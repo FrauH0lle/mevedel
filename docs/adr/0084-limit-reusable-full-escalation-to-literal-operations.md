@@ -3,7 +3,7 @@
 Status: accepted
 
 Full execution escalation prompts offer invocation, session, and workspace
-authority for stable literal Bash commands and complete batch-Eval expressions.
+authority for stable literal Bash commands and complete fresh-Eval expressions.
 Dynamic or glob-bearing Bash commands remain invocation-only. Eval approvals
 use `:expression` rules, which compare the entire expression text literally,
 including wildcard characters and whitespace. Deliberately authored `:pattern`

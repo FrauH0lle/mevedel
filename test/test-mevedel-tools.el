@@ -23,6 +23,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-mentions)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-transcript)

@@ -447,7 +447,7 @@ Return the outcome plist produced by the async helper."
                (lambda (_tool callback &rest _)
                  (funcall callback
                           (concat
-                           "Failed to start Eval batch process: boom"
+                           "Failed to start Eval fresh process: boom"
                            (mevedel-tool-render-data-format
                             '(:status error)))))))
       (let ((outcome (mevedel-skills-test--shell-injections-sync

@@ -17,13 +17,22 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
 (require 'mevedel-execution)
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-execution-target)
+(require 'mevedel-hooks)
 (require 'mevedel-pipeline)
 (require 'mevedel-ptc-driver)
 (require 'mevedel-sandbox)
+(require 'mevedel-sleep)
+(require 'mevedel-session-rewind)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-telemetry)
 (require 'mevedel-workspace)
 (require 'mevedel-permission-rules)
+(require 'mevedel-pending-inputs)
+(require 'mevedel-view-audit)
+(require 'mevedel-view-render)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -1535,8 +1544,13 @@ the execution boundary owns the session's single unavailable warning"
          (filesystem
           (plist-get (plist-get additional :properties) :file_system)))
     (should (equal "string" (plist-get mode :type)))
-    (should (equal ["live" "batch"] (plist-get mode :enum)))
+    (should (equal ["live" "fresh" "sandbox"] (plist-get mode :enum)))
     (should (plist-get mode :optional))
+    (let ((yield (seq-find (lambda (arg) (equal "yield_time_ms" (plist-get arg :name))) args)))
+      (should (equal "integer" (plist-get yield :type)))
+      (should (= 250 (plist-get yield :minimum)))
+      (should (= 30000 (plist-get yield :maximum)))
+      (should (plist-get yield :optional)))
     (should (equal "boolean" (plist-get preserve-ui :type)))
     (should (plist-get preserve-ui :optional))
     (should (equal ["use_default" "with_additional_permissions"
@@ -1558,44 +1572,486 @@ the execution boundary owns the session's single unavailable warning"
                 tool '(:expression "(+ 1 2)" :mode "bogus")))
           :kind)))))
 
+(defun mevedel-tool-exec-test--sandbox-call (expression &rest args)
+  "Run EXPRESSION with sandbox tool ARGS and await its result text."
+  (let (reply)
+    (funcall (mevedel-tool-handler (mevedel-tool-get "Eval"))
+             (lambda (value) (setq reply value))
+             (append (list :mode "sandbox" :expression expression) args))
+    (with-timeout (10 (error "Sandbox Eval timed out"))
+      (while (not reply) (accept-process-output nil 0.02)))
+    (plist-get reply :result)))
+
+(mevedel-deftest mevedel-tool-exec--eval-sandbox
+  (:vars* ((root (make-temp-file "sandbox-tool-" t))
+           (default-directory (file-name-as-directory root))
+           (mevedel--session (mevedel-session--create
+                             :name "sandbox" :working-directory default-directory
+                             :workspace (mevedel-workspace--create :root default-directory)))
+           (mevedel-eval-sandbox--sessions (make-hash-table :test #'eq))
+           (mevedel-eval-sandbox-idle-timeout nil))
+   :before-each (mevedel-tool-exec--register)
+   :after-each (progn (mevedel-execution-teardown-session mevedel--session)
+                      (delete-directory root t)))
+  (progn
+    (unless (plist-get (mevedel-sandbox-probe) :available) (ert-skip "No confinement backend"))
+    ,test)
+  (test)
+  :doc "registered Eval persists definitions, resets and isolates agent owners"
+  (progn
+    (should (string-search "Sandbox started; features:"
+                           (mevedel-tool-exec-test--sandbox-call "(defun sandbox-answer () 42)")))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "(sandbox-answer)")))
+      (should (string-search "Result:\n42" text))
+      (should (string-search "Sandbox reused; features:" text)))
+    (let ((mevedel--current-request
+           (mevedel-request--create :session mevedel--session :origin "/root/agent")))
+      (should (string-search "Result:\nnil"
+                             (mevedel-tool-exec-test--sandbox-call "(fboundp 'sandbox-answer)"))))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "(fboundp 'sandbox-answer)" :reset t)))
+      (should (string-search "Result:\nnil" text))
+      (should (string-search "Earlier definitions are gone" text))))
+  :doc "captures child output, messages and bounded signal-time backtraces"
+  (let ((text (mevedel-tool-exec-test--sandbox-call
+               "(progn (princ \"hello\") (message \"note\") (error \"boom\"))")))
+    (dolist (section '("STDOUT:\nhello" "MESSAGES:\nnote" "BACKTRACE:" "boom"))
+      (should (string-search section text))))
+  :doc "capture locals do not collide with evaluated definitions"
+  (should (string-search "Result:\n42"
+                         (mevedel-tool-exec-test--sandbox-call
+                          "(progn (defvar stdout 42) (defvar messages nil) stdout)")))
+  :doc "large values and output are truncated in the child, not protocol failures"
+  (let ((text (mevedel-tool-exec-test--sandbox-call
+               "(progn (princ (make-string 1100000 ?x)) (make-string 1100000 ?y))")))
+    (should (string-prefix-p "Result:" text))
+    (should (string-search "[Output truncated]" text))
+    (should (< (length text) 33000)))
+  :doc "busy calls refuse and owning request cancellation kills the service"
+  (progn
+    (mevedel-tool-exec-test--sandbox-call "t")
+    (let ((mevedel--current-request
+           (mevedel-request--create :session mevedel--session :origin "/root")) reply)
+      (mevedel-tool-exec--eval (lambda (value) (setq reply value))
+                              '(:mode "sandbox" :expression "(sleep-for 30)"))
+      (should (string-search "busy" (error-message-string
+                                     (should-error (mevedel-tool-exec-test--sandbox-call "t")))))
+      (mevedel-request-cancel mevedel--current-request)
+      (should (string-search "Earlier definitions are gone" (plist-get reply :result)))
+      (should-not (mevedel-execution-session-live-p mevedel--session))
+      (should-not (plist-get (mevedel-eval-sandbox-status mevedel--session "/root") :features))))
+  :doc "backend refusal is a clean Eval error with fresh guidance and no invented loss"
+  (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+             (lambda (&optional _) '(:available nil :reason "No backend"))))
+    (let ((text (mevedel-tool-exec-test--sandbox-call "t")))
+      (should (string-prefix-p "Error: Eval failed" text))
+      (should (string-search "Use fresh Eval" text))
+      (should-not (string-search "Sandbox started" text))
+      (should-not (string-search "Earlier definitions are gone" text))))
+  :doc "failed restart reports definition loss exactly once"
+  (progn
+    (mevedel-tool-exec-test--sandbox-call "t")
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda (&optional _) '(:available nil :reason "No backend"))))
+      (let ((text (mevedel-tool-exec-test--sandbox-call "t" :reset t)))
+        (should (string-prefix-p "Error: Eval failed" text))
+        (should (= 2 (length (split-string text "Earlier definitions are gone")))))))
+  :doc "yielded calls poll the inline result, retain activity and arm idle expiry after settlement"
+  (let* ((mevedel-eval-sandbox-idle-timeout 60)
+         (mevedel-execution-mailbox-delivery-function nil)
+         (expression "(progn (sleep-for 0.7) (princ \"printed\") (message \"note\") 42)")
+         initial final events
+         (mevedel-execution-event-functions (list (lambda (event) (push event events)))))
+    (mevedel-tool-exec-test--sandbox-call "t")
+    (let ((inline (mevedel-tool-exec-test--sandbox-call expression))
+          (entry (mevedel-eval-sandbox--entry mevedel--session "/root")))
+      (mevedel-tool-exec--eval (lambda (value) (setq initial value))
+                              (list :mode "sandbox" :expression expression :yield_time_ms 250))
+      (with-timeout (10 (error "Sandbox did not yield"))
+        (while (not initial) (accept-process-output nil 0.02)))
+      (let ((id (plist-get (plist-get initial :render-data) :execution-id)))
+        (should (stringp id))
+        (should (string-search id (plist-get (mevedel-tool-exec--list-executions nil) :result)))
+        (should-not (mevedel-eval-sandbox--entry-timer entry))
+        (should (mevedel-execution-working-p))
+        (should (mevedel-execution-owner-live-p mevedel--session "/root"))
+        (should (mevedel-execution-session-live-p mevedel--session))
+        (dolist (reset '(nil t))
+          (should (string-search id (error-message-string
+                                    (should-error
+                                     (mevedel-tool-exec-test--sandbox-call "t" :reset reset))))))
+        (dolist (input '("text" "\C-c"))
+          (should-error (mevedel-tool-exec--write-stdin #'ignore
+                        (list :execution_id id :chars input))
+                        :type 'mevedel-execution-input-error))
+        (mevedel-tool-exec--write-stdin (lambda (value) (setq final value))
+                                       (list :execution_id id :yield_time_ms 5000))
+        (with-timeout (10 (error "Sandbox poll timed out"))
+          (while (not final) (accept-process-output nil 0.02)))
+        (should (equal inline (plist-get final :result)))
+        (let ((summary (plist-get
+                        (plist-get (seq-find (lambda (e) (eq (plist-get e :type) 'terminal))
+                                              events) :observation) :sandbox-summary)))
+          (should (= 1 (plist-get summary :attempt-count) (plist-get summary :started-count)))
+          (should-not (mevedel-execution-telemetry-sandbox-summary-class summary))
+          (should-not (plist-get (plist-get final :render-data) :sandbox-summary)))
+        (should (timerp (mevedel-eval-sandbox--entry-timer entry)))
+        (should-not (mevedel-execution-working-p))
+        (should-not (mevedel-execution-owner-live-p mevedel--session "/root"))
+        (should-not (mevedel-execution-session-live-p mevedel--session))
+        (let ((facts (plist-get (seq-find (lambda (e) (eq (plist-get e :type) 'terminal))
+                                          events) :facts)))
+          (should (eq 'sandbox (plist-get facts :eval-mode)))
+          (should (string-search "Background Eval completed"
+                                 (mevedel-view-audit--breadcrumb-label (list :facts facts))))))))
+  :doc "yield survives request cancellation; stop kills the sandbox and reports loss"
+  (let ((mevedel--current-request (mevedel-request--create :session mevedel--session :origin "/root"))
+        (mevedel-execution-mailbox-delivery-function nil) initial stopped)
+    (mevedel-tool-exec--eval (lambda (value) (setq initial value))
+                            '(:mode "sandbox" :expression "(sleep-for 30)" :yield_time_ms 250))
+    (with-timeout (10 (error "Sandbox did not yield"))
+      (while (not initial) (accept-process-output nil 0.02)))
+    (let* ((entry (mevedel-eval-sandbox--entry mevedel--session "/root"))
+           (service (mevedel-eval-sandbox--entry-service entry))
+           (id (plist-get (plist-get initial :render-data) :execution-id)))
+      (mevedel-request-cancel mevedel--current-request)
+      (should (mevedel-execution-service-live-p service))
+      (mevedel-tool-exec--stop-execution (lambda (value) (setq stopped value))
+                                        (list :execution_id id))
+      (with-timeout (10 (error "Sandbox did not stop"))
+        (while (not stopped) (accept-process-output nil 0.02)))
+      (should (string-search "Earlier definitions are gone" (plist-get stopped :result)))
+      (should (eq 'stopped (plist-get (plist-get stopped :render-data) :termination)))
+      (should-not (mevedel-execution-service-live-p service))
+      (should-not (mevedel-eval-sandbox--entry-timer entry))
+      (let ((mevedel--current-request nil))
+        (should (string-search "Earlier definitions are gone"
+                               (mevedel-tool-exec-test--sandbox-call "t"))))))
+  :doc "yielded sandbox holds sleep and blocks history/transfer until user Stop All"
+  (let ((mevedel-execution-mailbox-delivery-function nil)
+        (mevedel-execution-state-change-hook '(mevedel-sleep-update))
+        (mevedel-sleep-inhibit t)
+        (mevedel-sleep-inhibit-command '("cat"))
+        (mevedel-sleep--poll-interval 0.05)
+        (mevedel-sleep--timer nil) (mevedel-sleep--process nil)
+        (mevedel-sleep--held-reasons nil) (mevedel-sleep--failed nil)
+        initial final held)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec-test--sandbox-call "t")
+          ;; Idle services alone do not obstruct either boundary.
+          (should-not (mevedel-session-rewind-assert-stable-source
+                       mevedel--session (current-buffer) "rewind"))
+          (should (mevedel-session-control-transfer-drained-p mevedel--session))
+          (should-not (member "command running" (mevedel-sleep--reasons)))
+          (mevedel-tool-exec--eval
+           (lambda (value) (setq initial value))
+           '(:mode "sandbox" :expression "(sleep-for 30)" :yield_time_ms 250))
+          (with-timeout (5 (error "Sandbox did not yield and hold sleep"))
+            (while (not (and initial (process-live-p mevedel-sleep--process)))
+              (accept-process-output nil 0.02)))
+          (setq held mevedel-sleep--process)
+          (should (equal '("command running") mevedel-sleep--held-reasons))
+          (should (string-search
+                   "Stop live executions"
+                   (error-message-string
+                    (should-error
+                     (mevedel-session-rewind-assert-stable-source
+                      mevedel--session (current-buffer) "rewind") :type 'user-error))))
+          (should (equal "a live execution"
+                         (mevedel-session-control-transfer-drain-blocker mevedel--session)))
+          (should-not (mevedel-session-control-transfer-drained-p mevedel--session))
+          (should (> (mevedel-execution-stop-all-user mevedel--session) 0))
+          (mevedel-tool-exec--write-stdin
+           (lambda (value) (setq final value))
+           (list :execution_id (plist-get (plist-get initial :render-data) :execution-id)))
+          (with-timeout (5 (error "Stop All did not settle and release sleep"))
+            (while (not (and final (not (process-live-p held))))
+              (accept-process-output nil 0.02)))
+          (should (eq 'stopped (plist-get (plist-get final :render-data) :termination)))
+          (should (string-search "Earlier definitions are gone" (plist-get final :result)))
+          (should-not (plist-get (mevedel-eval-sandbox-status mevedel--session "/root") :features))
+          (should-not (mevedel-execution-working-p))
+          (should-not mevedel-sleep--process)
+          (should-not mevedel-sleep--held-reasons)
+          (should-not mevedel-sleep--timer)
+          (should-not (mevedel-session-rewind-assert-stable-source
+                       mevedel--session (current-buffer) "rewind"))
+          (should (mevedel-session-control-transfer-drained-p mevedel--session)))
+      (mevedel-sleep-stop)))
+  :doc "queued calls reserve the owner and cancel without launching a child"
+  (let* ((state (mevedel-execution--state-for-session mevedel--session))
+         (lease (mevedel-execution-scheduler-submit
+                 (mevedel-execution--state-scheduler state) 'exclusive #'ignore))
+         (mevedel--current-request (mevedel-request--create :session mevedel--session :origin "/root"))
+         reply)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--eval (lambda (value) (setq reply value))
+                                  '(:mode "sandbox" :expression "42"))
+          (should-not reply)
+          (should-not (plist-get (mevedel-eval-sandbox-status mevedel--session "/root") :age-seconds))
+          (let ((message (error-message-string
+                          (should-error (mevedel-tool-exec-test--sandbox-call "t")))))
+            (should (string-search "foreground" message))
+            (should-not (string-search "execution_id" message)))
+          (mevedel-request-cancel mevedel--current-request)
+          (should reply)
+          (should-not (mevedel-execution-session-live-p mevedel--session)))
+      (mevedel-execution-scheduler-release lease)))
+  :doc "large yielded replies are bounded in polling, mailbox and transcript; completion offers root wake"
+  (dolist (delivery '(poll mailbox))
+    (let* ((mevedel-execution-inline-output-limit 1024)
+           (mevedel-execution-mailbox-delivery-function
+            (and (eq delivery 'mailbox) #'mevedel-tool-exec-handle-execution-event))
+           initial final events (wakes 0)
+           (mevedel-execution-event-functions (list (lambda (event) (push event events)))))
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                 (lambda (&rest _) (cl-incf wakes))))
+        (mevedel-tool-exec--eval (lambda (value) (setq initial value))
+                                '(:mode "sandbox" :expression "(progn (sleep-for 0.7) (make-string 10000 ?x))"
+                                  :yield_time_ms 250))
+        (with-timeout (10 (error "Sandbox did not yield"))
+          (while (not initial) (accept-process-output nil 0.02)))
+        (when (eq delivery 'poll)
+          (mevedel-tool-exec--write-stdin (lambda (value) (setq final value))
+                                         (list :execution_id (plist-get (plist-get initial :render-data) :execution-id)
+                                               :yield_time_ms 5000)))
+        (with-timeout (10 (error "Sandbox did not settle"))
+          (while (not (seq-find (lambda (e) (eq (plist-get e :type) 'terminal)) events))
+            (accept-process-output nil 0.02)))
+        (let* ((event (seq-find (lambda (e) (eq (plist-get e :type) 'terminal)) events))
+               (preview (plist-get (plist-get event :observation) :result)))
+          (should (plist-get event :whole-output-truncated-p))
+          (should (string-search "tool output truncated" preview))
+          (should (< (length preview) 1200))
+          (should (equal preview (plist-get (mevedel-execution-transcript-terminal-render-data event)
+                                            :execution-output)))
+          (should (string-search preview
+                                 (if (eq delivery 'poll) (plist-get final :result)
+                                   (plist-get (car (mevedel-agent-control-context-mailbox mevedel--session))
+                                              :payload))))
+          (should (= wakes (if (eq delivery 'mailbox) 1 0))))))))
+
 (mevedel-deftest mevedel-tool-exec--eval
   (:vars* ((eval-directory (make-temp-file "mevedel-eval-test-" t))
-           (default-directory (file-name-as-directory eval-directory)))
-   :after-each (delete-directory eval-directory t))
+           (default-directory (file-name-as-directory eval-directory))
+           (mevedel--session
+            (mevedel-session--create
+             :name "eval" :working-directory default-directory
+             :workspace (mevedel-workspace--create :root default-directory))))
+   :after-each (progn
+                 (mevedel-execution-teardown-session mevedel--session)
+                 (delete-directory eval-directory t)))
   ,test
   (test)
   :doc "errors on missing expression"
   (should-error
    (mevedel-tool-exec--eval #'ignore (list))
    :type 'error)
-  :doc "passes approved network authority only to batch Eval"
+  :doc "rejects a live yield interval and fresh TTY"
+  (dolist (args '((:expression "1" :yield_time_ms 250)
+                  (:expression "1" :mode "live" :yield_time_ms 10000)
+                  (:expression "1" :mode "fresh" :tty t)))
+    (should-error (mevedel-tool-exec--eval #'ignore args)))
+  :doc "fresh yielding polls the same result as inline completion and labels Eval"
+  (let* ((mevedel-sandbox-mode 'off)
+         (temporary-file-directory default-directory)
+         (mevedel-execution-mailbox-delivery-function nil)
+         events inline yielded final listed
+         (mevedel-execution-event-functions
+          (list (lambda (event) (push event events))))
+         (expression "(progn (sleep-for 2) (princ \"printed\") (message \"diagnostic\") 42)"))
+    (mevedel-tool-exec--eval
+     (lambda (result) (setq inline result))
+     (list :expression expression :mode "fresh" :yield_time_ms 10000))
+    (with-timeout (15 (error "Inline Eval timed out"))
+      (while (null inline) (accept-process-output nil 0.02)))
+    (should-not (plist-get (plist-get inline :render-data) :execution-id))
+    (setq events nil)
+    (mevedel-tool-exec--eval
+     (lambda (result) (setq yielded result))
+     (list :expression expression :mode "fresh" :yield_time_ms 250))
+    (with-timeout (10 (error "Eval did not yield"))
+      (while (null yielded) (accept-process-output nil 0.02)))
+    (let* ((id (plist-get (plist-get yielded :render-data) :execution-id))
+           (record (mevedel-execution--owned-yielded-record mevedel--session "/root" id)))
+      (should (stringp id))
+      (should (string-search "<eval-execution" (plist-get yielded :result)))
+      (should (mevedel-execution--record-mutating-p record))
+      (should-not (mevedel-execution--record-pipeline-marker record))
+      (setq listed (mevedel-tool-exec--list-executions nil))
+      (should (string-search id (plist-get listed :result)))
+      (dolist (chars '("input" "\C-c"))
+        (should-error (mevedel-tool-exec--write-stdin #'ignore
+                      (list :execution_id id :chars chars))
+                      :type 'mevedel-execution-input-error))
+      (mevedel-tool-exec--write-stdin
+       (lambda (result) (setq final result))
+       (list :execution_id id :chars "" :yield_time_ms 5000))
+      (with-timeout (10 (error "Eval poll timed out"))
+        (while (null final) (accept-process-output nil 0.02)))
+      (should (equal (plist-get inline :result) (plist-get final :result)))
+      (should (string-search "STDOUT:\nprinted\n\nMESSAGES:\ndiagnostic"
+                             (plist-get final :result)))
+      (let* ((event (seq-find (lambda (event) (eq (plist-get event :type) 'terminal)) events))
+             (facts (plist-get event :facts)))
+        (should (eq 'success (plist-get facts :outcome)))
+        (should-not (plist-get event :whole-output-truncated-p))
+        (let* ((render-data (mevedel-execution-transcript-terminal-render-data event))
+               (rendered (mevedel-tool-exec--render-eval
+                          "Eval" (list :mode "fresh" :expression expression)
+                          (plist-get yielded :result) render-data)))
+          (should (equal (plist-get inline :result) (plist-get rendered :body)))
+          (should (eq 'success (plist-get rendered :status))))
+        (should (string-search "Background Eval completed"
+                               (mevedel-view-audit--breadcrumb-label (list :facts facts))))
+        (should (string-search "Background Eval completed"
+                               (car (mevedel-view--mail-notice
+                                     "<agent-message type=\"EXECUTION\" kind=\"eval\" termination=\"exited\" outcome=\"success\">"
+                                     nil "/root/child" "")))))
+      (should-not (mevedel-execution--record-teardown-function record))
+      (should-not (directory-files default-directory nil "\\`mevedel-eval-fresh-"))))
+  :doc "bounds large yielded values in polls, mail and durable output, but not inline"
+  (dolist (delivery '(inline poll mailbox))
+    (let* ((mevedel-sandbox-mode 'off)
+           (mevedel-execution-inline-output-limit 1024)
+           (mevedel-execution-mailbox-delivery-function
+            (and (eq delivery 'mailbox) #'mevedel-tool-exec-handle-execution-event))
+           events initial final
+           (mevedel-execution-event-functions
+            (list (lambda (event) (push event events)))))
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work) #'ignore))
+        (mevedel-tool-exec--eval
+         (lambda (result) (setq initial result))
+         (list :expression "(progn (sleep-for 1) (make-string 2000000 ?x))"
+               :mode "fresh" :yield_time_ms (if (eq delivery 'inline) 10000 250)))
+        (with-timeout (15 (error "Large Eval did not return or yield"))
+          (while (null initial) (accept-process-output nil 0.02)))
+        (if (eq delivery 'inline)
+            (should (> (length (plist-get initial :result)) 2000000))
+          (when (eq delivery 'poll)
+            (mevedel-tool-exec--write-stdin
+             (lambda (result) (setq final result))
+             (list :execution_id (plist-get (plist-get initial :render-data) :execution-id)
+                   :chars "" :yield_time_ms 5000)))
+          (with-timeout (15 (error "Large Eval did not settle"))
+            (while (not (seq-find (lambda (event) (eq (plist-get event :type) 'terminal)) events))
+              (accept-process-output nil 0.02)))
+          (let* ((event (seq-find (lambda (event) (eq (plist-get event :type) 'terminal)) events))
+                 (preview (plist-get (plist-get event :observation) :result))
+                 (render-data (mevedel-execution-transcript-terminal-render-data event)))
+            (should (< (length preview) (+ mevedel-execution-inline-output-limit 100)))
+            (should (string-prefix-p "Result:\n\"xxx" preview))
+            (should (string-suffix-p "xxx\"" preview))
+            (should (string-search "tool output truncated" preview))
+            (should (plist-get event :whole-output-truncated-p))
+            (should (equal preview (plist-get render-data :execution-output)))
+            (let ((payload
+                   (if (eq delivery 'poll)
+                       (plist-get final :result)
+                     (plist-get
+                      (car (mevedel-agent-control-context-mailbox mevedel--session))
+                      :payload))))
+              ;; Model delivery may append a sandbox disclosure to the preview.
+              (should (string-search preview payload))
+              (should (< (length payload) (+ mevedel-execution-inline-output-limit 1000)))))))))
+  :doc "yielded fresh calls stream messages into a running poll"
+  (let ((mevedel-sandbox-mode 'off)
+        (mevedel-execution-mailbox-delivery-function nil)
+        yielded polled)
+    (mevedel-tool-exec--eval
+     (lambda (result) (setq yielded result))
+     '(:expression "(progn (while (not (file-exists-p \"emit-message\")) (sleep-for 0.02)) (message \"poll progress\") (sleep-for 30))"
+       :mode "fresh" :yield_time_ms 250))
+    (with-timeout (10 (error "Eval did not yield"))
+      (while (null yielded) (accept-process-output nil 0.02)))
+    (with-temp-file "emit-message" (insert "ready"))
+    (mevedel-tool-exec--write-stdin
+     (lambda (result) (setq polled result))
+     (list :execution_id (plist-get (plist-get yielded :render-data) :execution-id)
+           :chars "" :yield_time_ms 5000))
+    (with-timeout (10 (error "Eval poll did not return"))
+      (while (null polled) (accept-process-output nil 0.02)))
+    (should (string-search "poll progress" (plist-get polled :result)))
+    (should (eq 'running (plist-get (plist-get polled :render-data) :state))))
+  :doc "fresh stop retains streamed messages and teardown removes temporary files"
+  (dolist (action '(stop teardown))
+    (let* ((temporary-file-directory default-directory)
+           (mevedel-sandbox-mode 'off)
+           (mevedel-execution-mailbox-delivery-function nil)
+           yielded stopped)
+      (mevedel-tool-exec--eval
+       (lambda (result) (setq yielded result))
+       '(:expression "(progn (message \"stop progress\") (sleep-for 30))" :mode "fresh" :yield_time_ms 250))
+      (with-timeout (10 (error "Eval did not yield"))
+        (while (null yielded) (accept-process-output nil 0.02)))
+      (let* ((id (plist-get (plist-get yielded :render-data) :execution-id))
+             (record (mevedel-execution--owned-yielded-record mevedel--session "/root" id))
+             (child (mevedel-execution--record-child record)))
+        (with-timeout (10 (error "Fresh message did not reach the spool"))
+          (while (not (string-search "stop progress" (mevedel-execution--read-output record)))
+            (accept-process-output nil 0.02)))
+        (should (= 2 (length (directory-files default-directory nil "\\`mevedel-eval-fresh-"))))
+        (if (eq action 'stop)
+            (progn
+              (mevedel-tool-exec--stop-execution
+               (lambda (result) (setq stopped result)) (list :execution_id id))
+              (with-timeout (10 (error "Eval did not stop"))
+                (while (null stopped) (accept-process-output nil 0.02)))
+              (should (string-prefix-p "Eval stopped" (plist-get stopped :result)))
+              (should (string-search "stop progress" (plist-get stopped :result)))
+              (should (eq 'stopped (plist-get (plist-get stopped :render-data) :termination)))
+              (should (equal '(stopped . "stopped")
+                             (mevedel-tool-exec-completion 'stopped 'failure))))
+          (mevedel-execution-teardown-session mevedel--session))
+        (should-not (mevedel-execution-process-live-p child))
+        (should-not (directory-files default-directory nil "\\`mevedel-eval-fresh-")))))
+  :doc "fresh independent completion delivers its formatted result and offers a root wake"
+  (let* ((mevedel-sandbox-mode 'off)
+         (mevedel-execution-mailbox-delivery-function #'mevedel-tool-exec-handle-execution-event)
+         yielded offered)
+    (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+               (lambda (buffer) (push buffer offered))))
+      (mevedel-tool-exec--eval
+       (lambda (result) (setq yielded result))
+       '(:expression "(progn (sleep-for 2) (message \"mail diagnostic\") 42)"
+         :mode "fresh" :yield_time_ms 250))
+      (with-timeout (15 (error "Eval mailbox completion timed out"))
+        (while (null offered) (accept-process-output nil 0.02))))
+    (should (plist-get (plist-get yielded :render-data) :execution-id))
+    (let ((message (car (mevedel-agent-control-context-mailbox mevedel--session))))
+      (should (plist-get message :wake))
+      (should (equal "eval" (plist-get (plist-get message :meta) :kind)))
+      (should (string-search "Result:\n42\n\nMESSAGES:\nmail diagnostic"
+                             (plist-get message :payload)))))
+  :doc "passes approved network authority only to fresh Eval"
   (let (captured)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-fresh)
                (lambda (_callback expression result-format additional
-                                  &optional sandbox-permissions)
+                                  &optional sandbox-permissions _args)
                  (setq captured (list expression result-format additional
                                       sandbox-permissions)))))
       (mevedel-tool-exec--eval
        #'ignore
        '(:expression "(+ 1 2)"
-                     :mode "batch"
+                     :mode "fresh"
                      :sandbox_permissions "with_additional_permissions"
                      :additional_permissions (:network t)
                      :justification "Fetch package metadata?")))
     (should (equal '("(+ 1 2)" nil (:network t) nil) captured)))
-  :doc "passes approved full escalation only to batch Eval"
+  :doc "passes approved full escalation only to fresh Eval"
   (let (captured)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-fresh)
                (lambda (_callback expression _result-format additional
-                                  &optional sandbox-permissions)
+                                  &optional sandbox-permissions _args)
                  (setq captured (list expression additional
                                       sandbox-permissions)))))
       (mevedel-tool-exec--eval
        #'ignore
        '(:expression "(+ 1 2)"
-                     :mode "batch"
+                     :mode "fresh"
                      :sandbox_permissions "require_escalated"
-                     :justification "Run batch Eval without confinement?")))
+                     :justification "Run fresh Eval without confinement?")))
     (should (equal '("(+ 1 2)" nil require-escalated) captured)))
   :doc "evaluates simple expression"
   (let (result)
@@ -1614,6 +2070,114 @@ the execution boundary owns the session's single unavailable warning"
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression "(princ \"hello world\")"))
     (should (string-match-p "STDOUT:\nhello world" result)))
+  :doc "captures live messages without suppressing downstream handlers or logging"
+  (let* ((result-file (make-temp-file "mevedel-eval-live-messages-"))
+         (process-environment (cons "TERM=xterm" process-environment))
+         (form
+          `(progn
+             (setq load-path ',load-path native-comp-jit-compilation nil)
+             (require 'mevedel-tool-exec)
+             (let* ((default-directory ,default-directory)
+                    downstream response
+                    (set-message-functions
+                     (list (lambda (text) (push text downstream) nil))))
+               (mevedel-tool-exec--eval-live
+                (lambda (value) (setq response value))
+                "(progn (message \"live hello\") (message \"live again\") 42)"
+                nil t)
+               (with-temp-file ,result-file
+                 (prin1 (list response (nreverse downstream)
+                              (with-current-buffer "*Messages*" (buffer-string)))
+                        (current-buffer))))
+             (kill-emacs 0)))
+         (child (make-process
+                 :name "mevedel-test-live-messages" :buffer nil :noquery t
+                 :connection-type 'pty
+                 :command (list (expand-file-name invocation-name invocation-directory)
+                                "-Q" "-nw" "--eval" (prin1-to-string form)))))
+    ;; Echo-area hooks do not run in batch Emacs, even with noninteractive bound.
+    (unwind-protect
+        (progn
+          (with-timeout (30 (error "Live message fixture timed out"))
+            (while (process-live-p child) (accept-process-output child 0.05)))
+          (should (zerop (process-exit-status child)))
+          (let* ((data (mevedel-tool-exec--eval-read-fresh-result result-file))
+                 (result (plist-get (car data) :result)))
+            (should (string-search "Result:\n42" result))
+            (should (string-search "MESSAGES:\nlive hello\nlive again" result))
+            (should (equal '("live hello" "live again") (cadr data)))
+            (should (string-search "live hello\nlive again" (caddr data)))))
+      (when (process-live-p child) (delete-process child))
+      (delete-file result-file)))
+  :doc "returns fresh messages on success"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (value) (setq result (plist-get value :result)))
+     '(:expression "(progn (message \"fresh hello\") 42)" :mode "fresh"))
+    (with-timeout (30 (error "Fresh messages timed out"))
+      (while (null result) (accept-process-output nil 0.05)))
+    (should (string-search "Result:\n42" result))
+    (should (string-search "MESSAGES:\nfresh hello" result)))
+  :doc "keeps injection results compact in both modes"
+  (dolist (mode '("live" "fresh"))
+    (let (result)
+      (mevedel-tool-exec--eval
+       (lambda (value) (setq result (plist-get value :result)))
+       (list :expression "(progn (princ \"printed\") 42)"
+             :result-format "injection" :mode mode))
+      (with-timeout (30 (error "Injection result timed out"))
+        (while (null result) (accept-process-output nil 0.05)))
+      (should (string-prefix-p "42\n\nSTDOUT:\nprinted" result))
+      (should-not (string-search "Result:" result))
+      (should-not (string-search "BACKTRACE:" result))
+      (should-not (string-search "MESSAGES:" result))))
+  :doc "returns pre-error output and a bounded failing frame in both modes"
+  (dolist (mode '("live" "fresh"))
+    (let (result)
+      (mevedel-tool-exec--eval
+       (lambda (value) (setq result (plist-get value :result)))
+       (list :expression "(progn (princ \"before failure\") (error \"failing frame\"))"
+             :mode mode))
+      (with-timeout (30 (error "Error result timed out"))
+        (while (null result) (accept-process-output nil 0.05)))
+      (should (string-prefix-p "Error:" result))
+      (should (string-search "STDOUT:\nbefore failure" result))
+      (let ((trace (cadr (split-string result "BACKTRACE:\n"))))
+        (should trace)
+        (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
+        (should (string-search "error(\"failing frame\")" trace))
+        (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars)))))
+  :doc "visibly truncates deep and overlong backtraces in both modes"
+  (dolist (mode '("live" "fresh"))
+    (dolist (expression
+             '("(funcall (letrec ((recur (lambda (n) (if (zerop n) (error \"deep\") (funcall recur (1- n)))))) recur) 50)"
+               "(error \"%s\" (make-string 10000 ?x))"))
+      (let (result)
+        (mevedel-tool-exec--eval
+         (lambda (value) (setq result (plist-get value :result)))
+         (list :expression expression :mode mode))
+        (with-timeout (30 (error "Truncated result timed out"))
+          (while (null result) (accept-process-output nil 0.05)))
+        (let ((trace (cadr (split-string result "BACKTRACE:\n"))))
+          (should trace)
+          (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
+          (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars))
+          (should (<= (length (split-string trace "\n" t))
+                      (1+ mevedel-tool-exec--eval-backtrace-frames)))
+          (should (string-suffix-p mevedel-tool-exec--eval-backtrace-marker trace))))))
+  :doc "returns fresh errors with unreadable error data"
+  (let (result envelope)
+    (mevedel-tool-exec--eval
+     (lambda (value) (setq envelope value result (plist-get value :result)))
+     '(:expression "(signal 'wrong-type-argument (list 'numberp (current-buffer)))"
+       :mode "fresh"))
+    (with-timeout (30 (error "Unreadable error timed out"))
+      (while (null result) (accept-process-output nil 0.05)))
+    (should (string-prefix-p "Error: Eval failed with error wrong-type-argument" result))
+    (should (eq 'error (plist-get envelope :status)))
+    (should (eq 'failure (plist-get (plist-get envelope :render-data) :outcome)))
+    (should (string-search "#<buffer" result))
+    (should (string-search "BACKTRACE:" result)))
   :doc "passes large live output intact to the shared pipeline"
   (let (result)
     (mevedel-tool-exec--eval
@@ -1624,8 +2188,8 @@ the execution boundary owns the session's single unavailable warning"
            :mode "live"))
     (should (string-search (make-string 100 ?t) result))
     (should-not (string-search "Output truncated" result)))
-  :doc "prints shared structure once in live and batch results"
-  (dolist (mode '("live" "batch"))
+  :doc "prints shared structure once in live and fresh results"
+  (dolist (mode '("live" "fresh"))
     (let (result)
       (mevedel-tool-exec--eval
        (lambda (r)
@@ -1706,12 +2270,12 @@ the execution boundary owns the session's single unavailable warning"
           (should (string-match-p "Result:" result))
           (should (= 1 (length (window-list)))))
       (set-window-configuration original)))
-  :doc "evaluates simple expressions in batch mode"
+  :doc "evaluates simple expressions in fresh mode"
   (let ((original-start
-         (symbol-function 'mevedel-execution-start-one-shot))
+         (symbol-function 'mevedel-execution-start-bash))
         (child-starts 0)
         result)
-    (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
                (lambda (&rest args)
                  (cl-incf child-starts)
                  (let ((workdir (plist-get (cdr args) :workdir)))
@@ -1727,34 +2291,38 @@ the execution boundary owns the session's single unavailable warning"
       (mevedel-tool-exec--eval
        (lambda (r)
          (setq result (mevedel-tool-exec-test--handler-result r)))
-       (list :expression "(+ 4 5)" :mode "batch"))
+       (list :expression "(+ 4 5)" :mode "fresh"))
       (while (null result)
         (accept-process-output nil 0.1)))
     (should (= 1 child-starts))
     (should (string-match-p "Result:\n9" result))
     (should-not (string-match-p "without child-process confinement" result)))
-  :doc "failed confined batch mode includes explicit retry guidance"
+  :doc "failed confined fresh mode includes explicit retry guidance"
   (let (result)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-batch-result)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-fresh-result)
                (lambda (_file)
-                 '(:status error :text "Error: batch failure")))
-              ((symbol-function 'mevedel-execution-start-one-shot)
-               (lambda (callback &rest _args)
+                 '(:status error :error "error: (\"Fresh failure\")")))
+              ((symbol-function 'mevedel-execution-start-bash)
+               (lambda (callback &rest args)
+                 (let ((result (funcall (plist-get args :result-function)
+                                        '(:exit-code 1 :output "" :termination exited))))
+                   (funcall (plist-get args :teardown-function))
                  (funcall
                   callback
-                  '(:exit-code 1 :output "" :error nil
-                               :sandbox-facts
-                               (:sandbox bubblewrap :filesystem workspace-write
-                                         :network isolated))))))
+                  (list :result (plist-get result :output)
+                        :facts '(:kind eval :state completed :outcome failure)
+                        :sandbox-facts
+                        '(:sandbox bubblewrap :filesystem workspace-write
+                                   :network isolated)))))))
       (mevedel-tool-exec--eval
        (lambda (envelope)
          (setq result (mevedel-tool-exec-test--handler-result envelope)))
-       (list :expression "(error \"batch failure\")" :mode "batch")))
+       (list :expression "(error \"fresh failure\")" :mode "fresh")))
     (should
      (string-search
       "retry with `with_additional_permissions`"
       result)))
-  :doc "pipeline settles both batch launch failure forms as errors"
+  :doc "pipeline settles both fresh launch failure forms as errors"
   (progn
     (let* ((workspace (mevedel-workspace--create :root default-directory))
            (mevedel--session
@@ -1765,16 +2333,20 @@ the execution boundary owns the session's single unavailable warning"
                      :handler #'mevedel-tool-exec--eval
                      :args '((expression string :required "Expression")
                              (mode string :optional "Mode"
-                                   :enum ["live" "batch"]))
+                                   :enum ["live" "fresh"]))
                      :async-p t
                      :read-only-p t))
               events result)
-          (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
-                     (lambda (callback &rest _)
+          (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+                     (lambda (callback &rest args)
                        (if (eq failure 'child-result)
-                           (funcall callback
-                                    '(:exit-code nil :output ""
-                                                 :error "launch failed"))
+                           (let ((result (funcall (plist-get args :result-function)
+                                                  '(:exit-code nil :output ""
+                                                    :error "launch failed"))))
+                             (funcall (plist-get args :teardown-function))
+                             (funcall callback
+                                      (list :result (plist-get result :output)
+                                            :facts '(:kind eval :state completed :outcome failure))))
                          (error "Launch failed"))))
                     ((symbol-function 'mevedel-hooks-run-event)
                      (lambda (event _payload callback &rest _)
@@ -1782,15 +2354,15 @@ the execution boundary owns the session's single unavailable warning"
                        (funcall callback nil))))
             (mevedel-pipeline-run-tool
              tool (lambda (value) (setq result value))
-             '(:expression "(+ 1 2)" :mode "batch")))
+             '(:expression "(+ 1 2)" :mode "fresh")))
           (should
-           (string-match-p "Failed to start Eval batch process" result))
+           (string-match-p "Failed to start Eval fresh process" result))
           (should
            (equal '(PreToolUse PostToolUseFailure) (nreverse events)))))))
   :doc "live mode does not use the child-process seam"
   (let ((child-starts 0)
         result)
-    (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
                (lambda (&rest _args)
                  (cl-incf child-starts))))
       (mevedel-tool-exec--eval
@@ -1799,7 +2371,7 @@ the execution boundary owns the session's single unavailable warning"
        (list :expression "(+ 2 3)" :mode "live")))
     (should (= 0 child-starts))
     (should (string-match-p "Result:\n5" result)))
-  :doc "batch mode removes its temporary script and result files"
+  :doc "fresh mode removes its temporary script and result files"
   (let* ((temp-dir (make-temp-file "mevedel-eval-cleanup-" t))
          (temporary-file-directory (file-name-as-directory temp-dir))
          result)
@@ -1808,58 +2380,75 @@ the execution boundary owns the session's single unavailable warning"
           (mevedel-tool-exec--eval
            (lambda (r)
              (setq result (mevedel-tool-exec-test--handler-result r)))
-           (list :expression "(error \"cleanup\")" :mode "batch"))
+           (list :expression "(error \"cleanup\")" :mode "fresh"))
           (with-timeout (5 (error "Timed out"))
             (while (null result)
               (accept-process-output nil 0.1)))
           (should (string-prefix-p "Error:" result))
           (should-not
-           (directory-files temp-dir nil directory-files-no-dot-files-regexp)))
+           (directory-files temp-dir nil "\\`mevedel-eval-fresh-"))
+          (should-not
+           (directory-files (file-name-concat temp-dir ".mevedel-pending-executions")
+                            nil directory-files-no-dot-files-regexp)))
       (delete-directory temp-dir t)))
-  :doc "captures printed output in batch mode"
+  :doc "fresh capture preserves definitions and captures output and messages"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
-     (list :expression "(princ \"batch hello\")" :mode "batch"))
+     (list :expression "(progn (defvar stdout 42) (defvar messages nil) (message \"note\") (princ \"fresh hello\") stdout)" :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
-    (should (string-match-p "STDOUT:\nbatch hello" result)))
-  :doc "batch mode does not mutate parent variables"
+    (should (string-match-p "STDOUT:\nfresh hello" result))
+    (should (string-match-p "MESSAGES:\nnote" result))
+    (should (string-match-p "Result:\n42" result)))
+  :doc "fresh final messages are bounded even without a result file"
+  (dolist (tail '("42" "(kill-emacs 42)"))
+    (let ((mevedel-sandbox-mode 'off) result)
+      (mevedel-tool-exec--eval
+       (lambda (reply) (setq result (plist-get reply :result)))
+       (list :mode "fresh" :expression
+             (format "(progn (message \"lost diagnostic %%s\" (make-string 50000 ?x)) %s)" tail)))
+      (with-timeout (10 (error "Fresh message result timed out"))
+        (while (null result) (accept-process-output nil 0.02)))
+      (should (string-search "lost diagnostic" result))
+      (should (string-search "[Output truncated]" result))
+      (should (< (length result) 17000))))
+  :doc "fresh mode does not mutate parent variables"
   (let (result)
-    (makunbound 'mevedel-test-batch-parent-mutation)
+    (makunbound 'mevedel-test-fresh-parent-mutation)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
-     (list :expression "(setq mevedel-test-batch-parent-mutation 99)"
-           :mode "batch"))
+     (list :expression "(setq mevedel-test-fresh-parent-mutation 99)"
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n99" result))
-    (should-not (boundp 'mevedel-test-batch-parent-mutation)))
-  :doc "batch mode does not expose bootstrap locals"
+    (should-not (boundp 'mevedel-test-fresh-parent-mutation)))
+  :doc "fresh mode does not expose bootstrap locals"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression
            "(list (boundp 'result-file) (boundp 'stdout-buffer) (boundp 'max-output-bytes))"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n(nil nil nil)" result)))
-  :doc "batch mode bootstrap locals cannot be corrupted by evaluated code"
+  :doc "fresh mode bootstrap locals cannot be corrupted by evaluated code"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression "(progn (setq result-file nil) 42)"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-match-p "Result:\n42" result)))
-  :doc "batch mode uses the session working directory"
-  (let* ((root (make-temp-file "mevedel-eval-batch-cwd-" t))
+  :doc "fresh mode uses the session working directory"
+  (let* ((root (make-temp-file "mevedel-eval-fresh-cwd-" t))
          (module-dir (file-name-concat root "packages" "api"))
          (workspace (mevedel-workspace-get-or-create
                      'file root root "test"))
@@ -1872,7 +2461,7 @@ the execution boundary owns the session's single unavailable warning"
           (mevedel-tool-exec--eval
            (lambda (r)
              (setq result (mevedel-tool-exec-test--handler-result r)))
-           (list :expression "default-directory" :mode "batch"))
+           (list :expression "default-directory" :mode "fresh"))
           (while (null result)
             (accept-process-output nil 0.1))
           (should (string-match-p
@@ -1882,8 +2471,8 @@ the execution boundary owns the session's single unavailable warning"
                    result)))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
-  :doc "batch mode belongs to its agent and cleans temporary files on teardown"
-  (let* ((root (make-temp-file "mevedel-eval-batch-owner-" t))
+  :doc "fresh mode belongs to its agent and cleans temporary files on teardown"
+  (let* ((root (make-temp-file "mevedel-eval-fresh-owner-" t))
          (temporary-file-directory (file-name-as-directory root))
          (workspace (mevedel-workspace-get-or-create
                      'test root root "eval-owner"))
@@ -1898,8 +2487,8 @@ the execution boundary owns the session's single unavailable warning"
         (progn
           (mevedel-tool-exec--eval
            (lambda (result) (setq callback-result result))
-           (list :expression "(progn (sleep-for 30) 1)" :mode "batch"))
-          (with-timeout (2 (error "Batch Eval did not start"))
+           (list :expression "(progn (sleep-for 30) 1)" :mode "fresh"))
+          (with-timeout (2 (error "Fresh Eval did not start"))
             (while
                 (progn
                   (setq record
@@ -1913,20 +2502,20 @@ the execution boundary owns the session's single unavailable warning"
                           (mevedel-execution--record-origin record))))
           (should (= 1 (mevedel-execution-stop-owner
                         session "/root/agent_eval")))
-          (should-not callback-result)
+          (should (eq 'error (plist-get callback-result :status)))
           (should-not
-           (directory-files root nil directory-files-no-dot-files-regexp)))
+           (directory-files root nil "\\`mevedel-eval-fresh-")))
       (mevedel-execution-teardown-session session)
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
-  :doc "preserves large batch error output for shared pipeline persistence"
+  :doc "preserves large fresh error output for shared pipeline persistence"
   (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (mevedel-tool-exec-test--handler-result r)))
      (list :expression
            "(progn (princ (make-string 550000 ?h)) (princ (make-string 50000 ?t)) (error \"boom\"))"
-           :mode "batch"))
+           :mode "fresh"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-prefix-p "Error:" result))

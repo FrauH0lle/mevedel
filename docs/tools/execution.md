@@ -1,9 +1,9 @@
 # Bash, Monitor, and Eval execution
 
 The tool descriptions give ordinary Bash, Monitor, and Eval contracts. This manual
-covers exact grants, event monitoring, batch evaluation, and command control; it
+covers exact grants, event monitoring, fresh evaluation, and command control; it
 grants no authority. The `sandbox_permissions` and `additional_permissions`
-fields below apply to Bash, Monitor, and batch Eval, not live Eval. A live Eval may still
+fields below apply to Bash, Monitor, and fresh Eval, not live Eval. A live Eval may still
 carry an optional `justification`, shown to whoever approves it.
 
 ## Additive permission requests
@@ -157,17 +157,18 @@ before repeating an operation.
 
 ## Yielding, polling, and input
 
-Bash waits for `yield_time_ms`, then returns an `execution_id` if still running.
+Bash and fresh/sandbox Eval wait for `yield_time_ms` (default 10000, range 250–30000),
+then return an `execution_id` if still running. Live Eval rejects this argument.
 Completion of a yielded root-owned command automatically wakes an idle root;
 polling just to keep the task moving is unnecessary. Continue other work or end
 the turn and handle the delivered result. Use WriteStdin with empty `chars`
 when intermediate unread output is needed; a quiet interval does not establish
-completion. Only Bash has no automatic command timeout; a native `timeout` command can enforce
-a deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
+completion. Bash and fresh/sandbox Eval have no automatic execution timeout; a native
+`timeout` command can enforce a Bash deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
 be replaced with a small yield interval.
 
 WriteStdin, ListExecutions, and StopExecution all support Monitor IDs as well
-as yielded Bash IDs. They are scoped to the calling agent in the current
+as yielded Bash and fresh/sandbox Eval IDs. They are scoped to the calling agent in the current
 session; monitors belong to root. ListExecutions lists only live caller-owned
 executions, not completed ones or other agents' commands. A known settled ID
 can still be observed while its execution record is retained.
@@ -179,6 +180,9 @@ completed execution stops that execution's unread notifications from waking
 the model; they are still delivered at the next turn. Pipe-mode stdin is closed.
 Bash's `tty=true` provides a PTY whose stdin stays writable for prompts, REPLs,
 and tools requiring a terminal. Monitor has no PTY and rejects ordinary input.
+Fresh and sandbox Eval have no PTY and reject all non-empty input, including Ctrl-C;
+use StopExecution to kill its child. Its final observation includes the value,
+STDOUT, MESSAGES and any BACKTRACE, in the same format as inline completion.
 A single Ctrl-C character requests a process-group interrupt in either PTY or
 pipe mode (unavailable on Windows). The command may ignore it; it neither
 guarantees a stop nor suppresses a terminal wake. Use StopExecution to stop the
@@ -228,7 +232,7 @@ event is ordinary active work and does hold the inhibitor.
 
 ## Transcript presentation
 
-The initiating Bash or Monitor row owns the command, current state, and output.
+The initiating Bash, Monitor, or fresh Eval row owns the current state and output.
 Bash's compact header shows the command, status, and elapsed time; Monitor uses
 the Watching presentation above. Expanded details contain the
 execution ID, working directory, output counts, routine exit facts, the full
@@ -299,7 +303,8 @@ Only a command that actually yielded receives a completion breadcrumb. Whether
 completion was polled or delivered independently, the original command row
 shows one linked line, such as `● Background command "Run tests" completed
 (exit code 0)  [Show result]`, `… failed (exit code 1)`, `… stopped`, or
-`● Monitor "ticker" timed out · 3 events`. A stop is neutral, not a failure,
+`● Monitor "ticker" timed out · 3 events`, or `● Background Eval completed`.
+A stop is neutral, not a failure,
 though the model-facing outcome fact stays `failure`. The owner's own mailbox
 delivery of that completion adds no second line; a parent receiving a child's
 forwarded completion shows it as a notice. One classifier,
@@ -326,35 +331,73 @@ delivery, execution ownership, or process lifecycle.
 
 ## Eval process and state
 
-Live Eval runs in the host Emacs. Restoring the window configuration does not
-undo variable assignments, buffer edits, files written, timers, or other side
+Live Eval runs on the host Emacs's main thread and can only be stopped by the
+user's `C-g`; long or uncertain work belongs in fresh mode.
+Restoring the window configuration does not undo variable assignments,
+buffer edits, files written, timers, or other side
 effects. Use it only for effects within the authorized task. With UI preservation
 enabled, chat views restore their semantic cursor and reading positions after
 the frame layout is restored. A redraw during evaluation therefore does not let
 the saved window configuration move a background-work reader into an earlier
 Assistant block or the composer.
 
-Batch Eval starts a separate `emacs --batch -Q`. Its load path and working
+Fresh Eval starts a separate `emacs --batch -Q`. Its load path and working
 directory are supplied, but it does not copy loaded packages or live values.
 Load the code whose behavior you need to check in the expression itself:
 
 ```text
 Eval(expression="(and (require 'cl-lib) (cl-every #'numberp '(1 2 3)))",
-     mode="batch")
+     mode="fresh")
 ```
 
-For a batch check requiring protected files or network, use the additive
-permission fields above with `mode="batch"` and the Elisp `expression` in
+For a fresh check requiring protected files or network, use the additive
+permission fields above with `mode="fresh"` and the Elisp `expression` in
 place of a Bash `command`. Full escalation removes child confinement; it
 does not copy live Emacs state into the child. A failed expression can already
 have changed state before the error, so inspect relevant effects before retrying.
 
 Only one top-level form is read. Compound forms can sequence related operations
 and share lexical bindings. `print`, `prin1`, and `princ` contribute STDOUT;
-`message` goes to Emacs diagnostics instead. Unprintable objects appear as
+`message` text is returned as MESSAGES in every mode and still reaches the
+user normally in live mode. Errors include a bounded BACKTRACE and retain
+output printed before failure. Unprintable objects appear as
 `#<...>` and cannot be reconstructed by reading their printed representation.
-Batch Eval settles through its callback; the Bash polling controls above do
-not apply to it.
+Fresh Eval uses the managed yielding and polling controls above. Its script and
+result files are removed on completion, failure, stop, or owner/session teardown;
+the final result remains available through the retained execution record.
+
+### Persistent sandbox Eval
+
+`mode="sandbox"` keeps one confined `emacs -Q --batch` per session owner,
+including retained agents. It inherits the current load path, not the user's
+init or live state. Definitions persist between calls; results report
+started/reused and feature count. `reset: true` restarts before evaluation and
+is valid only in this mode. Busy calls are refused, not queued; a yielded call's
+`execution_id` is included, while foreground calls are identified as still
+starting/running.
+
+Calls yield and use the managed polling controls above. StopExecution kills the
+child and discards its definitions. Request abort does the same before yield;
+after yield the call survives request abort, like fresh Eval. Idle services hold
+neither agent results nor sleep inhibition and do not block rewind/transfer. The one-shot
+`mevedel-eval-sandbox-idle-timeout` defaults to 600 seconds; nil disables expiry.
+Session close, Emacs exit, rewind, fork and control transfer kill the sandbox.
+Working-directory or writable-root changes restart it on the next call.
+Results report lost definitions after reset, crash, expiry or restart once a
+request reached the child, even if it never replied. Child result sections are
+truncated with a marker before framing; the host retains its hard 1 MiB protocol bound.
+
+Sandbox Eval is automatic in Ask and Edits, subject to explicit rules, and
+always requires confinement, even in Full Access: default workspace writable
+roots, no network, no remembered grants. Additional permissions/escalation,
+remote execution targets and missing confinement are refused; use fresh Eval
+for per-call authority. Plan denies every Eval mode. Review evidence describes
+the persistent definitions, age, feature count and fixed confinement.
+
+The background-work panel and `/ps` show idle sandboxes with owner, age and
+last reported feature count; Stop discards their definitions. A busy sandbox
+uses its ordinary Eval row with a sandbox annotation, not a second row.
+Idle rows need no periodic redraw timer; the one-shot expiry still applies.
 
 ## Shell composition and outcomes
 

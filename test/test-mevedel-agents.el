@@ -427,7 +427,7 @@
                     "XrefDefinitions" "Skill" "TaskWrite"))
       (should (member tool tools))))
 
-  :doc "every named role reports natively; roles with Bash poll natively"
+  :doc "every named role reports natively; worker and verifier also evaluate natively"
   (dolist (name '("worker" "explorer" "reviewer" "verifier"))
     (let* ((resolved (mevedel-tool-resolve
                       (mevedel-agent--effective-specs (mevedel-agent-get name))))
@@ -436,6 +436,10 @@
       (should (member "SendMessage" active))
       (should-not (member "SendMessage" catalog))
       (should (member "ListAgents" catalog))
+      (if (member name '("worker" "verifier"))
+          (should (member "Eval" active))
+        (should-not (member "Eval" active)))
+      (should-not (member "Eval" catalog))
       (if (member "Bash" active)
           (should (member "WriteStdin" active))
         (should-not (member "WriteStdin" active)))

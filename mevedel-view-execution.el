@@ -40,6 +40,14 @@
 (declare-function mevedel-background-list-open "mevedel-background-list" (&optional context))
 (autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
 
+;; `mevedel-eval-sandbox'
+(declare-function mevedel-eval-sandbox-any-live-p "mevedel-eval-sandbox" (session))
+(autoload 'mevedel-eval-sandbox-any-live-p "mevedel-eval-sandbox")
+(declare-function mevedel-eval-sandbox-list-idle "mevedel-eval-sandbox" (session calls))
+(declare-function mevedel-eval-sandbox-stop-user "mevedel-eval-sandbox" (session snapshot))
+(autoload 'mevedel-eval-sandbox-list-idle "mevedel-eval-sandbox")
+(autoload 'mevedel-eval-sandbox-stop-user "mevedel-eval-sandbox")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
@@ -168,12 +176,12 @@ Only observed exit or focus loss clears it; polling cannot renew it.")
    (mapcar (lambda (row)
              (list (mevedel-view-execution--key 'agent row) 'agent row))
            agents)
-   (cl-loop for item in executions when (plist-get item :yielded)
-            collect (list (mevedel-view-execution--key 'execution item)
-                          'execution item))))
+   (cl-loop for item in executions
+            when (or (plist-get item :yielded) (plist-get item :eval-mode))
+            collect (list (mevedel-view-execution--key 'execution item) 'execution item))))
 
 (defun mevedel-view-execution-collect (session)
-  "Collect SESSION's active background panel entries without view state.
+  "Collect SESSION's active calls and agents, excluding idle services.
 Each entry is (KEY KIND DATA).  Presentation adapters pass these entries
 and their own retained terminal entries to `mevedel-view-execution--ordered'."
   (mevedel-view-execution--entries
@@ -271,11 +279,16 @@ Retain only its summary, not the inspector's output payloads."
 
 ;;;; Stable order and held rows
 
+(defvar mevedel-view-execution--sandbox-owner-keys nil
+  "Snapshot-to-owner-key table when the local panel has live sandboxes.
+Nil avoids annotation lookups entirely.  Other projections keep execution IDs.")
+
 (defun mevedel-view-execution--key (kind data)
   "Return the identity of a KIND row showing DATA."
-  (if (eq kind 'agent)
-      (list 'agent (plist-get data :path))
-    (list 'execution (plist-get data :owner) (plist-get data :execution-id))))
+  (or (and mevedel-view-execution--sandbox-owner-keys
+           (gethash data mevedel-view-execution--sandbox-owner-keys))
+      (if (eq kind 'agent) (list 'agent (plist-get data :path))
+        (list 'execution (plist-get data :owner) (plist-get data :execution-id)))))
 
 (defun mevedel-view-execution--start-time (data)
   "Return DATA's start as a float, or 0 when unknown."
@@ -438,6 +451,7 @@ point or a mouse lease, rows stay; losing protection restarts the period."
         (deadline (+ (float-time) mevedel-view-execution-grace-seconds)))
     (dolist (shown mevedel-view-execution--shown)
       (unless (or (member (car shown) live-keys)
+                  (eq (caar shown) 'sandbox)
                   (assoc (car shown) mevedel-view-execution--held)
                   ;; An expanded execution keeps its own terminal inspector.
                   (and (eq (nth 1 shown) 'execution)
@@ -516,9 +530,8 @@ continuation column of a window without fringes is left free."
       (mevedel-view-execution--state-face data))
      (mevedel-view-execution--face
       (concat " "
-              (string-pad (cond ((eq kind 'agent) "agent")
-                                ((eq (plist-get data :kind) 'monitor) "monitor")
-                                (t "bash"))
+              (string-pad (if (eq kind 'agent) "agent"
+                            (symbol-name (or (plist-get data :kind) 'bash)))
                           8)
               " "
               (truncate-string-to-width
@@ -700,7 +713,8 @@ the metadata is cut."
 (defun mevedel-view-execution--line (snapshot)
   "Return a whole clickable status row for execution SNAPSHOT."
   (let* ((session (mevedel-view--status-session))
-         (monitor (eq (plist-get snapshot :kind) 'monitor))
+         (kind (plist-get snapshot :kind))
+         (monitor (eq kind 'monitor))
          (owner (plist-get snapshot :owner))
          (events (or (plist-get snapshot :event-count) 0)))
     (mevedel-view-execution--row
@@ -709,7 +723,7 @@ the metadata is cut."
                            snapshot mevedel-view-execution--selected))
            :state (mevedel-view-execution--state-label snapshot)
            :state-face (mevedel-view-execution--state-face snapshot)
-           :kind (if monitor "monitor" "bash")
+           :kind (symbol-name (or kind 'bash))
            :started-at (and (not (or (plist-get snapshot :terminal-p)
                                     (plist-get snapshot :unavailable-p)
                                     (memq (plist-get snapshot :state) '(completed lost failed))))
@@ -720,15 +734,35 @@ the metadata is cut."
                               (memq (plist-get snapshot :state) '(completed lost failed)))
                           (plist-get snapshot :wall-time-seconds))
            :label (or (plist-get snapshot :description)
-                      (plist-get snapshot :command) "Bash")
-           :facts (delq nil
-                        (list (when monitor
-                                (format "%d %s" events (if (= events 1) "event" "events")))
-                              (when-let* ((expires (and monitor (plist-get snapshot :expires-at))))
-                                (format "until %s" (format-time-string "%H:%M" expires)))
-                              (unless (equal owner "/root") owner)))
+                      (plist-get snapshot :command)
+                      (if (eq kind 'eval) "Eval" "Bash"))
+           :facts (append
+                   (when (and mevedel-view-execution--sandbox-owner-keys
+                              (gethash snapshot mevedel-view-execution--sandbox-owner-keys))
+                     '("sandbox"))
+                   (delq nil
+                         (list (when monitor
+                                 (format "%d %s" events (if (= events 1) "event" "events")))
+                               (when-let* ((expires (and monitor (plist-get snapshot :expires-at))))
+                                 (format "until %s" (format-time-string "%H:%M" expires)))
+                               (unless (equal owner "/root") owner))))
            :callback (mevedel-view-execution--callback
                       'toggle session owner (plist-get snapshot :execution-id))))))
+
+(defun mevedel-view-execution--sandbox-line (session row)
+  "Return SESSION's idle sandbox ROW with frozen age and a Stop action."
+  (concat
+   (mevedel-view-execution--face
+    (truncate-string-to-width
+     (format "    Idle      sandbox  %s · %s · %s features"
+             (plist-get row :owner)
+             (mevedel--duration-label (- (float-time) (plist-get row :started-at)))
+             (plist-get row :features))
+     (max 1 (- (mevedel-view-execution--width) 9)) nil nil "…")
+    'mevedel-view-tool-metadata)
+   " " (mevedel-view-execution--button
+        "[Stop]" (lambda () (interactive) (mevedel-eval-sandbox-stop-user session row))
+        "RET: stop this idle sandbox and discard its definitions") "\n"))
 
 (defun mevedel-view-execution--agent-line (session row)
   "Return a whole clickable status row for SESSION's active agent ROW."
@@ -1031,7 +1065,8 @@ panel's collapse toggle, `[-]' or `[+]' when COLLAPSED."
                                                    '(blocked waiting)))
                                agents))
          (monitors (cl-count 'monitor live :key (lambda (item) (plist-get item :kind))))
-         (commands (- (length live) monitors))
+         (commands (cl-count-if (lambda (item)
+                                 (not (eq (plist-get item :kind) 'monitor))) live))
          (count (lambda (n singular plural)
                   (when (> n 0) (format "%d %s" n (if (= n 1) singular plural)))))
          (toggle (if collapsed "[+]" "[-]"))
@@ -1094,18 +1129,41 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
     (setq mevedel-view-execution--selected nil))
   (let* ((mevedel-view-execution--layout-width (mevedel-view-zone-width))
          (agents (mevedel-view--agent-status-collect))
-         (live (cl-remove-if-not (lambda (item) (plist-get item :yielded))
-                                (mevedel-view-execution--live session)))
+         (calls (mevedel-view-execution--live session))
+         (mevedel-view-execution--sandbox-owner-keys nil)
+         (idle
+          (when (mevedel-eval-sandbox-any-live-p session)
+            (setq mevedel-view-execution--sandbox-owner-keys (make-hash-table :test #'eq))
+            (dolist (call calls)
+              (when (eq (plist-get call :eval-mode) 'sandbox)
+                (puthash call (list 'sandbox (plist-get call :owner))
+                         mevedel-view-execution--sandbox-owner-keys)))
+            (mapcar (lambda (row)
+                      (let ((key (list 'sandbox (plist-get row :owner))))
+                        (puthash row key mevedel-view-execution--sandbox-owner-keys)
+                        (list key 'sandbox row)))
+                    (mevedel-eval-sandbox-list-idle session calls))))
+         (live (cl-remove-if-not
+                (if mevedel-view-execution--sandbox-owner-keys
+                    (lambda (item) (or (plist-get item :yielded) (plist-get item :eval-mode)))
+                  (lambda (item) (plist-get item :yielded)))
+                calls))
          (selected-live (cl-find-if
                          (lambda (item) (mevedel-view-execution--same-p
                                         item mevedel-view-execution--selected)) live))
          ;; State notification precedes terminal publication.  Keep the
          ;; selection through that gap, but do not offer live controls on
          ;; stale facts.
-         (retained (when (and mevedel-view-execution--selected (not selected-live))
-                     (setq mevedel-view-execution--selected
-                           (plist-put mevedel-view-execution--selected :unavailable-p t))))
-         (entries (mevedel-view-execution--entries agents live))
+         (retained
+          (progn
+            (when (and (not selected-live)
+                       (eq (plist-get mevedel-view-execution--selected :eval-mode) 'sandbox))
+              (setq mevedel-view-execution--selected nil))
+            (when (and mevedel-view-execution--selected (not selected-live))
+              (setq mevedel-view-execution--selected
+                    (plist-put mevedel-view-execution--selected :unavailable-p t)))))
+         (entries (if idle (nconc (mevedel-view-execution--entries agents live) idle)
+                    (mevedel-view-execution--entries agents live)))
          (hover (and (or mevedel-view-execution--shown mevedel-view-execution--held)
                      (mevedel-view-execution--pointer-on-panel-p)))
          (held (mevedel-view-execution--update-held entries hover))
@@ -1203,6 +1261,10 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                                       (equal (plist-get data :path)
                                              mevedel-view-execution--selected-agent))
                              (mevedel-view-execution--agent-held-details data))))
+                         ((eq (car item) 'sandbox)
+                          (mevedel-view-execution--anchor
+                           (mevedel-view-execution--sandbox-line session data)
+                           (mevedel-view-execution--key 'sandbox data)))
                          ((eq (car item) 'agent)
                           (concat (mevedel-view-execution--anchor
                                    (mevedel-view-execution--agent-line session data)

@@ -41,6 +41,20 @@ Claude Code caps background commands at 10 minutes by default and 2 hours at
 most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
+### Journal worker cancellation through a launcher script
+
+When `invocation-name` names a shell launcher rather than the Emacs binary,
+journal workers cannot be cancelled. Fedora's `emacs-desktop` launcher leaves
+a zombie `readlink` child in its process group, and the journal stopper
+(`mevedel-journal-worker.el`, near the "not a group leader" check) refuses to
+signal it. Reproduced 2026-11-17 by `mevedel-cockpit-surfaces-open-quit-windows/test@8`:
+it fails through the launcher and passes when invocation points at the real
+Emacs executable (`/proc/self/exe`). Decide whether workers should launch the
+resolved Emacs executable or whether the stopper's group-leader check should
+tolerate a launcher, and keep the stopper's protection against signalling
+unrelated processes. Fresh Eval launches the same `invocation-name`; its
+managed process-group stop was not checked against this launcher.
+
 ## Proactive sessions
 
 Source: the 2026-11-16 review of Anthropic's "Building always-on agents"
@@ -108,90 +122,14 @@ already cover being away.
 
 ## Eval integration
 
-Source: the 2026-11-16 discussion of why models choose Bash and Python
-scripts over Eval. Emacs state is fully inspectable, but live Eval looks like
-a human interruption, risks the user's editor and has thin error feedback.
-Batch Eval rebuilds every fixture on each call, so for multi-step work it is
-no better than a Python script. Planned modes: `live` (the user's Emacs),
-`sandbox` (persistent and isolated) and `fresh` (a new clean process per call).
+### Sandbox Eval extensions
 
-### Eval as a native tool
-
-Promote Eval from a ToolCall specialist to a native tool beside Bash.
-Measured cost (2026-11-16, Opus 5.5, `claude -p` with no tools against a
-548-token baseline system prompt):
-
-- `prompts/tools/eval.md` description: 1,081 input tokens; for comparison
-  `prompts/tools/bash.md` is 881. The argument schema adds to this and was
-  not measured separately.
-- mevedel's first root request through ACP, including its first-message
-  context reminders (about 28,600 characters): about 23,700 input tokens in
-  two root sessions.
-- Native Claude Code's first request in four projects with short first
-  messages: 39,354 to 46,128 input tokens, including those projects' own
-  instructions and memory.
-
-Eval therefore adds roughly 5–6% to mevedel's first request; later requests
-read it from the prompt cache. Remove its specialist listing entry when it
-becomes native.
-
-Change the permission reminder at the same time. The `ask` and `edits` texts
-(`mevedel-reminders.el:867-868`) say live Eval requires approval and do not
-reflect `mevedel-permission-reviewer`. With `auto`, observational live Eval is
-usually approved by review ([reviewer](guardian-prompts.md)), so the model
-avoids a tool that would rarely interrupt the user.
-
-### Rename batch Eval to fresh, and yield
-
-Rename the `batch` mode to `fresh` everywhere (`:eval-mode`, cards, execution
-profiles, prompts, docs, tests), with no alias, per NO BACKWARDS COMPATIBILITY.
-Fresh and sandbox Eval currently block the turn until they finish and have no
-deadline; give them Bash's `yield_time_ms`, `execution_id`, WriteStdin and
-StopExecution handling and completion wake-ups. Live Eval stays synchronous: it
-runs on Emacs's main thread.
-
-### Eval feedback and live limits
-
-- Capture `message` output from every mode. In live mode, still show it to
-  the user; do not hide the echo area to capture it.
-- Return a bounded backtrace with errors.
-- Document that live Eval cannot be interrupted reliably: `with-timeout` fires
-  only where timers can run, so a tight loop needs the user's `C-g`. Bound
-  recursion and output, and have the tool guidance steer long or uncertain
-  work to the sandbox.
-
-### Persistent sandbox Eval
-
-A long-lived child Emacs that keeps state between calls, so code can be loaded
-once and probed step by step (load the working tree, build a fixture buffer,
-redefine one function, retry) without touching the user's Emacs. Decisions so
-far:
-
-- One sandbox per agent: the root and each retained agent that uses it. Start
-  on first use, stop after idling, restart after a crash, and offer an
-  explicit reset. Show it in the background-work panel with a summary of
-  loaded features, since stale definitions are its main risk.
-- Start from `-Q` with the current `load-path`; load features on demand. Do
-  not load the user's init, which loads mevedel itself and could start
-  collaboration rooms, sleep inhibitors or servers. An opt-in init profile can
-  follow later.
-- Default confinement only, fixed at start. A call needing network or extra
-  paths uses fresh Eval, or restarts the sandbox with the new profile and says
-  so.
-- Run where mevedel's Emacs runs, which covers a remote mevedel host. In a
-  TRAMP session, reach files through TRAMP; a sandbox on the remote host can
-  follow later. Today batch Eval is refused in remote sessions
-  (`mevedel-tool-exec-permission.el`, "Batch Eval is unavailable for remote
-  sessions"); decide whether sandbox Eval keeps that refusal or runs locally
-  against TRAMP paths. Remote-execution tests use the `/mevedelmock:` TRAMP
-  method (`test/test-mevedel-execution-remote.el`); a remote-host sandbox would
-  also need a target with Emacs installed, such as a container.
-- Calls are asynchronous and yield like fresh Eval.
-- Write an ADR before implementation.
-
-Fresh Eval stays the clean-room check: a reset sandbox can keep loaded
-features, advice, timers and hooks, so only a fresh process proves that code
-loads and runs from scratch.
+[ADR 0133](adr/0133-add-persistent-sandbox-eval.md) leaves two extensions
+for when a concrete need appears: an opt-in init profile for the sandbox, and
+sandbox Eval for remote execution targets (locally against TRAMP paths, or on
+the remote host) if Elisp development over TRAMP needs it. Remote-host tests
+need an Emacs-equipped target such as a container; current remote tests use
+the `/mevedelmock:` method.
 
 ## View
 
@@ -426,3 +364,17 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
 - `mevedel-window-child-frame-return/test` failed once on parent-layout
   equality (109/110 on 2026-10-31; retry and base 110/110). Graphical,
   unreproduced; rerun on the private-KWin runner if it recurs.
+- `mevedel-agent-control-mail-batch/producer/test` stalled twice past 240 s in
+  parallel affected-tier runs (2026-11-16), but passed alone, in an isolated
+  24-test prefix replay on changed and pristine trees, and in 120 instrumented
+  stress runs. Confirmed mechanism for the missing deadline: installed TRAMP
+  2.8.2.31.1 discards an enclosing `with-timeout` timer during a direct TRAMP
+  file operation (here `mevedel-execution-process--append-spool`), while
+  `mevedel-transport-with-exclusive-connection` preserves it. The test wait
+  helper now also checks elapsed time. Why the producer predicate stayed false
+  is unexplained; production `with-timeout` uses around direct TRAMP
+  operations may share the lost-deadline mechanism.
+- `mevedel-execution-start-bash/remote/test@10` timed out once in a loaded
+  affected-tier run (2026-11-16) with `group-id nil` while waiting for the
+  fixture's zombie, before StopExecution. It passed in focused runs and in
+  three repeated runs each on the changed and pristine trees (113/113).

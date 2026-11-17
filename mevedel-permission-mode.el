@@ -346,9 +346,10 @@ Controls execution authority, confinement and approval behavior.
   `ask'       - Allow recognized inspection; review patches and prompt for
                 uncertain execution.  Use the configured sandbox preference.
   `edits'     - Automatically apply native edits within allowed roots and run
-                Bash and batch Eval with required child confinement.  Native
+                Bash and fresh Eval with required child confinement.  Native
                 reads cover OS-readable paths except configured credential
-                masks.  Live Eval and additional authority require approval.
+                masks.  Live Eval and additional authority go to the selected
+                permission reviewer (automatic review first, or the user).
   `full-auto' - Full Access under the target OS account: no confinement or
                 permission prompts, including native tools and live Eval.
                 Ordinary ask rules and protected-path defaults do not apply.

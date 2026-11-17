@@ -156,6 +156,7 @@
   pipeline-exit-codes
   pipeline-marker
   process
+  service-p
   settle-timer
   spool-path
   started-at
@@ -175,18 +176,21 @@
 
 (cl-defun mevedel-execution-process-create
     (&key workdir tty spool-path filter-function output-function pipeline-marker
-          stderr-function terminal-function diagnostic-scope)
+          stderr-function terminal-function diagnostic-scope service)
   "Create an opaque child for WORKDIR without launching it.
 DIAGNOSTIC-SCOPE is its captured workspace scope for deferred reports.
 OUTPUT-FUNCTION and STDERR-FUNCTION receive (CHILD RETAINED-CHUNK) after
 the shared spool cap.  Separated stderr bypasses FILTER-FUNCTION and
-OUTPUT-FUNCTION; otherwise both streams use the ordinary output path."
+OUTPUT-FUNCTION; otherwise both streams use the ordinary output path.
+SERVICE keeps pipe stdin open, omits the spool and observes exits by sentinel."
   (mevedel-execution-process--child-create
    :diagnostic-scope (or diagnostic-scope 'unavailable)
    :filter-function filter-function
    :output-function output-function
    :pipeline-marker pipeline-marker
-   :spool-path (or spool-path (make-temp-file "mevedel-execution-output-"))
+   :service-p service
+   :spool-path (unless service
+                 (or spool-path (make-temp-file "mevedel-execution-output-")))
    :started-at (float-time)
    :stderr-function stderr-function
    :terminal-function terminal-function
@@ -602,7 +606,9 @@ STDERR selects the separate consumer and bypasses stdout marker filtering."
                (chunk (if stderr chunk
                         (mevedel-execution-process--filter-pipeline-marker
                          child chunk)))
-               (appended (mevedel-execution-process--append-spool child chunk))
+               (appended (if (mevedel-execution-process--child-service-p child)
+                             (cons chunk nil)
+                           (mevedel-execution-process--append-spool child chunk)))
                (retained (car appended)))
           (when-let* ((function
                        (if stderr
@@ -723,7 +729,7 @@ after the owned process group settles, so EOF is not guaranteed."
 (defun mevedel-execution-process-read (child)
   "Return CHILD's complete decoded spooled output."
   (let ((path (mevedel-execution-process--child-spool-path child)))
-    (if (not (file-readable-p path))
+    (if (not (and path (file-readable-p path)))
         ""
       (with-temp-buffer
         (set-buffer-multibyte nil)
@@ -819,7 +825,7 @@ deferred work, so that case deletes immediately rather than leak."
     (setf (mevedel-execution-process--child-finished-p child) t
           (mevedel-execution-process--child-exit-code child) status)
     (let* ((path (mevedel-execution-process--child-spool-path child))
-           (bytes (or (and (file-readable-p path)
+           (bytes (or (and path (file-readable-p path)
                            (file-attribute-size (file-attributes path)))
                       0))
            (result
@@ -1107,7 +1113,8 @@ a target-side wrapper appends stderr to a temporary file instead, which
                    (mevedel-execution-process--child-process child))))
           (mevedel-execution-process--attach-stderr child)
           (let ((process (mevedel-execution-process--child-process child)))
-            (when (and (not (mevedel-execution-process--child-tty-p child))
+            (when (and (not (mevedel-execution-process--child-service-p child))
+                       (not (mevedel-execution-process--child-tty-p child))
                        (process-live-p process))
               (condition-case err
                   (process-send-eof process)
@@ -1115,7 +1122,8 @@ a target-side wrapper appends stderr to a temporary file instead, which
                  ;; A fast helper can exit between the liveness check and EOF.
                  (when (process-live-p process)
                    (signal (car err) (cdr err)))))))
-          (setf (mevedel-execution-process--child-watch-timer child)
+          (unless (mevedel-execution-process--child-service-p child)
+            (setf (mevedel-execution-process--child-watch-timer child)
                 (mevedel--run-periodic-timer
                  (mevedel-execution-process--child-diagnostic-scope child)
                  mevedel-execution-process--watch-interval
@@ -1127,7 +1135,7 @@ a target-side wrapper appends stderr to a temporary file instead, which
                        (when (and
                               (processp process)
                               (memq (process-status process) '(exit signal)))
-                         (mevedel-execution-process--ended child process)))))))
+                         (mevedel-execution-process--ended child process))))))))
           (when timeout
             (setf (mevedel-execution-process--child-timeout-timer child)
                   (mevedel-transport-run-at-time
@@ -1138,7 +1146,7 @@ a target-side wrapper appends stderr to a temporary file instead, which
        nil))))
 
 (defun mevedel-execution-process-write (child input)
-  "Write INPUT to live TTY CHILD."
+  "Write INPUT to live CHILD's writable stdin."
   (let ((process (mevedel-execution-process--child-process child)))
     (when (process-live-p process)
       (process-send-string process input)

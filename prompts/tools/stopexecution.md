@@ -1,4 +1,4 @@
-Stop one yielded Bash or Monitor execution owned by this agent.
+Stop one yielded Bash, Eval (fresh/sandbox), or Monitor execution owned by this agent.
 
 ### When to use `StopExecution`
 
@@ -7,12 +7,12 @@ Stop one yielded Bash or Monitor execution owned by this agent.
 ### When NOT to use `StopExecution`
 
 - Inferring a hang from quiet output alone; WriteStdin can wait for new evidence.
-- Requesting only an interrupt; WriteStdin accepts a single Ctrl-C character,
+- Requesting only an interrupt for Bash or Monitor; WriteStdin accepts Ctrl-C,
   but that is not a guaranteed stop, and its terminal notice can wake you.
 
 ### How to use `StopExecution`
 
-- Use the opaque `execution_id` from Bash, Monitor, or ListExecutions. Only the
+- Use the opaque `execution_id` from Bash, Eval, Monitor, or ListExecutions. Only the
   caller's yielded executions are addressable; monitors belong to root.
 - Returns the execution's final observation. Stopping ends that execution; it
   cannot be resumed and does not undo completed side effects.
@@ -33,6 +33,6 @@ StopExecution(execution_id="exec-42") after the temporary server is no longer ne
 StopExecution(execution_id="make test")
 <reasoning>
 The argument is an execution ID, not command text. Use the ID returned by Bash,
-Monitor, or ListExecutions.
+Eval, Monitor, or ListExecutions.
 </reasoning>
 </example>

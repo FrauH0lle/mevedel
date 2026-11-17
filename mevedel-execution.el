@@ -346,6 +346,8 @@ row redraws a second.")
   omitted-output-bytes
   origin
   outcome-function
+  result-function
+  terminal-result
   output-chars
   output-head
   output-limit-p
@@ -364,6 +366,10 @@ row redraws a second.")
   sandbox-facts
   sandbox-preparation
   scheduler-lease
+  service-active-p
+  service-call-p
+  service
+  active-call
   started-at
   stop-p
   termination
@@ -700,7 +706,8 @@ whose remote work is long finished recovers on its own."
 
 (defun mevedel-execution--notify-state-change (record)
   "Notify observers that RECORD's session execution set changed."
-  (when (mevedel-execution--record-execution-id record)
+  (when (or (mevedel-execution--record-execution-id record)
+            (eq (mevedel-execution--record-kind record) 'service))
     (let* ((origin (mevedel-execution--record-origin record))
            (session (mevedel-execution--origin-session origin))
            (data-buffer (mevedel-execution--origin-data-buffer origin)))
@@ -886,12 +893,13 @@ depend on the printer state of the context that takes it."
 
 (defun mevedel-execution--prepare
     (callback command workdir roots additional permissions session owner
-              &optional temporary-root teardown settlement)
+              &optional temporary-root teardown settlement required)
   "Prepare COMMAND under owned, cancellable discovery for SESSION and OWNER.
 CALLBACK receives preparation facts.  ROOTS, ADDITIONAL, PERMISSIONS and
 TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation.
 SETTLEMENT permits terminal snapshot work after producer cancellation; request
-identity, owner liveness, target and policy must still remain unchanged."
+identity, owner liveness, target and policy must still remain unchanged.
+REQUIRED forces confinement independently of the permission mode."
   (let* ((buffer (current-buffer))
          (request mevedel--current-request)
          (invocation (and (boundp 'mevedel--agent-invocation)
@@ -949,9 +957,10 @@ identity, owner liveness, target and policy must still remain unchanged."
            (lambda ()
              (when child (mevedel-execution-process-stop child 'aborted)))))
        command workdir roots additional permissions
-       (mevedel-sandbox-mode-effective
-        policy-session
-        (mevedel-permission-mode-effective policy-session nil nil request invocation))
+       (if required 'required
+         (mevedel-sandbox-mode-effective
+          policy-session
+          (mevedel-permission-mode-effective policy-session nil nil request invocation)))
        temporary-root (mevedel-diagnostic-scope policy-session)))))
 
 
@@ -989,7 +998,7 @@ identity, owner liveness, target and policy must still remain unchanged."
 (defun mevedel-execution--record-output-bytes (record)
   "Return the current spool size for RECORD."
   (let ((path (mevedel-execution--spool-path record)))
-    (or (and (file-readable-p path)
+    (or (and path (file-readable-p path)
              (file-attribute-size (file-attributes path)))
         0)))
 
@@ -1289,8 +1298,9 @@ settles: it is no longer waiting for admission."
   (cond
    ((mevedel-execution--record-finished-p record) 'completed)
    ((mevedel-execution--record-stop-p record) 'stopping)
-   ((mevedel-execution-process-launch-attempted-p
-     (mevedel-execution--record-child record))
+   ((or (mevedel-execution--record-service record)
+        (when-let* ((child (mevedel-execution--record-child record)))
+          (mevedel-execution-process-launch-attempted-p child)))
     'running)
    (t 'queued)))
 
@@ -1323,8 +1333,8 @@ execution's progress cost."
   "Return an immutable public fact snapshot for RECORD."
   (let* ((finished (mevedel-execution--record-finished-p record))
          (child-status
-          (mevedel-execution-process-status
-           (mevedel-execution--record-child record)))
+          (when-let* ((child (mevedel-execution--record-child record)))
+            (mevedel-execution-process-status child)))
          (origin (mevedel-execution--record-origin record))
          (exit-code (and finished
                          (mevedel-execution--record-exit-code record)))
@@ -1343,6 +1353,7 @@ execution's progress cost."
                             pipeline-codes)
                  (error '(:pipeline-classification unavailable)))))))
     (list :kind (or (mevedel-execution--record-kind record) 'bash)
+          :eval-mode (and (mevedel-execution--record-service-call-p record) 'sandbox)
           :description (mevedel-execution--record-description record)
           :expires-at (mevedel-execution--record-expires-at record)
           :event-count (and (eq (mevedel-execution--record-kind record) 'monitor)
@@ -1360,7 +1371,9 @@ execution's progress cost."
           :pipeline-failed-stages (plist-get pipeline-facts :pipeline-failed-stages)
           :pipeline-classification (plist-get pipeline-facts :pipeline-classification)
           :outcome (and finished
-                        (or (and (eq termination 'exited)
+                        (or (plist-get (mevedel-execution--record-terminal-result record)
+                                       :outcome)
+                            (and (eq termination 'exited)
                                  (or (plist-get pipeline-facts :pipeline-failed-stages)
                                      (equal exit-code (car (last pipeline-codes))))
                                  (plist-get pipeline-facts :pipeline-outcome))
@@ -1622,14 +1635,22 @@ settles a yielded execution.  The live spool always remains local."
   "Return an observation of RECORD and unread RANGE.
 CLAIMED non-nil marks it as the final model delivery.
 PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
-  (let ((facts (mevedel-execution--facts record)))
+  (let ((facts (mevedel-execution--facts record))
+        (result (plist-get (mevedel-execution--record-terminal-result record) :output)))
     (when project-unconsumed
       (setq facts
             (plist-put
              facts :omitted-output-bytes
              (+ (or (plist-get facts :omitted-output-bytes) 0)
                 (plist-get range :omitted)))))
-    (list :output (plist-get range :output)
+    (list :result (if (and result (mevedel-execution--record-yielded-p record))
+                      (plist-get
+                       (mevedel--head-tail-preview-parts
+                        result result (length result)
+                        mevedel-execution-inline-output-limit)
+                       :text)
+                    result)
+          :output (plist-get range :output)
           :facts facts
           :compound-profile-misses
           (mevedel-execution--copy-value
@@ -1661,9 +1682,13 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           (when (eq (mevedel-execution--record-kind record) 'monitor)
             (mevedel-execution--record-monitor-omitted record))
           :whole-output-truncated-p
-          (> (or (mevedel-execution--record-output-chars record) 0)
+          (> (if-let* ((result (plist-get (mevedel-execution--record-terminal-result record)
+                                         :output)))
+                 (length result)
+               (or (mevedel-execution--record-output-chars record) 0))
              mevedel-execution-inline-output-limit)
-          :whole-output (mevedel-execution--whole-preview record))))
+          :whole-output (or (plist-get observation :result)
+                            (mevedel-execution--whole-preview record)))))
     (plist-put event :facts (plist-get observation :facts))))
 
 (defun mevedel-execution--observation (record &optional claim-final)
@@ -1841,14 +1866,27 @@ returning: their callers expect the outcome settled."
         (mevedel-execution--monitor-line record t))
       (setf (mevedel-execution--record-finished-p record) t
             (mevedel-execution--record-delivery-pending-p record) t)
+      (when-let* ((function (mevedel-execution--record-result-function record)))
+        (unwind-protect
+            (progn
+              (mevedel-execution--collect-stderr record)
+              (setf (mevedel-execution--record-terminal-result record)
+                    (condition-case err
+                        (funcall function (mevedel-execution--sandbox-launch-result record))
+                      (error (list :output (format "Execution result failed: %s" err)
+                                   :outcome 'failure)))))
+          (setf (mevedel-execution--record-result-function record) nil)
+          (mevedel-execution--teardown-record record)))
       (mevedel-execution--settle-mutation record)
       (let* ((facts (mevedel-execution--record-sandbox-facts record))
              (refused-p (plist-get facts :refused))
              (started-p
               (and (not refused-p)
                    (not launch-failed)
-                   (mevedel-execution-process-launch-attempted-p
-                    (mevedel-execution--record-child record)))))
+                   (when-let* ((child (mevedel-execution--record-child
+                                      (or (mevedel-execution--record-service record)
+                                          record))))
+                     (mevedel-execution-process-launch-attempted-p child)))))
         (mevedel-execution-telemetry-record-sandbox-attempt
          (mevedel-execution--record-telemetry-context record)
          facts started-p refused-p))
@@ -1961,6 +1999,7 @@ process-filter appends use the published path."
   (unless (or (mevedel-execution--record-finished-p record)
               (mevedel-execution--record-yielded-p record))
     (when (or (eq (mevedel-execution--record-kind record) 'monitor)
+              (mevedel-execution--record-service record)
               (mevedel-execution-process-live-p
                (mevedel-execution--record-child record)))
       (mevedel-execution--publish-yielded-artifact record)
@@ -2154,12 +2193,15 @@ process-filter appends use the published path."
               (mevedel-execution--record-stop-p record))
     (setf (mevedel-execution--record-stop-p record) t
           (mevedel-execution--record-termination record) reason)
-    (if (mevedel-execution--record-preparation-cancel record)
-        (progn
-          (setf (mevedel-execution--record-exit-code record) -1)
-          (mevedel-execution--finish-managed record))
+    (cond
+     ((mevedel-execution--record-service record)
+      (mevedel-execution-service-stop (mevedel-execution--record-service record)))
+     ((mevedel-execution--record-preparation-cancel record)
+      (setf (mevedel-execution--record-exit-code record) -1)
+      (mevedel-execution--finish-managed record))
+     (t
       (mevedel-execution-process-stop
-       (mevedel-execution--record-child record) reason))))
+       (mevedel-execution--record-child record) reason)))))
 
 (defun mevedel-execution--abort-request-record (record)
   "Abort queued or foreground RECORD for its originating request."
@@ -2178,11 +2220,12 @@ process-filter appends use the published path."
               command workdir
               writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
-              outcome-function read-only-p tool-args tool-use-id tty
+              outcome-function result-function teardown-function
+              read-only-p tool-args tool-use-id tty
               pipeline-marker pipeline-facts-function
               permission-approvals (kind 'bash) description (timeout-ms 300000)
               (yield-time-ms 10000))
-  "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
+  "Start managed COMMAND and call CALLBACK at terminal or yield.
 
 SESSION, canonical OWNER, and OWNER-CONTEXT fix the control boundary.
 OWNER-CONTEXT is the durable mailbox object captured at spawn.
@@ -2191,6 +2234,8 @@ match the one-shot interface; TEMPORARY-ROOT is the writable temporary
 directory that protected-path discovery skips.  ARTIFACT-DIRECTORY owns the
 spool after yield.
 OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
+RESULT-FUNCTION receives terminal child facts and returns :output and :outcome.
+Its result is frozen before TEARDOWN-FUNCTION releases caller-owned resources.
 PIPELINE-MARKER identifies a private final-pipeline status frame;
 PIPELINE-FACTS-FUNCTION derives final pipeline facts from its exit codes.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
@@ -2201,7 +2246,8 @@ not execution authority.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement.  KIND `monitor' yields immediately, frames stdout lines,
-and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
+and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime.
+KIND `eval' uses the exclusive lane, without pipeline framing or input."
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
@@ -2213,6 +2259,9 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
       (error "Monitor requires a non-empty description"))
     (unless (and (integerp timeout-ms) (<= 1000 timeout-ms 3600000))
       (error "Monitor timeout_ms must be between 1000 and 3600000")))
+  (when (eq kind 'eval)
+    (when tty (error "Fresh Eval does not support TTY execution"))
+    (setq read-only-p nil pipeline-marker nil pipeline-facts-function nil))
   (when (and tty (eq system-type 'windows-nt))
     (signal 'mevedel-execution-input-error
             (list "PTY execution is unavailable on Windows")))
@@ -2275,6 +2324,8 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
               :tool-args tool-args
               :tool-use-id tool-use-id)
              :outcome-function outcome-function
+             :result-function result-function
+             :teardown-function teardown-function
              :pipeline-marker pipeline-marker
              :pipeline-facts-function pipeline-facts-function
              :permission-approvals
@@ -2411,6 +2462,9 @@ after WAIT-MS while the process remains live."
     (unless (or (null chars) (stringp chars))
       (signal 'mevedel-execution-input-error
               (list "Execution input must be a string")))
+    (when (and input-p (eq (mevedel-execution--record-kind record) 'eval))
+      (signal 'mevedel-execution-input-error
+              (list "Eval accepts only empty polling input; use StopExecution to stop it")))
     (when (and input-p (mevedel-execution--record-observer record))
       (mevedel-execution--flush-observer record))
     (when (mevedel-execution--record-observer record)
@@ -2563,6 +2617,9 @@ after WAIT-MS while the process remains live."
             (list "Interrupting managed execution is unavailable on Windows")))
   (let ((record
          (mevedel-execution--user-live-record session execution-id)))
+    (when (mevedel-execution--record-service-call-p record)
+      (signal 'mevedel-execution-input-error
+              '("Sandbox Eval cannot be interrupted in place; stop it instead")))
     (unless (mevedel-execution-process-launch-attempted-p
              (mevedel-execution--record-child record))
       (signal 'mevedel-execution-input-error
@@ -2583,13 +2640,19 @@ after WAIT-MS while the process remains live."
                (mevedel-execution--state-records state)))
     records))
 
+(defun mevedel-execution--idle-service-p (record)
+  "Return non-nil when RECORD is a service with no call in flight."
+  (and (eq (mevedel-execution--record-kind record) 'service)
+       (not (mevedel-execution--record-service-active-p record))))
+
 (defun mevedel-execution-owner-live-p (session owner)
   "Return non-nil when OWNER has an unsettled execution in SESSION."
   (when-let* ((state (and session
                           (mevedel-session-execution-state session))))
     (let (live-p)
       (dolist (record (mevedel-execution--state-record-list state))
-         (when (and (not (mevedel-execution--record-delivery-state record))
+         (when (and (not (mevedel-execution--idle-service-p record))
+                    (not (mevedel-execution--record-delivery-state record))
                     (equal (mevedel-execution--origin-owner
                             (mevedel-execution--record-origin record))
                            owner))
@@ -2604,8 +2667,9 @@ not active work and cannot keep session transfer or history changes blocked."
                           (mevedel-session-execution-state session))))
     (let (live-p)
       (dolist (record (mevedel-execution--state-record-list state))
-        (when (or (not (mevedel-execution--record-finished-p record))
-                  (mevedel-execution--record-delivery-pending-p record))
+        (when (and (not (mevedel-execution--idle-service-p record))
+                   (or (not (mevedel-execution--record-finished-p record))
+                       (mevedel-execution--record-delivery-pending-p record)))
           (setq live-p t)))
       live-p)))
 
@@ -2627,11 +2691,20 @@ A monitor waiting for events is live but not working."
          (maphash (lambda (_id record)
                     (when (and (not (eq (mevedel-execution--record-kind record)
                                         'monitor))
-                               (mevedel-execution--managed-live-p record))
+                               (or (mevedel-execution--managed-live-p record)
+                                   (and (eq (mevedel-execution--record-kind record) 'service)
+                                        (mevedel-execution--record-service-active-p record)
+                                        (not (mevedel-execution--record-finished-p record)))))
                       (throw 'working t)))
                   (mevedel-execution--state-records state))))
      mevedel-execution--sessions)
     nil))
+
+(defun mevedel-execution--teardown-record (record)
+  "Release RECORD's caller-owned resources exactly once."
+  (when-let* ((function (mevedel-execution--record-teardown-function record)))
+    (setf (mevedel-execution--record-teardown-function record) nil)
+    (ignore-errors (funcall function))))
 
 (defun mevedel-execution--finalize-discarded-record
     (record managed-live-p)
@@ -2646,10 +2719,7 @@ MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
         (mevedel-sandbox-cleanup preparation))))
   (mevedel-execution--release-scheduler record)
   (mevedel-execution--cleanup-record record)
-  (when-let* ((function
-               (mevedel-execution--record-teardown-function record)))
-    (setf (mevedel-execution--record-teardown-function record) nil)
-    (ignore-errors (funcall function))))
+  (mevedel-execution--teardown-record record))
 
 (defun mevedel-execution--discard-record (record reason)
   "Kill and forget RECORD because of lifecycle REASON.
@@ -2688,8 +2758,10 @@ instead discards it, and the late acknowledgement then finds it gone."
 	(when-let* ((lease
                      (mevedel-execution--record-scheduler-lease record)))
           (mevedel-execution-scheduler-cancel lease))
-	(if (mevedel-execution-process-launch-attempted-p
-             (mevedel-execution--record-child record))
+	(when-let* ((service (mevedel-execution--record-service record)))
+          (mevedel-execution-service-stop service))
+	(if (when-let* ((child (mevedel-execution--record-child record)))
+              (mevedel-execution-process-launch-attempted-p child))
             (if managed-live-p
 		(progn
                   (mevedel-execution--stop-process record reason)
@@ -2714,9 +2786,10 @@ Return the number of executions selected."
         records)
     (when state
       (dolist (record (mevedel-execution--state-record-list state))
-         (when (equal owner
-                      (mevedel-execution--origin-owner
-                       (mevedel-execution--record-origin record)))
+         (when (and (not (mevedel-execution--idle-service-p record))
+                    (equal owner
+                           (mevedel-execution--origin-owner
+                            (mevedel-execution--record-origin record))))
            (push record records)))
       (dolist (record records)
         (mevedel-execution--discard-record record 'owner-stopped)))
@@ -2844,12 +2917,250 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
            #'mevedel-execution--record-finished-p
            (mevedel-execution--state-record-list state))))
     (dolist (record records)
-      (mevedel-execution--stop-user-record record))
+      (if (eq (mevedel-execution--record-kind record) 'service)
+          (progn
+            (when-let* ((call (mevedel-execution--record-active-call record)))
+              (mevedel-execution--stop-user-record call))
+            (mevedel-execution-service-stop record))
+        (mevedel-execution--stop-user-record record)))
     (length records)))
 
 
 ;;
-;;; Confined one-shot interface
+;;; Confined services and one-shot interface
+
+(cl-defun mevedel-execution-start-service-call
+    (callback start &key session owner owner-context data-buffer request tool-args
+              tool-use-id permission-approvals workdir (yield-time-ms 10000))
+  "Admit a childless Eval call and invoke START with its opaque handle.
+CALLBACK receives ordinary execution observations.  START binds a service
+and eventually settles the handle.  SESSION, OWNER and OWNER-CONTEXT fix
+authority; DATA-BUFFER, TOOL-ARGS, TOOL-USE-ID and PERMISSION-APPROVALS fix
+presentation.  REQUEST owns foreground cancellation.  WORKDIR and
+YIELD-TIME-MS have the managed execution meaning."
+  (unless session (error "Sandbox Eval requires an active session"))
+  (let ((state (mevedel-execution--state-for-session session)))
+    (dolist (record (mevedel-execution--state-record-list state))
+      (when (and (mevedel-execution--record-service-call-p record)
+                 (not (mevedel-execution--record-finished-p record))
+                 (equal owner (mevedel-execution--origin-owner
+                               (mevedel-execution--record-origin record))))
+        (if (mevedel-execution--record-yielded-p record)
+            (error "Sandbox is busy; running execution_id: %s"
+                   (mevedel-execution--record-execution-id record))
+          (error "Sandbox is busy; its current call is still starting or running in the foreground"))))
+    (mevedel-session-artifacts-assert-new-mutation-authority
+     (mevedel-execution--mutation-target session))
+    (when (mevedel-execution-mutation-refused-p session)
+      (error "%s" mevedel-execution-mutation-blocked-message))
+    (when (>= (mevedel-execution--managed-count state) mevedel-execution-live-limit)
+      (signal 'mevedel-execution-limit '("Session execution limit reached")))
+    (let* ((id (mevedel-execution--next-id state))
+           (record (mevedel-execution--record-create
+                    :kind 'eval :service-call-p t :mutating-p t
+                    :execution-id id :token id :callback callback
+                    :workdir workdir :started-at (float-time)
+                    :telemetry-context
+                    (mevedel-execution-telemetry-context-create
+                     :session session :execution-id id :tool-use-id tool-use-id
+                     :owner owner :invocation owner-context)
+                    :output-chars 0 :output-head "" :output-tail "" :read-offset 0
+                    :yield-time-ms yield-time-ms
+                    :permission-approvals (mevedel-execution--copy-value permission-approvals)
+                    :origin (mevedel-execution--origin-create
+                             :session session :owner owner :owner-context owner-context
+                             :data-buffer data-buffer :tool-args tool-args :tool-use-id tool-use-id)))
+           (invocation (and (buffer-live-p data-buffer)
+                            (buffer-local-value 'mevedel--agent-invocation data-buffer)))
+           (mode (mevedel-permission-mode-effective session data-buffer nil request invocation)))
+      (puthash id record (mevedel-execution--state-records state))
+      (mevedel-execution--notify-state-change record)
+      (let ((lease
+             (mevedel-execution-scheduler-submit
+              (mevedel-execution--state-scheduler state) 'exclusive
+              (lambda (lease)
+                (setf (mevedel-execution--record-scheduler-lease record) lease)
+                (condition-case err
+                    (progn
+                      (unless (eq mode (mevedel-permission-mode-effective
+                                        session data-buffer nil request invocation))
+                        (error "Permission mode changed while Eval was queued; submit again"))
+                      (with-current-buffer (or data-buffer (current-buffer))
+                        (let ((mevedel--current-request request)
+                              (mevedel--agent-invocation invocation))
+                          (funcall start record))))
+                  (error
+                   (mevedel-execution-service-call-settle
+                    record (list :output (error-message-string err) :outcome 'failure)))))
+              (lambda () (and (mevedel-execution--owner-admissible-p owner-context)
+                              (not (mevedel-execution-mutation-blocked-p session))))
+              (lambda (lease) (mevedel-execution--reject-owner-record record lease))
+              (mevedel-diagnostic-scope session))))
+        (unless (or (mevedel-execution--record-finished-p record)
+                    (mevedel-execution--record-scheduler-lease record))
+          (setf (mevedel-execution--record-scheduler-lease record) lease)))
+      (when request
+        (mevedel-request-push-canceller
+         request (lambda () (mevedel-execution--abort-request-record record))))
+      record)))
+
+(defun mevedel-execution-service-bind-call (service call)
+  "Bind opaque SERVICE to CALL, refusing any other in-flight call."
+  (unless (and (mevedel-execution-service-live-p service)
+               (not (mevedel-execution--record-finished-p call)))
+    (error "Sandbox call has ended"))
+  (when-let* ((active (mevedel-execution--record-active-call service)))
+    (unless (eq active call) (error "Sandbox already has a call")))
+  (setf (mevedel-execution--record-active-call service) call
+        (mevedel-execution--record-service call) service
+        (mevedel-execution--record-sandbox-facts call)
+        (plist-get (mevedel-execution--record-sandbox-preparation service) :facts))
+  ;; Preparation still belongs to the foreground request.  Start the yield
+  ;; clock only at READY, just as fresh Eval does after launching its child.
+  (when (and (mevedel-execution-process-launch-attempted-p
+              (mevedel-execution--record-child service))
+             (not (mevedel-execution--record-yield-timer call)))
+    (mevedel-execution--arm-managed-timers call)))
+
+(defun mevedel-execution-service-call-settle (call result)
+  "Settle opaque CALL once with formatted RESULT (:output and :outcome)."
+  (unless (mevedel-execution--record-finished-p call)
+    (when-let* ((service (mevedel-execution--record-service call)))
+      (when (eq call (mevedel-execution--record-active-call service))
+        (setf (mevedel-execution--record-active-call service) nil)))
+    (setf (mevedel-execution--record-terminal-result call) result
+          (mevedel-execution--record-exit-code call)
+          (if (eq (plist-get result :outcome) 'success) 0 -1)
+          (mevedel-execution--record-termination call)
+          (or (mevedel-execution--record-termination call) 'exited))
+    (mevedel-execution--finish-managed call)))
+
+(cl-defun mevedel-execution-start-service
+    (ready receive closed &key session owner command workdir writable-roots
+           temporary-root)
+  "Start an always-confined session service and return its opaque handle.
+READY receives the handle after launch; RECEIVE receives (HANDLE CHUNK).
+CLOSED receives terminal facts exactly once, including preparation failure.
+SESSION and OWNER fix its lifetime.  COMMAND, WORKDIR, WRITABLE-ROOTS and
+TEMPORARY-ROOT describe its default confinement, without remembered grants.
+The caller bounds protocol output; the service has no spool or periodic watch.
+Preparation counts as active work until the caller settles its first call."
+  (unless session (error "A service requires an active session"))
+  (when (or (file-remote-p workdir)
+            (mevedel-execution-target-remote-p
+             (mevedel-session-execution-target session)))
+    (error "Sandbox services require a local target"))
+  (mevedel-session-artifacts-assert-new-mutation-authority
+   (mevedel-execution--mutation-target session))
+  (let* ((record (mevedel-execution--record-create
+                  :kind 'service :service-active-p t :workdir workdir
+                  :token (gensym "service-")
+                  :origin (mevedel-execution--origin-create
+                           :session session :owner owner
+                           :data-buffer (current-buffer))))
+         (state (mevedel-execution--state-for-session session)))
+    (setf
+     (mevedel-execution--record-teardown-function record)
+     (lambda ()
+       (mevedel-sandbox-cleanup
+        (mevedel-execution--record-sandbox-preparation record))
+       (mevedel-execution--notify-state-change record)
+       (when-let* ((call (mevedel-execution--record-active-call record)))
+         (unless (mevedel-execution--record-termination call)
+           (setf (mevedel-execution--record-termination call)
+                 (mevedel-execution--record-termination record))))
+       (unwind-protect
+           (funcall closed
+                    (list :error (mevedel-execution--record-error-data record)
+                          :termination (mevedel-execution--record-termination record)))
+         (when-let* ((call (mevedel-execution--record-active-call record)))
+           (mevedel-execution-service-call-settle
+            call (list :output
+                       (concat "Sandbox ended."
+                               (when (mevedel-execution-process-launch-attempted-p
+                                      (mevedel-execution--record-child record))
+                                 " Earlier definitions are gone."))
+                       :outcome 'failure)))))
+     (mevedel-execution--record-child record)
+     (mevedel-execution-process-create
+      :service t :workdir workdir
+      :diagnostic-scope (mevedel-diagnostic-scope session)
+      :output-function (lambda (_child chunk) (funcall receive record chunk))
+      :terminal-function
+      (lambda (_child result)
+        (unless (mevedel-execution--record-finished-p record)
+          (setf (mevedel-execution--record-finished-p record) t
+                (mevedel-execution--record-error-data record) (plist-get result :error)
+                (mevedel-execution--record-termination record) (plist-get result :termination))
+          (mevedel-execution--cleanup-record record)
+          (mevedel-execution--teardown-record record)))))
+    (puthash (mevedel-execution--record-token record) record
+             (mevedel-execution--state-records state))
+    (mevedel-execution--notify-state-change record)
+    (condition-case err
+        (let ((cancel
+               (mevedel-execution--prepare
+                (lambda (preparation)
+                  (if (mevedel-execution--record-finished-p record)
+                      (mevedel-sandbox-cleanup preparation)
+                    (setf (mevedel-execution--record-preparation-cancel record) nil
+                          (mevedel-execution--record-sandbox-preparation record) preparation)
+                    (if (not (eq (plist-get preparation :state) 'confined))
+			(progn
+                          (setf (mevedel-execution--record-error-data record)
+				(list 'error (format "Sandbox requires confinement: %s. Use fresh Eval instead."
+                                                     (plist-get preparation :error))))
+                          (mevedel-execution-service-stop record))
+                      (when (mevedel-execution-process-start
+                             (mevedel-execution--record-child record)
+                             :name "mevedel-service" :command (plist-get preparation :command)
+                             :coding 'utf-8-unix :confined t)
+			(funcall ready record)))))
+                command workdir writable-roots nil nil session owner
+                temporary-root (lambda () (mevedel-execution-service-stop record)) nil t)))
+          (cond
+           ((mevedel-execution--record-finished-p record)
+            (when cancel (funcall cancel)))
+           ((not (mevedel-execution-process-launch-attempted-p
+                  (mevedel-execution--record-child record)))
+            (setf (mevedel-execution--record-preparation-cancel record) cancel))))
+      (error
+       (setf (mevedel-execution--record-error-data record) err)
+       (mevedel-execution-service-stop record)))
+    record))
+
+(defun mevedel-execution-service-live-p (service)
+  "Return whether opaque SERVICE is preparing or owns a live child."
+  (and service (not (mevedel-execution--record-finished-p service))))
+
+(defun mevedel-execution-service-set-active (service active)
+  "Mark opaque SERVICE's foreground call ACTIVE, or settled when nil."
+  (when active
+    (unless (mevedel-execution-service-live-p service) (error "Service has ended"))
+    (mevedel-session-artifacts-assert-new-mutation-authority
+     (mevedel-execution--mutation-target
+      (mevedel-execution--origin-session (mevedel-execution--record-origin service)))))
+  (setf (mevedel-execution--record-service-active-p service) active)
+  (mevedel-execution--notify-state-change service))
+
+(defun mevedel-execution-service-write (service text)
+  "Send protocol TEXT to opaque SERVICE's writable pipe."
+  (unless (and (mevedel-execution-service-live-p service)
+               (mevedel-execution-process-write
+                (mevedel-execution--record-child service) text))
+    (error "Service pipe is closed")))
+
+(defun mevedel-execution-service-stop (service)
+  "Stop opaque SERVICE, including its process group and pending preparation."
+  (when (mevedel-execution-service-live-p service)
+    (mevedel-execution--discard-record service 'service-stopped)))
+
+(defun mevedel-execution-stop-services (session)
+  "Stop all services in SESSION before changing its history or control."
+  (dolist (record (mevedel-execution--state-record-list
+                   (mevedel-session-execution-state session)))
+    (when (eq (mevedel-execution--record-kind record) 'service)
+      (mevedel-execution-service-stop record))))
 
 (cl-defun mevedel-execution-start-one-shot
     (callback &key name command workdir writable-roots

@@ -64,6 +64,8 @@ Data model
   mevedel-execution-transcript.el durable execution render data and archive reconciliation
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation
+  mevedel-eval-capture.el     shared Eval value, output, message and backtrace capture
+  mevedel-eval-sandbox.el     persistent owner-scoped confined Eval protocol and idle expiry
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   FD-backed grant mounts and the protected-path mount plan
   mevedel-pin.el              symlink-refusing opens and writes of authorized tool paths

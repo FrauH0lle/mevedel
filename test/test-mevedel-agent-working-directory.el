@@ -13,6 +13,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
 (require 'mevedel-claude-code-context)
 (require 'mevedel-context-delivery)
@@ -25,6 +26,15 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
+(require 'mevedel-tool-exec)
+(require 'mevedel-execution)
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-turn)
+(require 'mevedel-sandbox)
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -219,6 +229,137 @@
         (mevedel-session-persistence-lock-release (mevedel-session-save-path session)))
       (when (buffer-live-p parent) (kill-buffer parent))
       (delete-directory linked-root t)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-agent-control-send-message/sandbox-lifetime
+  (:before-each (mevedel-tools-register)
+   :after-each (mevedel-workspace-clear-registry)
+   :quiet t)
+  ,test
+  (test)
+  :doc "turn finalization preserves idle Eval, kills active Eval, and moved turns restart"
+  (let* ((probe (mevedel-sandbox-probe))
+         (_ (unless (plist-get probe :available) (ert-skip (plist-get probe :reason))))
+         (root (file-name-as-directory (make-temp-file "agent-sandbox-lifetime-" t)))
+         (moved (file-name-as-directory (file-name-concat root "moved")))
+         (workspace (mevedel-workspace-get-or-create 'project root root "lifetime"))
+         (session (mevedel-session-create "main" workspace root))
+         (parent (generate-new-buffer " *agent-sandbox-lifetime*"))
+         (mevedel-eval-sandbox-idle-timeout nil)
+         (start-service (symbol-function 'mevedel-execution-start-service))
+         child terminal services)
+    (unwind-protect
+        (progn
+          (make-directory moved)
+          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (with-current-buffer parent
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory root))
+          (cl-letf (((symbol-function 'mevedel-execution-start-service)
+                     (lambda (&rest args)
+                       (push (apply start-service args) services)
+                       (car services)))
+                    ((symbol-function 'mevedel-agent-exec-run)
+                     (lambda (callback _role _description _invocation buffer &optional _configure)
+                       (setq terminal callback child buffer)
+                       (with-current-buffer child (mevedel-request-begin session))
+                       'provider-request)))
+            (cl-labels
+                ((evaluate (expression)
+                   (let (reply)
+                     (with-current-buffer child
+                       (mevedel-tool-exec--eval
+                        (lambda (value) (setq reply value))
+                        (list :expression expression :mode "sandbox" :yield_time_ms 10000)))
+                     (test-mevedel-execution--wait (lambda () reply) 15)
+                     (should-not (eq 'error (plist-get reply :status)))
+                     (plist-get reply :result)))
+                 (finish ()
+                   (funcall terminal "Done.")
+                   (should (eq 'idle (mevedel-agent-record-activity
+                                      (cdr (assoc "/root/probe" (mevedel-session-agent-registry session))))))
+                   (should-not (buffer-local-value 'mevedel--current-request child))
+                   (should-not (mevedel-execution-owner-live-p session "/root/probe"))
+                   (should-not (mevedel-execution-session-live-p session))
+                   (should (mevedel-execution-service-live-p (car services)))
+                   (should (plist-get (mevedel-eval-sandbox-status session "/root/probe") :features))))
+              (with-current-buffer parent
+                (mevedel-agent-control-spawn session "probe" "Inspect." #'ignore))
+              (let ((invocation (buffer-local-value 'mevedel--agent-invocation child)))
+                (setf (mevedel-agent-invocation-parent-tool-use-id invocation) "sandbox-card")
+                (with-current-buffer parent
+                  (let ((start (point)))
+                    (insert "(:name \"Agent\" :args (:task_name \"probe\"))\n\nStarted.\n")
+                    (insert (mevedel-tool-render-data-format
+                             (list :kind 'collaboration-event :event 'started :path "/root/probe"
+                                   :agent-id (mevedel-agent-invocation-agent-id invocation)
+                                   :status 'running) "sandbox-card"))
+                    (put-text-property start (point) 'gptel '(tool . "sandbox-card")))))
+              (should (string-search "Result:\n73" (evaluate "(setq lifetime-marker 73)")))
+              (let* ((invocation (buffer-local-value 'mevedel--agent-invocation child))
+                     (summary (car (mevedel-agent-invocation-sandbox-summary-cell invocation))))
+                (should (= 1 (plist-get summary :attempt-count) (plist-get summary :started-count)))
+                (should-not (mevedel-execution-telemetry-sandbox-summary-class summary))
+                (mevedel-agent-conversation-refresh invocation)
+                (let ((card (mevedel-tool-render-data-for-tool parent "sandbox-card")))
+                  (should card)
+                  (should-not (plist-get card :sandbox-summary))))
+              (finish)
+              (with-current-buffer parent
+                (should (eq 'started (plist-get
+                                      (mevedel-agent-control-send-message session "/root/probe" "Again.")
+                                      :delivery))))
+              (let ((text (evaluate "lifetime-marker")))
+                (should (string-search "Result:\n73" text))
+                (should (string-search "Sandbox reused" text)))
+              (should (= 1 (length services)))
+              (finish)
+              (with-current-buffer parent
+                (should (eq 'started (plist-get
+                                      (mevedel-agent-control-send-message
+                                       session "/root/probe" "Move." :working-directory moved)
+                                      :delivery))))
+              (let ((text (evaluate "(list (boundp 'lifetime-marker) default-directory)")))
+                (should (string-match "Result:\n\\([^\n]+\\)" text))
+                (let ((value (read (match-string 1 text))))
+                  (should-not (car value))
+                  (should (equal moved (cadr value))))
+                (should (string-search "Earlier definitions are gone" text)))
+              (should (= 2 (length services)))
+              (should-not (mevedel-execution-service-live-p (cadr services)))
+              (finish)
+              (with-current-buffer parent
+                (should (eq 'started (plist-get
+                                      (mevedel-agent-control-send-message session "/root/probe" "Wait.")
+                                      :delivery))))
+              (let (reply)
+                (with-current-buffer child
+                  (mevedel-tool-exec--eval
+                   (lambda (value) (setq reply value))
+                   '(:expression "(sleep-for 30)" :mode "sandbox" :yield_time_ms 250)))
+                (test-mevedel-execution--wait (lambda () reply) 5)
+                (let ((facts (plist-get reply :render-data)))
+                  (should (eq 'running (plist-get facts :state)))
+                  (should (stringp (plist-get facts :execution-id))))
+                (should (mevedel-execution-owner-live-p session "/root/probe"))
+                (should (mevedel-execution-working-p))
+                ;; A normal result callback waits for owned work; force the
+                ;; real finalizer while the yielded call still owns the service.
+                (with-current-buffer child
+                  (mevedel-agent-runtime--finalize mevedel--agent-invocation 'aborted))
+                (test-mevedel-execution--wait
+                 (lambda () (not (mevedel-execution-service-live-p (car services)))) 5)
+                (should-not (buffer-local-value 'mevedel--current-request child))
+                (should-not (mevedel-execution-owner-live-p session "/root/probe"))
+                (should-not (mevedel-execution-session-live-p session))
+                (should-not (mevedel-execution-working-p))))))
+      (mevedel-execution-teardown-session session)
+      (dolist (buffer (list child parent))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-lock-release (mevedel-session-save-path session)))
       (delete-directory root t))))
 
 (provide 'test-mevedel-agent-working-directory)

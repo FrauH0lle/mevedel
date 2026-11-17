@@ -478,10 +478,10 @@
                   (sandbox-full-escalation "without confinement")))
     (let ((body (mevedel-permission--format-cause
                  (list :permission-mode-effective 'full-auto
-                       :mode "batch" :permission-via (car case)))))
+                       :mode "fresh" :permission-via (car case)))))
       (should (string-match-p "full-auto" body))
       (should (string-match-p (cadr case) body))
-      (should-not (string-match-p "batch" body))))
+      (should-not (string-match-p "fresh" body))))
   :doc "absent policy provenance is not guessed from the tool kind"
   (should-not (mevedel-permission--format-cause '(:kind bash))))
 
@@ -701,7 +701,7 @@
                         :permission-via 'one-shot-mutation
                         :command (and (eq kind 'bash) operation)
                         :expression (and (eq kind 'eval) operation)
-                        :mode "batch" :callback #'ignore
+                        :mode "fresh" :callback #'ignore
                         :resource-selection-cell selection
                         :requested-additional-permissions
                         '(:file-system ((:path "/srv/input" :access read))))))
@@ -775,8 +775,8 @@
                    (:kind generic :tool-name "Eval" :args (:expression "(+ 1 2)"))))
     (should (string-match-p "Live Eval runs inside this Emacs"
                             (mevedel-permission--execution-warnings entry))))
-  (dolist (entry '((:kind eval :mode "batch")
-                   (:kind generic :tool-name "Eval" :args (:mode "batch"))
+  (dolist (entry '((:kind eval :mode "fresh")
+                   (:kind generic :tool-name "Eval" :args (:mode "fresh"))
                    (:kind bash)))
     (should (string-empty-p (mevedel-permission--execution-warnings entry))))
   (dolist (entry '((:kind sandbox :sandbox-permissions require-escalated)
@@ -942,14 +942,14 @@
      (string-match-p
       "Mode: live (inherently unconfined; preserve_ui: false)"
       content)))
-  :doc "renders requested batch mode"
+  :doc "renders requested fresh mode"
   (let (content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
                (lambda (body _always _callback &rest _)
                  (setq content body))))
       (mevedel-permission--prompt-async-eval
-       "(+ 1 2)" nil #'ignore nil '(:mode "batch" :preserve-ui t)))
-    (should (string-match-p "Mode: batch" content))
+       "(+ 1 2)" nil #'ignore nil '(:mode "fresh" :preserve-ui t)))
+    (should (string-match-p "Mode: fresh" content))
     (should-not (string-match-p "preserve_ui" content))))
 
 (mevedel-deftest mevedel-permission--prompt-async-attributed

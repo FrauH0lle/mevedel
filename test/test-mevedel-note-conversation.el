@@ -71,7 +71,7 @@
           (before (buffer-list))
           (timers (append timer-list timer-idle-list nil))
           (events (copy-sequence unread-command-events))
-          source workspace sent)
+          source workspace sent sent-payloads)
      (unwind-protect
          (save-window-excursion
            (make-directory (file-name-concat root ".mevedel"))
@@ -82,7 +82,13 @@
                  source (find-file-noselect file))
            (mevedel-install)
            (cl-letf (((symbol-function 'gptel-curl-get-response)
-                      (lambda (fsm) (push fsm sent))))
+                      (lambda (fsm)
+                        (let ((config (gptel-curl--get-config (gptel-fsm-info fsm) "test")))
+                          (push (encode-coding-string
+                                 (substring config (+ 2 (string-search "\n\n" config)))
+                                 'utf-8-unix)
+                                sent-payloads))
+                        (push fsm sent))))
              (switch-to-buffer source)
              (setq-local mevedel--workspace workspace)
              (goto-char (point-min))
@@ -273,7 +279,7 @@
     (forward-line 1)
     (let* ((note (mevedel-note-create "Explain this code?"))
            (view (mevedel-note-send note))
-           (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+           (payload (decode-coding-string (car sent-payloads) 'utf-8-unix)))
       (dolist (expected '("Explain this code?" "selected code" "Project-only instruction"
                           "UNRELATED-MEMORY-SECRET" "## Skills" "## Resources"))
         (should (string-search expected payload)))
@@ -344,6 +350,30 @@
                        (mevedel-test--read-file file))))
       (with-current-buffer view
         (should (string-search "A prepared improvement." (buffer-string)))))))
+
+(mevedel-deftest mevedel-note-send/payload-encoding
+  (:quiet t :doc "non-ASCII note input retains the sent UTF-8 bytes and displays decoded text")
+  (mevedel-note-conversation-test--with-source
+    (mevedel-define-preset note-test-unicode
+      :description "No tool schemas" :system "Explain the note." :tools nil)
+    (let ((note (mevedel-note-create "Explain caf\u00e9 \u2013 please")))
+      (overlay-put note 'mevedel-note-settings '(:preset note-test-unicode))
+      (let* ((view (mevedel-note-send note))
+             (data (buffer-local-value 'mevedel--data-buffer view))
+             (session (buffer-local-value 'mevedel--session data))
+             (directory (file-name-concat (mevedel-session-save-path session) "note-input"))
+             (file (car (directory-files directory t "\\.json\\'")))
+             (payload (car sent-payloads)))
+        (should-not (plist-get (plist-get (gptel-fsm-info (car sent)) :data) :tools))
+        (with-temp-buffer
+          (set-buffer-multibyte nil)
+          (insert-file-contents-literally file)
+          (should (equal payload (buffer-string))))
+        (with-current-buffer view
+          (with-current-buffer (mevedel-note-show-sent)
+            (should (equal (decode-coding-string payload 'utf-8-unix) (buffer-string)))
+            (should (string-search "caf\u00e9 \u2013" (buffer-string)))))
+        (mevedel-note-conversation-test--answer (car sent) "An answer.")))))
 
 (mevedel-deftest mevedel-note-send/base-preset
   (:quiet t :doc "notes use the implementation base and keep isolation after a preset change")
@@ -450,7 +480,7 @@
            (data (buffer-local-value 'mevedel--data-buffer view))
            (session (buffer-local-value 'mevedel--session data))
            (directory (file-name-concat (mevedel-session-save-path session) "note-input"))
-           (payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
+           (payload (decode-coding-string (car sent-payloads) 'utf-8-unix)))
       (mevedel-note-conversation-test--answer (car sent) "An answer.")
       (should (file-directory-p directory))
       (let* ((first (car (directory-files directory t "\\.json\\'")))

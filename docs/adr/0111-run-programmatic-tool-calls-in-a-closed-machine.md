@@ -85,7 +85,7 @@ guest media-emission helpers.
 
 It also rejects the alternative of running full Elisp in a child
 `emacs -Q --batch` confined by an OS sandbox, which is what the Eval tool's
-batch mode does. That boundary is conditional: `mevedel-sandbox-mode` defaults
+fresh mode does. That boundary is conditional: `mevedel-sandbox-mode` defaults
 to `best-effort`, so a failed Bubblewrap probe -- no `bwrap`, no user
 namespaces, macOS or Windows, or a TRAMP target that lacks it -- runs the child
 unconfined with a disclosure rather than refusing. A process boundary without a

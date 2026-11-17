@@ -876,8 +876,8 @@ path is not published until the labelled background, authoritative task,
 durable transcript, and provider dispatch succeed; cancellation or failure
 releases the reservation.
 The same shared resource-grant interface authorizes native filesystem tools and
-additive Bash/batch-Eval mounts; command authorization remains independent.
-When one Bash or batch-Eval invocation is missing both operation authority and
+additive Bash/fresh-Eval mounts; command authorization remains independent.
+When one Bash or fresh-Eval invocation is missing both operation authority and
 additive network or exact-path authority, the pipeline presents one combined
 card. Checked capabilities are already granted; unchecked capabilities are the
 complete upgrade. Approval grants that complete request to the current
@@ -1116,7 +1116,7 @@ terminal outcome.
 
 Native tool implementations launch short-lived external helpers through the
 `mevedel-execution.el` facade, backed by the same opaque process owner used by
-Bash and batch Eval.
+Bash and fresh Eval.
 The external-helper execution boundary returns an idempotent cancellation
 function. Sessionless request owners can stop their own helper children while
 preserving normal terminal delivery and cleanup. Glob/Grep return this handle
@@ -1661,22 +1661,29 @@ request after restart.
 
 ## Eval execution scope
 
-Eval has two execution modes.  `live` is the default and runs inside the
+Eval has three execution modes.  `live` is the default and runs inside the
 current Emacs process so it can inspect live session state.  Live mode
 restores the selected frame's window configuration by default, preventing
 accidental calls like `delete-other-windows` from surprising the user;
-`preserve_ui: false` opts out for deliberate UI manipulation.  `batch`
+`preserve_ui: false` opts out for deliberate UI manipulation.  `fresh`
 runs a child `emacs --batch -Q` process with the current `load-path` and
-the session working directory. Bash and batch Eval share child-process output,
+the session working directory. Bash and fresh Eval share child-process output,
 cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
-does not use that child seam. Batch mode isolates interactive Emacs state and,
+does not use that child seam. Fresh mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
-Batch Eval is refused in sessions with a remote execution target, because it
+Fresh and sandbox Eval are refused in sessions with a remote execution target, because they
 would launch the local Emacs binary and script against remote paths; use live
 Eval, or Bash on the target, there.
 
-Bash and batch-Eval results record the boundary that applied to their
+`sandbox` retains definitions in a confined child per session/owner. Calls yield
+like fresh Eval; `reset: true` replaces the child, and busy calls refuse with the
+running call's `execution_id` rather than queue. Stopping a call kills the child.
+Unlike fresh, sandbox requires confinement even in Full Access and
+accepts no additional authority or remembered grants. See
+[sandbox lifecycle and limits](tools/execution.md#persistent-sandbox-eval).
+
+Bash and fresh-Eval results record the boundary that applied to their
 invocation. The settled owning tool row retains a compact durable warning for
 materially non-default boundaries, additional writes, refusals, and children
 that never started. Additional read-only mounts stay silent. Agent rows

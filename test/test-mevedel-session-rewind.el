@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-chat)
+(require 'mevedel-execution)
 (require 'mevedel-notes)
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-artifacts)
@@ -1440,7 +1441,7 @@ them are set, so the committing save keeps them."
          (local-root
           (file-name-as-directory
            (make-temp-file "mevedel-remote-rewind-" t)))
-         buffer)
+         buffer stopped)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list host)
           (cl-destructuring-bind (workspace session session-dir segment)
@@ -1475,7 +1476,12 @@ them are set, so the committing save keeps them."
                     (old-head
                      (plist-get (mevedel-session-publication session) :head)))
                 (cl-letf
-                    (((symbol-function
+                    (((symbol-function 'mevedel-execution-stop-services)
+                      (lambda (owner)
+                        (should (eq owner session))
+                        (should (= 1 (mevedel-session-turn-count owner)))
+                        (setq stopped t)))
+                     ((symbol-function
                        'mevedel-session-rewind--stage-rewind)
                       (lambda (_session candidate actual-target staging-path
                                staging-buffer &rest _)
@@ -1499,6 +1505,7 @@ them are set, so the committing save keeps them."
                   (should
                    (mevedel-session-rewind--commit-rewind
                     session buffer target nil)))
+                (should stopped)
                 (should
                  (equal generation
                         (plist-get (mevedel-session-lease session)

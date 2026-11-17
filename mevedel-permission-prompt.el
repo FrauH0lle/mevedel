@@ -475,7 +475,7 @@ kind requests them, including generic hook cards."
           (pcase kind
             ('eval (equal (or (plist-get entry :mode) "live") "live"))
             ('generic (and (equal (plist-get entry :tool-name) "Eval")
-                           (not (equal (plist-get args :mode) "batch"))))))
+                           (not (member (plist-get args :mode) '("fresh" "sandbox")))))))
          (escalated-p
           (or (eq (plist-get entry :sandbox-permissions) 'require-escalated)
               (equal (plist-get args :sandbox_permissions) "require_escalated"))))

@@ -308,8 +308,8 @@
 `mevedel-tool-exec-permission--sandbox-request' normalizes omitted authority"
   (should (equal '(:level use-default :additional-permissions nil)
                  (mevedel-tool-exec-permission--sandbox-request nil 'bash)))
-  :doc "batch and live mode normalization cannot contaminate later default requests"
-  (dolist (mode '(batch live))
+  :doc "fresh and live mode normalization cannot contaminate later default requests"
+  (dolist (mode '(fresh live))
     (mevedel-tool-exec-permission-effective-sandbox-request
      (list :mode (symbol-name mode)) "Eval" "(+ 1 2)" mode)
     (should (equal '(:level use-default :additional-permissions nil)
@@ -466,15 +466,15 @@ an empty optional capability object does not conflict with full authority"
                              :justification "Run without confinement?")
       'bash)
      :level)))
-  :doc "full batch Eval escalation:
-batch Eval may request full authority"
+  :doc "full fresh Eval escalation:
+fresh Eval may request full authority"
   (should
    (eq 'escalated
        (plist-get
         (mevedel-tool-exec-permission--sandbox-request
          '(:sandbox_permissions "require_escalated"
-                                :justification "Run batch Eval without confinement?")
-         'eval 'batch)
+                                :justification "Run fresh Eval without confinement?")
+         'eval 'fresh)
         :level)))
   :doc "full escalation justification:
 full authority rejects a missing justification"
@@ -497,7 +497,7 @@ live Eval cannot request child-confinement authority"
                            :justification "Run without confinement?")
     'eval 'live))
   :doc "live Eval:
-additive child permissions are available only to batch Eval"
+additive child permissions are available only to fresh Eval"
   (should-error
    (mevedel-tool-exec-permission--sandbox-request
     '(:sandbox_permissions "with_additional_permissions"
@@ -845,12 +845,12 @@ additive child permissions are available only to batch Eval"
       '(:level escalated
                :sandbox-permissions require-escalated
                :additional-permissions nil
-               :justification "Run directly?" :eval-mode batch)
+               :justification "Run directly?" :eval-mode fresh)
       (mevedel-tool-exec-permission-effective-sandbox-request
-       '(:expression "(+ 1 2)" :mode "batch"
+       '(:expression "(+ 1 2)" :mode "fresh"
                      :sandbox_permissions "require_escalated"
                      :justification "Run directly?")
-       "Eval" "(+ 1 2)" 'batch
+       "Eval" "(+ 1 2)" 'fresh
        '(:buckets ((:session)))))))
   :doc "reuses an exact direct Eval profile"
   (let* ((rules
@@ -859,10 +859,10 @@ additive child permissions are available only to batch Eval"
          (context `(:buckets ((:session ,@rules)))))
     (should
      (equal
-      '(:level additive :additional-permissions (:network t) :eval-mode batch)
+      '(:level additive :additional-permissions (:network t) :eval-mode fresh)
       (mevedel-tool-exec-permission-effective-sandbox-request
-       '(:expression "(url-retrieve-synchronously url)" :mode "batch")
-       "Eval" "(url-retrieve-synchronously url)" 'batch context))))
+       '(:expression "(url-retrieve-synchronously url)" :mode "fresh")
+       "Eval" "(url-retrieve-synchronously url)" 'fresh context))))
   :doc "reuses an independent protected child tree but never infers one from its parent"
   (let* ((root (make-temp-file "mevedel-reuse-child-" t))
          (git (file-name-concat root ".git"))
@@ -933,7 +933,7 @@ additive child permissions are available only to batch Eval"
                                `(:sandbox_permissions "with_additional_permissions"
                                  :additional_permissions (:file_system (:write [,path]))
                                  :justification "Connect")
-                               tool "true" (and (equal tool "Eval") 'batch) context))
+                               tool "true" (and (equal tool "Eval") 'fresh) context))
                      (request (plist-put request :operation-pattern "true"))
                      (request (plist-put request :approval-cell
                                          (list (and (eq source 'invocation) approved))))
@@ -1700,7 +1700,7 @@ command denial prevents network authority even in full-auto"
                                  (lambda (result) (setq outcome result))))
     (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny outcome)))
-  :doc "ask batch Eval:
+  :doc "ask fresh Eval:
 one prompt approves both Eval and additive network authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
@@ -1711,7 +1711,7 @@ one prompt approves both Eval and additive network authority"
                                 (mevedel-tool-exec-permission-check-eval-async
                                  nil
                                  '(:expression "(+ 1 2)"
-                                               :mode "batch"
+                                               :mode "fresh"
                                                :sandbox_permissions "with_additional_permissions"
                                                :additional_permissions (:network t)
                                                :justification "Fetch package metadata?")
@@ -1723,7 +1723,7 @@ one prompt approves both Eval and additive network authority"
             (plist-get (car entries)
                        :missing-additional-permissions)))
     (should (eq 'allow outcome)))
-  :doc "session batch Eval approval:
+  :doc "session fresh Eval approval:
 the exact expression and selected network authority are reused together"
   (let* ((root (make-temp-file "mevedel-eval-network-" t))
          (workspace (mevedel-workspace-get-or-create
@@ -1749,7 +1749,7 @@ the exact expression and selected network authority are reused together"
            (mevedel-tool-exec-permission-check-eval-async
             nil
             `(:expression "(+ 1 2)"
-                          :mode "batch"
+                          :mode "fresh"
                           :sandbox_permissions "with_additional_permissions"
                           :additional_permissions (:network t)
                           :justification "Fetch package metadata?"
@@ -1766,7 +1766,7 @@ the exact expression and selected network authority are reused together"
                                       (mevedel-tool-exec-permission-check-eval-async
                                        nil
                                        `(:expression "(+ 1 2)"
-                                                     :mode "batch"
+                                                     :mode "fresh"
                                                      :permission-context
                                                      (:session ,session :workspace ,workspace :mode ask))
                                        (lambda (result) (setq outcome result))))
@@ -1857,7 +1857,7 @@ the exact expression and selected network authority are reused together"
      (mevedel-tool-exec-permission-check-eval-async
       nil
       '(:expression "(+ 1 2)"
-                    :mode "batch"
+                    :mode "fresh"
                     :sandbox_permissions "with_additional_permissions"
                     :additional_permissions (:network t)
                     :justification "Fetch package metadata?")
@@ -1865,7 +1865,7 @@ the exact expression and selected network authority are reused together"
     (should (equal (list (cons 'eval origin))
                    (nreverse entries)))
     (should (eq 'allow outcome)))
-  :doc "full-auto batch Eval:
+  :doc "full-auto fresh Eval:
 both Eval and network authority proceed without prompts"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
@@ -1874,7 +1874,7 @@ both Eval and network authority proceed without prompts"
                                 (mevedel-tool-exec-permission-check-eval-async
                                  nil
                                  '(:expression "(+ 1 2)"
-                                               :mode "batch"
+                                               :mode "fresh"
                                                :sandbox_permissions "with_additional_permissions"
                                                :additional_permissions (:network t)
                                                :justification "Fetch package metadata?")
@@ -2196,7 +2196,7 @@ literal dangerous Bash offers reusable full-escalation authority"
     (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
   :doc "Eval escalation prompt:
-literal batch Eval offers reusable full-escalation authority"
+literal fresh Eval offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
@@ -2206,14 +2206,14 @@ literal batch Eval offers reusable full-escalation authority"
                                 (mevedel-tool-exec-permission-check-eval-async
                                  nil
                                  '(:expression "(delete-file \"important\")"
-                                               :mode "batch"
+                                               :mode "fresh"
                                                :sandbox_permissions "require_escalated"
-                                               :justification "Run batch Eval without confinement?")
+                                               :justification "Run fresh Eval without confinement?")
                                  (lambda (result) (setq outcome result))))
     (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
-  :doc "batch Eval direct allow:
-a broad qualified Eval rule authorizes unconfined batch execution"
+  :doc "fresh Eval direct allow:
+a broad qualified Eval rule authorizes unconfined fresh execution"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules
          '(("Eval" :sandbox-permissions require-escalated :action allow)))
@@ -2222,9 +2222,9 @@ a broad qualified Eval rule authorizes unconfined batch execution"
                                 (mevedel-tool-exec-permission-check-eval-async
                                  nil
                                  '(:expression "(+ 1 2)"
-                                               :mode "batch"
+                                               :mode "fresh"
                                                :sandbox_permissions "require_escalated"
-                                               :justification "Run batch Eval without confinement?")
+                                               :justification "Run fresh Eval without confinement?")
                                  (lambda (result) (setq outcome result))))
     (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'allow outcome)))
@@ -2635,7 +2635,7 @@ default Bash keeps bare dot inspection automatic"
                        (mevedel-tool-exec-permission-check-eval-async
                         nil
                         (append
-                         (list :expression code :mode (if (eq authority 'ordinary) "live" "batch")
+                         (list :expression code :mode (if (eq authority 'ordinary) "live" "fresh")
                                :permission-context (list :session session :workspace workspace :mode mode))
                          (pcase authority
                            ('network '(:sandbox_permissions "with_additional_permissions"
@@ -2724,14 +2724,17 @@ default Bash keeps bare dot inspection automatic"
     (should (equal "live" (plist-get entry :mode)))
     (should-not (plist-get entry :preserve-ui)))
   :doc "returns deny reason for invalid mode instead of signaling"
-  (let (outcome)
-    (mevedel-tool-exec-permission-check-eval-async
-     nil '(:expression "(+ 1 2)" :mode "bogus")
-     (lambda (r) (setq outcome r)))
-    (should (consp outcome))
-    (should (eq 'deny (car outcome)))
-    (should (string-match-p "Unknown Eval mode" (cdr outcome))))
-  :doc "refuses remote Batch Eval before prompting"
+  (dolist (mode '("bogus" "batch"))
+    (let (outcome)
+      (mevedel-tool-exec-permission-check-eval-async
+       nil (list :expression "(+ 1 2)" :mode mode)
+       (lambda (r) (setq outcome r)))
+      (should (consp outcome))
+      (should (eq 'deny (car outcome)))
+      (should (equal (format "Invalid execution permission request: %S"
+                             (format "Unknown Eval mode: %s" mode))
+                     (cdr outcome)))))
+  :doc "refuses remote Fresh Eval before prompting"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
          (session (mevedel-session--create
@@ -2744,13 +2747,13 @@ default Bash keeps bare dot inspection automatic"
                                 (mevedel-tool-exec-permission-check-eval-async
                                  nil
                                  `(:expression "(+ 1 2)"
-                                               :mode "batch"
+                                               :mode "fresh"
                                                :permission-context (:session ,session))
                                  (lambda (result) (setq outcome result))))
     (should-not (mevedel-pq-test--admitted-p))
     (should (eq 'deny (car outcome)))
     (should
-     (string-match-p "Batch Eval is unavailable for remote sessions"
+     (string-match-p "Fresh Eval is unavailable for remote sessions"
                      (cdr outcome))))
   :doc "returns deny when user denies"
   (let (outcome)
@@ -2813,11 +2816,11 @@ default Bash keeps bare dot inspection automatic"
           :mode mode)
          (mevedel-tool-exec-permission-check-eval-async
           nil
-          (list :expression "(+ 1 2)" :mode "batch" :permission-context
+          (list :expression "(+ 1 2)" :mode "fresh" :permission-context
                 (list :mode mode :buckets (list (cons :session rules))))
           (lambda (result) (setq outcome result))))
         (should (eq 'deny outcome))
-        (should (equal "batch" (plist-get entry :mode)))
+        (should (equal "fresh" (plist-get entry :mode)))
         (should (eq mode (plist-get entry :permission-mode-effective)))
         (should (eq via (plist-get entry :permission-via))))))
   :doc "explicit Eval deny beats full-auto"

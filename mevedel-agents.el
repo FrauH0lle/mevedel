@@ -647,11 +647,11 @@ delegation authority."
   :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
           (:discoverable read)
           (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
+          (:tool "Eval")
           (:tool "WriteStdin")
           (:discoverable code)
           (:discoverable web)
           (:discoverable elisp)
-          (:discoverable (:tool "Eval"))
           (:discoverable (:tool "ListExecutions"))
           (:discoverable (:tool "StopExecution"))
           (:discoverable (:tool "Ask"))
@@ -708,10 +708,9 @@ modifies files."
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
   :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
-          (:discoverable read) (:tool "Bash") (:tool "WriteStdin")
+          (:discoverable read) (:tool "Bash") (:tool "Eval") (:tool "WriteStdin")
           (:discoverable code)
           (:discoverable elisp)
-          (:discoverable (:tool "Eval"))
           (:discoverable (:tool "Ask")))
   :system-components
   '((role :file "agents/verifier.md")

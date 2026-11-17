@@ -5,11 +5,18 @@ Status: accepted
 ## Current decision
 
 The session owns managed executions; the initiating root or canonical agent is
-its model-facing owner. Bash waits through `yield_time_ms`, then returns unread
+its model-facing owner. Bash and fresh Eval wait through `yield_time_ms`, then return unread
 output and an opaque handle if still running. Yield detaches the process from
 request abort while retaining its owner, working directory, permission grant,
 and confinement. Input, observation, and stop reuse that captured authority;
 explicit denies and hooks remain authoritative.
+
+Fresh Eval previously held its tool callback until the child exited, with no
+deadline or model control. It now shares managed admission, polling, stop and
+completion wakes rather than requiring a second lifecycle. It takes the exclusive
+lane and accepts no input or PTY. A terminal-result function freezes the value,
+printed output, stderr messages and error backtrace before the record tears down
+its script and result files. Bash pipeline framing remains Bash-specific.
 
 The [execution manual](../tools/execution.md) owns tool arguments and result
 handling; [managed Bash](../tools.md#managed-bash-execution) describes scheduling,
@@ -17,14 +24,14 @@ progress, settlement, and recovery. The `mevedel-execution.el` facade exposes
 operations and immutable facts while `mevedel-execution-process.el` owns child
 processes and spools. Callers do not inspect process records or timers.
 
-The initiating Bash row owns output and execution status. Successful empty-input
+The initiating execution row owns output and execution status. Successful empty-input
 polls do not add visible rows; actual input, stops, and failed control operations
 remain visible, and all tool results remain model-visible and inspectable in
 execution history. An execution that actually yielded gets one durable
 completion breadcrumb at its original row, independent of whether completion
 was collected by polling or delivered through a mailbox. It is the one visible
 completion line, worded like a notice (`● Background command "Run tests"
-completed (exit code 0)  [Show result]`, `● Monitor "ticker" stopped · 2
+completed (exit code 0)  [Show result]`, `● Background Eval completed`, `● Monitor "ticker" stopped · 2
 events`); the transcript's own delivery of the same completion renders nothing.
 A transcript receiving another owner's completion, such as a child agent's
 forwarded record, has no local breadcrumb and shows a one-line notice built
@@ -100,7 +107,7 @@ draft.
 ## Rationale and consequences
 
 One owner absorbs process groups, output bounds, cancellation, and cleanup for
-Bash, batch Eval, and one-shot helpers. A shell-native background process would
+Bash, fresh Eval, and one-shot helpers. A shell-native background process would
 escape that lifecycle, so background operators are refused. Request-owned
 foreground work stops on abort; yielded work survives until completion, stop,
 owner/session teardown, or Emacs exit. Resumed sessions mark stale rows lost
@@ -112,7 +119,7 @@ observations. Remote live spools stay client-local; omitted output is staged as
 session-owned evidence. Exceeding the cap terminates execution rather than
 silently losing bytes. Read-only commands may overlap; other commands take a
 fair exclusive lane, released on yield so long-running work does not block
-admission. Managed Bash imposes no automatic timeout.
+admission. Managed Bash and fresh Eval impose no automatic timeout.
 
 Retired local spools from 64 KiB through 64 MiB use gzip level 1 only when it is
 smaller. A separate Python worker compresses after the 60-second terminal

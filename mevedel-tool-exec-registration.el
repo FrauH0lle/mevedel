@@ -117,9 +117,9 @@
    :prompt-file "prompts/tools/writestdin.md"
    :handler #'mevedel-tool-exec--write-stdin
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash, Monitor, or ListExecutions.")
+                        "Opaque execution ID returned by Bash, Eval (fresh/sandbox), Monitor, or ListExecutions.")
           (chars string :optional
-                 "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
+                 "Input to send. Omit or use an empty string to poll. Eval rejects non-empty input. Ordinary input requires a Bash PTY; a single Ctrl-C interrupts Bash or Monitor.")
           (yield_time_ms integer :optional
                          "Wait before returning: polls default to 5000ms and clamp positive shorter waits to 5000ms (maximum 300000); input defaults to 250ms (250-30000)."
                          :minimum 250 :maximum 300000))
@@ -136,7 +136,7 @@
 
   (mevedel-define-tool
    :name "ListExecutions"
-   :description "List live yielded Bash and Monitor executions owned by the caller."
+   :description "List live yielded Bash, Eval (fresh/sandbox), and Monitor executions owned by the caller."
    :prompt-file "prompts/tools/listexecutions.md"
    :handler #'mevedel-tool-exec--list-executions
    :args ()
@@ -145,11 +145,11 @@
 
   (mevedel-define-tool
    :name "StopExecution"
-   :description "Stop one yielded Bash or Monitor execution owned by the caller."
+   :description "Stop one yielded Bash, Eval (fresh/sandbox), or Monitor execution owned by the caller."
    :prompt-file "prompts/tools/stopexecution.md"
    :handler #'mevedel-tool-exec--stop-execution
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash, Monitor, or ListExecutions."))
+                        "Opaque execution ID returned by Bash, Eval (fresh/sandbox), Monitor, or ListExecutions."))
    :async-p t
    :max-result-size 30000
    :groups (eval)
@@ -164,20 +164,24 @@
    :prompt-file "prompts/tools/eval.md"
    :handler #'mevedel-tool-exec--eval
    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
-          (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; batch evaluates in a child emacs --batch process."
-                :enum ["live" "batch"])
+          (mode string :optional "live (default): current Emacs; fresh: clean child; sandbox: persistent confined child."
+                :enum ["live" "fresh" "sandbox"])
+          (reset boolean :optional "Sandbox only: restart before evaluation, discarding earlier definitions.")
           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
+          (yield_time_ms integer :optional
+                         "Fresh or sandbox mode: milliseconds to wait before yielding an execution_id. Defaults to 10000."
+                         :minimum 250 :maximum 30000)
           (sandbox_permissions string :optional
-                               "Batch child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
+                               "Fresh child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                :enum ["use_default"
                                       "with_additional_permissions"
                                       "require_escalated"])
           (additional_permissions object :optional
-                                  "Capabilities requested in addition to default batch confinement."
+                                  "Capabilities requested in addition to default fresh confinement."
                                   :properties
                                   (:network
                                    (:type boolean
-                                          :description "Allow network access for this batch invocation.")
+                                          :description "Allow network access for this fresh invocation.")
                                    :file_system
                                    (:type object
                                           :description "Exact filesystem paths to reopen inside confinement."
@@ -191,7 +195,7 @@
                                                   :items (:type string)
                                                   :description "Absolute paths requiring write access.")))))
           (justification string :optional
-                         "Concise user-facing reason shown if approval is needed; required for non-default batch permission requests."))
+                         "Concise user-facing reason shown if approval is needed; required for non-default fresh permission requests."))
    :async-p t
    :max-result-size 30000
    :groups (eval)

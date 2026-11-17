@@ -52,6 +52,14 @@
 (autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
+;; `mevedel-eval-sandbox'
+(declare-function mevedel-eval-sandbox-list-idle "mevedel-eval-sandbox" (session calls))
+(declare-function mevedel-eval-sandbox-any-live-p "mevedel-eval-sandbox" (session))
+(autoload 'mevedel-eval-sandbox-any-live-p "mevedel-eval-sandbox")
+(declare-function mevedel-eval-sandbox-stop-user "mevedel-eval-sandbox" (session snapshot))
+(autoload 'mevedel-eval-sandbox-list-idle "mevedel-eval-sandbox")
+(autoload 'mevedel-eval-sandbox-stop-user "mevedel-eval-sandbox")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-interrupt-user
                   "mevedel-execution" (session execution-id))
@@ -121,12 +129,15 @@
 
 (defun mevedel-background-list--collect (context)
   "Collect active agents, then live executions, for CONTEXT."
-  (let ((session (mevedel-background-list--session context)))
+  (let* ((session (mevedel-background-list--session context))
+         (calls (mevedel-execution-list-user session)))
     (append
      (mapcar (lambda (row) (append (list :kind 'agent :id (plist-get row :path)) row))
              (mevedel-view-agent-active-rows session))
      (mapcar (lambda (item) (append (list :id (plist-get item :execution-id)) item))
-             (mevedel-execution-list-user session)))))
+             calls)
+     (when (mevedel-eval-sandbox-any-live-p session)
+       (mevedel-eval-sandbox-list-idle session calls)))))
 
 (defun mevedel-background-list--agent-state (item)
   "Return the state label of agent ITEM."
@@ -149,7 +160,14 @@
 
 (defun mevedel-background-list--entry (item _context)
   "Return the tabulated row for background ITEM."
-  (if (mevedel-background-list--agent-p item)
+  (cond
+   ((eq (plist-get item :kind) 'sandbox)
+    (let ((age (- (float-time) (plist-get item :started-at))))
+      (list (plist-get item :id)
+            (vector "sandbox" "Idle" "Persistent Eval" (plist-get item :owner)
+                    (mevedel-cockpit-number-cell (mevedel--duration-label age) age)
+                    (format "%s features" (plist-get item :features))))))
+   ((mevedel-background-list--agent-p item)
       (let ((seconds (mevedel-background-list--agent-seconds item)))
         (list (plist-get item :id)
               (vector
@@ -164,16 +182,18 @@
                  ('interaction-blocked "waiting for input")
                  (_ (or (mevedel-view-agent-model-label
                          (plist-get item :model-metadata))
-                        ""))))))
+                        "")))))))
+   (t
     (let ((monitor-p (eq (plist-get item :kind) 'monitor))
           (seconds (or (plist-get item :wall-time-seconds) 0)))
       (list
        (plist-get item :id)
        (vector
-        (if monitor-p "monitor" "bash")
+        (symbol-name (or (plist-get item :kind) 'bash))
         (mevedel-background-list--execution-state item)
         (mevedel--truncate-display
-         (or (plist-get item :description) (plist-get item :command) "") 40 "…")
+         (or (plist-get item :description) (plist-get item :command)
+             (and (eq (plist-get item :kind) 'eval) "Eval") "") 40 "…")
         (or (plist-get item :owner) "")
         (mevedel-cockpit-number-cell
          (if monitor-p "—" (mevedel--duration-label seconds))
@@ -181,6 +201,7 @@
         (string-join
          (delq nil
                (list (plist-get item :execution-id)
+                     (when (eq (plist-get item :eval-mode) 'sandbox) "persistent sandbox")
                      (when monitor-p
                        (format "%d events" (or (plist-get item :event-count) 0)))
                      (when-let* ((expires (and monitor-p (plist-get item :expires-at))))
@@ -188,7 +209,7 @@
                      (if (plist-get item :tty) "PTY" "pipe")
                      (format "%d bytes" (or (plist-get item :output-bytes) 0))
                      (format "sandbox %s" (or (plist-get item :sandbox-state) 'pending))))
-         " · "))))))
+         " · ")))))))
 
 (defun mevedel-background-list--header (items context)
   "Return the cockpit header for background ITEMS and CONTEXT."
@@ -264,16 +285,22 @@
 
 (defun mevedel-background-list--details (item _context)
   "Return the information report for background ITEM."
-  (if (mevedel-background-list--agent-p item)
-      (mevedel-background-list--agent-details item)
-    (mevedel-background-list--execution-details item)))
+  (cond
+   ((eq (plist-get item :kind) 'sandbox)
+    (list :title "Idle sandbox" :subtitle (plist-get item :owner)
+          :sections (list (list :id 'sandbox :title "Persistent Eval"
+                                :body (format "%s features. Stop with k in /ps."
+                                              (plist-get item :features))))))
+   ((mevedel-background-list--agent-p item)
+    (mevedel-background-list--agent-details item))
+   (t (mevedel-background-list--execution-details item))))
 
 (defun mevedel-background-list--selected-execution ()
   "Return the selected item, signalling unless it is an execution."
   (let ((item (mevedel-cockpit-surface-selected)))
-    (when (mevedel-background-list--agent-p item)
+    (when (memq (plist-get item :kind) '(agent sandbox))
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
-                                   "Selected item is an agent, not an execution"))
+                                   "Selected item is not an execution"))
     item))
 
 (defun mevedel-background-list--call-control (function &rest args)
@@ -320,10 +347,14 @@
 An agent stays retained after its turn is interrupted."
   (interactive)
   (let ((item (mevedel-cockpit-surface-selected)))
-    (if (mevedel-background-list--agent-p item)
-        (mevedel-background-list--interrupt-agent item)
+    (cond
+     ((eq (plist-get item :kind) 'sandbox)
+      (mevedel-eval-sandbox-stop-user (mevedel-background-list--session) item))
+     ((mevedel-background-list--agent-p item)
+      (mevedel-background-list--interrupt-agent item))
+     (t
       (mevedel-background-list--call-control #'mevedel-execution-stop-user)
-      (message "mevedel: execution stopping"))))
+      (message "mevedel: execution stopping")))))
 
 (defun mevedel-background-list-visit ()
   "Open the selected agent's transcript or execution's live artifact."
