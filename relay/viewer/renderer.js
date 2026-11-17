@@ -23,6 +23,56 @@
     return root;
   }
 
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return; }
+      catch (_) { /* A denied Clipboard API can still permit a user-initiated copy. */ }
+    }
+    const active = document.activeElement;
+    const selection = window.getSelection();
+    const ranges = selection ? Array.from({length: selection.rangeCount}, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+    const field = el('textarea');
+    field.value = text;
+    field.style.cssText = 'position:fixed;top:0;left:-9999px';
+    document.body.append(field);
+    try {
+      field.select();
+      if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
+    } finally {
+      field.remove();
+      active?.focus({preventScroll: true});
+      if (selection) {
+        selection.removeAllRanges();
+        ranges.forEach(range => selection.addRange(range));
+      }
+    }
+  }
+
+  const messageSources = new WeakMap();
+
+  // One delegated handler serves live, archived, agent and discussion messages.
+  async function messageAction(event) {
+    if (event.defaultPrevented) return;
+    const button = event.target.closest('[data-message-action="copy"]');
+    if (!button || button.getAttribute('aria-disabled') === 'true') return;
+    event.preventDefault();
+    const turn = button.closest('[data-record-id]');
+    const source = messageSources.get(turn);
+    if (!source) return;
+    button.setAttribute('aria-disabled', 'true');
+    let label = 'Copied';
+    try { await copyText(source.text ?? source.rendered.innerText); }
+    catch (_) { label = 'Copy failed'; }
+    // Attribute-only feedback avoids invalidating the page's body:has rules.
+    button.dataset.label = label;
+    button.setAttribute('aria-label', label);
+    setTimeout(() => {
+      button.dataset.label = 'Copy';
+      button.setAttribute('aria-label', 'Copy message');
+      button.removeAttribute('aria-disabled');
+    }, 1500);
+  }
+
   /* -- Fontification -------------------------------------------------- */
 
   const LANG_RULES = {
@@ -690,6 +740,20 @@
     content.append(whoLine(record, scopeChip));
     const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen, href);
     content.append(rendered);
+    if (record.kind === 'user' || record.kind === 'assistant') {
+      messageSources.set(turn, {text: typeof record.text === 'string' ? record.text : null, rendered});
+      const actions = el('ul', 'message-actions');
+      actions.setAttribute('aria-label', 'Message actions');
+      const item = el('li');
+      const copy = el('button', 'btn quiet message-action');
+      copy.type = 'button';
+      copy.dataset.messageAction = 'copy';
+      copy.dataset.label = 'Copy';
+      copy.setAttribute('aria-label', 'Copy message');
+      item.append(copy);
+      actions.append(item);
+      content.append(actions);
+    }
     // A settled turn's last response can start a Conversation Fork. It
     // follows the response, since a continuation turn hides its who line.
     // Only owner links hold that authority, so the page hides it otherwise.
@@ -744,5 +808,5 @@
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, groupActivity, fitActivityFailures, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey});
+    {renderRecord, markContinuations, groupActivity, fitActivityFailures, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey, messageAction});
 })();

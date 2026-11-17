@@ -10,6 +10,7 @@
   const dock = document.querySelector('.dock');
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
+  document.addEventListener('click', window.mevedelTranscriptRenderer.messageAction);
   const queueState = document.getElementById('queue-state');
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
@@ -1563,7 +1564,10 @@
           const sent = await discussItem(filter.slice('item:'.length), text.trim(),
                                          tray.frame(submittedFiles));
           if (sent) {
-            if (composerInput.value === text) composerInput.value = '';
+            if (composerInput.value === text) {
+              composerInput.value = '';
+              window.mevedelComposer.setExpanded(composerInput, false);
+            }
             tray.remove(submittedFiles);
             shareToProject(submittedFiles);
           }
@@ -1584,7 +1588,10 @@
           flashNotice('Connection lost; prompt kept.');
           return;
         }
-        if (composerInput.value === text) composerInput.value = '';
+        if (composerInput.value === text) {
+          composerInput.value = '';
+          window.mevedelComposer.setExpanded(composerInput, false);
+        }
         tray.remove(submittedFiles);
         shareToProject(submittedFiles);
         // One tap, one invocation: disarm so the next send is a prompt.

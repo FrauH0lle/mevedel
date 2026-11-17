@@ -104,3 +104,25 @@
 @media (max-width:799px) {
   .ds-input { font-size:16px; }
 }
+
+/* Shared with room and new-session composers; both viewer pages load this sheet. */
+.expandable-input { position:relative; min-width:0; }
+.expandable-input > textarea { display:block; width:100%; padding-right:2.25rem; resize:none; }
+.input-expand { position:absolute; right:0; top:0; display:grid; place-items:center; width:32px; height:32px; min-height:0; padding:6px; border:0; border-radius:4px; background:var(--surface); color:var(--muted); }
+.input-expand:hover { color:var(--accent); background:var(--accent-soft); }
+.input-expand:focus-visible { outline:2px solid var(--accent); }
+.input-expand svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; }
+.input-expand .collapse-icon, .input-expand[aria-pressed="true"] .expand-icon { display:none; }
+.input-expand[aria-pressed="true"] .collapse-icon { display:block; }
+.expandable-input.expanded > textarea { height:min(75dvh, var(--input-expanded-max, 75dvh)); min-height:0; max-height:min(75dvh, var(--input-expanded-max, 75dvh)); resize:none; }
+/* Cover the thin transcript sliver left between the tall dock and header. */
+.dock.input-expanded { bottom:var(--input-keyboard-inset, 0px); box-shadow:0 -8px 0 var(--ground); }
+
+.message-actions { display:flex; gap:.4rem; margin:.35rem 0 0; padding:0; list-style:none; opacity:0; }
+.turn:hover > .content > .message-actions, .turn:focus-within > .content > .message-actions { opacity:1; }
+.message-action { min-height:28px; padding:.25rem .5rem; font-size:.72rem; font-weight:500; }
+.message-action::after { content:attr(data-label); }
+@media (hover:none), (pointer:coarse) { .message-actions { opacity:1; } }
+@media (max-width:640px) {
+  .expandable-input.expanded > textarea { height:min(75dvh, var(--input-expanded-max, calc(var(--input-viewport, 100dvh) - 11rem))); max-height:min(75dvh, var(--input-expanded-max, calc(var(--input-viewport, 100dvh) - 11rem))); }
+}

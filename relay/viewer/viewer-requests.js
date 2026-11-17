@@ -7,6 +7,7 @@
       const card = [...requests.children].find(c => c.dataset.reqId === String(reqId));
       if (card) {
         if (card.dispose) card.dispose();
+        card.querySelectorAll('.expanded > textarea').forEach(input => window.mevedelComposer.setExpanded(input, false));
         card.remove();
       }
     }
@@ -24,6 +25,7 @@
       const selected = (index, label) => Array.isArray(answers[index])
         ? answers[index].includes(label) : answers[index] === label;
       const form = el('div', 'questionnaire');
+      if (draft) form.style.height = draft.height;
       const rows = [];
       let open = 0;
       const controls = el('div', 'request-controls question-navigation');
@@ -36,6 +38,9 @@
       function show(index, focus = true) {
         open = index;
         rows.forEach((row, i) => {
+          if (i !== open && row.custom.parentElement.classList.contains('expanded')) {
+            window.mevedelComposer.setExpanded(row.custom, false);
+          }
           row.heading.hidden = i === open;
           row.panel.inert = i !== open;
           row.panel.setAttribute('aria-hidden', i === open ? 'false' : 'true');
@@ -55,10 +60,11 @@
         }
       }
 
-      function advance(index) {
+      function advance(index, submitComplete = false) {
         const unanswered = questions.map((_, step) => (index + step + 1) % questions.length)
           .find(i => !answered(answers[i]));
         show(unanswered === undefined ? null : unanswered);
+        if (unanswered === undefined && submitComplete) submit.click();
       }
 
       questions.forEach((q, index) => {
@@ -143,8 +149,9 @@
           panel.append(row);
           return button;
         });
-        const custom = el('input', 'request-feedback');
-        custom.type = 'text';
+        const custom = el('textarea', 'request-feedback');
+        custom.id = `request-${frame.reqId}-answer-${index}`;
+        custom.rows = 2;
         custom.autocomplete = 'off';
         custom.placeholder = 'Custom answer…';
         custom.setAttribute('aria-label', `Custom answer ${index + 1}`);
@@ -163,16 +170,21 @@
           }
         });
         custom.addEventListener('keydown', event => {
-          if (event.key === 'Enter' && !event.isComposing) {
-            event.preventDefault();
-            if (q.multiSelect && options.some(option => option.label === custom.value.trim())) {
-              chosen.add(custom.value.trim());
-              custom.value = '';
-              updateMulti();
-            } else if (!q.multiSelect) advance(index);
+          if (event.defaultPrevented || event.isComposing || event.key !== 'Enter'
+              || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+          event.preventDefault();
+          if (event.repeat || custom.disabled || custom.readOnly) return;
+          if (q.multiSelect && options.some(option => option.label === custom.value.trim())) {
+            chosen.add(custom.value.trim());
+            custom.value = '';
+            updateMulti();
           }
+          advance(index, true);
         });
         panel.append(custom);
+        window.mevedelComposer.expandable(custom);
+        custom.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
+        custom.title = 'Enter for a new line; Ctrl+Enter or ⌘+Enter to advance or submit answers';
         if (samples.size) panel.append(sampleBox);
         block.append(heading, panel);
         form.append(block);
@@ -181,7 +193,11 @@
       previous.addEventListener('click', () => show(open === null ? rows.length - 1 : open - 1));
       next.addEventListener('click', () => show(open + 1));
       controls.append(previous, next);
-      submit.addEventListener('click', () => send({t: 'ui-response', reqId: frame.reqId, answers}));
+      submit.addEventListener('click', async () => {
+        if (await send({t: 'ui-response', reqId: frame.reqId, answers}) !== false) {
+          rows.forEach(row => window.mevedelComposer.setExpanded(row.custom, false));
+        }
+      });
       submitRow.append(submit);
       if (frame.allowCancel === true) {
         const dismiss = el('button', 'btn quiet', 'Dismiss');
@@ -195,23 +211,30 @@
       // Host answer updates merge into untouched questions only. Keep local
       // edits, navigation and focus until the atomic response settles.
       card.questionDraft = () => ({definition, dirty: [...dirty], answers,
-        custom: rows.map(row => row.custom.value), open,
+        custom: rows.map(row => row.custom.value), open, height: form.style.height,
         chosen: rows.map(row => [...row.chosen]),
+        expanded: rows.map(row => row.custom.parentElement.classList.contains('expanded')),
         inspected: rows.map(row => row.inspected()),
-        focus: [...card.querySelectorAll('button,input')].indexOf(document.activeElement),
-        selection: document.activeElement && document.activeElement.tagName === 'INPUT'
+        focus: [...card.querySelectorAll('button,input,textarea')].indexOf(document.activeElement),
+        scrollTop: document.activeElement?.scrollTop,
+        selection: document.activeElement && document.activeElement.matches('input,textarea')
           ? [document.activeElement.selectionStart, document.activeElement.selectionEnd,
             document.activeElement.selectionDirection] : null});
-      if (draft && draft.focus >= 0) card.restoreQuestionFocus = () => {
-        const node = card.querySelectorAll('button,input')[draft.focus];
+      if (draft) card.restoreQuestionFocus = () => {
+        rows.forEach((row, i) => {
+          if (draft.expanded[i]) window.mevedelComposer.setExpanded(row.custom, true);
+        });
+        const node = card.querySelectorAll('button,input,textarea')[draft.focus];
         if (!node) return;
         node.focus({preventScroll: true});
-        if (draft.selection && node.tagName === 'INPUT') node.setSelectionRange(...draft.selection);
+        if (draft.selection && node.matches('input,textarea')) node.setSelectionRange(...draft.selection);
+        if (draft.scrollTop) node.scrollTop = draft.scrollTop;
       };
       // Inactive panels remain measurable but inert. Reserve the tallest open
       // question plus the other summaries once per width, never on focus/input.
       let width;
       const observer = new ResizeObserver(() => {
+        if (form.classList.contains('input-expanded')) return;
         const current = form.getBoundingClientRect().width;
         if (!current || current === width) return;
         width = current;
@@ -239,6 +262,7 @@
       if (existing && existing.frameKey === key) return;
       const scrolled = existing && existing.bodyEl ? existing.bodyEl.scrollTop : 0;
       const previousFeedback = existing && existing.feedbackEl;
+      const feedbackExpanded = previousFeedback?.parentElement.classList.contains('expanded');
       const feedbackFocused = previousFeedback && document.activeElement === previousFeedback;
       const previousInput = existing && existing.optionInputEl;
       const inputFocused = previousInput && document.activeElement === previousInput;
@@ -293,8 +317,9 @@
         card.append(controls);
         if (frame.allowFeedback === true) {
           const row = el('div', 'request-controls');
-          const feedback = el('input', 'request-feedback');
-          feedback.type = 'text';
+          const feedback = el('textarea', 'request-feedback');
+          feedback.id = `request-feedback-${frame.reqId}`;
+          feedback.rows = 2;
           feedback.autocomplete = 'off';
           feedback.placeholder = 'Feedback…';
           feedback.setAttribute('aria-label', 'Feedback');
@@ -303,11 +328,14 @@
           const button = el('button', 'btn quiet', 'Send feedback');
           button.type = 'button';
           button.title = 'Answer with a comment instead of choosing an option';
-          button.addEventListener('click', () => {
-            if (feedback.value.trim()) send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value});
+          button.addEventListener('click', async () => {
+            if (feedback.value.trim()
+                && await send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value}) !== false) {
+              window.mevedelComposer.setExpanded(feedback, false);
+            }
           });
-          window.mevedelComposer.bind(feedback, button);
           row.append(feedback, button);
+          window.mevedelComposer.bind(feedback, button);
           const disclosure = el('details', 'decision-feedback');
           if (existing && existing.feedbackDisclosure) disclosure.open = existing.feedbackDisclosure.open;
           card.feedbackDisclosure = disclosure;
@@ -317,8 +345,10 @@
       }
       if (existing) {
         if (existing.dispose) existing.dispose();
+        existing.querySelectorAll('.expanded > textarea').forEach(input => window.mevedelComposer.setExpanded(input, false));
         existing.replaceWith(card);
       } else requests.append(card);
+      if (feedbackExpanded && card.feedbackEl) window.mevedelComposer.setExpanded(card.feedbackEl, true);
       if (card.restoreQuestionFocus) card.restoreQuestionFocus();
       if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
       if (feedbackFocused && card.feedbackEl) {

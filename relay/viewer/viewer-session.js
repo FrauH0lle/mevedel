@@ -22,6 +22,7 @@
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
     const promptInput = document.getElementById('new-session-prompt');
+    window.mevedelComposer.expandable(promptInput);
     const modelInput = document.getElementById('new-session-model');
     const modelLabel = document.getElementById('new-session-model-label');
     const effortInput = document.getElementById('new-session-effort');
@@ -255,6 +256,7 @@
       notices.push({reqId, name: name || 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
+      window.mevedelComposer.setExpanded(promptInput, false);
       render();
     }
 

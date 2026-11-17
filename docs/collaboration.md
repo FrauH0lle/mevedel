@@ -387,6 +387,23 @@ keeps a 44px minimum and a 30% viewport-height cap. Conversation text and the co
 bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
+Every multiline message box has an **Expand** icon inside its upper-right corner:
+the room composer, a new session's first prompt, Plan/decision feedback, Ask custom
+answers, and discussion inputs on HTML artifacts, whiteboards and documents. It
+toggles a tall editing area, up to 75% of the viewport, limited by the room header,
+discussion controls and visible
+space above a phone keyboard. **Collapse** restores the compact size without
+changing the draft; sending returns the box to compact mode. When the composer's
+label is visible, its toggle sits beside that label at the box's upper-right;
+on phones it stays at the input's upper-right.
+
+User prompts and assistant responses offer **Copy** beneath the message. The
+action appears on hover or keyboard focus on desktop and remains visible on
+touch devices. It copies the message's original Markdown/plain text, or rendered
+text with line breaks when source text is absent, and briefly confirms **Copied**.
+When the Clipboard API is unavailable, the viewer tries the browser's legacy
+copy command; a refusal shows **Copy failed** instead.
+
 At the bottom of the conversation, the viewer follows new messages and streamed
 responses, including content that grows after rendering. Sending a message keeps
 that following state. Even a small upward scroll pauses following and preserves
@@ -427,6 +444,10 @@ or **⌘+Enter** to send. This applies to the room composer and new discussions
 and replies on HTML artifacts, whiteboards and documents. The sending shortcut
 also submits the feedback field on a pending interaction. The sending button's
 tooltip shows the platform's shortcut.
+
+Plan/decision feedback and Ask custom answers accept multiple lines: **Enter**
+adds a newline. **Ctrl+Enter** or **⌘+Enter** submits feedback, or advances to
+Ask's next unanswered question and submits the answers when all are answered.
 
 A guest's own chip leads the header's actions on every page. It opens a form
 for the name others see; the composer's **as …** beside Attach opens the same
@@ -1609,12 +1630,16 @@ the card explicitly requires full review in Emacs and offers feedback only. It
 never offers browser acceptance of an undisclosed truncated plan.
 
 Ask shows one open question and single-line summaries of the others. For a
-single-select question, choosing an option or pressing Enter in a custom answer
-opens the next unanswered question. A question with `multiSelect: true` instead
+single-select question, choosing an option opens the next unanswered question.
+Custom answers are expandable multiline text boxes: Enter adds a newline;
+Ctrl/Cmd+Enter advances to the next unanswered question, or submits when all
+are answered. Expanding an answer temporarily sets aside the option previews,
+other-question summaries and room composer to give the editor room; collapsing
+or advancing restores them. A question with `multiSelect: true` instead
 allows several checked options plus optional custom text; toggling or editing
-keeps it open. Clearing custom text leaves selected options intact. Enter on
-custom text matching an offered multi-select label
-commits that option and clears the custom field. Custom text is trimmed; whitespace
+keeps it open. Clearing custom text leaves selected options intact. Ctrl/Cmd+Enter
+on custom text matching an offered multi-select label commits that option and
+clears the custom field before advancing. Custom text is trimmed; whitespace
 alone is no preference. Submit sends
 the entire form, including unanswered questions as no
 preference. Previous/Next question and the summaries reopen answers for review.

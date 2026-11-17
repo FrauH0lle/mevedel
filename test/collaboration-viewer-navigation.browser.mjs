@@ -170,8 +170,9 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives, agentRecor
 }
 
 async function open(browser, {lobbyRunning = true, records = [], sharedItem = null, coldAgent = false,
-                              archives = null, agentRecords = null, viewport = {width: 1200, height: 800}} = {}) {
-  const context = await browser.newContext({viewport});
+                              archives = null, agentRecords = null, viewport = {width: 1200, height: 800},
+                              touch = false} = {}) {
+  const context = await browser.newContext({viewport, hasTouch: touch});
   const page = await context.newPage();
   const answers = host(lobbyRunning, records, sharedItem, coldAgent, archives, agentRecords);
   const keys = {};
@@ -308,6 +309,215 @@ test('room composer keeps Enter for newlines and submits with Control or Command
   } finally { await browser.close(); }
 });
 
+test('multiline inputs expand reversibly and message actions copy source with a plain-text fallback', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1440, height: 900}, {width: 375, height: 667}]) {
+      for (const theme of ['light', 'dark']) {
+        const page = await open(browser, {viewport, touch: viewport.width < 640, records: [
+          {id: 'question', kind: 'user', text: 'Review **this change**.\nKeep the draft intact.'},
+          {id: 'answer', kind: 'assistant', text: '## Review\n\nThe shared helper preserves **Markdown**.\nSecond line.'},
+        ]});
+        await page.goto(sessionRoom.link);
+        await page.locator('#transcript [data-record-id="answer"]').waitFor();
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        const suffix = `${viewport.width}x${viewport.height}-${theme}`;
+        const input = page.locator('#composer-input');
+        const toggle = page.locator('#composer .input-expand');
+        await input.fill('Please review this implementation.\nKeep this second line while expanding.');
+        const collapsed = (await input.boundingBox()).height;
+        assert.equal(await toggle.getAttribute('aria-label'), 'Expand');
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        assert.equal(await toggle.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)',
+          'the composer toggle must not paint over the textarea focus ring');
+        const toggleBox = await toggle.boundingBox();
+        if (viewport.width > 640) {
+          const label = await page.locator('.composer-label').boundingBox();
+          assert.ok(label.width > 1, 'the composer label stays visible');
+          assert.ok(Math.abs(toggleBox.y + toggleBox.height / 2 - label.y - label.height / 2) < 3,
+            'the toggle aligns with the visible label, not the placeholder');
+          await page.evaluate(() => {
+            const scope = document.getElementById('composer-scope');
+            scope.textContent = 'Selected context'; scope.hidden = false;
+          });
+          const scopedLabel = await page.locator('.composer-label').boundingBox();
+          const scopedToggle = await toggle.boundingBox();
+          assert.ok(Math.abs(scopedToggle.y + scopedToggle.height / 2 - scopedLabel.y - scopedLabel.height / 2) < 3,
+            'context above the input does not separate the toggle from its label');
+          await page.evaluate(() => {
+            const scope = document.getElementById('composer-scope');
+            scope.textContent = ''; scope.hidden = true;
+          });
+        } else assert.ok(Math.abs(toggleBox.y - (await input.boundingBox()).y) < 1);
+        await capture(page, `composer-collapsed-${suffix}`);
+        await toggle.click();
+        assert.equal(await toggle.getAttribute('aria-label'), 'Collapse');
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+        await page.waitForTimeout(250);
+        const expanded = await input.boundingBox();
+        assert.ok(expanded.height > viewport.height * .5);
+        assert.ok(expanded.height <= viewport.height * .75 + 1);
+        assert.ok(expanded.height > collapsed);
+        assert.equal(await input.inputValue(), 'Please review this implementation.\nKeep this second line while expanding.');
+        const send = await page.locator('#send-button').boundingBox();
+        assert.ok(send.y + send.height <= viewport.height, `Send must fit at ${suffix}`);
+        const header = await page.locator('body > .topbar').boundingBox();
+        assert.ok(Math.abs(header.y) <= 1, `Header must stay at viewport top at ${suffix}: ${JSON.stringify(header)}`);
+        const dock = await page.locator('.dock').boundingBox();
+        assert.ok(dock.y >= header.y + header.height + 7, `Dock must stay below header at ${suffix}`);
+        await capture(page, `composer-expanded-${suffix}`);
+        if (viewport.width < 640) {
+          await page.evaluate(() => {
+            Object.defineProperty(visualViewport, 'height', {configurable: true, value: 420});
+            visualViewport.dispatchEvent(new Event('resize'));
+          });
+          await page.waitForFunction(() => document.querySelector('#composer-input').getBoundingClientRect().height < 300);
+          const keyboardSend = await page.locator('#send-button').boundingBox();
+          assert.ok(keyboardSend.y + keyboardSend.height <= 420, 'Send stays above a visual-viewport-only keyboard');
+          await page.evaluate(() => { delete visualViewport.height; visualViewport.dispatchEvent(new Event('resize')); });
+          await page.waitForFunction(() => document.querySelector('#composer-input').getBoundingClientRect().height > 350);
+        }
+        await toggle.click();
+        assert.equal((await input.boundingBox()).height, collapsed);
+        await toggle.click();
+        await input.press('Control+Enter');
+        await page.waitForFunction(() => document.querySelector('#composer-input').value === '');
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        if (!await page.locator('#new-session-button').isVisible()) await page.locator('#room-button').click();
+        await page.locator('#new-session-button').click();
+        const prompt = page.locator('#new-session-prompt');
+        const promptToggle = page.locator('#new-session .input-expand');
+        await prompt.fill('A separate task');
+        assert.ok(Math.abs((await promptToggle.boundingBox()).y - (await prompt.boundingBox()).y) < 1);
+        await promptToggle.click();
+        assert.equal(await promptToggle.getAttribute('aria-pressed'), 'true');
+        assert.ok((await prompt.boundingBox()).height > viewport.height * .65);
+        await page.locator('#new-session-create').click();
+        await page.waitForFunction(() => document.querySelector('#new-session-prompt').value === '');
+        assert.equal(await promptToggle.getAttribute('aria-pressed'), 'false');
+        if (viewport.width < 640 && await page.locator('#session-box').evaluate(node => node.open)) {
+          await page.locator('#session-box > summary').click();
+        }
+
+        await page.evaluate(() => {
+          window.copied = [];
+          Object.defineProperty(navigator, 'clipboard', {configurable: true,
+            value: {writeText: async text => window.copied.push(text)}});
+        });
+        for (const id of ['question', 'answer']) {
+          const turn = page.locator(`#transcript [data-record-id="${id}"]`);
+          await turn.hover();
+          const copy = turn.getByRole('button', {name: 'Copy message', exact: true});
+          await copy.focus();
+          assert.equal(await copy.locator('..').locator('..').evaluate(node => getComputedStyle(node).opacity), '1');
+          await capture(page, `message-copy-${id}-${suffix}`);
+          await copy.click();
+          await page.waitForFunction(id => document.querySelector(
+            `[data-record-id="${id}"] [data-message-action="copy"]`).dataset.label === 'Copied', id);
+        }
+        assert.deepEqual(await page.evaluate(() => window.copied), [
+          'Review **this change**.\nKeep the draft intact.',
+          '## Review\n\nThe shared helper preserves **Markdown**.\nSecond line.',
+        ]);
+        await page.evaluate(() => {
+          Object.defineProperty(navigator, 'clipboard', {configurable: true, value: undefined});
+          document.execCommand = command => {
+            if (command === 'copy') window.fallbackCopy = document.activeElement.value;
+            return true;
+          };
+          const turn = window.mevedelTranscriptRenderer.renderRecord({id: 'rendered-only', kind: 'assistant'});
+          turn.querySelector('.prose').innerHTML = '<p>First paragraph</p><p>Second<br>line</p>';
+          document.getElementById('transcript').append(turn);
+        });
+        const fallback = page.locator('[data-record-id="rendered-only"] [data-message-action="copy"]');
+        await fallback.focus();
+        await fallback.click();
+        await page.waitForFunction(() => window.fallbackCopy);
+        assert.equal(await page.evaluate(() => window.fallbackCopy), 'First paragraph\n\nSecond\nline');
+        assert.equal(await fallback.evaluate(node => document.activeElement === node), true);
+        assert.equal(await page.locator('body > textarea').count(), 0, 'fallback textarea is removed');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await page.evaluate(() => {
+          document.getElementById('artifact-panel').hidden = false;
+          document.getElementById('artifact-side').hidden = false;
+          document.getElementById('artifact-title').textContent = 'Review notes';
+          document.getElementById('artifact-body').innerHTML = '<article class="prose"><h1>Review notes</h1><p>A shared document for the implementation review.</p></article>';
+          const drafts = new Map();
+          window.discussionView = window.mevedelDiscussionSidebar.create({
+            root: document.getElementById('artifact-discussion-sidebar'), noun: 'artifact',
+            canWrite: () => true, draft: {get: key => drafts.get(key) || {},
+              set: (key, value) => drafts.set(key, {...drafts.get(key), ...value})},
+            submit: async () => true,
+          });
+          discussionView.update({discussions: [{id: 'review', title: 'Implementation review', messages: []}]});
+          discussionView.show({kind: 'thread', id: 'review'});
+        });
+        const discussionInput = page.locator('#artifact-side .ds-input');
+        const discussionToggle = page.locator('#artifact-side .input-expand');
+        await discussionInput.fill('Please keep this discussion draft while expanding.');
+        assert.ok(Math.abs((await discussionToggle.boundingBox()).y - (await discussionInput.boundingBox()).y) < 1);
+        await discussionToggle.click();
+        assert.equal(await discussionToggle.getAttribute('aria-pressed'), 'true');
+        assert.ok((await discussionInput.boundingBox()).height > viewport.height * .5);
+        const reply = await page.locator('#artifact-side .ds-send').boundingBox();
+        assert.ok(reply.y + reply.height <= viewport.height, `Discussion Reply must fit at ${suffix}`);
+        await capture(page, `discussion-expanded-${suffix}`);
+        await discussionInput.press('Control+Enter');
+        await page.waitForFunction(() => document.querySelector('#artifact-side .ds-input').value === '');
+        assert.equal(await discussionToggle.getAttribute('aria-pressed'), 'false');
+        await page.context().close();
+      }
+    }
+  } finally { await browser.close(); }
+});
+
+test('Plan feedback supports multiline expansion, refresh continuity and shortcut sending', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1440, height: 900}, {width: 375, height: 667}]) {
+      const page = await open(browser, {viewport, records: [
+        {id: 'plan', kind: 'assistant', text: 'The implementation plan is ready for review.'},
+      ]});
+      await page.goto(sessionRoom.link);
+      await page.locator('#transcript [data-record-id="plan"]').waitFor();
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+      const frame = {t: 'ui-request', reqId: 99, body: 'Review the implementation plan.', allowFeedback: true};
+      await page.push[sessionRoom.id](frame);
+      await page.getByText('Suggest a change', {exact: true}).click();
+      const input = page.getByRole('textbox', {name: 'Feedback', exact: true});
+      assert.equal(await input.evaluate(node => node.tagName), 'TEXTAREA');
+      await input.fill('Keep the existing API.');
+      await input.press('Enter');
+      await input.pressSequentially('Add the regression first.');
+      const text = 'Keep the existing API.\nAdd the regression first.';
+      assert.equal(await input.inputValue(), text);
+      const collapsed = (await input.boundingBox()).height;
+      const toggle = page.locator('.decision-feedback .input-expand');
+      assert.ok(Math.abs((await toggle.boundingBox()).y - (await input.boundingBox()).y) < 1);
+      await toggle.click();
+      await page.waitForTimeout(250);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.ok((await input.boundingBox()).height > collapsed + 30);
+      await input.evaluate(node => node.setSelectionRange(5, 12));
+      await page.push[sessionRoom.id]({...frame, body: 'Updated plan, same feedback request.'});
+      await page.waitForFunction(() => document.querySelector('.request-body').textContent.startsWith('Updated'));
+      assert.equal(await input.inputValue(), text);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(await input.evaluate(node => [document.activeElement === node, node.selectionStart, node.selectionEnd]), [true, 5, 12]);
+      await capture(page, `plan-feedback-expanded-${viewport.width}x${viewport.height}-light`);
+      await input.press('Control+Enter');
+      await page.waitForFunction(() => document.querySelector('.decision-feedback .input-expand').getAttribute('aria-pressed') === 'false');
+      assert.equal(page.received.filter(({frame}) => frame.t === 'ui-response').at(-1).frame.feedback, text);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await toggle.click();
+      await page.push[sessionRoom.id]({t: 'ui-request-end', reqId: 99});
+      await page.waitForFunction(() => !document.querySelector('.decision-feedback'));
+      assert.equal(await page.locator('.dock').evaluate(node => node.classList.contains('input-expanded')), false);
+      await page.context().close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('live arrow floats over the transcript without reserving a bar', async () => {
   const browser = await chromium.launch();
   try {
@@ -377,7 +587,18 @@ function pinned(page, text) {
     const visible = getComputedStyle(pin).visibility === 'visible';
     const rendered = getComputedStyle(pin, '::before').content.replace(/^"|"$/g, '');
     return text === null ? !visible : visible && rendered.startsWith(text);
-  }, text);
+  }, text).catch(async error => {
+    throw new Error(`Expected pin ${JSON.stringify(text)}; observed ${JSON.stringify(await page.evaluate(() => ({
+      label: document.getElementById('pinned-prompt').dataset.label,
+      shown: document.getElementById('pinned-prompt').hasAttribute('data-shown'), scrollY,
+      ledgers: [...document.querySelectorAll('.history-ledger, #transcript')].map(node => ({
+        id: node.id, top: node.getBoundingClientRect().top, bottom: node.getBoundingClientRect().bottom,
+        open: node.closest('details')?.open})),
+      prompts: [...document.querySelectorAll('[data-role="you"], [data-role="guest"]')].map(node => ({
+        id: node.dataset.recordId, top: node.getBoundingClientRect().top,
+        live: Boolean(node.closest('.history-chat[data-live]'))})),
+    })))}`, {cause: error});
+  });
 }
 
 function pinGeometry(page) {
