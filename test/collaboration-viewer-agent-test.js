@@ -8,9 +8,14 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 const {navigation, nativeActivations} = require('./collaboration-viewer-content-links-support');
 
 const ids = ['agent-panel', 'agent-title',
-             'agent-meta', 'agent-close', 'agent-latest', 'agent-transcript'];
+             'agent-meta', 'agent-close', 'agent-latest', 'agent-transcript', 'agent-pinned-prompt'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
 nodes['agent-panel'].hidden = true;
+nodes['agent-panel'].querySelector = () => null;
+nodes['agent-pinned-prompt'].querySelector = () => null;
+nodes['agent-pinned-prompt'].removeAttribute = name => delete nodes['agent-pinned-prompt'].attributes[name];
+// This controller fixture has no layout; pinned-row geometry runs in Chromium.
+nodes['agent-transcript'].getClientRects = () => [];
 const document = {
   getElementById: id => nodes[id],
   createElement: tag => new Element(tag),
@@ -23,10 +28,12 @@ let poll = null;
 const window = {};
 const context = {
   window, document, console,
+  ResizeObserver: class { observe() {} },
   setInterval(callback) { poll = callback; return 1; },
   clearInterval() { poll = null; },
 };
 load('relay/viewer/renderer.js', context);
+load('relay/viewer/viewer-pinned-prompt.js', context);
 load('relay/viewer/viewer-agent.js', context);
 const href = navigation(context);
 const controller = window.mevedelAgentView.create({
