@@ -271,6 +271,16 @@ prefix argument, or when HERE is non-nil, insert it at point."
 ;;
 ;;; External helpers
 
+(defun mevedel--emacs-executable ()
+  "Return this Emacs executable, bypassing an invocation launcher when possible.
+Hosts without executable identity use the original invocation path."
+  (let ((default-directory "/"))
+    (or (condition-case nil
+            (let ((executable (file-symlink-p (format "/proc/%s/exe" (emacs-pid)))))
+              (and executable (file-executable-p executable) executable))
+          (file-error nil))
+        (expand-file-name invocation-name invocation-directory))))
+
 (defconst mevedel--process-identity-regexp
   (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
           "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")

@@ -14,6 +14,10 @@
 (require 'mevedel-transport)
 (require 'subr-x)
 
+;; `mevedel-utilities'
+(declare-function mevedel--emacs-executable "mevedel-utilities" ())
+(autoload 'mevedel--emacs-executable "mevedel-utilities")
+
 (defcustom mevedel-eval-sandbox-idle-timeout 600
   "Seconds before an idle Eval sandbox stops; nil disables idle expiry."
   :type '(choice (const :tag "Disabled" nil) number)
@@ -272,7 +276,7 @@ Return a cancellation function scoped to this protocol call."
                         (delete-file script)
                         (mevedel-eval-sandbox--closed entry facts))
                       :session session :owner owner
-                      :command (list (expand-file-name invocation-name invocation-directory)
+                      :command (list (mevedel--emacs-executable)
                                      "-Q" "--batch" "-l" script)
                       :workdir workdir :writable-roots roots :temporary-root temporary-root)))
                 (when (mevedel-execution-service-live-p service)

@@ -169,7 +169,9 @@ and the target transport is idle. Already-due journal and memory opportunities
 leave an event-loop interval between jobs rather than executing back-to-back.
 On local Linux workspaces, scheduled abandoned-capture recovery, digest discovery
 and claim admission, and journal retention run in short-lived batch Emacs children using the same pinned storage
-operations and fenced claims. Children load package dependencies without user
+operations and fenced claims. On Linux, workers start the running Emacs binary
+directly, not a shell launcher named by its invocation. This keeps process-group
+ownership verifiable at cancellation. Children load package dependencies without user
 init, receive frozen storage inputs and retention settings, and return bounded
 completion records. Digest preparation returns a capture identity and fenced
 claims; the editor freshly reads the selected capture and rechecks both claims

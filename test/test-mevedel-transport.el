@@ -447,6 +447,41 @@
       (should (< (float-time (time-subtract (timer--time timer) nil))
                  9.8))))
 
+  :doc "direct TRAMP operations cannot discard a deadline opened inside the body"
+  (let* ((root (make-temp-file "transport-deadline-" t))
+         (remote (concat "/mevedelmock:" (system-name) ":" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          ;; Connect first so this tests timer preservation, not login latency.
+          (should (file-directory-p remote))
+          (mevedel-transport-with-exclusive-connection
+            (with-timeout (10 (ert-fail "Unexpected deadline"))
+              (let* ((timer (car with-timeout-timers))
+                     (deadline (timer--time timer)))
+                (should (file-attributes remote))
+                (should (memq timer timer-list))
+                (should (equal deadline (timer--time timer)))))))
+      (delete-directory root t)))
+
+  :doc "a real TRAMP command charges time to the enclosing timeout"
+  (let* ((root (make-temp-file "transport-elapsed-" t))
+         (remote (concat "/mevedelmock:" (system-name) ":" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (should (file-directory-p remote))
+          (let ((default-directory (file-name-as-directory remote))
+                returned)
+            (should
+             (eq :expired
+                 (mevedel-transport-with-exclusive-connection
+                   (with-timeout (0.5 :expired)
+                     (should (= 0 (process-file "sleep" nil nil nil "0.8")))
+                     (setq returned t)
+                     (sleep-for 0.1)
+                     :missed))))
+            (should returned)))
+      (delete-directory root t)))
+
   :doc "restores the timer list when the body exits non-locally"
   (let ((before timer-list))
     (should-error

@@ -13,6 +13,9 @@
 (require 'mevedel-journal-claim)
 (require 'mevedel-workspace-identity)
 (require 'mevedel-transport)
+(require 'mevedel-tool-exec)
+(require 'mevedel-execution)
+(require 'mevedel-utilities)
 
 (defun mevedel-test-launcher--wait (predicate)
   "Wait boundedly for PREDICATE, allowing process and transport delivery."
@@ -269,6 +272,123 @@
                                           (if (eq ending 'signal) 15 17))))
                  (should (string-empty-p warning))))
            (mevedel-journal-process-stop-all)))))))
+
+(mevedel-deftest mevedel--emacs-executable ()
+  ,test
+  (test)
+  :doc "the running executable bypasses a launcher, with a portable fallback"
+  (let* ((default-directory "/ssh:unreachable:/")
+         (native-comp-enable-subr-trampolines nil)
+         (invocation-directory temporary-file-directory)
+         (invocation-name "emacs-launcher")
+         (symlink (symbol-function 'file-symlink-p)))
+    (when (eq system-type 'gnu/linux)
+      (should (equal (mevedel--emacs-executable)
+                     (file-symlink-p (format "/proc/%s/exe" (emacs-pid))))))
+    (dolist (fault '(missing inaccessible stale))
+      (cl-letf (((symbol-function 'file-symlink-p)
+                 (lambda (path)
+                   (if (string-prefix-p "/proc/" path)
+                       (pcase fault
+                         ('inaccessible (signal 'file-error '("Denied")))
+                         ('stale "/missing-emacs-binary")
+                         (_ nil))
+                     (funcall symlink path)))))
+        (should (equal (mevedel--emacs-executable)
+                       (expand-file-name invocation-name invocation-directory)))))))
+
+(mevedel-deftest mevedel-journal-worker-cancel/non-exec-launcher ()
+  ,test
+  (test)
+  :doc "journal cancellation and Fresh Eval stop quiesce descendants behind the same waiting launcher"
+  (mevedel-test-launcher--with-workspace
+   (lambda (workspace)
+     (let* ((default-directory (file-name-as-directory (mevedel-workspace-root workspace)))
+            (temporary-file-directory default-directory)
+            (emacs (expand-file-name invocation-name invocation-directory))
+            (launcher (file-name-concat default-directory "emacs-launcher"))
+            (launched (file-name-concat default-directory "launched"))
+            ;; A native trampoline build can launch Emacs via the invocation
+            ;; variables independently of the worker or Fresh Eval under test.
+            (native-comp-enable-subr-trampolines nil)
+            (invocation-directory default-directory)
+            (invocation-name "emacs-launcher")
+            (mevedel--session (mevedel-session--create
+                              :name "launcher" :working-directory default-directory
+                              :workspace workspace))
+            (mevedel-sandbox-mode 'off)
+            (mevedel-execution-mailbox-delivery-function nil)
+            (spawn (symbol-function 'make-process))
+            control)
+       (with-temp-file launcher
+         (insert (format "#!/bin/sh\nprintf launched >%s\n%s \"$@\"\nstatus=$?\nexit \"$status\"\n"
+                         (shell-quote-argument launched) (shell-quote-argument emacs))))
+       (set-file-modes launcher #o700)
+       (unwind-protect
+           (progn
+             ;; The control proves this is a waiting shell, not an exec wrapper.
+             (setq control (make-process :name "launcher-control" :noquery t
+                                         :command (list launcher "-Q" "--batch" "--eval" "(sleep-for 30)")))
+             (mevedel-test-launcher--wait (lambda () (file-exists-p launched)))
+             (mevedel-test-launcher--wait
+              (lambda () (cl-some (lambda (pid)
+                                   (eql (process-id control) (alist-get 'ppid (process-attributes pid))))
+                                 (list-system-processes))))
+             (signal-process (- (process-id control)) 'SIGKILL)
+             (delete-process control)
+             (delete-file launched)
+             (should-not (file-exists-p launched))
+             (dolist (kind '(journal fresh))
+               (let* ((marker (file-name-concat default-directory (symbol-name kind)))
+                      (late (concat marker "-late"))
+                      (shell-command (format "echo $$ >%s; sleep 30; printf late >%s"
+                                             (shell-quote-argument marker) (shell-quote-argument late)))
+                      (form `(process-file "sh" nil nil nil "-c" ,shell-command))
+                      child shell result stopped)
+                 (unwind-protect
+                     (progn
+                       (if (eq kind 'journal)
+                           (cl-letf (((symbol-function 'make-process)
+                                      (lambda (&rest args)
+                                        (let* ((command (copy-sequence (plist-get args :command)))
+                                               (run (read (car (last command)))))
+                                          (setcar (last command) (prin1-to-string `(progn ,form ,run)))
+                                          (apply spawn (plist-put args :command command))))))
+                             (setq child (mevedel-journal-worker-start
+                                          workspace 'recovery nil (lambda (reply) (setq result reply)))))
+                         (mevedel-tool-exec--eval
+                          (lambda (reply) (setq result reply))
+                          (list :expression (prin1-to-string form) :mode "fresh" :yield_time_ms 250)))
+                       (mevedel-test-launcher--wait (lambda () (file-exists-p marker)))
+                       (setq shell (with-temp-buffer (insert-file-contents marker)
+                                                     (string-to-number (buffer-string))))
+                       (should (> shell 0))
+                       (ert-info ((format "%s used invocation launcher" kind))
+                         (should-not (file-exists-p launched)))
+                       (if child
+                           (should (mevedel-journal-worker-cancel child))
+                         (mevedel-test-launcher--wait (lambda () result))
+                         (mevedel-tool-exec--stop-execution
+                          (lambda (reply) (setq stopped reply))
+                          (list :execution_id (plist-get (plist-get result :render-data) :execution-id)))
+                         (mevedel-test-launcher--wait (lambda () stopped))
+                         (should (eq 'stopped (plist-get (plist-get stopped :render-data) :termination))))
+                       (should-not (cl-some
+                                    (lambda (pid)
+                                      (let ((attrs (process-attributes pid)))
+                                        (and (eql shell (alist-get 'pgrp attrs))
+                                             (not (equal "Z" (alist-get 'state attrs))))))
+                                    (list-system-processes)))
+                       (should-not (file-exists-p late))
+                       (when child (should-not result)))
+                   (when shell (ignore-errors (signal-process (- shell) 'SIGKILL)))
+                   (when child
+                     (ignore-errors (signal-process (- (process-id child)) 'SIGKILL))
+                     (mevedel-journal-worker-cancel child))))))
+         (when (and control (process-live-p control))
+           (signal-process (- (process-id control)) 'SIGKILL)
+           (delete-process control))
+         (mevedel-execution-teardown-session mevedel--session))))))
 
 (provide 'test-mevedel-journal-worker-launcher)
 ;;; test-mevedel-journal-worker-launcher.el ends here

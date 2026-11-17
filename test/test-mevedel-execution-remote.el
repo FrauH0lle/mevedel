@@ -1317,10 +1317,11 @@ connection charges for, so the program path is proved here too."
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
                                               (setq session (test-mevedel-execution--session remote-root))
-                                              ;; The inner holder forks a short-lived child inside the managed
+                                              ;; The inner holder forks an exiting child inside the managed
                                               ;; group, then leaves the group via setsid while keeping the
                                               ;; child unreaped: a held zombie whose pgrp stays the managed
-                                              ;; group for as long as the holder lives.
+                                              ;; group for as long as the holder lives.  A shell can reap its
+                                              ;; child before exec, so use a parent that never calls wait.
                                               (cl-letf (((symbol-function
                                                           'mevedel-session-artifacts-publish-text)
                                                          (lambda (&rest _) 'queued)))
@@ -1328,8 +1329,16 @@ connection charges for, so the program path is proved here too."
                                                       (test-mevedel-execution--start-managed
                                                        session remote-root
                                                        (list "sh" "-c"
-                                                             (concat "sh -c 'sleep 0.05 & echo $$ > holder.pid; "
-                                                                     "exec setsid sleep 300' & "
+                                                             (concat "python3 -c "
+                                                                     (shell-quote-argument
+                                                                      (string-join
+                                                                       '("import os, time"
+                                                                         "if os.fork() == 0: os._exit(0)"
+                                                                         "os.setsid()"
+                                                                         "with open('holder.pid', 'w') as out: out.write(str(os.getpid()))"
+                                                                         "time.sleep(300)")
+                                                                       "\n"))
+                                                                     " & "
                                                                      "printf ready; exec sleep 300"))
                                                        :yield-time-ms 10))
                                                 ;; Keep the detached holder reachable for cleanup if the marker never arrives.
@@ -1357,7 +1366,8 @@ connection charges for, so the program path is proved here too."
                                                    (cl-some
                                                     (lambda (pid)
                                                       (let ((attributes (process-attributes pid)))
-                                                        (and (eql group-id (alist-get 'pgrp attributes))
+                                                        (and (eql holder-pid (alist-get 'ppid attributes))
+                                                             (eql group-id (alist-get 'pgrp attributes))
                                                              (equal "Z" (alist-get 'state attributes)))))
                                                     (list-system-processes))))
                                                 (let ((start (float-time)))

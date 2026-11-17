@@ -14,6 +14,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-workspace-identity)
+(require 'tramp-sh)
 (require 'mevedel-execution-test-helpers
          (file-name-concat (file-name-directory
                             (or load-file-name buffer-file-name))
@@ -182,6 +183,7 @@
             (mevedel-execution-mailbox-delivery-function
              #'mevedel-tool-exec-handle-execution-event)
             (mevedel-sandbox-mode 'off)
+            (gate (file-name-concat (file-local-name root) "producer-go"))
             records)
        (unwind-protect
            (progn
@@ -194,12 +196,38 @@
                                     (mevedel-session-execution-state session))) records))
                   :kind 'monitor :description (format "producer%d" i)
                   :session session :owner "/root" :owner-context session
-                  :command '("sh" "-c" "printf 'first\n'; sleep 60")
+                  :command (list "sh" "-c"
+                                 "while [ ! -f \"$1\" ]; do sleep .02; done; printf 'first\n'; sleep 60"
+                                 "sh" gate)
                   :workdir root :writable-roots (list root)
-                  :artifact-directory (file-name-concat root "artifacts")))
+                  :artifact-directory
+                  (mevedel-tool-exec--execution-artifact-directory session nil)))
+               (test-mevedel-execution--wait (lambda () (= 2 (length records))))
+               (let* ((wait (symbol-function 'tramp-wait-for-output))
+                      (default-directory root)
+                      (record (car records))
+                      (process (mevedel-execution-process--child-process
+                                (mevedel-execution--record-child record)))
+                      released)
+                 ;; Force real Monitor output while TRAMP is waiting on a
+                 ;; different command. A remote live spool would reenter it.
+                 (cl-letf (((symbol-function 'tramp-wait-for-output)
+                            (lambda (&rest args)
+                              (unless released
+                                (setq released t)
+                                (should (mevedel-transport-nested-p))
+                                (write-region "" nil gate nil 'silent)
+                                (let ((end (+ (float-time) 5)))
+                                  (while (and (string-empty-p (mevedel-execution--monitor-body record))
+                                              (< (float-time) end))
+                                    (accept-process-output process 0.05 nil 1)))
+                                (should (equal "first\n" (mevedel-execution--monitor-body record))))
+                              (apply wait args))))
+                   (should (= 0 (process-file "true" nil nil nil))))
+                 (should released))
                (test-mevedel-execution--wait
-                (lambda () (and (= 2 (length records))
-                                (cl-every #'mevedel-execution--record-monitor-inflight records))))
+                (lambda ()
+                  (cl-every #'mevedel-execution--record-monitor-inflight records)))
                (dolist (record records)
                  (should (equal "first\n" (mevedel-execution--monitor-body record))))
                (should-not (test-mevedel-mail-batch--restored session)))

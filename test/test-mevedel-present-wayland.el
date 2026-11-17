@@ -276,17 +276,7 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
                                (push (cons name (copy-sequence process-environment))
                                      launch-environments)
                                (apply real-make-process arguments)))))
-                  (condition-case err
-                      ;; The pass takes about 3.8 s; 10 s bounds a deadlock.
-                      (mevedel-test--run-wayland-fixture "present-wayland-thread.el" 10)
-                    (ert-test-failed
-                     ;; Stock pgtk itself deadlocks here now and then: the
-                     ;; thread waits in `gtk_main_iteration' for the GLib
-                     ;; context while the main thread waits in `thread-join'.
-                     ;; A crash or an error still fails.
-                     (if (equal (cadr err) "Wayland scenario timed out")
-                         (ert-skip "Stock pgtk deadlocked showing a frame from a thread")
-                       (signal (car err) (cdr err))))))))
+                  (mevedel-test--run-wayland-fixture "present-wayland-thread.el" 10))))
     (should (equal (sort (mapcar #'car launch-environments) #'string<)
                    '("mevedel-test-kwin" "mevedel-test-wayland-daemon")))
     (dolist (variable '(("DBUS_SESSION_BUS_ADDRESS" . "mevedel-invalid-host-bus")
@@ -300,6 +290,8 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
       (should-not (plist-get observed :error))
       (should (= 0 status))
       (should (eq 'enabled (plist-get observed :state)))
+      (should (eq t (plist-get observed :thread-side)))
+      (should (eq t (plist-get observed :show-returned)))
       (should (eq t (plist-get observed :visible))))))
 
 (provide 'test-mevedel-present-wayland)
