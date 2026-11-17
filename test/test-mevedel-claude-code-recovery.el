@@ -115,10 +115,10 @@
               (let ((before (buffer-string)))
                 (with-current-buffer view (mevedel-claude-code-recover-history))
                 (should (equal before (buffer-string))))
-              (should-not (assoc "root" (mevedel-session-external-conversations session)))
+              (should-not (plist-get (cdr (assoc "root" (mevedel-session-external-conversations session))) :id))
               (let ((metadata (mevedel-session-codec-read
                                (mevedel-session-artifacts-sidecar-path (mevedel-session-save-path session)))))
-                (should-not (assoc "root" (plist-get metadata :external-conversations))))
+                (should (eq 'unstarted (plist-get (cdr (assoc "root" (plist-get metadata :external-conversations))) :state))))
               (goto-char (point-max))
               (mevedel--insert-user-turn "Recover from retained evidence")
               (mevedel--send-request "Recover from retained evidence")
@@ -196,7 +196,8 @@
       (should-error (mevedel-claude-code-recover-history "/root/missing") :type 'user-error)
       (mevedel-claude-code-recover-history)
       (should (eq 'paused (mevedel-goal-status (mevedel-session-goal session))))
-      (should-not (mevedel-session-external-conversations session))
+      (should (equal '(("root" :engine claude-code :state unstarted :boundaries ((:turn 0 :detached t))))
+                     (mevedel-session-external-conversations session)))
       (should-not (mevedel-turn-busy-p buffer)))))
 
 (mevedel-deftest mevedel-claude-code-recover-history/publication-failure (:quiet t)

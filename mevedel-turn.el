@@ -81,6 +81,12 @@
                   "mevedel-goal" (fsm &optional status))
 (declare-function mevedel-goal-settle-turn "mevedel-goal" (fsm))
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-record-failure "mevedel-gptel-retry" (fsm))
+(declare-function mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry" (buffer))
+(autoload 'mevedel-gptel-retry-record-failure "mevedel-gptel-retry")
+(autoload 'mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry")
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-event-plist
                   "mevedel-hooks"
@@ -473,6 +479,8 @@ A root request is the user's retry: blocking recovery issues refuse it, and
 it clears the previous attempt's informational issues and a failure pause no
 failed input still justifies.  A retained agent's admission leaves the root's
 recovery state alone."
+  (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+    (user-error "Wait for native history preparation before starting a turn"))
   (unless mevedel--agent-invocation
     (mevedel-recovery-assert-ready session))
   (let ((entry-request mevedel--current-request))
@@ -512,6 +520,8 @@ recovery state alone."
       (mevedel-session-set-pending-input-failure-paused session nil)))
   ;; Readiness and recovery checks can yield.  Recheck immediately before
   ;; capture, keeping ordinary policy inspection independent of admission.
+  (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+    (user-error "Wait for native history preparation before starting a turn"))
   (when mevedel-implementation-policy--admission-preparation
     (mevedel-implementation-policy-assert-preparation
      mevedel-implementation-policy--admission-preparation))
@@ -792,6 +802,8 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
          chat-buffer
          (plist-get info :position)
          (list :outcome 'error
+               :request-id (plist-get info :mevedel-request-id)
+               :external-history (plist-get info :external-history)
                :backend (or backend-name "Provider")
                :status (plist-get info :status)
                :error-type (and (listp error-data)
@@ -835,12 +847,13 @@ Signal when the request is missing or its reservation is not the next turn."
     (with-current-buffer chat-buffer
       (unless (and mevedel--session mevedel--current-request)
         (error "Cannot commit turn without an active request"))
-      (let ((reserved (mevedel-request-turn mevedel--current-request))
-            (expected (1+ (or (mevedel-session-turn-count mevedel--session)
-                              0))))
+      (let* ((reserved (mevedel-request-turn mevedel--current-request))
+             (retry (plist-get info :mevedel-retry-of))
+             (committed (or (mevedel-session-turn-count mevedel--session) 0))
+             (expected (if retry committed (1+ committed))))
         (unless (equal reserved expected)
-          (error "Reserved turn %S does not follow committed turn %S"
-                 reserved (mevedel-session-turn-count mevedel--session)))
+          (error "%s turn %S conflicts with committed turn %S"
+                 (if retry "Retry reservation for" "Reserved") reserved committed))
         (setf (mevedel-session-turn-count mevedel--session) reserved)))))
 
 (defun mevedel--turn-save (fsm)
@@ -936,6 +949,9 @@ The terminal admission hold stays live between publication and this phase."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
+      (when (or (plist-get info :error)
+                (eq (plist-get info :mevedel-terminal-status) 'error))
+        (mevedel-gptel-retry-record-failure fsm))
       (mevedel-request-end))))
 
 (defun mevedel--turn-request-id (info)
@@ -1057,6 +1073,7 @@ Holds nest across final-patch generation and deferred durable settlement."
         (with-current-buffer buffer
           (setq mevedel--turn-settlements-pending
                 (delq fsm mevedel--turn-settlements-pending))
+          (mevedel-gptel-retry-refresh-availability buffer)
           ;; A drain offered before the last hold cleared may have refused.
           (when (plist-get info :mevedel-input-delivery-after-release)
             (setf (mevedel-engine-info fsm)

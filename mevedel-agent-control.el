@@ -1762,6 +1762,7 @@ re-offers only its own session, so it does not hold this one.
 Waiting mail gets the offer `mevedel-agent-control-settlement-finished'
 makes."
   (and (eq (mevedel-agent-record-activity record) 'idle)
+       (not (memq session (bound-and-true-p mevedel-claude-code-fork--sessions)))
        (not (cl-some (lambda (invocation)
                        (eq session (mevedel-agent-invocation-parent-session
                                     invocation)))

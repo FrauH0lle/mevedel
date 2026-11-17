@@ -744,25 +744,36 @@
       messageSources.set(turn, {text: typeof record.text === 'string' ? record.text : null, rendered});
       const actions = el('ul', 'message-actions');
       actions.setAttribute('aria-label', 'Message actions');
-      const item = el('li');
-      const copy = el('button', 'btn quiet message-action');
-      copy.type = 'button';
-      copy.dataset.messageAction = 'copy';
-      copy.dataset.label = 'Copy';
-      copy.setAttribute('aria-label', 'Copy message');
-      item.append(copy);
-      actions.append(item);
+      const action = (name, label, help) => {
+        const item = el('li', name === 'copy' ? '' : 'owner-message-action');
+        const button = el('button', 'btn quiet message-action');
+        button.type = 'button';
+        button.dataset.messageAction = name;
+        button.dataset.label = label;
+        button.setAttribute('aria-label', name === 'copy' ? 'Copy message' : label);
+        button.setAttribute('title', help);
+        item.append(button);
+        actions.append(item);
+        return button;
+      };
+      action('copy', 'Copy', 'Copy message');
+      if (record.kind === 'assistant' && typeof record.forkPoint === 'string' && record.forkPoint) {
+        const fork = action('fork', 'Fork from here',
+          'Continue from this response in a new session; this one stays as it is');
+        fork.classList.add('forkbtn');
+        fork.dataset.forkPoint = record.forkPoint;
+        const rewind = action('rewind', 'Rewind to here',
+          'Discard later conversation; leave files unchanged. Undo with Redo in Emacs.');
+        rewind.dataset.historyId = record.forkPoint;
+        if (Number.isInteger(record.forkTurn)) rewind.dataset.historyTurn = String(record.forkTurn);
+      }
+      if (record.kind === 'assistant' && typeof record.retryId === 'string' && record.retryId) {
+        action('retry-turn', 'Retry',
+          record.retryExternal ? 'Retry from before the failed prompt (older sessions reuse native history); file effects are not undone'
+            : 'Retry the failed request without repeating completed tools')
+          .dataset.historyId = record.retryId;
+      }
       content.append(actions);
-    }
-    // A settled turn's last response can start a Conversation Fork. It
-    // follows the response, since a continuation turn hides its who line.
-    // Only owner links hold that authority, so the page hides it otherwise.
-    if (record.kind === 'assistant' && typeof record.forkPoint === 'string' && record.forkPoint) {
-      const fork = el('button', 'forkbtn', 'Fork from here');
-      fork.type = 'button';
-      fork.dataset.forkPoint = record.forkPoint;
-      fork.setAttribute('title', 'Continue from this response in a new session; this one stays as it is');
-      content.append(fork);
     }
     turn.append(content);
     return restore();

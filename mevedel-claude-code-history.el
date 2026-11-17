@@ -14,6 +14,9 @@
 (require 'mevedel-transcript)
 (require 'mevedel-compact-evidence)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-turn "mevedel-agents" (invocation))
+
 (defun mevedel-claude-code-history--foreign-p (record)
   "Return non-nil when another machine or installation retained RECORD."
   (and (plist-get record :id)
@@ -39,14 +42,17 @@ That is when it was refused as edited or foreign, or failed to start."
            (mevedel-claude-code-history--foreign-p record)
            (plist-get record :start-failed))))
 
-(defun mevedel-claude-code-history-open (owner id &optional boundary)
+(defun mevedel-claude-code-history-open (owner id &optional boundary prior-history)
   "Return OWNER's in-flight native record for conversation ID.
 BOUNDARY is the submitted input's (SEGMENT . OFFSET), protecting it from
-undetected edits.  The record is attached to OWNER's turn context."
+undetected edits.  Preserve PRIOR-HISTORY's exact native boundaries.
+The record is attached to OWNER's turn context."
   (let ((record (list :engine 'claude-code :id id :host (system-name)
                       :directory (expand-file-name mevedel-claude-code-directory)
                       :state 'in-flight)))
     (when boundary (plist-put record :input-boundary boundary))
+    (when-let* ((boundaries (plist-get prior-history :boundaries)))
+      (plist-put record :boundaries (copy-tree boundaries)))
     (setf (mevedel-engine-info owner)
           (plist-put (mevedel-engine-info owner) :mevedel-claude-history record))
     record))
@@ -55,7 +61,8 @@ undetected edits.  The record is attached to OWNER's turn context."
   "Record OWNER's native OUTCOME on RECORD, opened from previous HISTORY.
 Without RECORD, a retained HISTORY failed to start; it is marked so recovery
 can be offered, and its diagnosis names excerpt recovery.  Divergence
-observed during the turn is preserved."
+observed during the turn is preserved.  Successful answers retain the exact
+native message boundary, replacing any checkpoint at the same root turn."
   (if (not record)
       (let ((info (mevedel-engine-info owner)))
         (when (and (plist-get history :id)
@@ -69,7 +76,19 @@ observed during the turn is preserved."
                                    "; if native history is unavailable, use M-x mevedel-claude-code-recover-history to continue from the retained transcript")))))
     (unless (eq 'diverged (plist-get record :state))
       (plist-put record :state
-                 (if (eq 'success (plist-get outcome :status)) 'ready 'uncertain)))))
+                 (if (eq 'success (plist-get outcome :status)) 'ready 'uncertain)))
+    (when-let* (((eq 'success (plist-get outcome :status)))
+                (id (plist-get (mevedel-engine-info owner) :mevedel-native-message-id)))
+      (let ((turn (if (mevedel-request-p owner) (mevedel-request-turn owner)
+                    (mevedel-agent-invocation-parent-turn owner))))
+        (plist-put record :boundaries
+                   (append (cl-remove turn (plist-get record :boundaries)
+                                      :key (lambda (entry) (plist-get entry :turn)))
+                           (list (list :turn turn :id (plist-get record :id)
+                                       :host (plist-get record :host)
+                                       :directory (plist-get record :directory)
+                                       :message-id id
+                                       :input-boundary (copy-tree (plist-get record :input-boundary))))))))))
 
 (defun mevedel-claude-code-history-excerpt (session &optional child end)
   "Return labelled evidence before the current prompt for SESSION.

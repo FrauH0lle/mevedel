@@ -34,6 +34,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-rewind)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-task)
@@ -515,7 +516,7 @@
            (mevedel-session--create
             :name "rewind-point"
             :current-segment 1))
-          called-buffer called-target called-boundary returned-latest)
+          called-buffer called-target called-boundary called-scope returned-latest)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (insert "Prompt\n")
@@ -531,10 +532,12 @@
         (search-forward "Assistant")
         (cl-letf
             (((symbol-function 'mevedel-session-rewind-rewind)
-              (lambda (buffer target &optional boundary)
+              (lambda (buffer target &optional boundary scope _confirm complete)
                 (setq called-buffer buffer
                       called-target target
-                      called-boundary boundary)
+                      called-boundary boundary
+                      called-scope scope)
+                (funcall complete t nil)
                 t))
              ((symbol-function 'mevedel-view-return-to-latest-segment)
               (lambda (&optional _event)
@@ -543,9 +546,27 @@
       (should (eq data-buf called-buffer))
       ;; Point names a response the user is looking at, so it survives.
       (should (eq 'after called-boundary))
+      (should (eq 'choose called-scope))
       (should returned-latest)
       (should (equal "rewind-point-1"
-                     (plist-get called-target :fork-point-id))))))
+                     (plist-get called-target :fork-point-id)))))
+  :doc "waits for native completion before returning to the live segment"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "native"))
+    (setq-local mevedel--data-buffer (current-buffer))
+    (let (pending returned-latest)
+      (cl-letf (((symbol-function 'mevedel-view--settled-response-at-point)
+                 (lambda () '(:fork-point-id "native")))
+                ((symbol-function 'mevedel-session-rewind-rewind)
+                 (lambda (_buffer _target _boundary _scope _confirm complete)
+                   (setq pending complete)
+                   :pending))
+                ((symbol-function 'mevedel-view-return-to-latest-segment)
+                 (lambda (&optional _event) (setq returned-latest t))))
+        (should (eq :pending (mevedel-view-rewind-at-point)))
+        (should-not returned-latest)
+        (funcall pending t nil)
+        (should returned-latest)))))
 
 (mevedel-deftest mevedel-view--conversation-variant-button ()
   ,test
@@ -2892,7 +2913,7 @@
                    "Codex request failed · server_error" text))
           (should (string-match-p "HTTP/2 200" text))
           (should (string-match-p "provider-request-123" text))
-          (should (string-match-p "Retry the request manually" text))
+          (should (string-match-p "Retry replays the prepared request" text))
           (should (string-match-p "Worked for 7s" text)))
         (goto-char (point-min))
         (search-forward "Codex request failed")
@@ -2965,7 +2986,7 @@
           (should (string-search "Code: -32603" text))
           ;; Provider data restating the message and code adds nothing.
           (should-not (string-search "Provider data" text))
-          (should (= 1 (funcall count "Retry the request manually." text)))))))
+          (should (= 1 (funcall count "Retry replays the prepared request" text)))))))
 
   :doc "a failure after partial prose hangs below it like other activity"
   (mevedel-view-test--with-buffers
@@ -5523,7 +5544,7 @@
               (should position)
               (should (> position previous))
               (setq previous position))))
-        (should (string-search "Retry the request manually." body)))))
+        (should (string-search "Retry replays the prepared request" body)))))
   :doc "legacy failures and nonexhausted retry history do not claim exhaustion"
   (with-temp-buffer
     (dolist (attempts '(nil ((:attempt 1 :http-status nil :type nil :code nil

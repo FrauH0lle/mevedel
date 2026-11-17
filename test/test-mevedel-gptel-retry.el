@@ -68,7 +68,7 @@
       (with-current-buffer data-buf
         (should (equal "Recovered answer\n" (buffer-string))))))
 
-  :doc "zero disables recovery and leaves the native error path unchanged"
+  :doc "zero disables automatic recovery but retains the prepared sample for explicit retry"
   (let ((mevedel-gptel-retry-max-retries 0))
     (mevedel-retry-test--with-http
         (list "event: error\ndata: {\"error\":{\"code\":\"server_error\"}}\n\n")
@@ -76,7 +76,8 @@
       (mevedel-retry-test--drain-native)
       (should (= 1 (length requests)))
       (should (= 1 failed))
-      (should-not (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))))
+      (should (plist-get (gptel-fsm-info fsm) :mevedel-retry-state))
+      (should-not (plist-get (gptel-fsm-info fsm) :mevedel-retry-exhausted)))))
 
 (mevedel-deftest mevedel-gptel-retry--cancel ()
   ,test

@@ -92,6 +92,10 @@
                   (&optional session buffer prompt-submission delay))
 (autoload 'mevedel-goal-schedule-continuation "mevedel-goal")
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry" (buffer))
+(autoload 'mevedel-gptel-retry-refresh-availability "mevedel-gptel-retry")
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
@@ -317,6 +321,7 @@ names the running turn; read and cleared when that turn settles.")
 (defun mevedel-pending-inputs-follow-up-changed (session)
   "Persist SESSION's changed follow-up queue soon and notify observers."
   (mevedel-recovery-save session)
+  (mevedel-gptel-retry-refresh-availability (mevedel-session-root-buffer session))
   (when (fboundp 'mevedel-collaboration-notify-queue-changed)
     (mevedel-collaboration-notify-queue-changed session)))
 
@@ -334,7 +339,9 @@ Persist and notify guests once, and only when a queue changed."
           (mevedel-session-set-pending-inputs session category entries))))
     (cond
      (follow-up-changed (mevedel-pending-inputs-follow-up-changed session))
-     (changed (mevedel-recovery-save session)))))
+     (changed
+      (mevedel-recovery-save session)
+      (mevedel-gptel-retry-refresh-availability (mevedel-session-root-buffer session))))))
 
 (defun mevedel-view--next-follow-up (session)
   "Return SESSION's first queued follow-up."
@@ -1117,6 +1124,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
        (when (and session
                   (buffer-live-p view-buffer)
                   (not (mevedel-turn-busy-p data-buffer))
+                  (not (memq session (bound-and-true-p mevedel-claude-code-fork--sessions)))
                   (not (buffer-local-value 'mevedel-compact-run-in-flight
                                            data-buffer)))
          (with-current-buffer view-buffer
@@ -1234,9 +1242,13 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (funcall release)
                       ;; A refused guest entry left at the head would block
                       ;; every later message; drop it and tell its sender.
-                      (if (and (plist-get entry :guest-id) (not (eq 'quit (car err))))
-                          (mevedel-view--refuse-guest-follow-up entry session err)
-                        (signal (car err) (cdr err)))))))))))))))
+                      (cond
+                       ;; Preparation can begin while a readiness check yields.
+                       ((and (not (eq 'quit (car err)))
+                             (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))))
+                       ((and (plist-get entry :guest-id) (not (eq 'quit (car err))))
+                        (mevedel-view--refuse-guest-follow-up entry session err))
+                       (t (signal (car err) (cdr err))))))))))))))))
 
 (defun mevedel-view--refused-question (err)
   "Return \": QUESTION\" for an `inhibited-interaction' ERR naming one, else \"\"."

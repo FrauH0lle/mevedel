@@ -1227,6 +1227,10 @@ conversation's optional execution directory, never a resource grant."
          publication-ready)
     (unless (mevedel-session-p session)
       (error "Agent requires an active mevedel session"))
+    (when (memq session (bound-and-true-p mevedel-claude-code-fork--sessions))
+      (mevedel-diagnostic-user-error
+       (mevedel-diagnostic-scope session)
+       "Wait for native history preparation before starting a turn"))
     (unless (or retained-p prepared-turn)
       (error "Initial agent turn requires prepared task"))
     (when working-directory

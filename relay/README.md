@@ -59,6 +59,17 @@ propagate through room status and fresh lobby listings.
 An owner link forks the shared session with
 `{"t":"fork","reqId":N,"forkPoint":"ID"}`, where `ID` is an assistant record's
 `forkPoint`; the host answers with the `new-session` reply for that `reqId`.
+An owner link rewinds only the conversation with
+`{"t":"rewind","reqId":N,"forkPoint":"ID","turnCount":C}` after confirming
+in the viewer. The response's stable `forkTurn` and status frame's `turnCount`
+give the number of later turns; the host refuses if the confirmed count changed.
+The host replies `{"t":"history-action","reqId":N,"ok":true}` or a refusal
+with `ok:false` and `message`. Files are never restored by this frame, and native
+external histories remain ineligible under the ordinary Rewind safeguards.
+The owner-only `{"t":"retry-turn","reqId":N,"failureId":"REQUEST-ID"}`
+uses the same `history-action` reply. Only a currently retained replay identity
+is accepted; the projected failure carries `retryId` while it is available and
+`retryExternal:true` for an ACP prompt resend rather than exact native replay.
 
 The bounded `history-index` records stream contains artifact metadata and
 canonical chat descriptors: `{kind:"chat",number,firstSegment,lastSegment,title}`.

@@ -37,6 +37,10 @@
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 (autoload 'mevedel--run-session-start-hooks "mevedel-chat")
 
+;; `mevedel-claude-code-fork'
+(declare-function mevedel-claude-code-fork-histories "mevedel-claude-code-fork" (histories complete &optional session))
+(autoload 'mevedel-claude-code-fork-histories "mevedel-claude-code-fork")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
 (declare-function mevedel-execution-stop-services "mevedel-execution" (session))
@@ -844,7 +848,8 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 (defun mevedel-session-rewind-assert-stable-source
     (session buffer operation)
   "Refuse OPERATION when SESSION or BUFFER owns live work."
-  (mevedel-engine-assert-local-history session operation)
+  (unless (member operation '("rewinding" "restoring"))
+    (mevedel-engine-assert-local-history session operation))
   (when (mevedel-session-pending-input-p session)
     (user-error
      "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before %s"
@@ -1184,7 +1189,88 @@ candidate's surviving turn count."
     (setf (mevedel-session-agent-transcripts candidate)
           (mevedel-session-rewind-reduce-agent-transcripts
            (mevedel-session-agent-transcripts candidate) turn))
+    (setf (mevedel-session-external-conversations candidate)
+          (mevedel-session-rewind--reduce-native-histories candidate turn))
     candidate))
+
+(defun mevedel-session-rewind--reduce-native-histories (candidate turn)
+  "Reduce CANDIDATE's native boundaries and surviving scopes through TURN."
+  (cl-loop
+   for (scope . original) in (mevedel-session-external-conversations candidate)
+   when (or (equal scope "root")
+            (cl-find scope (mevedel-session-agent-transcripts candidate)
+                     :key (lambda (entry) (plist-get (cdr entry) :agent-path))
+                     :test #'equal))
+   append
+   (let* ((record (copy-tree original))
+          (boundaries (cl-remove-if
+                       (lambda (entry) (> (plist-get entry :turn) turn))
+                       (plist-get record :boundaries)))
+          (latest (car (last boundaries))))
+     (when (and (plist-get record :id) (not (plist-get record :boundaries)))
+       (user-error "No recorded native answer boundary for %s; recover its Claude history before Rewind" scope))
+     (cond
+      ((plist-get latest :detached)
+       (list (cons scope (list :engine 'claude-code :state 'unstarted
+                               :boundaries boundaries))))
+      (latest
+       (setq record (plist-put record :boundaries boundaries)
+             record (plist-put record :id (plist-get latest :id))
+             record (plist-put record :host (plist-get latest :host))
+             record (plist-put record :directory (plist-get latest :directory)))
+       (unless (eq 'diverged (plist-get record :state))
+         (setq record (plist-put record :state
+                                 (if (or (and (< (plist-get latest :turn) turn)
+                                              (or (equal scope "root")
+                                                  (< (length boundaries)
+                                                     (length (plist-get original :boundaries)))))
+                                         (and (not (equal scope "root"))
+                                              (or (memq (plist-get original :state) '(uncertain in-flight))
+                                                  (plist-get original :start-failed))))
+                                     'uncertain 'ready))))
+       (list (cons scope record)))))))
+
+(defvar mevedel-session-rewind--native-committed nil
+  "Non-nil after the current prepared native transaction commits its head.")
+
+(defun mevedel-session-rewind--prepare-native
+    (session buffer candidate continue complete)
+  "Prepare native CANDIDATE for SESSION and BUFFER, then call CONTINUE.
+COMPLETE receives the result and nil, or nil and an error string.  Without
+COMPLETE, asynchronous failures are reported in SESSION's diagnostic scope."
+  (let ((head (plist-get (mevedel-session-publication session) :head))
+        (tick (buffer-chars-modified-tick buffer))
+        (source (mevedel-session-artifacts-printed-value
+                 (mevedel-session-artifacts--live-sidecar session buffer)))
+        (scope (mevedel-diagnostic-scope session)))
+    (with-current-buffer buffer
+      (mevedel-claude-code-fork-histories
+       (mevedel-session-external-conversations candidate)
+       (lambda (histories failure cleanup)
+         (let (result (mevedel-session-rewind--native-committed nil))
+           (unwind-protect
+               (condition-case err
+                   (unless failure
+                     (unless (and (buffer-live-p buffer)
+                                  (eq session (buffer-local-value 'mevedel--session buffer))
+                                  (= tick (buffer-chars-modified-tick buffer))
+                                  (equal source
+                                         (mevedel-session-artifacts-printed-value
+                                          (mevedel-session-artifacts--live-sidecar session buffer)))
+                                  (equal head (plist-get
+                                               (mevedel-session-publication-read
+                                                (mevedel-session-save-path session)) :head)))
+                       (user-error "Session source changed during native history preparation; retry"))
+                     (mevedel-session-artifacts-assert-mutation-authority session buffer)
+                     (mevedel-session-rewind-assert-stable-source session buffer "rewinding")
+                     (setf (mevedel-session-external-conversations candidate) histories)
+                     (setq result (funcall continue candidate)))
+                 ((error quit) (setq failure (error-message-string err))))
+             (unless mevedel-session-rewind--native-committed (funcall cleanup)))
+           (if complete (funcall complete result failure)
+             (when failure
+               (mevedel-diagnostic-warning scope 'mevedel failure)))))
+       session))))
 
 (defun mevedel-session-rewind-copy-session-state (from to)
   "Copy every cl-struct slot from session FROM into TO."
@@ -1455,7 +1541,9 @@ step that fails afterwards has to name its own frame."
   (mevedel-session-persistence-notify-session-event
    session 'reset-status-panel)
   (mevedel-session-persistence-notify-session-event
-   session 'rerender))
+   session 'rerender)
+  (mevedel-session-persistence-notify-session-event
+   session 'replace-history))
 
 (defun mevedel-session-rewind--end-store-intent (session committed label)
   "Resolve SESSION's instruction store Rewind intent; warn if that fails.
@@ -1474,9 +1562,10 @@ drops it without pruning anything."
       :warning))))
 
 (defun mevedel-session-rewind--commit-rewind
-    (session buffer target plan &optional boundary replan)
+    (session buffer target plan &optional boundary replan prepared)
   "Commit SESSION, BUFFER, TARGET, and file PLAN through one head CAS.
-BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
+BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan.
+PREPARED supplies a candidate with independently forked native histories."
   (let* ((workspace (mevedel-session-workspace session))
          (save-path (mevedel-session-save-path session))
          (publication
@@ -1488,8 +1577,8 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
          (staging-path (file-name-concat temporary-root "staging"))
          (file-backup-dir (file-name-concat temporary-root "files"))
          (candidate
-          (mevedel-session-rewind--rewind-candidate
-           session target boundary))
+          (or prepared (mevedel-session-rewind--rewind-candidate
+                        session target boundary)))
          (staging-buffer
           (generate-new-buffer " *mevedel-remote-rewind-staging*"))
          (mevedel-instruction-store--inhibit workspace)
@@ -1566,6 +1655,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                              (plist-get (mevedel-session-publication session)
                                         :head)))
                      (setq committed t
+                           mevedel-session-rewind--native-committed t
                            post-commit-error publish-error)
                    (signal (car publish-error) (cdr publish-error)))))
               (unless committed
@@ -1576,6 +1666,7 @@ BOUNDARY selects the turn side; REPLAN rechecks the confirmed plan."
                                        :head)))
                   (error "Portable project Rewind did not commit a publication head"))
                 (setq committed t))
+              (setq mevedel-session-rewind--native-committed t)
               ;; Only the successful head CAS installs logical session state.
               (mevedel-session-rewind--copy-rewind-session-state
                candidate session)
@@ -1717,7 +1808,32 @@ Return the plan, its recheck function and force choice, or `:abort'."
       (if (eq plan :abort) :abort
         (list :plan plan :replan replan :force force)))))
 
-(defun mevedel-session-rewind-rewind (buffer target &optional boundary)
+(defun mevedel-session-rewind--choose-scope (operation detail)
+  "Choose OPERATION's scope before reading working files, naming DETAIL."
+  (pcase (car (read-multiple-choice
+               (format "%s %s?" operation detail)
+               '((?c "conversation only" "Leave working files unchanged; undo with Redo")
+                 (?f "conversation and files" "Review captured file changes before proceeding")
+                 (?q "cancel" "Change nothing"))))
+    (?c 'conversation)
+    (?f 'files)
+    (_ 'abort)))
+
+(defun mevedel-session-rewind-rewind
+    (buffer target &optional boundary scope confirm-function complete)
+  "Rewind BUFFER to TARGET, selecting BOUNDARY and SCOPE.
+CONFIRM-FUNCTION confirms conversation impact without host UI.  COMPLETE
+receives (RESULT ERROR), with ERROR nil or a string.  Native preparation
+returns `:pending'; local history still completes synchronously."
+  (let* ((mevedel-session-rewind--native-committed nil)
+         (result (mevedel-session-rewind--rewind
+                  buffer target boundary scope confirm-function complete)))
+    (when (and complete (not (eq result :pending)))
+      (funcall complete result nil))
+    result))
+
+(defun mevedel-session-rewind--rewind
+    (buffer target &optional boundary scope confirm-function complete)
   "Rewind BUFFER's session in place to stable assistant TARGET.
 
 BOUNDARY says which side of TARGET's turn the transcript ends on.  With
@@ -1725,7 +1841,14 @@ BOUNDARY says which side of TARGET's turn the transcript ends on.  With
 response asks for.  With `before' -- the default -- TARGET's turn is
 discarded with everything later, which is what picking one of the user's
 own prompts asks for, since the point of naming a prompt is to return to
-just before sending it."
+just before sending it.
+SCOPE is `conversation' to leave files alone, or `files' to restore them.
+With `choose', offer a scope choice if discarded turns have captured files.
+Nil preserves the captured-file restore for noninteractive callers.
+CONFIRM-FUNCTION, when supplied, confirms a conversation-only impact without
+opening host UI; browser callers have already asked their owner.
+COMPLETE receives (RESULT ERROR), where ERROR is nil or a string.  Native
+preparation returns `:pending'; local history still completes synchronously."
   (let ((session (buffer-local-value 'mevedel--session buffer))
         (mevedel-session-artifacts-backup-cache
          (or mevedel-session-artifacts-backup-cache (make-hash-table :test #'equal))))
@@ -1739,8 +1862,27 @@ just before sending it."
      session buffer "rewinding")
     (when (mevedel-session-note-conversation session)
       (mevedel-instruction-store-sync (mevedel-session-workspace session)))
-    (let* ((selection (mevedel-session-rewind--prepare-rewind-files
-                       session target boundary))
+    (let* ((chosen-scope
+            (if (not (eq scope 'choose)) (or scope 'files)
+              (or (and (cl-some
+                      (lambda (entry)
+                        (and (cdr entry)
+                             (if (eq boundary 'after)
+                                 (> (car entry) (plist-get target :cum-turn))
+                               (>= (car entry) (plist-get target :cum-turn)))))
+                      (mevedel-session-file-snapshots session))
+                     (mevedel-session-rewind--choose-scope
+                      "Rewind" (format "%s S%d T%d"
+                                       (if (eq boundary 'after) "keeping" "to before")
+                                       (plist-get target :segment)
+                                       (plist-get target :turn))))
+                  'files)))
+           (conversation-only (eq chosen-scope 'conversation))
+           (selection (cond
+                       ((eq chosen-scope 'abort) :abort)
+                       (conversation-only (list :replan (lambda () nil)))
+                       (t (mevedel-session-rewind--prepare-rewind-files
+                           session target boundary))))
            (prepared (unless (eq selection :abort) (plist-get selection :plan))))
       (when (eq selection :abort)
         (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))
@@ -1763,38 +1905,49 @@ just before sending it."
                 session target prepared boundary)))
           (if (mevedel-session-rewind--rewind-impact-empty-p impact)
               (message "Already at this state")
-            (mevedel-session-rewind--render-rewind-impact session impact)
+            (unless conversation-only
+              (mevedel-session-rewind--render-rewind-impact session impact))
             (let ((confirmed
-                   (yes-or-no-p
+                   (if conversation-only
+                       (if confirm-function (funcall confirm-function impact)
+                         (or (eq scope 'choose)
+                             (yes-or-no-p
+                              "Rewind conversation only, leaving files unchanged (undo with Redo)? ")))
+                     (yes-or-no-p
                     (concat
                      (when (plist-get selection :force)
                        "Force snapshot restore (overwrite newer edits). ")
                      (mevedel-session-rewind--rewind-confirmation
-                      session impact)))))
+                      session impact))))))
+              (unless confirmed
+                (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))
+                  (quit-windows-on impact-buffer t)
+                  (when (buffer-live-p impact-buffer) (kill-buffer impact-buffer))))
               (when confirmed
-                (mevedel-session-artifacts-assert-mutation-authority
-                 session buffer)
-                (mevedel-session-rewind--commit-rewind
-                 session buffer target prepared boundary
-                 (plist-get selection :replan)))
-              (when-let* ((impact-buffer
-                           (get-buffer "*mevedel-rewind-impact*")))
-                (quit-windows-on impact-buffer t)
-                (when (buffer-live-p impact-buffer)
-                  (kill-buffer impact-buffer)))
-              (when confirmed
-                (with-current-buffer buffer
-                  (mevedel--run-session-start-hooks "rewind"))
-                (message "mevedel: rewound %s %s S%d T%d, %d turn%s discarded"
-                         (mevedel-session-name session)
-                         (if (eq (plist-get impact :boundary) 'after)
-                             "keeping"
-                           "to before")
-                         (plist-get target :segment)
-                         (plist-get target :turn)
-                         (plist-get impact :discarded-turns)
-                         (if (= 1 (plist-get impact :discarded-turns)) "" "s"))
-                t)))))))))
+                (mevedel-session-artifacts-assert-mutation-authority session buffer)
+                (let ((finish
+                       (lambda (candidate)
+                         (mevedel-session-rewind--commit-rewind
+                          session buffer target prepared boundary
+                          (plist-get selection :replan) candidate)
+                         (when-let* ((impact-buffer (get-buffer "*mevedel-rewind-impact*")))
+                           (quit-windows-on impact-buffer t)
+                           (when (buffer-live-p impact-buffer) (kill-buffer impact-buffer)))
+                         (with-current-buffer buffer
+                           (mevedel--run-session-start-hooks "rewind"))
+                         (message "mevedel: rewound %s %s S%d T%d, %d turn%s discarded"
+                                  (mevedel-session-name session)
+                                  (if (eq boundary 'after) "keeping" "to before")
+                                  (plist-get target :segment) (plist-get target :turn)
+                                  (plist-get impact :discarded-turns)
+                                  (if (= 1 (plist-get impact :discarded-turns)) "" "s"))
+                         t)))
+                  (if (mevedel-session-external-conversations session)
+                      (mevedel-session-rewind--prepare-native
+                       session buffer
+                       (mevedel-session-rewind--rewind-candidate session target boundary)
+                       finish complete)
+                    (funcall finish nil))))))))))))
 
 
 ;;
@@ -1898,7 +2051,22 @@ captured working-tree state the restored turns owned."
           (string< (plist-get left :path) (plist-get right :path)))))
 
 (defun mevedel-session-rewind-restore-head
-    (session buffer head &optional confirm-function)
+    (session buffer head &optional confirm-function conversation-only complete)
+  "Restore SESSION and BUFFER to HEAD, optionally notifying COMPLETE.
+CONFIRM-FUNCTION and CONVERSATION-ONLY control the existing restore transaction.
+COMPLETE receives (RESULT ERROR), with ERROR nil or a string.  Native history
+is forked asynchronously before restoration and returns `:pending'."
+  (let* ((mevedel-session-rewind--native-committed nil)
+         (result
+         (catch 'mevedel-native-preparation
+           (mevedel-session-rewind--restore-head
+            session buffer head confirm-function conversation-only nil complete))))
+    (when (and complete (not (eq result :pending)))
+      (funcall complete result nil))
+    result))
+
+(defun mevedel-session-rewind--restore-head
+    (session buffer head &optional confirm-function conversation-only prepared complete confirmed-plan)
   "Restore SESSION and BUFFER to published HEAD through one head CAS.
 
 HEAD is an immutable published generation, as returned by
@@ -1915,7 +2083,11 @@ CONFIRM-FUNCTION receives the impact plist from
 must return non-nil for the restore to proceed.  Preparation, including
 the modified-buffer prompt, happens before the session lease is
 reserved; the reserved transaction then rechecks both the current head
-and the file plan the caller confirmed."
+and the file plan the caller confirmed.  CONVERSATION-ONLY skips all working
+file reads and restores, including modified-buffer prompts.
+PREPARED supplies independently forked native histories; COMPLETE receives
+the asynchronous result and error string, if any.  CONFIRMED-PLAN supplies
+the file plan already confirmed before native preparation."
   (unless (mevedel-session-codec-portable-authority-p session)
     (user-error "A workspace session is required to restore published heads"))
   (mevedel-session-rewind-assert-stable-source session buffer "restoring")
@@ -1952,6 +2124,9 @@ and the file plan the caller confirmed."
                       workspace)
                      :session)
                     (error "Published head has no readable sidecar")))
+          (when prepared
+            (setf (mevedel-session-external-conversations candidate)
+                  (mevedel-session-external-conversations prepared)))
           ;; The sidecar carries logical state only; where the session
           ;; lives and what it talks to belong to the live session, as
           ;; they do on resume.  Its publication is the head being
@@ -1965,16 +2140,27 @@ and the file plan the caller confirmed."
           (mevedel-session-rewind--load-restored-transcript
            staging-buffer staging-path
            (or (mevedel-session-current-segment candidate) 1))
-          (setq plan (mevedel-session-rewind--restore-file-plan candidate))
-          (setq plan
-                (mevedel-session-rewind--prepare-buffers-for-restore
-                 candidate (or (mevedel-session-turn-count candidate) 0)
-                 plan "Restore" nil))
+          (when prepared (setq plan confirmed-plan))
+          (unless (or prepared conversation-only)
+            (setq plan (mevedel-session-rewind--restore-file-plan candidate))
+            (setq plan
+                  (mevedel-session-rewind--prepare-buffers-for-restore
+                   candidate (or (mevedel-session-turn-count candidate) 0)
+                   plan "Restore" nil)))
           (unless (eq plan :abort)
-            (when (or (null confirm-function)
+            (when (or prepared (null confirm-function)
                       (funcall confirm-function
                                (mevedel-session-rewind--restore-impact
                                 candidate plan)))
+              (when (and (not prepared)
+                         (mevedel-session-external-conversations candidate))
+                (throw 'mevedel-native-preparation
+                       (mevedel-session-rewind--prepare-native
+                        session buffer candidate
+                        (lambda (ready)
+                          (mevedel-session-rewind--restore-head
+                           session buffer head nil conversation-only ready nil plan))
+                        complete)))
               (make-directory file-backup-dir t)
               ;; Recheck, file backup, and file restore are one
               ;; synchronous target operation under the reserved lease,
@@ -1990,11 +2176,11 @@ and the file plan the caller confirmed."
                      (user-error
                       "Session state changed before restore; retry"))
                    (setf (mevedel-session-publication session) current))
-                 (unless (equal
+                 (unless (or conversation-only (equal
                           (mevedel-session-rewind--sorted-file-plan plan)
                           (mevedel-session-rewind--sorted-file-plan
                            (mevedel-session-rewind--restore-file-plan
-                            candidate)))
+                            candidate))))
                    (error "Captured files changed after restore confirmation"))
                  (setq file-backups
                        (mevedel-session-rewind--backup-restore-files
@@ -2008,11 +2194,15 @@ and the file plan the caller confirmed."
                        (error "File restore failed on %s: %s"
                               (plist-get restore-result :failed)
                               (plist-get restore-result :error))))))
-              (mevedel-session-publication-publish
-               session
-               (mevedel-session-rewind-rewind-publication-artifacts
-                session staging-buffer staging-path candidate)
-               t)
+              (unwind-protect
+                  (mevedel-session-publication-publish
+                   session
+                   (mevedel-session-rewind-rewind-publication-artifacts
+                    session staging-buffer staging-path candidate)
+                   t)
+                (unless (equal head-before
+                               (plist-get (mevedel-session-publication session) :head))
+                  (setq committed t mevedel-session-rewind--native-committed t)))
               (when (equal head-before
                            (plist-get (mevedel-session-publication session)
                                       :head))
@@ -2163,7 +2353,7 @@ current, rather than returning to their historical state."
     (unless session
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope buffer) "Active buffer has no mevedel session"))
     (mevedel-with-diagnostic-errors scope
-      (mevedel-engine-assert-local-history session "Redo"))
+      (mevedel-session-rewind-assert-stable-source session buffer "restoring"))
     (unless (mevedel-session-codec-portable-authority-p session)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session)
        "A workspace session is required to restore published heads"))
@@ -2181,22 +2371,32 @@ current, rather than returning to their historical state."
               (completing-read
                "Restore session to published head: "
                (mapcar #'car table) nil t nil nil (caar table)))
-             (entry (cdr (assoc choice table))))
+             (entry (cdr (assoc choice table)))
+             (scope-choice
+              (and entry
+                   (mevedel-session-rewind--choose-scope
+                    "Restore" (mevedel-session-rewind--published-head-label entry)))))
         (unless entry
           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "No published head selected"))
-        (when (mevedel-with-diagnostic-errors scope
-                (mevedel-session-rewind-restore-head
+        (unless (eq scope-choice 'abort)
+          (mevedel-with-diagnostic-errors scope
+            (mevedel-session-rewind-restore-head
                  session buffer (plist-get entry :head)
-                 (lambda (impact)
-                   (yes-or-no-p
-                    (mevedel-session-rewind--restore-confirmation
-                     session entry impact)))))
-          (with-current-buffer buffer
-            (mevedel--run-session-start-hooks "restore"))
-          (message "mevedel: restored %s to %s"
-                   (mevedel-session-name session)
-                   (plist-get entry :head))
-          t)))))
+                 (unless (eq scope-choice 'conversation)
+                   (lambda (impact)
+                     (yes-or-no-p
+                      (mevedel-session-rewind--restore-confirmation
+                       session entry impact))))
+                 (eq scope-choice 'conversation)
+                 (lambda (result failure)
+                   (cond
+                    (failure (mevedel-diagnostic-warning scope 'mevedel failure))
+                    (result
+                     (with-current-buffer buffer
+                       (mevedel--run-session-start-hooks "restore"))
+                     (message "mevedel: restored %s to %s"
+                              (mevedel-session-name session)
+                              (plist-get entry :head))))))))))))
 
 (defun mevedel-session-rewind-rewind-checkpoint
     (workspace checkpoint &optional buffer)
@@ -2280,7 +2480,7 @@ Rewind from the view with point on that turn's response."
                (target (gethash chosen lookup)))
           (when target
             (mevedel-with-diagnostic-errors scope
-              (mevedel-session-rewind-rewind buffer target 'before))))))))
+              (mevedel-session-rewind-rewind buffer target 'before 'choose))))))))
 
 
 (provide 'mevedel-session-rewind)

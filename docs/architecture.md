@@ -480,7 +480,9 @@ native gptel requests across all backends, not just Codex OAuth: root
 (including note conversations), shared-item, and retained-agent requests.
 `mevedel-gptel-retry-max-retries` defaults to 10 retries after the initial
 attempt, at most 11 physical provider calls per
-logical model sample; zero disables this controller. Each successful sample
+logical model sample; zero disables automatic resends. Root requests still
+retain their prepared sample for explicit failed-turn Retry and discard failed
+provisional output, while retained agents opt out of the controller at zero. Each successful sample
 resets the allowance. Root and concurrent children have independent budgets.
 Unadmitted background gptel requests and their separate retry policies are
 unchanged. Claude Code/ACP remains a separate, self-retrying engine; it keeps
@@ -537,7 +539,7 @@ or publish error blocks. On a nonzero curl stream exit after response headers,
 the cleanup adapter skips the already-performed WAIT-to-TYPE transition so the
 terminal callback runs before ERRS closes its owner; cleanup then settles or
 parks the sample exactly once. This ordering repair also applies to admitted
-requests with retries disabled; it does not enable recovery for them.
+requests with automatic retries disabled; it does not enable automatic recovery for them.
 Recovered output returns root progress to the status
 the retry wait replaced, unless another owner has claimed it since. Exhaustion
 settles once with one expandable ignored request summary: the existing

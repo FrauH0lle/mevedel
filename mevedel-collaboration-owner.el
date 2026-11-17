@@ -62,6 +62,11 @@
 (declare-function mevedel-collaboration--transport-send
                   "mevedel-collaboration-transport" (transport peer frame))
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-failed-turn
+                  "mevedel-gptel-retry" (buffer failure-id))
+(autoload 'mevedel-gptel-retry-failed-turn "mevedel-gptel-retry")
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt-user-with-overlay
                   "mevedel-interaction-prompt"
@@ -101,6 +106,12 @@
 (declare-function mevedel-session-fork-create
                   "mevedel-session-fork" (buffer target type))
 (autoload 'mevedel-session-fork-create "mevedel-session-fork")
+
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-rewind
+                  "mevedel-session-rewind"
+                  (buffer target &optional boundary scope confirm-function complete))
+(autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -545,6 +556,48 @@ requester asked to keep.  The refusal names it and how to open it."
              room peer ledger request-id
              (or keys (list :name nil :ok :json-false
                             :message "The fork was interrupted"))))))))))
+
+(defun mevedel-collaboration--handle-history-action (room peer frame)
+  "Apply owner PEER's conversation history action in ROOM from FRAME.
+The browser confirms before sending; host validation never opens a prompt."
+  (when (mevedel-collaboration--owner room peer)
+    (let ((buffer (mevedel-collaboration--room-data-buffer room))
+          (request-id (plist-get frame :reqId)))
+      (when (mevedel-collaboration--request-id-p request-id)
+        (cl-labels ((reply (_result &optional diagnosis)
+                      (ignore-errors
+                        (mevedel-collaboration--transport-send
+                         (plist-get room :transport) peer
+                         (append (list :t "history-action" :reqId request-id
+                                       :ok (if diagnosis :json-false t))
+                                 (when diagnosis (list :message diagnosis)))))))
+         (condition-case err
+            (progn
+              (unless (and buffer (plist-get room :session))
+                (user-error "This room has no session"))
+              (pcase (plist-get frame :t)
+                ("rewind"
+                 (unless (and (integerp (plist-get frame :turnCount))
+                              (= (plist-get frame :turnCount)
+                                 (or (mevedel-session-turn-count
+                                      (plist-get room :session)) 0)))
+                   (user-error "The conversation changed; review Rewind again"))
+                 (let ((point-id (mevedel-collaboration--guest-text
+                                  (plist-get frame :forkPoint))))
+                   (unless point-id
+                     (user-error "Choose a settled assistant response to rewind"))
+                   (mevedel-session-rewind-rewind
+                    buffer (list :fork-point-id point-id) 'after 'conversation
+                    (lambda (_impact) t) #'reply)))
+                ("retry-turn"
+                 (let ((failure-id (mevedel-collaboration--guest-text
+                                    (plist-get frame :failureId))))
+                   (unless failure-id (user-error "Choose a failed turn to retry"))
+                   (mevedel-gptel-retry-failed-turn buffer failure-id)
+                   (reply t)))
+                (_ (user-error "Unknown history action"))))
+          (error
+           (reply nil (error-message-string err)))))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

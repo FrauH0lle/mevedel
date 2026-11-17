@@ -823,6 +823,8 @@ room, and follows a rename, including an automatic title."
     (list :t "status"
           :name (when-let* ((session (plist-get room :session)))
                   (mevedel-session-name session))
+          :turnCount (when-let* ((session (plist-get room :session)))
+                       (or (mevedel-session-turn-count session) 0))
           ;; Host diagnostics reach owners only, in their recovery frame.
           :issues (vconcat
                    (when-let* ((session (plist-get room :session)))
@@ -889,6 +891,8 @@ and the title of its current chat; a history save may change its Goal."
   (pcase event
     ('rename
      (mevedel-collaboration-notify-request-changed data-buffer)
+     (mevedel-collaboration-notify-history-changed data-buffer))
+    ('replace-history
      (mevedel-collaboration-notify-history-changed data-buffer))
     ('save-history
      (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))

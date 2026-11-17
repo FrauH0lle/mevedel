@@ -81,9 +81,16 @@ uses the effective segment and labels a new native conversation as excerpt
 continuation. Same-machine resume retains native identity, including direct
 acquisition of a released or expired lease from an already open read-only view.
 Cooperative transfer from a live owner still refuses retained native histories.
-Operations requiring
-an exact native checkpoint mapping, including Fork and Rewind, refuse before
-effects when that mapping is unavailable. These constraints are documented in
+Rewind and Redo use recorded root and retained-child answer boundaries to fork
+native histories before the existing publication transaction commits. The ACP
+bridge records the adapter's assistant `messageId`, whose persisted identity
+survives compaction. Independent scopes and engine-detachment checkpoints remain
+explicit, so a transcript copy cannot silently stand in for a native history.
+Native preparation excludes new root and child turns. A failed preparation or
+pre-CAS transaction deletes its new forks; source sessions and forks referenced
+by a committed head remain available for Redo. Missing coordinates or deleted
+native sessions refuse before publication. Save As, durable Fork and cooperative
+control transfer retain their native-history restriction. These constraints are documented in
 [session lifecycle](../sessions.md#external-conversation-references), rather
 than hidden behind a transcript copy that claims exact model-history
 equivalence.
@@ -198,7 +205,9 @@ attempt diagnostics with the original provider error, and pauses an affected
 Goal rather than invoking its settled-turn retry policy. An owned permanent
 refusal also pauses the affected Goal instead of gaining new-turn retries.
 Reported usage has a distinct physical-call identity and is charged once; absent usage stays
-unknown. Zero `mevedel-gptel-retry-max-retries` disables the controller.
+unknown. Zero `mevedel-gptel-retry-max-retries` disables automatic resends;
+root requests still discard failed provisional output and retain the prepared
+sample for explicit failed-turn Retry. Retained agents opt out at zero.
 Unadmitted background gptel policies are unchanged. Claude Code/ACP stays
 separate and self-retrying, retaining its built-in retry behavior and the
 credential-lock replay below. The all-backend admission contract does not
@@ -271,6 +280,19 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Native answer checkpoints, 2026-11-17:** Rewind and Redo originally refused
+  all retained native histories because no exact chronological mapping existed.
+  The installed adapter exposes stable assistant message ids and an exact
+  `session/fork` boundary extension. Its full-history lookup also reaches answers
+  outside the active post-compaction chain. Recording those ids per root and
+  child turn now supplies the missing mapping without copying model history.
+  Explicit failed-turn ACP Retry uses the preceding answer (or a fresh first
+  prompt), removes failed prose, and replays the retained prompt as the same
+  logical turn. File effects are not undone; reconciliation guidance precedes
+  further tools. Histories without recorded answer coordinates retain the
+  same-session prompt resend, explicitly labelled because partial native context
+  may remain. Rewind and Redo still refuse those histories before publication.
 
 - **Note sessions replace directive requests, 2026-11-12:** directive admission
   previously reserved authority before file preparation and save prompts, and

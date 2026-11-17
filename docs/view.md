@@ -2108,6 +2108,28 @@ shows bounded sanitized diagnostics in chronological attempt order (attempt,
 HTTP status, type, code, message), and labels exhaustion in both the header and
 body, including the number of failed attempts. Legacy failures without these
 fields keep their ordinary rendering. See [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery).
+The failure header offers **Retry** for the latest retained native request.
+It replays the same prepared provider payload with a fresh admission in the
+same conversation turn, without resending a user prompt, repeating preparation,
+or rerunning completed tools.
+The complete original error disclosure remains as historical evidence.
+Retry expires on canonical transcript edits, another turn, or an Emacs restart;
+it does not reconstruct requests from saved transcript text. Disabling automatic
+retries still retains this explicit retry.
+While any steering or follow-up entries remain in the pending-input queue,
+resolve that queued input first. Retry stays unavailable without consuming or
+rebinding the entries, avoiding duplicate delivery.
+For external Claude ACP conversations, Retry forks native history at the last
+answer before the failed prompt and resends the original submitted input,
+including retained image bytes. A first failed prompt starts fresh. Failed
+prose and reasoning are removed; tool records and the error disclosure remain.
+Its tooltip warns that file effects are not undone. This replays the whole
+prompt, not one sample, so receipt-backed current-state reconciliation guidance
+precedes further tools. It is unavailable without the retained input and an
+unchanged native identity. Older histories without answer coordinates reuse the
+same native session, with an explicit notice that partial native context may
+remain. Unavailable native history refuses with a named reason rather than
+guessing from transcript text.
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
 Standalone reasoning disclosures and grouped tool activity runs are separate

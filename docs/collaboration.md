@@ -161,6 +161,35 @@ than through the command allowlist:
   refusal names its session id and says to open it in Emacs with
   `M-x mevedel`.
 
+- `rewind` truncates the shared conversation after a settled assistant response,
+  leaving working files alone. Only owner links offer **Rewind to here** beside
+  Fork, with a short confirmation naming the number of later turns and a reminder
+  that Emacs Redo can restore the conversation. Its count uses the response's
+  stable `forkTurn` and the status frame's `turnCount`, not loaded message counts.
+  The frame carries the response's `forkPoint` and confirmed `turnCount`; the host
+  refuses if the count changed before it receives the action, then resolves
+  it and uses the ordinary Rewind transaction without a file plan. Its stable
+  source safeguards still apply. Native Claude histories prepare independent
+  forks at recorded answer boundaries before publishing the replacement head;
+  local sends refuse until that preparation finishes, preserving their drafts;
+  browser and guest prompts remain queued and resume when preparation releases
+  its hold. Each session room
+  republishes the truncated history, including after an Emacs Rewind or Redo.
+
+- `retry-turn` retries a retained failed turn by its exact request identity.
+  Owner links show **Retry** on the failure message only while the host retains
+  that request's replay data. Native providers resend the same prepared sample
+  without rerunning completed tools; the error disclosure remains in history.
+  For external ACP sessions, **Retry** forks native history at the last answer
+  before the failed prompt, then replays that whole prompt with its retained
+  image bytes. A first failed prompt starts a fresh native history. Older native
+  histories without recorded boundaries retry into the same native session,
+  explicitly labelled as such; their native partial context may remain. Failed prose
+  and reasoning disappear; tool records and the error disclosure remain. Its
+  help warns that file effects are not undone. The replacement receives
+  current-state reconciliation guidance before more tools. This is separate
+  from the pending-input queue's Retry action.
+
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
   retry, reviewed input requeue/discard,
@@ -1613,7 +1642,7 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, edit, Worktree forks, publication, and execution-target
+transfer, save, file-restoring rewind, edit, Worktree forks, publication, and execution-target
 changes remain host operations. The owner-only `fork` frame above creates
 Conversation Forks only. Owner acceptance of a Worktree plan is the typed,
 host-validated exception, not a general browser Worktree Fork command.

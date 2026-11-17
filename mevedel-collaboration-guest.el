@@ -138,6 +138,9 @@
                   "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-set-mode
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--handle-history-action
+                  "mevedel-collaboration-owner" (room peer frame))
+(autoload 'mevedel-collaboration--handle-history-action "mevedel-collaboration-owner")
 (declare-function mevedel-collaboration--owner
                   "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session
@@ -1380,6 +1383,8 @@ returns; for the room's own types the value is unspecified."
     ("set-mode"
      (mevedel-collaboration--handle-set-mode room peer frame))
     ("fork" (mevedel-collaboration--handle-fork room peer frame))
+    ((or "rewind" "retry-turn")
+     (mevedel-collaboration--handle-history-action room peer frame))
     (_
      (mevedel-collaboration--dispatch-shared-frame
       room peer frame

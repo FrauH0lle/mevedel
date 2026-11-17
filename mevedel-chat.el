@@ -1325,6 +1325,10 @@ The effective model and effort apply only to this request, not saved selection."
         ;; Never bind the shared root's selection around startup: synchronous
         ;; hooks and yielding checks can change that baseline.  gptel's model
         ;; transform owns its private prompt locals; native takes explicit args.
+        (when (memq mevedel--session (bound-and-true-p mevedel-claude-code-fork--sessions))
+          (mevedel-diagnostic-user-error
+           (mevedel-diagnostic-scope (current-buffer))
+           "Wait for native history preparation before starting a turn"))
         (if (mevedel-claude-code-backend-p backend)
             (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
                 (mevedel-claude-code-btw-send (or model-input native-input) policy)

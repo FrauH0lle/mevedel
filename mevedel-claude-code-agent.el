@@ -74,6 +74,7 @@ its runtime canceller owns the transport without creating a gptel FSM."
             (append (mevedel-engine-info invocation)
                     (list :buffer buffer :stream t :backend gptel-backend
                           :model gptel-model :external-history t
+                          :mevedel-native-before-history (copy-tree history)
                           :mevedel-agent-invocation invocation)))
       (let ((model (gptel--model-name gptel-model))
             (effort gptel-reasoning-effort)
@@ -110,7 +111,8 @@ its runtime canceller owns the transport without creating a gptel FSM."
                          (cons 0
                                (- (marker-position
                                    (plist-get (mevedel-engine-info invocation) :position))
-                                  (mevedel-session-artifacts-content-start buffer)))))
+                                  (mevedel-session-artifacts-content-start buffer)))
+                         history))
            (setf (alist-get scope (mevedel-session-external-conversations session)
                             nil nil #'equal) record)
            (mevedel-session-artifacts-publish-sidecar-state

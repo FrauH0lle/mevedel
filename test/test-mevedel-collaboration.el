@@ -705,17 +705,17 @@
                   (let ((start (point)))
                     (insert text)
                     (push (list type start (1- (point))) segments)))
-                (fork (id)
+                (fork (id turn)
                   (insert (mevedel--format-hook-audit-record
-                           (list :type 'fork-point :fork-point-id id)))))
+                           (list :type 'fork-point :fork-point-id id :cum-turn turn)))))
         (add 'user "first prompt\n")
         (add 'response "early answer\n")
         (add 'response "settled answer\n")
-        (fork "fork-1")
+        (fork "fork-1" 1)
         ;; A turn without a response gets no fork point of its own; the
         ;; earlier turn's answer must not take this one's.
         (add 'user "second prompt\n")
-        (fork "fork-2")
+        (fork "fork-2" 2)
         ;; A turn that has not settled has no fork point yet.
         (add 'user "third prompt\n")
         (add 'response "streaming answer\n"))
@@ -742,6 +742,11 @@
           (should (equal '(nil "fork-1" nil)
                          (mapcar (lambda (record) (plist-get record :forkPoint))
                                  answers)))
+          (should (equal '(nil 1 nil)
+                         (mapcar (lambda (record) (plist-get record :forkTurn))
+                                 answers)))
+          (should (= 1 (cdr (assoc "forkTurn"
+                                  (mevedel-collaboration--json-record (nth 1 answers))))))
           (should (equal "fork-1"
                          (cdr (assoc "forkPoint"
                                      (mevedel-collaboration--json-record
@@ -993,13 +998,18 @@
 
 
 (mevedel-deftest mevedel-collaboration--on-session-event
-  (:doc "re-publishes status on a rename and ignores other session events")
-  (let (published)
+  (:doc "re-publishes replaced history and status on rename")
+  (let (published history)
     (cl-letf (((symbol-function 'mevedel-collaboration-notify-request-changed)
-               (lambda (buffer) (push buffer published))))
+               (lambda (buffer) (push buffer published)))
+              ((symbol-function 'mevedel-collaboration-notify-history-changed)
+               (lambda (buffer) (push buffer history))))
       (mevedel-collaboration--on-session-event 'data 'rename)
+      (mevedel-collaboration--on-session-event 'data 'replace-history)
+      (mevedel-collaboration--on-session-event 'other-room 'replace-history)
       (mevedel-collaboration--on-session-event 'data 'saved)
-      (should (equal '(data) published)))))
+      (should (equal '(data) published))
+      (should (equal '(other-room data data) history)))))
 
 (mevedel-deftest mevedel-collaboration--publish-status
   (:doc "broadcasts busy and name changes once and tells a joining guest directly")

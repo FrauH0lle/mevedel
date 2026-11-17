@@ -12,6 +12,7 @@
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'gptel)
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-gptel-retry)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-tool-render-data)
@@ -85,6 +86,7 @@
   :doc "a failure keeps its record identity and gains the closing line after it"
   (with-temp-buffer
     (let* ((failure (append '(:outcome error :message "Provider unavailable"
+                                       :request-id "failed-request" :external-history t
                                        :error-data (:secret "not projected"))
                             mevedel-projection-timestamps-test--summary-data))
            (text "Assistant request failed. Provider unavailable"))
@@ -98,6 +100,9 @@
         (should (equal (plist-get failed :kind) "assistant"))
         (should (equal (plist-get failed :status) "failed"))
         (should (equal (plist-get failed :text) text))
+        (should (equal "failed-request" (plist-get failed :failure-id)))
+        (should (eq t (plist-get failed :retryExternal)))
+        (should-not (assoc "failure-id" (mevedel-collaboration--json-record failed)))
         (should (equal (plist-get summary :kind) "request-summary"))
         (should (equal (plist-get summary :text)
                        (mevedel-projection-timestamps-test--summary-text
@@ -114,8 +119,8 @@
                             mevedel-projection-timestamps-test--summary-data))
            (retimed (plist-put (copy-sequence failure)
                                :finished-at 1761730999.0)))
-      (mevedel-projection-timestamps-test--insert-turn "Answer." old)
-      (mevedel-projection-timestamps-test--insert-turn "Answer." old)
+      (mevedel-projection-timestamps-test--insert-turn "Answer." (append '(:request-id "one") old))
+      (mevedel-projection-timestamps-test--insert-turn "Answer." (append '(:request-id "two") old))
       (mevedel-projection-timestamps-test--insert-turn "Answer." failure)
       (mevedel-projection-timestamps-test--insert-turn "Answer." retimed)
       (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
@@ -204,6 +209,29 @@
         (should (= 2 (length
                       (mevedel-projection-timestamps-test--summary-records restored))))
         (should (equal live restored))))))
+
+(mevedel-deftest mevedel-collaboration--project-records/retry
+  (:doc "only the exact retained failure gets Retry, without polluting cached history")
+  (with-temp-buffer
+    (let ((room (list :data-buffer (current-buffer)))
+          (retry-id "current"))
+      (dolist (id '("older" "current"))
+        (mevedel-projection-timestamps-test--insert-turn
+         "Partial answer."
+         (append (list :request-id id :outcome 'error :message "Down")
+                 mevedel-projection-timestamps-test--summary-data)))
+      (cl-letf (((symbol-function 'mevedel-gptel-retry-available-p)
+                 (lambda (buffer &optional _)
+                   (should (eq buffer (current-buffer)))
+                   retry-id)))
+        (let* ((records (mevedel-collaboration--project-records room))
+               (retryable (cl-remove-if-not
+                           (lambda (record) (plist-get record :retryId)) records)))
+          (should (= 1 (length retryable)))
+          (should (equal "current" (plist-get (car retryable) :retryId))))
+        (setq retry-id nil)
+        (should-not (cl-some (lambda (record) (plist-get record :retryId))
+                             (mevedel-collaboration--project-records room)))))))
 
 (provide 'test-mevedel-collaboration-projection-timestamps)
 

@@ -370,7 +370,9 @@ them are set, so the committing save keeps them."
 
 
 (mevedel-deftest mevedel-rewind (:quiet t)
-  ,test
+  (cl-letf (((symbol-function 'read-multiple-choice)
+             (lambda (&rest _) '(?f "conversation and files"))))
+    ,test)
   (test)
   :doc "errors when no current session"
   (with-temp-buffer
@@ -1911,12 +1913,17 @@ them are set, so the committing save keeps them."
                 ((symbol-function 'completing-read)
                  (lambda (&rest _) "published state"))
                 ((symbol-function 'yes-or-no-p) (lambda (_prompt) t))
+                ((symbol-function 'read-multiple-choice)
+                 (lambda (&rest _) '(?f "conversation and files")))
                 ((symbol-function 'mevedel-session-rewind-restore-head)
-                 (lambda (seen-session seen-buffer head confirm)
+                 (lambda (seen-session seen-buffer head confirm conversation-only complete)
+                   (should-not conversation-only)
                    (setq restored (list seen-session seen-buffer head))
                    (funcall confirm
                             '(:restored-turns 1 :file-plan nil
-                              :external-overwrites 0))))
+                              :external-overwrites 0))
+                   (funcall complete t nil)
+                   t))
                 ((symbol-function 'mevedel--run-session-start-hooks)
                  (lambda (source) (setq hook-source source)))
                 ((symbol-function 'message) #'ignore))
@@ -1924,6 +1931,69 @@ them are set, so the committing save keeps them."
       (should (equal (list session (current-buffer) (plist-get entry :head))
                      restored))
       (should (equal "restore" hook-source)))))
+
+(mevedel-deftest mevedel-session-rewind-rewind/conversation (:quiet t)
+  ,test
+  (test)
+  :doc "conversation rewind and redo preserve changed disk bytes and unsaved buffers"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "conversation-only" workspace))
+           (buffer (generate-new-buffer " *conversation-rewind*"))
+           (path (file-name-concat tempdir "source.txt"))
+           visiting head)
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (write-region "before\n" nil path nil 'silent)
+            (mevedel-request-begin session)
+            (puthash path "before\n"
+                     (mevedel-request-file-snapshots mevedel--current-request))
+            (write-region "after\n" nil path nil 'silent)
+            (insert "Prompt\n" (propertize "Reply.\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (mevedel-request-end)
+            (setq head (plist-get (mevedel-session-publication session) :head))
+            (write-region "external\n" nil path nil 'silent)
+            (setq visiting (find-file-noselect path))
+            (with-current-buffer visiting (goto-char (point-max)) (insert "draft\n"))
+            (let ((target (cdar (mevedel-session-rewind--prompt-candidates session))))
+              (cl-letf (((symbol-function 'mevedel-session-rewind--prepare-rewind-files)
+                         (lambda (&rest _) (ert-fail "Read working files")))
+                        ((symbol-function 'mevedel-session-rewind--restore-file-plan)
+                         (lambda (&rest _) (ert-fail "Read working files during Redo")))
+                        ((symbol-function 'mevedel-session-rewind--render-rewind-impact)
+                         (lambda (&rest _) (ert-fail "Opened file impact UI")))
+                        ((symbol-function 'mevedel--run-session-start-hooks) #'ignore))
+                (should (mevedel-session-rewind-rewind
+                         buffer target 'before 'conversation (lambda (_) t)))
+                (should (= 0 (mevedel-session-turn-count session)))
+                (should-not (string-search "Reply." (buffer-string)))
+                (should (mevedel-session-rewind-restore-head session buffer head nil t))
+                (should (= 1 (mevedel-session-turn-count session)))
+                (should (string-search "Reply." (buffer-string)))))
+            (should (equal "external\n" (mevedel-test--read-file path)))
+            (with-current-buffer visiting
+              (should (buffer-modified-p))
+              (should (equal "external\ndraft\n" (buffer-string)))))
+        (when (buffer-live-p visiting)
+          (with-current-buffer visiting (set-buffer-modified-p nil))
+          (kill-buffer visiting))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-session-rewind--choose-scope ()
+  ,test
+  (test)
+  :doc "maps explicit scope choices and cancellation without reading files"
+  (dolist (choice '((?c . conversation) (?f . files) (?q . abort)))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) (list (car choice)))))
+      (should (eq (cdr choice)
+                  (mevedel-session-rewind--choose-scope "Rewind" "before T2"))))))
 
 (mevedel-deftest mevedel-session-rewind--redo-availability ()
   ,test

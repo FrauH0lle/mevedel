@@ -118,7 +118,7 @@
 /* Cover the thin transcript sliver left between the tall dock and header. */
 .dock.input-expanded { bottom:var(--input-keyboard-inset, 0px); box-shadow:0 -8px 0 var(--ground); }
 
-.message-actions { display:flex; gap:.4rem; margin:.35rem 0 0; padding:0; list-style:none; opacity:0; }
+.message-actions { display:flex; flex-wrap:wrap; gap:.4rem; margin:.35rem 0 0; padding:0; list-style:none; opacity:0; }
 .turn:hover > .content > .message-actions, .turn:focus-within > .content > .message-actions { opacity:1; }
 .message-action { min-height:28px; padding:.25rem .5rem; font-size:.72rem; font-weight:500; }
 .message-action::after { content:attr(data-label); }

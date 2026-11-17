@@ -803,20 +803,44 @@ gptel payload rule or Claude system/prompt receipt, not the previous engine's
 acknowledgements.
 
 A session retaining a native identity in its root or any child conversation
-rejects cooperative control transfer, Save As, Fork, Rewind and Redo. Manual
+rejects cooperative control transfer, Save As and Fork. Rewind and Redo prepare
+native forks at recorded settled answer boundaries for each surviving root or
+child scope before publishing their replacement head. The source native
+sessions remain intact so Redo can return to them. Failed preparation or a
+pre-publication failure deletes only newly created forks; a committed head
+retains its new native references even if local buffer refresh fails. Root and
+child sends refuse while native history preparation is pending. Mail waking an
+idle child remains unread with its wake request intact and is offered again
+when preparation ends. Missing native
+history or answer coordinates refuse with a named reason before publication;
+older session files without coordinates still load and resume normally.
+Their failed-turn Retry reuses the same native session, with an explicit notice
+that partial native context may remain; Rewind and Redo still require recorded
+answer coordinates and refuse before changing history when those are missing.
+
+Each native history's optional `:boundaries` stores the settled assistant
+`messageId`, native source identity and installation, cumulative root turn and
+submitted-input boundary. Root and retained child histories keep independent lists. Native
+compaction preserves these coordinates: the adapter resolves exact ids through
+its full persisted history when they are absent from its active chain. Engine
+release and explicit transcript recovery record detachment checkpoints, so a
+Rewind to an intervening gptel turn cannot resume an older native answer.
+Edits after detachment invalidate the retained native coordinates, so Rewind
+cannot resurrect a pre-edit native history.
+
+Manual
 transcript compaction considers only the root conversation, and is also
 unavailable with the external provider selected. The ephemeral `/btw` command
 instead forks settled native root history through ACP; see
 [side conversations](view.md#ephemeral-btw-side-conversations).
-Unstarted and released markers hold no native history and restrict nothing. These commands cannot
+Unstarted and released markers hold no active native identity and restrict nothing. These commands cannot
 treat a copied transcript as an equivalent native model history. The adapter's
-native fork extension alone does not map mevedel's chronological checkpoints
-and independent conversation scopes to native message boundaries. Unlike those
-durable operations, `/btw` forks only the current settled root, stores no native
+native fork extension uses the recorded message boundaries for Rewind and Redo.
+Unlike those durable operations, `/btw` forks only the current settled root, stores no native
 identity in session metadata, and deletes the fork when the side ends.
 Direct commands and menu actions report the external-history restriction before
 arming a fork or changing state. Save As refuses before asking for a name or
-saving the parent, and Redo refuses before reading the published-head choices.
+saving the parent.
 Cooperative control requests refuse before creating a request; an owner rejects
 requests from a client with stale native history information instead of
 automatically granting them. Direct acquisition of an unheld or expired lease
@@ -2823,9 +2847,21 @@ inspection, while `C-n`/`C-p` move through user queries. These navigation action
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
+When discarded turns have captured file snapshots, the Emacs entry points first
+offer **Conversation only**, **Conversation and files**, or Cancel. Choosing
+Conversation only is its confirmation: it skips file preparation, conflicts,
+modified-buffer prompts and the file impact card. It leaves working files and
+unsaved visiting buffers untouched. Conversation and files continues through
+the existing file impact and confirmation below. Without captured files, the
+ordinary confirmation remains. Owner browser links offer only conversation
+Rewind, with a short confirmation. Both scopes retain the same active-turn,
+pending-input and execution safeguards. Native histories use the recorded
+answer-boundary forks described above rather than reconstructing model history
+from the truncated transcript.
+
 Rewind is an in-place logical transaction. It discards historical transcript
 and managed session state after the boundary, reverts the discarded turns'
-recorded file changes newest first, and keeps the same session identity, name,
+recorded file changes newest first when files are included, and keeps the same session identity, name,
 directory, working directory, and lineage. The candidate session state is the
 single place the boundary is decided; the transcript cutoff, instruction
 snapshot pruning, and remote staging pruning all derive their answers from its
@@ -2952,9 +2988,17 @@ of consuming history. Where a session lives and what it talks to -- save path,
 execution target, working directory -- stays live and is never adopted from the
 snapshot.
 
+Before restoration, Redo offers **Conversation only**, **Conversation and
+files**, or Cancel. Conversation only leaves working files and unsaved buffers
+untouched, and its scope choice is the confirmation. Conversation and files
+retains the file-impact confirmation described below. This explicit choice
+also makes conversation-only Rewind undoable without modifying files.
+Redo always asks the scope, including for heads with no captured files: its
+head-picker metadata does not carry the captured-file index.
+
 Redo returns the transcript, sidecar state, retained
 agent transcripts, and persisted tool results, and it restores captured
-working-tree files in the same transaction. Captured bytes live in published
+working-tree files in the same transaction when that scope is chosen. Captured bytes live in published
 `file-history` artifacts indexed by the sidecar's per-turn snapshots: a Rewind
 trims that index while republishing the bytes, so the head being restored still
 names its own captured file state. Coverage is Rewind's coverage -- uncaptured

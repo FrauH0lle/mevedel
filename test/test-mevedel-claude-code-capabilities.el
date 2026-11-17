@@ -12,6 +12,7 @@
 (require 'mevedel-claude-code-session)
 (require 'mevedel-claude-code-btw)
 (require 'mevedel-menu)
+(require 'mevedel-session-rewind)
 (require 'mevedel-side-conversation)
 (require 'gptel-transient)
 
@@ -100,13 +101,41 @@
               (with-current-buffer view
                 (goto-char (mevedel-view--input-start))
                 (insert "> preserve this draft\nsecond line"))
+              (let (calls)
+                (cl-letf (((symbol-function 'completing-read)
+                           (lambda (&rest args) (nth 6 args)))
+                          ((symbol-function 'mevedel-session-rewind--choose-scope)
+                           (lambda (&rest _) 'conversation))
+                          ((symbol-function 'mevedel-session-rewind-published-heads)
+                           (lambda (_) '((:head "prior" :turn-count 0))))
+                          ((symbol-function 'mevedel-session-rewind-rewind)
+                           (lambda (source target &rest _)
+                             (should (eq buffer source))
+                             (should target)
+                             (push 'rewind calls)))
+                          ((symbol-function 'mevedel-session-rewind-restore-head)
+                           (lambda (owner source head &rest _)
+                             (should (eq session owner))
+                             (should (eq buffer source))
+                             (should (equal "prior" head))
+                             (push 'redo calls))))
+                  (mevedel-rewind)
+                  (mevedel-redo)
+                  (with-current-buffer view
+                    (dolist (command '(mevedel-view-rewind-at-point
+                                       mevedel-menu--rewind-here mevedel-menu--redo))
+                      (goto-char (or (text-property-any (point-min) (point-max)
+                                                       'mevedel-view-turn-role 'assistant)
+                                     (ert-fail "Missing assistant response")))
+                      (funcall command))))
+                (should (equal '(redo rewind rewind redo rewind) calls)))
               (cl-letf (((symbol-function 'read-string)
                          (lambda (&rest _) (ert-fail "Unsupported operation asked for input")))
                         ((symbol-function 'completing-read)
                          (lambda (&rest _) (ert-fail "Unsupported operation opened a picker")))
                         ((symbol-function 'yes-or-no-p)
                          (lambda (&rest _) (ert-fail "Unsupported operation asked for approval"))))
-                (dolist (command `(mevedel-compact mevedel-rewind mevedel-redo
+                (dolist (command `(mevedel-compact
                                    ,(lambda () (mevedel-session-control-transfer-request session))
                                    (lambda () (mevedel-save-session t))))
                   (ert-info ((format "Direct command %S" command))
@@ -115,9 +144,9 @@
                              (error-message-string (should-error (funcall command) :type 'user-error))))))
                 (with-current-buffer view
                   (dolist (command '(mevedel-view-arm-conversation-fork
-                                     mevedel-view-arm-worktree-fork mevedel-view-rewind-at-point
+                                     mevedel-view-arm-worktree-fork
                                      mevedel-menu--fork-conversation-here mevedel-menu--fork-worktree-here
-                                     mevedel-menu--rewind-here mevedel-menu--redo mevedel-menu--compact))
+                                     mevedel-menu--compact))
                     (goto-char (or (text-property-any (point-min) (point-max)
                                                      'mevedel-view-turn-role 'assistant)
                                    (ert-fail "Missing assistant response")))

@@ -152,10 +152,13 @@ function host(lobbyRunning, records, sharedItem, coldAgent, archives, agentRecor
         reply({t: 'welcome', proto: 4, readOnly: !frame.writeToken, workspace: 'ws',
                project: 'proj', lobby: lobbyRunning, recordCount: records.length});
         reply({t: 'snapshot-chunk', records, final: true});
-        reply({t: 'status', name: 'Feature work', busy: false});
+        reply({t: 'status', name: 'Feature work', busy: false,
+               turnCount: records.filter(record => record.kind === 'user').length});
         if (frame.ownerToken) reply({t: 'recovery', models: [], model: null,
                                     efforts: [], effort: null, presets: [], providers: []});
         if (sharedItem) reply(store);
+      } else if (frame.t === 'rewind' || frame.t === 'retry-turn') {
+        reply({t: 'history-action', reqId: frame.reqId, ok: true});
       } else content(frame, reply, guest);
     },
     [forkRoom.id]: (frame, reply) => {
@@ -216,6 +219,7 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
         if (challenge !== 'c' || !(seq > last)) return;
         last = seq;
         page.received.push({room: id, connection, frame});
+        page.emit('host-frame', frame);
         answers[id]?.(frame, reply, guest);
       });
     });
@@ -307,6 +311,64 @@ test('room composer keeps Enter for newlines and submits with Control or Command
     await input.press('Control+Enter');
     assert.equal(page.received.filter(({frame}) => frame.t === 'prompt').length, 2);
   } finally { await browser.close(); }
+});
+
+test('history actions share one owner-only row and fit desktop and narrow phone widths', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 320, height: 568}]) {
+      for (const tier of [32, 48, 64]) {
+        const page = await open(browser, {viewport, records: [
+          {id: 'prompt', kind: 'user', text: 'Please revise the result.'},
+          {id: 'answer', kind: 'assistant', text: 'A settled answer.', forkPoint: 'fp-1', forkTurn: 1},
+          {id: 'follow-up', kind: 'user', text: 'Please continue.'},
+          {id: 'failed', kind: 'assistant', text: 'Assistant request failed.', status: 'failed', retryId: 'request-1'},
+        ]});
+        const link = `http://localhost:8765/#${sessionRoom.id}.${base64url(sessionRoom.secret.slice(0, tier))}`;
+        await page.goto(link);
+        await page.locator('[data-record-id="failed"]').waitFor();
+        const answer = page.locator('[data-record-id="answer"]');
+        const rewind = answer.getByRole('button', {name: 'Rewind to here', exact: true});
+        const retry = page.getByRole('button', {name: 'Retry', exact: true});
+        assert.equal(await rewind.isVisible(), tier === 64);
+        assert.equal(await retry.isVisible(), tier === 64);
+        assert.equal(await answer.getByRole('button', {name: 'Copy message'}).isVisible(), true);
+        if (tier === 64) {
+          await answer.hover();
+          assert.equal(await answer.locator('.message-actions').count(), 1);
+          assert.equal(await answer.locator('.message-actions .forkbtn').count(), 1);
+          for (const button of await answer.locator('.message-action').all()) {
+            const box = await button.boundingBox();
+            assert.ok(box && box.x >= 0 && box.x + box.width <= viewport.width,
+                      `message action fits ${viewport.width}px: ${JSON.stringify(box)}`);
+          }
+          await rewind.click();
+          const confirmation = page.getByRole('dialog', {name: 'Rewind to here?'});
+          await confirmation.waitFor();
+          assert.match(await confirmation.textContent(),
+                       /Remove 1 later turn\? Files stay unchanged; undo with Redo in Emacs\./);
+          await capture(page, `history-rewind-confirm-${viewport.width}`);
+          await confirmation.getByRole('button', {name: 'Cancel', exact: true}).click();
+          assert.equal(page.received.some(({frame}) => frame.t === 'rewind'), false);
+          await rewind.click();
+          const rewound = page.waitForEvent('host-frame', {predicate: frame => frame.t === 'rewind'});
+          await confirmation.getByRole('button', {name: 'Rewind', exact: true}).click();
+          assert.deepEqual(await rewound, {t: 'rewind', reqId: 1, forkPoint: 'fp-1', turnCount: 2});
+          await page.waitForFunction(() => !document.querySelector('[data-message-action="rewind"]').disabled);
+          const retried = page.waitForEvent('host-frame', {predicate: frame => frame.t === 'retry-turn'});
+          await retry.click();
+          assert.deepEqual(await retried, {t: 'retry-turn', reqId: 2, failureId: 'request-1'});
+          await page.waitForFunction(() => !document.querySelector('[data-message-action="retry-turn"]').disabled);
+          await answer.getByRole('button', {name: 'Copy message'}).focus();
+          await retry.hover();
+          await capture(page, `history-actions-${viewport.width}`);
+        }
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
 });
 
 test('multiline inputs expand reversibly and message actions copy source with a plain-text fallback', async () => {
