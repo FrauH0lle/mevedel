@@ -1987,6 +1987,12 @@ the editable composer signal instead of settling queued interactions."
   "Return propertized status-zone task text for SESSION and SHOW-COMPLETED."
   (let ((body (mevedel-tool-task-display-string session show-completed)))
     (add-text-properties 0 (length body) '(mevedel-tool-task t) body)
+    (add-text-properties
+     0 (or (string-search "\n" body) (length body))
+     (list 'keymap (mevedel-view--display-fragment-keymap)
+           'follow-link t 'mouse-face 'highlight
+           'help-echo "Toggle task panel (mouse-1, TAB or RET)")
+     body)
     body))
 
 (defun mevedel-view--status-session (&optional data-buf)

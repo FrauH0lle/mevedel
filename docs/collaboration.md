@@ -1513,6 +1513,8 @@ notes, and unresolved dependency IDs. Each task displays its ID so dependency
 references can be resolved; each active owner's note appears once. The host
 uses the native task activity and priority helpers rather than inferring them
 in JavaScript. Long owner paths and notes wrap on narrow screens.
+In the native Emacs view, clicking the highlighted task-panel header toggles
+disclosure; task-row clicks remain available for point placement and selection.
 The frame is latched on change and sent directly to each joining guest so an
 unchanged list cannot disappear on reconnect. The viewer keeps it collapsed
 to a done/total summary, orders in-progress work first, and strikes completed

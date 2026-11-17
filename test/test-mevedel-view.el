@@ -1700,6 +1700,48 @@
       ;; so the blank has to travel as a suffix.
       (should (equal "\n" (plist-get executions :body-suffix)))))))
 
+(mevedel-deftest mevedel-view--status-task-body ()
+  ,test
+  (test)
+  :doc "header clicks toggle while task row clicks only place point"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (let ((session (mevedel-session--create
+                    :name "task-mouse"
+                    :tasks (list (mevedel-task--create
+                                  :id 1 :subject "Active task" :status 'pending)
+                                 (mevedel-task--create
+                                  :id 2 :subject "Done task" :status 'completed)))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 2)
+      (mevedel-view--render-status data-buf)
+      (dolist (expanded '(t nil))
+        (let* ((header (plist-get (mevedel-view-zone-fragment-bounds 'status 'tasks)
+                                  :start))
+               (command (lookup-key (get-text-property header 'keymap) [mouse-1])))
+          (should (eq (get-text-property header 'mouse-face) 'highlight))
+          (should (get-text-property header 'follow-link))
+          (should (stringp (get-text-property header 'help-echo)))
+          (goto-char (+ (mevedel-view--input-start) 2))
+          (funcall command
+                   (list 'mouse-1 (list (selected-window) header '(0 . 0) 0))))
+        (should (eq (mevedel-view--status-task-show-completed-p) expanded))
+        (should (eq (not (null (string-search "Done task" (buffer-string))))
+                    expanded))
+        (let* ((header (plist-get (mevedel-view-zone-fragment-bounds 'status 'tasks)
+                                  :start))
+               (row (save-excursion (goto-char header) (forward-line 1) (point)))
+               (command (lookup-key (get-text-property row 'keymap) [mouse-1])))
+          (should-not (get-text-property row 'mouse-face))
+          (should-not (get-text-property row 'follow-link))
+          (goto-char (+ (mevedel-view--input-start) 2))
+          (funcall command
+                   (list 'mouse-1 (list (selected-window) row '(0 . 1) 0)))
+          (should (= (point) row))
+          (should (eq (mevedel-view--status-task-show-completed-p) expanded)))
+        (should (equal (mevedel-view--input-text) "> draft\nsecond line"))))))
+
 (mevedel-deftest mevedel-view-execution-state-changed-integration ()
   ,test
   (test)
