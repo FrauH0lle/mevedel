@@ -24,7 +24,8 @@
     (let ((original-font (frame-parameter nil 'font))
           (frame-resize-pixelwise t)
           (source (concat "| Name | Description |\n|---|---|\n"
-                          "| α界 🙂 | target and [link](https://example.org) with repeated words for wrapping |\n"
+                          "| α界 🙂 | **target** and [link](https://example.org) with repeated words for wrapping |\n"
+                          "| *em* ~~old~~ | `x|y` |\n"
                           "| WWW iii | monospaced |\n| small | |\n")))
       (unwind-protect
           (dolist (case '(("DejaVu Sans Mono-11" nil)
@@ -83,10 +84,10 @@
       (insert (make-string 400 ?\n) "| c | d |\n")
       (put-text-property (point-min) (point-max) 'mevedel-view-table-source "src")
       (put-text-property table-end (- (point-max) 10) 'mevedel-view-table-source nil)
-      (put-text-property (point-min) (point-max) 'mevedel-view-table-width
-                         (window-body-width (selected-window) t))
+      (put-text-property (point-min) (point-max) 'mevedel-view-table-layout
+                         (mevedel-view-table--window-layout (selected-window)))
       ;; The first table is unformatted but entirely above the window start.
-      (put-text-property (point-min) table-end 'mevedel-view-table-width nil)
+      (put-text-property (point-min) table-end 'mevedel-view-table-layout nil)
       (set-window-start (selected-window) (+ table-end 5) t)
       (let ((noninteractive nil))
         (cl-letf (((symbol-function 'window-end)
@@ -151,8 +152,9 @@
                   (redraw)
                   (should (= calls 1))
                   (let ((before (buffer-string))
-                        (before-layout (mevedel-view-table--layout
-                                        (string-trim-right source) window 0)))
+                        (before-layout (mevedel-view-table--entry-rendered
+                                        (mevedel-view-table--layout
+                                         (string-trim-right source) window 0))))
                     (redraw)
                     (should (= calls 1))
                     (should (equal-including-properties before (buffer-string)))
@@ -180,7 +182,7 @@
          (face (get-text-property position 'font-lock-face source)))
     (setf (plist-get face :height) 2.0)
     (maphash (lambda (key _rendered)
-               (should (= 1.0 (plist-get (get-text-property position 'font-lock-face (car key))
+               (should (= 1.0 (plist-get (get-text-property position 'font-lock-face key)
                                          :height))))
              mevedel-view-table--layout-cache))
   (put-text-property (string-match "cell" source) (+ 4 (string-match "cell" source))
@@ -192,9 +194,57 @@
                        (list :height 1.0) original)
     (setf (plist-get (get-text-property position 'font-lock-face source) :height) 2.0)
     (should (equal-including-properties
-             (mevedel-view-table--layout (string-trim-right original) window 0)
+             (mevedel-view-table--entry-rendered
+              (mevedel-view-table--layout (string-trim-right original) window 0))
              (funcall render (string-trim-right original) window 0)))
     (should (= calls 1))))
+
+(mevedel-deftest mevedel-view-table--display-cell/markdown
+  (:doc "inline Markdown uses prose faces and zero-width delimiters inside a cell")
+  (progn
+    (skip-unless (and (require 'markdown-ts-mode nil t)
+                      (mevedel-view--markdown-grammars-ready-p)))
+    (let* ((mevedel-view-hide-markdown-markup t)
+           (source "| **Bold** | *italic* | `x|y` | ~~Obsolete~~ | [Docs](https://example.org) |\n|---|---|---|---|---|")
+           (rendered (mevedel-view-table--render-source source nil 0)))
+      (dolist (expect '(("Bold" . markdown-ts-bold) ("italic" . markdown-ts-emphasis)
+                        ("x|y" . markdown-ts-code-span) ("Obsolete" . markdown-ts-strikethrough)))
+        (let ((pos (string-match (regexp-quote (car expect)) rendered)))
+          (should pos)
+          (dolist (property '(face font-lock-face))
+            (should (memq (cdr expect) (flatten-tree (get-text-property pos property rendered)))))))
+      (should-not (string-match-p "[*`~]" rendered))
+      (should (equal "https://example.org"
+                     (get-text-property (string-match "Docs" rendered) 'mevedel-view-url rendered)))
+      (should (memq 'link (flatten-tree (get-text-property (string-match "Docs" rendered)
+                                                         'face rendered))))
+      (should (= (string-width (car (split-string rendered "\n")))
+                 (string-width "│ Bold │ italic │ x|y │ Obsolete │ Docs │")))
+      (let* ((old (string-match "Obsolete" source))
+             (new (string-match "Obsolete" rendered))
+             (mapping (mevedel-view-table--position-map source rendered)))
+        (should (= new (aref mapping old)))
+        (should (= (+ new 2) (aref mapping (+ old 2))))))))
+
+(mevedel-deftest mevedel-view-table--visible-stale/font-and-color
+  (:doc "same-width text scale invalidates a layout; a color change does not")
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-test--with-displayed-buffer
+      (let* ((window (selected-window))
+             (frame (window-frame window))
+             (face 'mevedel-view-table-header)
+             (color (face-attribute face :foreground frame)))
+        (insert "| First | Second |\n|---|---|\n| cell | value |\n")
+        (mevedel-view-table-decorate (point-min) (point-max) nil)
+        (unwind-protect
+            (progn
+              (set-face-attribute face frame :foreground "red")
+              (should-not (mevedel-view-table--visible-stale window))
+              (setq-local face-remapping-alist '((default (:height 1.5) default)))
+              (should (mevedel-view-table-rerender window))
+              (should-not (mevedel-view-table--visible-stale window)))
+          (set-face-attribute face frame :foreground color))))))
 
 (provide 'test-mevedel-view-table-graphical)
 ;;; test-mevedel-view-table-graphical.el ends here

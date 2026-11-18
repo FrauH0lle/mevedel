@@ -32,7 +32,7 @@
                               (point-min) 'mevedel-view-table-source
                               nil (point-max))))
               (put-text-property (point-min) table-end
-                                 'mevedel-view-table-width nil))
+                                 'mevedel-view-table-layout nil))
             (goto-char (point-max))
             (insert draft)
             (goto-char (point-max))
@@ -93,14 +93,14 @@
                               (point-min) 'mevedel-view-table-source
                               nil (point-max))))
               (put-text-property (point-min) table-end
-                                 'mevedel-view-table-width nil))
+                                 'mevedel-view-table-layout nil))
             (should-not (eql (window-body-width other t)
                              (window-body-width (selected-window) t)))
             (goto-char (point-min))
             (search-forward "anchor")
             (set-window-start other (line-beginning-position))
             (mevedel-view--realign-markdown buffer other)
-            (should-not (get-text-property (point-min) 'mevedel-view-table-width))
+            (should-not (get-text-property (point-min) 'mevedel-view-table-layout))
             (save-excursion
               (goto-char (window-start other))
               (should (looking-at-p "anchor")))
@@ -163,7 +163,7 @@
   (mevedel-test--with-displayed-buffer
     (insert "| A | B |\n|---|---|\n| one | two |\n")
     (mevedel-view-table-decorate (point-min) (point-max) nil)
-    (put-text-property (point-min) (point-max) 'mevedel-view-table-width nil)
+    (put-text-property (point-min) (point-max) 'mevedel-view-table-layout nil)
     (setq mevedel-view--image-layout-width (window-body-width (selected-window) t))
     (unwind-protect
         (progn
