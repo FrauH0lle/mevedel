@@ -36,7 +36,11 @@
              'reload-test "/ssh:user@host:/srv/x" #'ignore))
           (setq timer (car (gethash 'reload-test mevedel-transport--pending)))
           (should (timerp timer))
+          (advice-add 'timer-event-handler :around
+                      #'mevedel-transport--guard-deadline-timer)
           (unload-feature 'tramp 'force)
+          (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                       'timer-event-handler))
           (should-not (gethash 'reload-test mevedel-transport--pending))
           (should-not (memq timer timer-list))
           (require 'tramp)
@@ -44,6 +48,7 @@
                                    'tramp-file-name-handler))
           (should (memq #'mevedel-transport--detach tramp-unload-hook)))
       (mevedel-transport-cancel-pending)
+      (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
       (unless (featurep 'tramp)
         (require 'tramp))
       (dolist (feature (reverse tramp-features))
@@ -447,41 +452,6 @@
       (should (< (float-time (time-subtract (timer--time timer) nil))
                  9.8))))
 
-  :doc "direct TRAMP operations cannot discard a deadline opened inside the body"
-  (let* ((root (make-temp-file "transport-deadline-" t))
-         (remote (concat "/mevedelmock:" (system-name) ":" root)))
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp nil
-          ;; Connect first so this tests timer preservation, not login latency.
-          (should (file-directory-p remote))
-          (mevedel-transport-with-exclusive-connection
-            (with-timeout (10 (ert-fail "Unexpected deadline"))
-              (let* ((timer (car with-timeout-timers))
-                     (deadline (timer--time timer)))
-                (should (file-attributes remote))
-                (should (memq timer timer-list))
-                (should (equal deadline (timer--time timer)))))))
-      (delete-directory root t)))
-
-  :doc "a real TRAMP command charges time to the enclosing timeout"
-  (let* ((root (make-temp-file "transport-elapsed-" t))
-         (remote (concat "/mevedelmock:" (system-name) ":" root)))
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp nil
-          (should (file-directory-p remote))
-          (let ((default-directory (file-name-as-directory remote))
-                returned)
-            (should
-             (eq :expired
-                 (mevedel-transport-with-exclusive-connection
-                   (with-timeout (0.5 :expired)
-                     (should (= 0 (process-file "sleep" nil nil nil "0.8")))
-                     (setq returned t)
-                     (sleep-for 0.1)
-                     :missed))))
-            (should returned)))
-      (delete-directory root t)))
-
   :doc "restores the timer list when the body exits non-locally"
   (let ((before timer-list))
     (should-error
@@ -493,6 +463,60 @@
                   (mevedel-transport-with-exclusive-connection
                     (throw 'done 'thrown)))))
     (should (eq before timer-list))))
+
+(mevedel-deftest mevedel-transport-call-with-deadline
+  (:quiet t :after-each ((advice-remove 'timer-event-handler
+                                       #'mevedel-transport--guard-deadline-timer)))
+  ,test
+  (test)
+  :doc "restores dispatch after a successful bounded call"
+  (let ((handler (symbol-function 'timer-event-handler)))
+    (should (eq :done (mevedel-transport-call-with-deadline
+                       10 (lambda () :done) #'ignore)))
+    (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                 'timer-event-handler))
+    (should (eq handler (symbol-function 'timer-event-handler))))
+
+  :doc "removes the timer guard when the bounded call signals an error"
+  (progn
+    (should-error (mevedel-transport-call-with-deadline
+                   10 (lambda () (user-error "Probe failed")) #'ignore)
+                  :type 'user-error)
+    (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                 'timer-event-handler)))
+
+  :doc "interrupts real TRAMP I/O without dispatching old or newly armed timers"
+  (let* ((root (make-temp-file "transport-deadline-" t))
+         (remote (concat "/mevedelmock:" (system-name) ":" root))
+         (fired 0)
+         old new returned)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (let ((default-directory (file-name-as-directory remote)))
+            (should (= 0 (process-file "true")))
+            (setq old (run-at-time 0 nil (lambda () (cl-incf fired))))
+            (should
+             (eq :expired
+                 (mevedel-transport-call-with-deadline
+                  0.5 (lambda ()
+                        (setq new (run-at-time 0 nil (lambda () (cl-incf fired))))
+                        (mevedel-transport-with-exclusive-connection
+                          (process-file "sleep" nil nil nil "3"))
+                        (setq returned t))
+                  (lambda ()
+                    (should (zerop fired))
+                    :expired))))
+            (should-not returned)
+            (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                         'timer-event-handler))
+            (let ((end (+ (float-time) 2)))
+              (while (and (< fired 2) (< (float-time) end))
+                (accept-process-output nil 0.02)))
+            (should (= 2 fired))
+            (should (= 0 (process-file "true")))))
+      (when old (cancel-timer old))
+      (when new (cancel-timer new))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-transport-run-when-idle ()
   ,test
@@ -786,12 +810,17 @@
              'teardown "/srv/project" (lambda () (cl-incf runs))
              (lambda () (cl-incf cancels)))
             (setq timer (car (gethash 'teardown mevedel-transport--pending))))
+          (advice-add 'timer-event-handler :around
+                      #'mevedel-transport--guard-deadline-timer)
           (mevedel-transport-uninstall)
+          (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                       'timer-event-handler))
           (mevedel-transport-install)
           (apply (timer--function timer) (timer--args timer))
           (should (= 0 runs))
           (should (= 1 cancels)))
       (when (timerp timer) (cancel-timer timer))
+      (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
       (mevedel-transport-install)
       (mevedel-transport-cancel-pending))))
 

@@ -33,6 +33,8 @@
 (declare-function tramp-set-connection-property
                   "tramp-cache" (key property value))
 (autoload 'tramp-get-connection-property "tramp-cache")
+(defvar tramp-current-connection)
+(defvar tramp-dont-suspend-timers)
 
 
 ;;
@@ -76,27 +78,14 @@ control check does during redisplay.")
 
 The frame is counted with a dynamic binding, so a THUNK that exits through
 `throw', `keyboard-quit', or any signal still uncounts itself.  After the
-outermost frame restores TRAMP's suspended timer lists, restore enclosing
-deadlines and re-arm pending retries and held continuations.  Remote I/O that
+outermost frame restores TRAMP's suspended timer lists, re-arm pending retries
+and held continuations.  Remote I/O that
 bypasses TRAMP's file-name handler, such as a direct process pipe, uses this so
 that `mevedel-transport-busy-p' sees it exactly as it sees a handler call."
-  (let* ((outermost (zerop mevedel-transport--depth))
-         (deadlines (when outermost
-                      (cl-loop for timer in with-timeout-timers
-                               when (memq timer timer-list)
-                               collect (cons timer (timer--time timer)))))
-         (mevedel-transport--depth (1+ mevedel-transport--depth)))
+  (let ((outermost (zerop mevedel-transport--depth))
+        (mevedel-transport--depth (1+ mevedel-transport--depth)))
     (unwind-protect (funcall thunk)
       (when outermost
-        ;; TRAMP re-arms these on its temporary list, then discards that list.
-        ;; Restore only enclosing deadlines, never foreign callback timers.
-        (pcase-dolist (`(,timer . ,deadline) deadlines)
-          (unless (or (timer--triggered timer)
-                      (and (memq timer timer-list)
-                           (equal deadline (timer--time timer))))
-            (cancel-timer timer)
-            (timer-set-time timer deadline)
-            (timer-activate timer)))
         (mevedel-transport--rearm-pending-timers)
         (mevedel-transport--release-held-timers)))))
 
@@ -145,6 +134,7 @@ is the default."
 (defun mevedel-transport--detach ()
   "Detach transport integration and cancel work that cannot safely run."
   (mevedel-transport-cancel-pending)
+  (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
   (advice-remove 'tramp-file-name-handler
                  #'mevedel-transport--handler-advice)
   (setq mevedel-transport--depth 0))
@@ -160,6 +150,11 @@ Paced processes continue."
   (mevedel-transport--detach)
   (when (boundp 'tramp-unload-hook)
     (remove-hook 'tramp-unload-hook #'mevedel-transport--detach)))
+
+(defun mevedel-transport-unload-function ()
+  "Remove transport integration before unloading the feature."
+  (mevedel-transport-uninstall)
+  nil)
 
 (defun mevedel-transport-nested-p ()
   "Return non-nil when a TRAMP file operation is already on the stack."
@@ -236,6 +231,9 @@ Activating one of them again inside the section would give it a second copy
 on the section's list; one that fires there leaves the suspended copy marked
 triggered, which Emacs then skips forever.")
 
+(defvar mevedel-transport--deadline-timer nil
+  "The only timer allowed to fire during a bounded exclusive operation.")
+
 (defun mevedel-transport--call-with-exclusive-connection (thunk)
   "Call THUNK with foreign timers suspended, re-arming any it schedules.
 
@@ -251,12 +249,14 @@ would silently move by however long this section ran.  Both are therefore
 charged for the section."
   (let ((suspended (with-timeout-suspend))
         (started (float-time))
+        (deadline (car (memq mevedel-transport--deadline-timer timer-list)))
         (scheduled nil)
         (scheduled-idle nil))
     (unwind-protect
         (let ((mevedel-transport--suspended-timers
                (append timer-list mevedel-transport--suspended-timers))
-              timer-list timer-idle-list)
+              (timer-list (and deadline (list deadline)))
+              timer-idle-list)
           ;; A collection inside the section is paid twice: it lengthens
           ;; the section, and the section is the window where the
           ;; connection is held and foreign timers are stopped, so the
@@ -266,7 +266,7 @@ charged for the section."
           (unwind-protect (mevedel--with-gc-batched (funcall thunk))
             ;; Collect here: the outer lists come back when this `let' exits,
             ;; taking anything armed inside with them.
-            (setq scheduled timer-list
+            (setq scheduled (delq deadline timer-list)
                   scheduled-idle timer-idle-list)))
       (mevedel-transport--unsuspend-timeouts
        suspended (- (float-time) started))
@@ -294,18 +294,66 @@ critical sections.  A timer BODY arms is re-armed on exit rather than lost, so
 BODY may schedule one; a suspended timer whose deadline passed meanwhile fires
 overdue, which for everything on this path is a latency cost and not a
 correctness one.  A `with-timeout' a caller opened around BODY is charged for
-the time BODY took, so bounding remote work still bounds it.
+the time BODY took, but cannot interrupt a synchronous TRAMP wait.
 
 A timer BODY arms fires normally unless TRAMP temporarily suspends it.
-An enclosing `with-timeout' still counts time spent in TRAMP and can fire
-once the remote transport returns.  Only timers that existed beforehand
-are held for the entire exclusive section.
+Use `mevedel-transport-call-with-deadline' to bound a synchronous TRAMP wait.
 
 One limit BODY must respect: `cancel-timer' inside BODY cannot reach a timer
 this macro suspended, because it is not on the bound list; that timer is
 restored on exit as though the cancel never happened."
   (declare (indent 0) (debug t))
   `(mevedel-transport--call-with-exclusive-connection (lambda () ,@body)))
+
+(defvar mevedel-transport--deadline-held nil
+  "Timers that became due during a bounded exclusive operation.")
+
+(defun mevedel-transport--guard-deadline-timer (original timer)
+  "Dispatch TIMER through ORIGINAL unless a private deadline holds it."
+  (if (and mevedel-transport--deadline-timer
+           (not (eq timer mevedel-transport--deadline-timer)))
+      ;; Emacs marks a due timer triggered before dispatching it.  Leave it
+      ;; on its queue so cancellation still works, but do not run its callback.
+      (cl-pushnew timer mevedel-transport--deadline-held)
+    (funcall original timer)))
+
+(defun mevedel-transport-call-with-deadline (seconds thunk on-timeout)
+  "Call THUNK exclusively with a private deadline of SECONDS.
+Call ON-TIMEOUT after aborting a synchronous wait, or instead of returning
+an overdue result.  Hold both pre-existing timers and timers armed by
+process filters during the wait; only the private deadline can fire.
+Use one deadline around the whole operation, rather than nesting deadlines."
+  (mevedel-transport-with-exclusive-connection
+    (let* ((outermost (not mevedel-transport--deadline-timer))
+           (tag (make-symbol "transport-deadline"))
+           (deadline (+ (float-time) seconds))
+           (tramp-dont-suspend-timers t)
+           (connection (bound-and-true-p tramp-current-connection))
+           (mevedel-transport--deadline-held nil)
+           (mevedel-transport--deadline-timer
+            (run-at-time
+             seconds nil
+             (lambda ()
+               (let ((current (bound-and-true-p tramp-current-connection)))
+                 (throw tag (unless (eq current connection)
+                              (tramp-get-connection-process (car current))))))))
+           completed result)
+      (unwind-protect
+          (progn
+            (when outermost
+              (advice-add 'timer-event-handler :around
+                          #'mevedel-transport--guard-deadline-timer '((depth . -90))))
+            (let ((interrupted (catch tag (setq result (funcall thunk) completed t))))
+              (if (and completed (< (float-time) deadline))
+                  result
+                ;; The aborted request's reply must not reach the next command.
+                (when (processp interrupted) (delete-process interrupted))
+                (funcall on-timeout))))
+        (when outermost
+          (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer))
+        (cancel-timer mevedel-transport--deadline-timer)
+        (dolist (timer mevedel-transport--deadline-held)
+          (setf (timer--triggered timer) nil))))))
 
 
 ;;

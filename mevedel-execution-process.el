@@ -334,10 +334,9 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                   (stringp start-time) (stringp workdir)
                   (file-remote-p workdir)))
         'ambiguous
-      (mevedel-transport-with-exclusive-connection
-        (with-timeout
-            (mevedel-execution-process--remote-control-timeout
-             (error "Target process status probe timed out"))
+      (mevedel-transport-call-with-deadline
+       mevedel-execution-process--remote-control-timeout
+       (lambda ()
           (with-temp-buffer
             (setq default-directory workdir)
             (pcase
@@ -348,7 +347,8 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                  start-time)
               (0 'live)
               (1 'dead)
-              (_ 'ambiguous))))))))
+              (_ 'ambiguous))))
+       (lambda () (error "Target process status probe timed out"))))))
 
 (defun mevedel-execution-process--remote-group-status (child)
   "Return CHILD's remote group status as `live', `dead', or `ambiguous'."
@@ -480,11 +480,10 @@ stay roots because a stopped shell's escaped children are reparented away."
           (if remote
               (pcase (mevedel-execution-process--remote-group-status child)
                 ('live
-                 (mevedel-transport-with-exclusive-connection
-                   (with-timeout
-                       (mevedel-execution-process--remote-control-timeout
-                        (error "Target process signal timed out"))
-                     (signal-process (- group-id) signal workdir))))
+                 (mevedel-transport-call-with-deadline
+                  mevedel-execution-process--remote-control-timeout
+                  (lambda () (signal-process (- group-id) signal workdir))
+                  (lambda () (error "Target process signal timed out"))))
                 ;; A dead group needs no signal, and an ambiguous one must
                 ;; not be signalled: the pinned identity is the only thing
                 ;; stopping a recycled group number from taking it.  Neither
