@@ -3054,6 +3054,52 @@ work in flight genuinely unprovable rather than merely finished."
         (when paused (call-process "podman" nil nil nil "unpause" container)))
       (should (eq 'dead (mevedel-execution-process-remote-group-status group-id "1" root))))))
 
+(mevedel-deftest mevedel-real-remote-control-lock/orphan
+  (:quiet t :tags (external remote connection-loss)
+          :after-each ((tramp-cleanup-all-connections)))
+  (let ((root (getenv "MEVEDEL_TEST_PODMAN_ROOT")))
+    (skip-unless root)
+    (let* ((directory (directory-file-name (test-mevedel-execution-remote--real-temp-directory root "control-lock-")))
+           (local (file-local-name directory))
+           (container (file-remote-p root 'host))
+           (buffer (generate-new-buffer " *control lock fixture*"))
+           client pid successor)
+      (unwind-protect
+          (progn
+            ;; Reproduce the tty transport retaining stdin after client death.
+            (setq client (make-process :name "test-podman-control-tty" :buffer buffer :noquery t
+                                       :connection-type 'pipe :sentinel #'ignore
+                                       :command (list "podman" "exec" "-it" container "bash" "-c"
+                                                      "exec 7<\"$1\" && flock -x 7 && echo $$ && read -r reply"
+                                                      "control-lock" local)))
+            (with-current-buffer buffer
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (process-live-p client) (< (float-time) deadline)
+                            (not (string-match "\\`[0-9]+[\r\n]" (buffer-string))))
+                  (accept-process-output client .05)))
+              (should (string-match "\\`\\([0-9]+\\)[\r\n]" (buffer-string)))
+              (setq pid (match-string 1 (buffer-string))))
+            (kill-process client)
+            (while (process-live-p client) (accept-process-output client .05))
+            (let ((failure (error-message-string
+                            (should-error (mevedel-session-control-fs-lock-session-open directory 2)
+                                          :type 'file-error))))
+              (should (string-search (format "holder PID %s on %s" pid container) failure))
+              (should (string-search directory failure)))
+            ;; Signal only the independently recorded fixture PID, still on the tested inode.
+            (should (zerop (call-process "podman" nil nil nil "exec" container "sh" "-c"
+                                         "test /proc/\"$1\"/fd/7 -ef \"$2\" && kill -KILL \"$1\""
+                                         "control-lock" pid local)))
+            (setq successor (mevedel-session-control-fs-lock-session-open directory 2))
+            (mevedel-session-control-fs-program-value
+             (car (mevedel-session-control-fs-lock-session-run
+                   successor (list (list :op 'create :path (file-name-concat directory "slot") :content "applied")))))
+            (should (equal "applied" (mevedel-session-control-fs-read-file (file-name-concat directory "slot")))))
+        (mevedel-session-control-fs-lock-session-close successor)
+        (when (and client (process-live-p client)) (delete-process client))
+        (kill-buffer buffer)
+        (delete-directory directory t)))))
+
 (mevedel-deftest mevedel-real-remote-loss
   (:quiet t :tags (external remote connection-loss)
           :after-each ((tramp-cleanup-all-connections)))

@@ -576,7 +576,8 @@ accepted decisions and, unless DECISIONS-ONLY, pass publications, except when
 CONTINUATION freshly proves direct succession.  FUNCTION receives the job
 plist holding :claim; it settles durable outcomes itself.  Return the public
 result with a new continuation, or signal."
-  (let* ((key (mevedel-memory-store--claim-directory workspace))
+  (mevedel-session-control-fs-with-reuse
+   (let* ((key (mevedel-memory-store--claim-directory workspace))
          (claim (or (mevedel-journal-claim-acquire key 180)
                     (progn
                       (mevedel-journal-cleanup-wait workspace)
@@ -594,7 +595,7 @@ result with a new continuation, or signal."
       (unless (plist-get job :outcome)
         (plist-put job :outcome (mevedel-journal-claim-settle claim 'cancelled ""))))
     (mevedel-memory-decision--result
-     value (mevedel-memory-decision--continuation job (plist-get job :outcome) (plist-get value :status)))))
+     value (mevedel-memory-decision--continuation job (plist-get job :outcome) (plist-get value :status))))))
 
 (defun mevedel-memory-decision--finish-write (workspace job target intent &optional failed)
   "Record INTENT's observed outcome under WORKSPACE JOB's claim and TARGET.

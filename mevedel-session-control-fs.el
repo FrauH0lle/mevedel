@@ -110,15 +110,22 @@ before the operation ran."
 (defconst mevedel-session-control-fs--program-script
   (concat
    "set -eu\n"
-   "pause_file=$1\n"
-   "lock_directory=$2\n"
-   "archive_reads=$3\n"
-   "shift 3\n"
-   "if test -n \"$lock_directory\"; then\n"
-   "  exec 7<\"$lock_directory\" || exit 70\n"
-   "  test \"$(cd /proc/self/fd/7 && pwd -P)\" = \"$lock_directory\" || exit 70\n"
-   "  flock -x -w 20 7 || exit 79\n"
-   "fi\n"
+   "take_lock() {\n"
+   "  exec 7<\"$1\" || exit 70\n"
+   "  test \"$(cd /proc/self/fd/7 && pwd -P)\" = \"$1\" || exit 70\n"
+   "  if [[ ${3-} == report ]]; then\n"
+   "    flock -xn 7 && return 0\n"
+   ;; flock(1)'s PID in /proc/locks can already be gone: fd7 owns the lock.
+   "    for fd in /proc/[0-9]*/fd/7; do\n"
+   "      [[ $fd -ef /proc/self/fd/7 ]] || continue\n"
+   "      pid=${fd#/proc/}; pid=${pid%%/*}\n"
+   "      if grep -q '^lock:.*FLOCK .*WRITE' /proc/$pid/fdinfo/7 2>/dev/null; then\n"
+   "        printf 'holder %s\\0' \"$pid\"; break\n"
+   "      fi\n"
+   "    done\n"
+   "  fi\n"
+   "  flock -x -w \"$2\" 7 || exit 79\n"
+   "}\n"
    ;; Every operation opens its own parent and re-proves it, so one process
    ;; carrying a program is exactly as pinned as one process per operation.
    ;;
@@ -616,12 +623,36 @@ before the operation ran."
    ;; Operation frames bypass the diagnostic pipe through descriptor 3.
    ;; Encode before command substitution, since shell variables drop NULs.
    ;; This preserves arbitrary target diagnostics without a temporary file.
+   "control_program() {\n"
+   "pause_file=$1; lock_directory=$2; archive_reads=$3; shift 3\n"
+   "if [[ -n $held ]]; then\n"
+   "  [[ $lock_directory == \"$held\" && $held -ef /proc/self/fd/7 ]] || exit 70\n"
+   "elif [[ -n $lock_directory ]]; then take_lock \"$lock_directory\" 20; fi\n"
    "exec 3>&1\n"
    "set -o pipefail\n"
    "program_status=0\n"
    "diagnostics=$(run_program \"$@\" 2>&1 1>&3 | base64 -w0) || program_status=$?\n"
    "printf 'diagnostic 0\\0%s\\0' \"$diagnostics\"\n"
-   "exit \"$program_status\"\n")
+   "exit \"$program_status\"\n"
+   "}\n"
+   "held=\n"
+   "if [[ $1 != --helper ]]; then control_program \"$@\"; fi\n"
+   "held=$2\n"
+   "if [[ -n $held ]]; then take_lock \"$held\" \"$3\" report; fi\n"
+   "printf 'ready\\0'\n"
+   "while IFS= read -r count; do\n"
+   "  [[ $count == close ]] && exit 0\n"
+   "  [[ $count =~ ^[0-9]+$ ]] || exit 71\n"
+   "  fields=()\n"
+   "  for ((i=0; i<count; i++)); do\n"
+   "    IFS= read -r size || exit 71\n"
+   "    [[ $size =~ ^[0-9]+$ ]] || exit 71\n"
+   "    LC_ALL=C IFS= read -r -N \"$size\" field || exit 71\n"
+   "    fields+=(\"$field\")\n"
+   "  done\n"
+   "  status=0; (control_program \"${fields[@]}\") </dev/null || status=$?\n"
+   "  printf 'end %s\\0' \"$status\"\n"
+   "done\n")
   "Target-side script running a whole program of pinned control operations.
 
 Content payloads are base64 so one framing carries arbitrary bytes, including
@@ -1274,12 +1305,211 @@ commit the write rides behind."
 Pause attribution needs only programs long enough to be seen; recording
 every five-second transfer poll would drown them.")
 
+(defvar mevedel-session-control-fs--helper-enabled nil
+  "Non-nil inside a synchronous workflow that owns a reusable carrier.")
+(defvar mevedel-session-control-fs--local-helper nil
+  "Process serving successive local programs, without retaining locks.")
+(defvar mevedel-session-control-fs--lock-holder nil
+  "Target PID observed holding the lock during this startup only.")
+
+(defmacro mevedel-session-control-fs-with-reuse (&rest body)
+  "Run foreground BODY with a local carrier, closing it on every exit."
+  (declare (indent 0) (debug t))
+  `(progn
+     (when inhibit-quit (user-error "Cannot wait for a memory decision in this callback"))
+     (let ((mevedel-session-control-fs--helper-enabled t)
+           (mevedel-session-control-fs--local-helper nil))
+       (unwind-protect (progn ,@body)
+         (mevedel-session-control-fs-lock-session-close mevedel-session-control-fs--local-helper)))))
+
+(defun mevedel-session-control-fs--lock-timeout (lock)
+  "Refuse acquisition of LOCK without signalling any potential holder."
+  (signal 'file-error
+          (list (concat "Control lock wait expired"
+                        (when mevedel-session-control-fs--lock-holder
+                          (format "; observed holder PID %s on %s. A crashed editor may have left it; verify it still holds this lock and no editor uses it before stopping it"
+                                  mevedel-session-control-fs--lock-holder
+                                  (or (file-remote-p lock 'host 'never) (system-name))))) lock)))
+
+(defun mevedel-session-control-fs-lock-session-close (process)
+  "Release PROCESS and its private output buffer; repeated calls are safe."
+  (when (processp process)
+    (when (process-live-p process)
+      (when (and (process-get process 'ready) (not (process-get process 'busy)))
+        ;; Classic container ttys need an explicit close before disconnect.
+        (ignore-errors (process-send-string process "close\n")
+                       (accept-process-output process .1 nil 1)))
+      (when (process-live-p process) (delete-process process)))
+    (when (buffer-live-p (process-buffer process)) (kill-buffer (process-buffer process)))))
+
+(defun mevedel-session-control-fs--helper-wait (process regexp &optional deadline)
+  "Wait for REGEXP at the tail of PROCESS output, bounded by DEADLINE."
+  (with-current-buffer (process-buffer process)
+    (goto-char (point-max))
+    (while (not (save-excursion
+                  (forward-char (- (min 20 (- (point) (point-min)))))
+                  (re-search-forward regexp nil t)))
+      (when (and deadline (not mevedel-session-control-fs--lock-holder)
+                 (save-excursion (goto-char (point-min)) (looking-at "holder \\([0-9]+\\)\0")))
+        (setq mevedel-session-control-fs--lock-holder (match-string 1)))
+      (unless (process-live-p process)
+        (when (= (process-exit-status process) 79)
+          (mevedel-session-control-fs--lock-timeout (process-get process 'lock)))
+        (signal 'file-error (list "Control helper died; refusing to continue" (process-get process 'lock))))
+      (let ((remaining (and deadline (- deadline (float-time)))))
+        (when (and remaining (<= remaining 0))
+          (mevedel-session-control-fs--lock-timeout (process-get process 'lock)))
+        (accept-process-output process remaining nil 1))
+      (goto-char (point-max)))
+    (goto-char (match-beginning 0))))
+
+(defun mevedel-session-control-fs--helper-open (remote lock deadline)
+  "Start the helper on REMOTE and acquire LOCK by absolute time DEADLINE."
+  (let* ((default-directory (mevedel-session-control-fs--connection-directory (or remote "/")))
+         (bash (file-local-name (car (mevedel-session-control-fs--programs remote))))
+         (script (encode-coding-string mevedel-session-control-fs--program-script 'utf-8-unix))
+         (vec (and remote (tramp-dissect-file-name default-directory)))
+         (container-shell (and vec (member (tramp-file-name-method vec) '("podman" "docker"))
+                               (null (cdr (tramp-compute-multi-hops vec)))
+                               (tramp-get-method-parameter vec 'tramp-direct-async)))
+         (buffer (generate-new-buffer " *mevedel-control-helper*")) process ready)
+    (with-current-buffer buffer (set-buffer-multibyte nil))
+    (unwind-protect
+        (progn
+          (setq process
+                (mevedel-transport-call-with-spawn-channel
+                 remote container-shell
+                 (lambda ()
+                   ;; conmon keeps -it ttys open after client death.  Preserve
+                   ;; the configured method's remaining arguments verbatim.
+                   (let ((tramp-methods
+                          (if container-shell
+                              (cons (cl-subst "-i" "-it" (assoc (tramp-file-name-method vec) tramp-methods) :test #'equal)
+                                    tramp-methods)
+                            (and (boundp 'tramp-methods) tramp-methods))))
+                   (make-process
+                    :name "mevedel-control-helper" :buffer buffer :file-handler t
+                    :coding 'no-conversion :connection-type 'pipe :noquery t :sentinel #'ignore
+                    :command (list bash "-p" "-c"
+                                   ;; Classic TRAMP supplies a tty even for a pipe process.
+                                   ;; Bash's fixed-length reads need a real pipe, not tty mode changes.
+                                   (concat "exec 2>/dev/null; if test -t 0; then stty raw -echo || exit 71; "
+                                           "exec 0< <(cat); fi; printf 'input\\0'; "
+                                           "LC_ALL=C IFS= read -r -N \"$1\" s && "
+                                           "IFS= read -r -d '' lock || exit 71; "
+                                           "set -- --helper \"$lock\" \"$2\"; eval \"$s\"")
+                                   "control-helper" (number-to-string (length script))
+                                   (format "%.6f" (max 0 (- deadline (float-time))))))))))
+          (process-put process 'lock lock)
+          (process-put process 'remote remote)
+          (mevedel-session-control-fs--helper-wait process "\\`input\0\\'" deadline)
+          (with-current-buffer buffer (erase-buffer))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert script (encode-coding-string (if lock (file-local-name lock) "") 'utf-8-unix) 0)
+            (mevedel-session-control-fs--send-request-buffer process))
+          (mevedel-session-control-fs--helper-wait process "ready\0\\'" deadline)
+          (process-put process 'ready t)
+          (setq ready t)
+          process)
+      (unless ready
+        (mevedel-session-control-fs-lock-session-close process)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(defun mevedel-session-control-fs--acquire (directory deadline)
+  "Acquire DIRECTORY on its execution host by the enclosing absolute DEADLINE."
+  (mevedel-session-control-fs--assert-idle directory)
+  (setq directory (mevedel-session-control-fs-physical-path directory))
+  (mevedel-transport-call-as-remote-operation
+   (lambda () (mevedel-session-control-fs--helper-open (file-remote-p directory) directory deadline))))
+
+(defun mevedel-session-control-fs-lock-session-open (directory &optional wait)
+  "Hold an exclusive lock on DIRECTORY on its host for successive calls.
+WAIT bounds lock acquisition in seconds, at most twenty (the default)."
+  (unless (<= 0 (or wait 20) 20) (error "Invalid control lock wait"))
+  (let ((deadline (+ (float-time) (or wait 20)))
+        (mevedel-session-control-fs--lock-holder nil) session)
+    (mevedel-transport-call-with-deadline
+     (or wait 20)
+     (lambda () (setq session (mevedel-session-control-fs--acquire directory deadline)))
+     (lambda ()
+       ;; A ready helper returned after the deadline must not retain the lock.
+       (mevedel-session-control-fs-lock-session-close session)
+       (mevedel-session-control-fs--lock-timeout directory)))))
+
+(defun mevedel-session-control-fs-call-with-locks (directories function)
+  "Create and lock DIRECTORIES in order, then call FUNCTION with their sessions.
+One twenty-second budget covers all startup, never the work of FUNCTION.
+Release acquired locks in reverse order on every exit."
+  (let ((deadline (+ (float-time) 20)) (mevedel-session-control-fs--lock-holder nil) current sessions)
+    (unwind-protect
+        (progn
+          (mevedel-transport-call-with-deadline
+           20 (lambda ()
+                (dolist (directory directories)
+                  (setq current directory mevedel-session-control-fs--lock-holder nil)
+                  (mevedel-session-control-fs-make-directory directory t)
+                  (push (mevedel-session-control-fs--acquire directory deadline) sessions)))
+           (lambda () (mevedel-session-control-fs--lock-timeout current)))
+          (apply function (reverse sessions)))
+      (mapc #'mevedel-session-control-fs-lock-session-close sessions))))
+
+(defun mevedel-session-control-fs-lock-session-run (session operations)
+  "Run OPERATIONS only on SESSION, under its original directory lock."
+  (unless (and (processp session) (process-live-p session) (process-get session 'lock))
+    (signal 'file-error '("Control lock owner is gone; refusing to continue")))
+  (mevedel-session-control-fs-run-program operations session))
+
+(defun mevedel-session-control-fs--helper-request (process fields output)
+  "Send FIELDS to PROCESS and collect its ordinary program reply in OUTPUT."
+  (when (process-get process 'busy) (error "Control helper already in use"))
+  (process-put process 'busy t)
+  (let (done)
+    (unwind-protect
+        (progn
+          (with-current-buffer (process-buffer process) (erase-buffer))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert (number-to-string (length fields)) "\n")
+            (dolist (field fields)
+              (when (string-search "\0" field) (error "NUL in control argument"))
+              (let ((bytes (if (multibyte-string-p field) (encode-coding-string field 'utf-8-unix) field)))
+                (insert (number-to-string (length bytes)) "\n" bytes)))
+            (mevedel-session-control-fs--send-request-buffer process))
+          (mevedel-session-control-fs--helper-wait process "end \\([0-9]+\\)\0\\'")
+          (with-current-buffer (process-buffer process)
+            (let ((status (string-to-number (match-string 1))))
+              (append-to-buffer output (point-min) (point))
+              (setq done t)
+              status)))
+      (process-put process 'busy nil)
+      (unless done (mevedel-session-control-fs-lock-session-close process)))))
+
+(defun mevedel-session-control-fs--pooled-helper ()
+  "Return the idle local helper with exactly the current spawn environment."
+  (when inhibit-quit (user-error "Cannot wait for a reusable control helper in this callback"))
+  (unless (and mevedel-session-control-fs--local-helper
+               (process-live-p mevedel-session-control-fs--local-helper)
+               (= (default-file-modes) (process-get mevedel-session-control-fs--local-helper 'modes))
+               (eq mevedel-session-control-fs--program-script
+                   (process-get mevedel-session-control-fs--local-helper 'script))
+               (equal process-environment (process-get mevedel-session-control-fs--local-helper 'environment)))
+    (mevedel-session-control-fs-lock-session-close mevedel-session-control-fs--local-helper)
+    (setq mevedel-session-control-fs--local-helper
+          (mevedel-session-control-fs--helper-open nil nil (+ (float-time) 20)))
+    (process-put mevedel-session-control-fs--local-helper 'script mevedel-session-control-fs--program-script)
+    (process-put mevedel-session-control-fs--local-helper 'modes (default-file-modes))
+    (process-put mevedel-session-control-fs--local-helper 'environment (copy-sequence process-environment)))
+  mevedel-session-control-fs--local-helper)
+
 (defun mevedel-session-control-fs-run-program (operations &optional lock-directory)
   "Run OPERATIONS as one pinned target program and return their results.
 
 LOCK-DIRECTORY, when non-nil, holds an exclusive target-side `flock' on its
 pinned directory descriptor for the entire program. Cooperating mutations must
-use the same physical directory. Process death releases the lock; waiting is
+use the same physical directory. A live lock session instead of a directory
+sends this request to that exact owner without affecting reentrant calls.
+Process death releases the lock; waiting is
 bounded to 20 seconds. This requires the target's `flock' executable.
 
 OPERATIONS is a list of plists.  `:op' names one of
@@ -1334,7 +1564,9 @@ LOCK-DIRECTORY is its optional target-side lock."
   (when operations
     (mevedel-session-control-fs--assert-idle
      (plist-get (car operations) :path))
-    (let* ((parents
+    (let* ((owner (and (processp lock-directory) lock-directory))
+           (lock-directory (if owner (or (process-get owner 'lock) (error "Not a control lock owner")) lock-directory))
+           (parents
             (mapcar (lambda (op)
                       (file-remote-p
                        (plist-get
@@ -1373,10 +1605,16 @@ LOCK-DIRECTORY is its optional target-side lock."
              ;; A request too large for the command line streams over a
              ;; direct pipe where the target allows one, and otherwise
              ;; travels as an input file TRAMP copies to the target.
-             (pipe (and (not arguments)
+             (helper (or owner
+                         (and mevedel-session-control-fs--helper-enabled
+                              (not inhibit-quit) (not remote) arguments
+                              (not (and mevedel-session-control-fs--local-helper
+                                        (process-get mevedel-session-control-fs--local-helper 'busy)))
+                              (mevedel-session-control-fs--pooled-helper))))
+             (pipe (and (not helper) (not arguments)
                         (mevedel-session-control-fs--pipe-capable-p remote)
                         (generate-new-buffer " *mevedel-control-fs-request*")))
-             (input (unless (or arguments pipe)
+             (input (unless (or helper arguments pipe)
                       (make-temp-file ".mevedel-control-fs-program-")))
              (flags (list (or mevedel-session-control-fs--test-pause-file "")
                           (if lock-directory (file-local-name lock-directory) "")
@@ -1398,9 +1636,16 @@ LOCK-DIRECTORY is its optional target-side lock."
                   (let* ((coding-system-for-read 'no-conversion)
                          (status
                           (mevedel-transport-with-exclusive-connection
-                           (if pipe
+                           (cond
+                            (helper
+                             (mevedel-transport-call-as-remote-operation
+                              (lambda ()
+                                (mevedel-session-control-fs--helper-request
+                                 helper (append flags (or arguments (apply #'append fields))) output))))
+                            (pipe
                                (mevedel-session-control-fs--run-over-pipe
-                                remote bash pipe output flags)
+                                remote bash pipe output flags))
+                            (t
                              ;; Stderr is discarded rather than pointed at a local
                              ;; file: TRAMP would answer a local one by creating a
                              ;; remote temporary and copying it back on every
@@ -1418,7 +1663,7 @@ LOCK-DIRECTORY is its optional target-side lock."
                               (append
                                (mevedel-session-control-fs--script-arguments
                                 remote programs)
-                               flags arguments)))))
+                               flags arguments))))))
                          (text (with-current-buffer output (buffer-string))))
                     (unless (and (integerp status) (zerop status))
                       ;; The resolved interpreters are the only cached input, so a

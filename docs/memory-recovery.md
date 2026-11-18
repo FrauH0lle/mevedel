@@ -35,6 +35,9 @@ original actor's live policy and workspace identity rather than the timer's
 current buffer. The context is not frozen permission.
 
 Without a callback, application is synchronous and signals errors and quit.
+A foreground decision can reuse its local control process until it returns.
+Calling the synchronous verb in a quit-inhibited timer or process callback
+refuses before admission; it must not block the callback waiting for a helper.
 `mevedel-memory-decision-interrupted` carries any already-accounted decision.
 With `:callback`, application delivers one result, including admission failure,
 as `:error` or `:cancelled` when appropriate; confirmed effects and updated-file

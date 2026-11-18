@@ -39,10 +39,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   the gain falls well short of half), and fault-injection tests for an index
   failure after the topic write, a kill between renames, the cross-host gap,
   reject during that gap, and cleanup during apply.
-- Memory control-file programs: batching per call site saved 11 → 2
-  programs (63.5 → 37.4 ms) but whole operations did not get faster; more
-  needs a long-lived helper process instead of one program per step (ADR 0101
-  decision history, 2026-11-14).
 
 ## Proactive sessions
 

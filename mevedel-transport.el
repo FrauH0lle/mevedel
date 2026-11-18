@@ -97,10 +97,9 @@ that `mevedel-transport-busy-p' sees it exactly as it sees a handler call."
 (defun mevedel-transport-call-with-spawn-channel (remote direct-async thunk)
   "Call THUNK, which spawns a process, through REMOTE's selected channel.
 
-With DIRECT-ASYNC, TRAMP starts the process on its own ssh channel instead
-of through the connection's shell, which costs no command on the shared
-connection; without it the classic spawn is forced even where direct-async
-is the default."
+With DIRECT-ASYNC, TRAMP starts the process on its own channel instead of
+through the connection's shell.  A list supplies the method's command
+shell; t selects ssh.  With nil, force the classic spawn."
   (if (and remote (fboundp 'tramp-direct-async-process-p))
       (let ((shim (and direct-async
                        (not (fboundp 'tramp-ssh-controlmaster-options))
@@ -116,7 +115,7 @@ is the default."
           (if direct-async
               (let ((vec (tramp-dissect-file-name remote)))
                 (with-tramp-saved-connection-property vec "direct-async"
-                  (tramp-set-connection-property vec "direct-async" t)
+                  (tramp-set-connection-property vec "direct-async" direct-async)
                   (funcall thunk)))
             (funcall thunk))))
     (funcall thunk)))

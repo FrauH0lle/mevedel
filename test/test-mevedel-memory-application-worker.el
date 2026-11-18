@@ -538,18 +538,20 @@ the public verb, not this helper, constructs and drives the operation."
     (mevedel-test-application-fixture
       (let* ((items (plist-get accepted :proposals))
 	     (pass (plist-get (plist-get accepted :prepared) :id))
-             (apply-owned (symbol-function 'mevedel-memory-decision--apply-owned)) injected trace)
+             (apply-owned (symbol-function 'mevedel-memory-decision--apply-owned)) first injected trace)
         (should (= 2 (length items)))
         (cl-letf (((symbol-function 'mevedel-memory-decision--apply-owned)
 		   (lambda (&rest args)
                      (push (list :proposal (nth 3 args) :notify (not (null (nth 4 args)))) trace)
-		     (prog1 (apply apply-owned args)
-		       (unless injected
-			 (setq injected t)
-			 (should (eq 'applied
-				     (plist-get (mevedel-memory-decision-apply
-						 workspace pass (plist-get (cadr items) :id)) :status))))))))
+		     (prog1 (apply apply-owned args) (setq first t))))
+                  ((symbol-function 'mevedel-memory-decision--idle-p)
+                   (lambda () (or (not first) injected))))
 	  (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+                  (mevedel-test-application-wait (lambda () first))
+                  ;; The second human decision runs in the foreground, not in the worker's timer.
+                  (should (eq 'applied (plist-get (mevedel-memory-decision-apply
+                                                   workspace pass (plist-get (cadr items) :id)) :status)))
+                  (setq injected t)
 	  (mevedel-test-application-wait (lambda () result)))
         (should injected)
         (ert-info ((prin1-to-string trace))

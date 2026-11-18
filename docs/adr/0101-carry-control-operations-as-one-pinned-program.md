@@ -505,3 +505,32 @@ protocol, extraction directory, or generic resolver cache is needed.
   call, preserving the running reply but producing an error in the sentinel.
   A slower remote transfer poll reduces exposure; package-specific suppression
   remains an operational workaround, not a guarantee against external sentinels.
+- **2026-11-18 — Reuse the carrier, not filesystem observations.** Within a
+  foreground memory decision, local argument-sized programs can reuse Bash
+  while the environment and file-creation mask are unchanged. Each request
+  runs the same pinned program in a fresh
+  subshell. Length-prefixed fields carry newlines and large payloads; the
+  helper consumes the whole frame before running a program that may stop
+  early. Remote, oversized and reentrant ordinary calls keep their existing
+  carriers. The decision closes its helper on exit; unrelated operations do
+  not retain processes. A quit-inhibited callback cannot start or wait on a
+  pooled helper. There is no polling or idle timer.
+- **Multi-request ownership.** A dedicated helper opens and flocks the physical
+  lock **directory itself** on its execution host. No PID file, expiry or
+  takeover record is written. Only that process may run the caller's subsequent
+  locked requests. A different inode at the same path, or loss of the process,
+  refuses another request. Lock-set acquisition takes locks in caller order,
+  with a single 20 s budget for startup and waiting, and releases them in
+  reverse order. This is not a distributed transaction.
+
+  | Channel | After editor SIGKILL in the acceptance fixture |
+  |---|---|
+  | Single-hop SSH; SSH through SSH | Successor acquired the lock (one run each). |
+  | Single-hop Podman, native non-tty exec | Successor acquired the lock (one run). |
+  | Podman, classic `-it` transport | Target retained the helper. The successor refused and reported host, lock path and observed holder PID; after the isolated fixture stopped that holder, the successor wrote. |
+  | Docker; SSH to container; nested containers; sudo; Kubernetes | Not established. Docker selects native non-tty exec when available. Multi-hop keeps its configured route. |
+
+  A stalled or disconnected client does not prove abandonment. If refusal
+  identifies a holder, check on that host that the process still holds that
+  exact lock and no editor is using it before stopping it. The harness never
+  signals the reported PID. Do not delete the lock directory to force entry.

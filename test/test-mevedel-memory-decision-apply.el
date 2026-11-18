@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-decision)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-memory-write)
 (require 'mevedel-journal-capture)
 (require 'mevedel-session-persistence)
@@ -43,6 +44,20 @@
         (mevedel-memory-store-publish workspace pass)))
     ,test)
   (initial-review test)
+  :doc "a timer cannot enter a blocking synchronous decision or modify the target"
+  t
+  (let (result blocked)
+    (run-at-time
+     0 nil (lambda ()
+             (cl-letf (((symbol-function 'mevedel-session-control-fs--helper-wait)
+                        (lambda (&rest _) (setq blocked t) (error "Unexpected blocking wait"))))
+               (setq result (should-error (mevedel-memory-decision-apply workspace pass (plist-get item :id))
+                                          :type 'user-error)))))
+    (with-timeout (2 (ert-fail "Decision timer did not return"))
+      (while (not result) (accept-process-output nil .01)))
+    (should (string-match-p "Cannot wait for a memory decision" (error-message-string result)))
+    (should-not blocked)
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
   :doc "applies complete topic/index changes with private intent and an immutable decision"
   t
   (let* (notifications

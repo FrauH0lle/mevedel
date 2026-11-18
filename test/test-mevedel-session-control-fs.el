@@ -23,6 +23,108 @@
 (defconst mevedel-session-control-fs-test--file (or load-file-name buffer-file-name)
   "This file, which the SIGPIPE-ignoring child loads.")
 
+(mevedel-deftest mevedel-session-control-fs-lock-session-open
+  (:doc "a competing lock refuses, owner death releases it, a dead owner cannot elect a slot")
+  (let* ((root (make-temp-file "mevedel-control-owner-" t))
+         (target (file-name-concat root "topic"))
+         (slot (file-name-concat root "slot"))
+         (elect (list (list :op 'create :path slot :content "applied")))
+         first successor)
+    (unwind-protect
+        (progn
+          (setq first (mevedel-session-control-fs-lock-session-open root))
+          (mevedel-session-control-fs-program-value
+           (car (mevedel-session-control-fs-lock-session-run
+                 first (list (list :op 'create :path target :content "after")))))
+          (let ((reason (error-message-string
+                         (should-error (mevedel-session-control-fs-lock-session-open root .8)
+                                       :type 'file-error))))
+            (should (string-match-p "lock wait expired" reason))
+            (should (string-search (format "holder PID %s on %s" (process-id first) (system-name)) reason))
+            (should (string-search root reason)))
+          (signal-process first 'SIGKILL)
+          (while (process-live-p first) (accept-process-output first .05))
+          (should-error (mevedel-session-control-fs-lock-session-run first elect) :type 'file-error)
+          (should-not (file-exists-p slot))
+          (setq successor (mevedel-session-control-fs-lock-session-open root .5))
+          (mevedel-session-control-fs-program-value
+           (car (mevedel-session-control-fs-lock-session-run successor elect)))
+          (should (equal "applied" (mevedel-session-control-fs-read-file slot))))
+      (mapc #'mevedel-session-control-fs-lock-session-close (list first successor))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-control-fs-call-with-locks
+  (:doc "the target and workspace have distinct owners on the same host, released after an error")
+  (let* ((root (make-temp-file "mevedel-lock-order-" t))
+         (locks (mapcar (lambda (name) (file-name-concat root name)) '("target" "workspace"))) reached)
+    (unwind-protect
+        (progn
+          (should-error
+           (mevedel-session-control-fs-call-with-locks
+            locks (lambda (target workspace)
+                    (should-not (= (process-id target) (process-id workspace)))
+                    (should (equal locks (mapcar (lambda (s) (process-get s 'lock)) (list target workspace))))
+                    (dolist (lock locks) (should (= 1 (call-process "flock" nil nil nil "-n" lock "true"))))
+                    (setq reached t)
+                    (error "Caller failed"))))
+          (should reached)
+          (dolist (lock locks) (should (= 0 (call-process "flock" nil nil nil "-n" lock "true")))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-control-fs-lock-session-run
+  (:doc "large and non-ASCII frames survive a stopped program without leaking into the next call")
+  (let* ((root (make-temp-file "mevedel-control-frames-" t))
+         (path (file-name-concat root "café"))
+         (content (encode-coding-string (make-string 100000 ?界) 'utf-8-unix))
+         (op (list :op 'write :path path :content content :coding 'no-conversion))
+         (mevedel-session-control-fs--stage-local nil)
+         session)
+    (unwind-protect
+        (progn
+          (setq session (mevedel-session-control-fs-lock-session-open root))
+          (should-error
+           (mevedel-session-control-fs-program-value
+            (car (mevedel-session-control-fs-lock-session-run
+                  session (list (list :op 'verify-hash :path path :content (make-string 64 ?0)) op)))))
+          (should-not (file-exists-p path))
+          (mevedel-session-control-fs-program-value
+           (car (mevedel-session-control-fs-lock-session-run session (list op))))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally path)
+            (should (equal content (buffer-string)))))
+      (mevedel-session-control-fs-lock-session-close session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-control-fs-lock-session-open/cold-local
+  (:doc "a first local operation does not need TRAMP's methods table")
+  (let ((root (make-temp-file "mevedel-control-cold-" t)) owner)
+    (unwind-protect
+        (cl-progv '(tramp-methods) '(nil)
+          (makunbound 'tramp-methods)
+          (should-not (boundp 'tramp-methods))
+          (setq owner (mevedel-session-control-fs-lock-session-open root))
+          (should (process-live-p owner)))
+      (mevedel-session-control-fs-lock-session-close owner)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-control-fs-lock-session-run/replaced-directory
+  (:doc "a lock on a retired directory cannot authorize a slot in its replacement")
+  (let* ((root (make-temp-file "mevedel-control-replaced-" t))
+         (lock (file-name-concat root "lock"))
+         (slot (file-name-concat lock "slot")) owner)
+    (unwind-protect
+        (progn
+          (make-directory lock)
+          (setq owner (mevedel-session-control-fs-lock-session-open lock))
+          (rename-file lock (file-name-concat root "retired"))
+          (make-directory lock)
+          (should-error (mevedel-session-control-fs-lock-session-run
+                         owner (list (list :op 'create :path slot :content "applied"))))
+          (should-not (file-exists-p slot)))
+      (mevedel-session-control-fs-lock-session-close owner)
+      (delete-directory root t))))
+
 (defun mevedel-session-control-fs-test--streamed-operations ()
   "Return operations too large for the argument carrier, writing under /tmp.
 Used with `mevedel-session-control-fs--stage-local' nil so the request
@@ -312,7 +414,9 @@ streams over stdin."
           (should-not (nth 1 settled))
           (should (eq 'ok (plist-get (car (car settled)) :status)))
           (should (= 0 eofs))
-          (should (equal "committed" (mevedel-session-control-fs-read-file path))))
+          (should (equal "committed" (with-temp-buffer
+                                       (insert-file-contents-literally path)
+                                       (buffer-string)))))
       (delete-directory root t)))
 
   :doc "a large local write is staged, never inlined, and its file lives until exit"
@@ -1042,7 +1146,8 @@ streams over stdin."
 
 (defun mevedel-session-control-fs-test--program-commands (thunk)
   "Call THUNK and return the interpreter arguments of every program it ran."
-  (let ((process-file (symbol-function 'process-file))
+  (let ((mevedel-session-control-fs--helper-enabled nil)
+        (process-file (symbol-function 'process-file))
         commands)
     (cl-letf (((symbol-function 'process-file)
                (lambda (program &optional infile buffer display &rest args)
@@ -1440,6 +1545,7 @@ streams over stdin."
                 (write-region payload nil path nil 'silent))
               (push path paths)))
           (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
+                (mevedel-session-control-fs--helper-enabled nil)
                 (original (symbol-function 'process-file)))
             (cl-letf (((symbol-function 'process-file)
                        (lambda (&rest args) (cl-incf calls) (apply original args))))
@@ -1458,6 +1564,7 @@ streams over stdin."
          (second (file-name-concat root "second"))
          (outside (file-name-concat root "outside"))
          (tar (executable-find "tar"))
+         (mevedel-session-control-fs--helper-enabled nil)
          (original (symbol-function 'process-file))
          (calls 0))
     (skip-unless tar)
@@ -1503,6 +1610,7 @@ streams over stdin."
          (bin (file-name-concat root "bin"))
          (first (file-name-concat root "first"))
          (second (file-name-concat root "second"))
+         (mevedel-session-control-fs--helper-enabled nil)
          (original (symbol-function 'process-file))
          (calls 0))
     (unwind-protect
@@ -1540,6 +1648,7 @@ streams over stdin."
 
   :doc "rejected bulk output is discarded and retried against fresh native bytes"
   (let* ((root (make-temp-file "mevedel-control-fs-bulk-fresh-" t))
+         (mevedel-session-control-fs--helper-enabled nil)
          (first (file-name-concat root "first"))
          (second (file-name-concat root "second"))
          (original (symbol-function 'process-file))
@@ -1601,7 +1710,8 @@ streams over stdin."
     (unwind-protect
         (progn
           (setq results
-                (cl-letf* ((original (symbol-function 'process-file))
+                (cl-letf* ((mevedel-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
                            ((symbol-function 'process-file)
                             (lambda (&rest args)
                               (setq calls (1+ calls))
@@ -1659,7 +1769,8 @@ streams over stdin."
          (mevedel-session-control-fs--stage-local nil)
          calls)
     (unwind-protect
-        (cl-letf* ((original (symbol-function 'process-file))
+        (cl-letf* ((mevedel-session-control-fs--helper-enabled nil)
+                   (original (symbol-function 'process-file))
                    ((symbol-function 'process-file)
                     (lambda (&rest args)
                       (push args calls)
@@ -1831,7 +1942,8 @@ streams over stdin."
          (text (concat (make-string 5000 ?a) "Unicode: \u03bb\n"))
          calls)
     (unwind-protect
-        (cl-letf* ((original (symbol-function 'process-file))
+        (cl-letf* ((mevedel-session-control-fs--helper-enabled nil)
+                   (original (symbol-function 'process-file))
                    ((symbol-function 'process-file)
                     (lambda (&rest args) (push args calls) (apply original args))))
           (should
@@ -2089,7 +2201,8 @@ streams over stdin."
           (with-temp-file (file-name-concat one "data") (insert "x"))
           (make-directory two)
           (setq results
-                (cl-letf* ((original (symbol-function 'process-file))
+                (cl-letf* ((mevedel-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
                            ((symbol-function 'process-file)
                             (lambda (&rest args)
                               (setq calls (1+ calls))
@@ -2155,7 +2268,8 @@ streams over stdin."
           (with-temp-file (file-name-concat nested "data") (insert "1234567"))
           (with-temp-file (file-name-concat two "data") (insert "four"))
           (setq results
-                (cl-letf* ((original (symbol-function 'process-file))
+                (cl-letf* ((mevedel-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
                            ((symbol-function 'process-file)
                             (lambda (&rest args)
                               (setq calls (1+ calls))
