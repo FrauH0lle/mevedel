@@ -188,6 +188,7 @@
           (mevedel-telemetry-record session 'provider-request
                                     :stage 'finish)
           (should (= 1 (length (mevedel-session-telemetry-pending session))))
+          (make-directory restored)
           (setf (mevedel-session-save-path session) restored)
           (mevedel-telemetry-record session 'provider-response
                                     :stage 'finish)
@@ -1015,27 +1016,25 @@
                          (mevedel-telemetry-path session))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-telemetry--persist-content ()
+(mevedel-deftest mevedel-telemetry--persist-content (:quiet t)
   ,test
   (test)
-  :doc "creates a missing directory once, then appends without probing it"
+  :doc "appends in order but does not recreate a session directory removed by its owner"
   (let* ((root (make-temp-file "mevedel-telemetry-persist-" t))
          (session (test-mevedel-telemetry--session root))
-         (make (symbol-function 'make-directory))
-         (probes 0))
+         (directory (file-name-concat root "session")))
     (unwind-protect
         (progn
-          (setf (mevedel-session-save-path session)
-                (file-name-concat root "late"))
-          (cl-letf (((symbol-function 'make-directory)
-                     (lambda (&rest args) (cl-incf probes) (apply make args))))
-            (should (mevedel-telemetry--persist-content session "(:a 1)\n"))
-            (should (= 1 probes))
-            (should (mevedel-telemetry--persist-content session "(:b 2)\n"))
-            (should (= 1 probes)))
+          (make-directory directory)
+          (setf (mevedel-session-save-path session) directory)
+          (should (mevedel-telemetry--persist-content session "(:a 1)\n"))
+          (should (mevedel-telemetry--persist-content session "(:b 2)\n"))
           (should (equal '((:a 1) (:b 2))
                          (test-mevedel-telemetry--read
-                          (mevedel-telemetry-path session)))))
+                          (mevedel-telemetry-path session))))
+          (delete-directory directory t)
+          (should-not (mevedel-telemetry--persist-content session "(:late t)\n"))
+          (should-not (file-exists-p directory)))
       (delete-directory root t)))
 
   :doc "writes UTF-8 whatever the ambient buffer's coding system"
