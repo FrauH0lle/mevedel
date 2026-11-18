@@ -440,7 +440,7 @@ animation stops: retrying reopened it about once a second."
                     (setq failed t)
                   ;; An error or a refused surface affects only this label.
                   (condition-case nil
-                      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+                      (dolist (window (mevedel-view--windows 'visibility))
                         (when (mevedel-view-native--visible-p target window)
                           (let* ((placement (mevedel-view-native--placement target window))
                                  (frame (car placement))

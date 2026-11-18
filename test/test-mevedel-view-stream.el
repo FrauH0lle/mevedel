@@ -7682,6 +7682,18 @@ turn's later text, live and after reconstruction."
       (should (string-prefix-p "[edits] · ⚠ 2 permissions · C-c C-j" rail))
       (should-not (string-match-p "Working" rail)))))
 
+(mevedel-deftest mevedel-view--animation-window-frame
+  (:doc "A child frame marked to animate as its parent shares the parent's palette.")
+  (let ((window (selected-window))
+        (frame (selected-frame)))
+    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) 'parent)))
+      (should (eq frame (mevedel-view--animation-window-frame window)))
+      (unwind-protect
+          (progn
+            (set-frame-parameter frame 'mevedel-view-animate-as-parent t)
+            (should (eq 'parent (mevedel-view--animation-window-frame window))))
+        (set-frame-parameter frame 'mevedel-view-animate-as-parent nil)))))
+
 (mevedel-deftest mevedel-view--animation-frozen-p
   (:doc "Input pause and reduced motion independently freeze presentation.")
   (mevedel-view-stream-test--with-buffers
