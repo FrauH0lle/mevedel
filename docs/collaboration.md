@@ -697,10 +697,13 @@ sits at sets `mevedel-session-durability-accept-target-storage` to accept in
 advance. Questions that read single keys instead of the minibuffer are reached
 only from host commands.
 
-`mevedel-busy-p` tells whether any buffer in the Emacs is running or settling
-a turn, including retained agents awaiting admission or terminal publication.
-A host can wait for it to return nil before restarting a daemon whose rooms
-are idle.
+`mevedel-restart-unsafe-p` tells whether restarting this Emacs would interrupt
+mevedel work: a turn running or settling in any buffer (`mevedel-busy-p`,
+including retained agents awaiting admission or terminal publication), a
+session's live command or Monitor, or an active Goal waiting between turns. A
+host can wait for it to return nil before restarting a daemon whose rooms are
+idle. `mevedel-busy-p` alone ignores those idle waits; the sleep inhibitor
+uses it so that waiting does not keep a machine awake.
 
 The cockpit refuses to open, so a bare `/goal` from a guest is refused
 rather than opening a menu on the host's screen.

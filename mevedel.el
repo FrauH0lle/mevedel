@@ -194,7 +194,7 @@ See `mevedel-library-provenance' for how installation methods are covered.")
 (autoload 'mevedel-view-zone-previous "mevedel-view-zone" nil t)
 
 ;; A host asks this before restarting its Emacs.
-(autoload 'mevedel-busy-p "mevedel-turn")
+(autoload 'mevedel-restart-unsafe-p "mevedel-turn")
 
 ;; Integration callbacks load their owners at the corresponding lifecycle.
 (autoload 'mevedel--active-chat-buffer "mevedel-chat")

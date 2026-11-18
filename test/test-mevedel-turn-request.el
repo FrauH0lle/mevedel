@@ -9,6 +9,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agents)
 (require 'mevedel-artifact-backend)
+(require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-permission-queue)
 (require 'mevedel-permissions)
@@ -136,6 +137,38 @@
       (should-not (mevedel-busy-p))
       (setf (mevedel-session-agent-reservations session) '(reservation))
       (should (mevedel-busy-p)))))
+
+(mevedel-deftest mevedel-restart-unsafe-p ()
+  ,test
+  (test)
+  :doc "a running turn makes a restart unsafe"
+  (with-temp-buffer
+    (should-not (mevedel-restart-unsafe-p))
+    (setq-local mevedel--turn-settlements-pending '(settlement))
+    (should (eq t (mevedel-restart-unsafe-p))))
+
+  :doc "an idle session with an active Goal makes a restart unsafe"
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create :status 'active)))
+      (setq-local mevedel--session (mevedel-session--create :goal goal))
+      (should-not (mevedel-busy-p))
+      (should (eq t (mevedel-restart-unsafe-p)))
+      (dolist (status '(paused blocked budget-limited complete))
+        (setf (mevedel-goal-status goal) status)
+        (should-not (mevedel-restart-unsafe-p)))))
+
+  :doc "an idle session with a live execution, including a Monitor, makes a restart unsafe"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create))
+           live)
+      (setq-local mevedel--session session)
+      ;; Execution liveness has its own coverage; this checks the restart guard asks it.
+      (cl-letf (((symbol-function 'mevedel-execution-session-live-p)
+                 (lambda (s) (and live (eq s session)))))
+        (should-not (mevedel-restart-unsafe-p))
+        (setq live t)
+        (should-not (mevedel-busy-p))
+        (should (eq t (mevedel-restart-unsafe-p)))))))
 
 (mevedel-deftest mevedel-request-state-label ()
   ,test
