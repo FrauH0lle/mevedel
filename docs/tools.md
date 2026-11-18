@@ -48,7 +48,10 @@ ToolSearch delivers current contracts; the dialect manual lists pure operations.
 `NoteWrite` creates, edits, tags, closes, deletes and sends notes through an
 ordered `operations` array. It belongs to the discoverable `notes` group;
 Read, Glob and Grep expose existing notes at `notes://`. Create takes a source
-path and inclusive 1-based line range. Other operations identify a note by UUID.
+path and inclusive 1-based line range. Use `match` to anchor exact,
+case-sensitive text within those lines instead of the whole range. It can span
+lines. If the text appears more than once, specify its 1-based `occurrence`;
+missing or ambiguous matches are rejected. Other operations identify a note by UUID.
 Tags replace the complete list. Closing or deleting retains the note in recently
 closed rather than changing its source code.
 

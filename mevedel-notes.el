@@ -1147,8 +1147,9 @@ Create `.mevedel/' only in a recognized project.  Return the actual workspace."
 
 (cl-defun mevedel-note-make (buffer beg end &key text author span)
   "Create and render a note in BUFFER over BEG..END, and return its overlay.
-AUTHOR is `user' (default), `agent' or `buddy'; SPAN is `line' or nil for the
-exact range.  The note starts unsent with TEXT (default empty).  Work in
+AUTHOR is `user' (default), `agent' or `buddy'.  SPAN is `line' for whole
+lines, `char' for the exact range, or nil to infer the shape.
+The note starts unsent with TEXT (default empty).  Work in
 BUFFER without a file, never read or change the region, point or selected
 window, and neither write nor touch the store: callers prepare the workspace
 and decide durability."

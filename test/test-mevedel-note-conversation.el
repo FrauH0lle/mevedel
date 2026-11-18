@@ -1631,6 +1631,41 @@
         (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
         (should (equal "outside-before\nselected code\noutside-after\n" (mevedel-test--read-file file)))))))
 
+(mevedel-deftest mevedel-tool-note-write/nested-match
+  (:quiet t :doc "a matched child is previewed, sent and closed with its whole-line parent")
+  (mevedel-note-conversation-test--with-source
+    (let ((parent (mevedel-note-create "Parent brief"))
+          (main (mevedel--chat-buffer "main" t workspace)) outcome)
+      (with-current-buffer main
+        (mevedel-pipeline-run-tool-outcome
+         (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))
+         (list :operations (vector (list :action "create" :file_path file :start_line 2
+                                         :match "selected" :text "Matched child brief")))))
+      (mevedel-test--await 5 "NoteWrite did not settle" outcome)
+      (should (eq 'success (plist-get outcome :status)))
+      (let* ((child (car (mevedel--child-instructions parent)))
+             (child-id (overlay-get child 'mevedel-uuid))
+             (preview (with-current-buffer (mevedel-note-preview-prompt parent) (buffer-string)))
+             (view (mevedel-note-send parent :no-display t))
+             (data (buffer-local-value 'mevedel--data-buffer view)))
+        (should (string-search "Matched child brief" preview))
+        (should (equal (overlay-get parent 'mevedel-note-session-id)
+                       (overlay-get child 'mevedel-note-session-id)))
+        (should (string-search "Matched child brief"
+                               (decode-coding-string (car sent-payloads) 'utf-8-unix)))
+        (mevedel-note-conversation-test--answer (car sent) "An answer.")
+        (with-current-buffer data
+          (mevedel-tool-patch-handler
+           #'ignore '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+selected text\n*** End Patch")))
+        (mevedel-note-apply-change parent)
+        (should-not (overlay-buffer parent))
+        (should-not (overlay-buffer child))
+        (should (cl-find child-id (mevedel-notes-closed workspace)
+                         :key (lambda (entry)
+                                (plist-get (plist-get (plist-get entry :instruction) :properties)
+                                           'mevedel-uuid))
+                         :test #'equal))))))
+
 (mevedel-deftest mevedel-note-send/store-write (:quiet t)
   ,test
   (test)
