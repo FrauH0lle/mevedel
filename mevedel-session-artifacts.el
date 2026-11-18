@@ -2586,6 +2586,9 @@ Edits made after capture remain modified.  Nothing is published here."
        (mevedel-request-untracked-effects mevedel--current-request)))
     (with-current-buffer buffer
       (when (buffer-modified-p)
+        ;; The writer can run before chat setup; freeze canonical bounds
+        ;; before any deferred view render can normalize them.
+        (mevedel-session-artifacts-install-gptel-save-state-advice)
         (run-hooks 'before-save-hook)
         (mevedel-session-artifacts-update-prompt-index session buffer)
         (setq frozen-tick (buffer-chars-modified-tick)
