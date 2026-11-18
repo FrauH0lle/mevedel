@@ -463,4 +463,19 @@ them while the frame is still alive"
 
 (provide 'test-mevedel-note-frame)
 
+
+(ert-deftest mevedel-note-frame-border-is-prominent ()
+  "The border defaults to 3 px; active and inactive faces stay distinct."
+  (should (= 3 (eval (car (get 'mevedel-note-frame-border-width
+                               'standard-value)))))
+  (dolist (bg '(dark light))
+    (let (colors)
+      (dolist (face '(mevedel-note-frame-border
+                      mevedel-note-frame-border-inactive))
+        (let ((spec (cdr (assq bg (mapcar (lambda (e) (cons (cadr (caar e)) (cdr e)))
+                                          (get face 'face-defface-spec))))))
+          (push (plist-get spec :background) colors)))
+      (should (cl-every #'stringp colors))
+      (should-not (equal (car colors) (cadr colors))))))
+
 ;;; test-mevedel-note-frame.el ends here

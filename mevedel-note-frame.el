@@ -73,7 +73,7 @@
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-note-frame-border-width 2
+(defcustom mevedel-note-frame-border-width 3
   "Border width of the note frame in pixels."
   :type 'integer
   :group 'mevedel)
@@ -86,16 +86,16 @@ The frame fits itself to its content between this and
   :group 'mevedel)
 
 (defface mevedel-note-frame-border
-  '((((background dark)) :background "#5c7a80")
-    (((background light)) :background "#7d979d"))
+  '((((background dark)) :background "#2ec4b6")
+    (((background light)) :background "#0b8a8a"))
   "Border of the note frame while it has focus.
 The background attribute is what paints; a face that inherits an unset
 background makes the border invisible against the frame."
   :group 'mevedel)
 
 (defface mevedel-note-frame-border-inactive
-  '((((background dark)) :background "#2d383b")
-    (((background light)) :background "#c6d2d5"))
+  '((((background dark)) :background "#1c6f73")
+    (((background light)) :background "#6cb9bd"))
   "Border of the note frame while another frame has focus."
   :group 'mevedel)
 
