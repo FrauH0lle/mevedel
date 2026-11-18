@@ -2192,9 +2192,13 @@ thread paints; at a 30 Hz change editor CPU was 6.0-6.2% with the release and
 6.1-6.2% without. Stock pgtk itself deadlocks when a thread shows a frame, now
 and then (1 in 19 runs; 3 in 3 after another thread waited in `sleep-for`): the
 thread waits in `gtk_main_iteration` for the GLib context while the main thread
-waits in `thread-join`. The module did not change that rate (2 in 28), so the
-test showing a frame from a thread runs in a daemon of its own and skips a
-timeout; a crash still fails it.
+waits for the Lisp lock. The module did not change that rate (2 in 28).
+The isolated test starts with a hidden frame and yields the Lisp lock without
+a competing GTK wait. It still fails on a hang or crash; the watchdog reports
+the last worker checkpoint. This fixes the fixture, not stock PGTK. Production
+view preparation parses source without invoking frame operations or waiting in
+the event loop. The telemetry worker hands workspace target programs to the
+main thread because synchronous process waits can enter GTK indirectly.
 
 An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
 need a rebuild on every machine and distribution, and LLM-written
