@@ -407,45 +407,77 @@ Refuse unavailable sources before a caller starts mutating the notes."
         (concat "\n" (buffer-string))))))
 
 (defun mevedel-notes--refresh-label-stack (position)
-  "Tint only the leading newline of the first note label at POSITION."
+  "Keep the source row's tint separate from the label stack at POSITION."
   (save-restriction
     (widen)
-    (let* ((labels (cl-remove-if-not
+    (let* ((overlays (overlays-in (max (point-min) (1- position))
+                                 (min (point-max) (1+ position))))
+           (labels (cl-remove-if-not
                     (lambda (label)
                       (and (= (overlay-end label) position)
                            (overlay-get label 'mevedel-note-owner)
                            (overlay-get label 'after-string)))
-                    (overlays-in (max (point-min) (1- position))
-                                 (min (point-max) (1+ position)))))
-           (priority (lambda (label)
-                       (or (overlay-get (overlay-get label 'mevedel-note-owner)
-                                        'priority) 0)))
-           (first t)
-           previous)
+                    overlays))
+           (priority (lambda (note) (or (overlay-get note 'priority) 0)))
+           (precedes (lambda (a b)
+                       (let ((ap (funcall priority a)) (bp (funcall priority b)))
+                         (if (= ap bp)
+                             (< (overlay-get a 'mevedel-id) (overlay-get b 'mevedel-id))
+                           (> ap bp)))))
+           line real-priority previous)
+      (when labels
+        (dolist (note overlays)
+          (when (and (eq 'note (overlay-get note 'mevedel-instruction-type))
+                     (<= (overlay-start note) position (overlay-end note)))
+            (when (< position (overlay-end note))
+              (setq real-priority (max (or real-priority 0) (funcall priority note))))
+            (when (and (eq 'line (overlay-get note 'mevedel-span))
+                       (or (not line) (funcall precedes note line)))
+              (setq line note)))))
       ;; Redisplay orders after-strings by decreasing integer priority.
-      (setq labels
-            (sort labels :in-place t
-                  :lessp (lambda (a b)
-                           (let ((ap (funcall priority a)) (bp (funcall priority b)))
-                             (if (= ap bp)
-                                 (< (overlay-get (overlay-get a 'mevedel-note-owner) 'mevedel-id)
-                                    (overlay-get (overlay-get b 'mevedel-note-owner) 'mevedel-id))
-                               (> ap bp))))))
+      (setq labels (sort labels :in-place t :key (lambda (label) (overlay-get label 'mevedel-note-owner))
+                         :lessp precedes))
       (dolist (label labels)
         (let* ((note (overlay-get label 'mevedel-note-owner))
                (text (overlay-get label 'after-string))
-               (rank (if previous (min (1- previous) (funcall priority label))
-                       (funcall priority label)))
-               (face (if first (and (eq 'line (overlay-get note 'mevedel-span))
-                                    (overlay-get note 'face))
-                       'default)))
+               (rank (funcall priority note))
+               (face (if previous 'default (and line (overlay-get line 'face))))
+               (tint (overlay-get note 'mevedel-note-tint-overlay)))
+          (when previous (setq rank (min (1- previous) rank)))
+          ;; The real newline ends the final label row, not the source row.
+          (if (and (not previous) (or line real-priority) (eq (char-after position) ?\n))
+              (progn
+                (unless tint
+                  (setq tint (make-overlay position (1+ position) nil t nil))
+                  (overlay-put note 'mevedel-note-tint-overlay tint))
+                (unless (and (eql (overlay-start tint) position)
+                             (eql (overlay-end tint) (1+ position)))
+                  (move-overlay tint position (1+ position)))
+                (overlay-put tint 'priority (1+ (max rank (or real-priority 0))))
+                (overlay-put tint 'face (if real-priority '(:inherit default :extend t) 'default)))
+            (when tint
+              (delete-overlay tint)
+              (overlay-put note 'mevedel-note-tint-overlay nil)))
           (overlay-put label 'priority rank)
           (unless (eq face (get-text-property 0 'face text))
             (if face (put-text-property 0 1 'face face text)
               (remove-list-of-text-properties 0 1 '(face) text))
             (overlay-put label 'after-string nil)
             (overlay-put label 'after-string text))
-          (setq first nil previous rank))))))
+          (setq previous rank))))))
+
+(defun mevedel-notes--refresh-label-stacks-in (start end)
+  "Refresh label stacks on source rows between START and END, inclusive."
+  (save-restriction
+    (widen)
+    (let (positions)
+      (dolist (label (overlays-in (max (point-min) (1- start))
+                                  (min (point-max) (1+ end))))
+        (when (and (overlay-get label 'mevedel-note-owner)
+                   (<= start (overlay-end label) end))
+          (cl-pushnew (overlay-end label) positions)))
+      (dolist (position positions)
+        (mevedel-notes--refresh-label-stack position)))))
 
 (defun mevedel-notes--render (note)
   "Render NOTE's label below its code."
@@ -469,7 +501,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
              (code-face (pcase author
                           ('buddy 'mevedel-note-buddy) ('agent 'mevedel-note-agent)
                           (_ 'mevedel-note-you)))
-             (tint (overlay-get note 'mevedel-note-tint-overlay))
+             (face-changed (not (eq code-face (overlay-get note 'face))))
              (face (cond ((eq note mevedel--highlighted-instruction) 'highlight)
                          ((eq author 'buddy) 'mevedel-note-label-buddy)
                          ((eq author 'agent) 'mevedel-note-label-agent)
@@ -499,24 +531,8 @@ Refuse unavailable sources before a caller starts mutating the notes."
                       (propertize (if (eq author 'buddy) "┆" "▍") 'face face)
                       (eq 'collapsed (overlay-get note 'mevedel-note-labels)))))
         (overlay-put note 'keymap mevedel-note-actions-map)
-        (unless (eq code-face (overlay-get note 'face))
+        (when face-changed
           (overlay-put note 'face code-face))
-        ;; The label tracks edits; this sibling only gives the newline its face.
-        (if (and (eq 'line (overlay-get note 'mevedel-span))
-                 (or text (= end (overlay-end note)))
-                 (eq (char-after end) ?\n))
-            (progn
-              (unless tint
-                (setq tint (make-overlay end (1+ end) nil t nil))
-                (overlay-put note 'mevedel-note-tint-overlay tint))
-              (move-overlay tint end (1+ end))
-              (overlay-put tint 'priority (1+ (or (overlay-get note 'priority) 0)))
-              (let ((tint-face (if text 'default code-face)))
-                (unless (eq tint-face (overlay-get tint 'face))
-                  (overlay-put tint 'face tint-face))))
-          (when tint
-            (delete-overlay tint)
-            (overlay-put note 'mevedel-note-tint-overlay nil)))
         (move-overlay label (overlay-start note) end)
         (when-let* ((leading-face (and old-text (get-text-property 0 'face old-text))))
           (put-text-property 0 1 'face leading-face text))
@@ -524,7 +540,9 @@ Refuse unavailable sources before a caller starts mutating the notes."
           (overlay-put label 'after-string text))
         (when (and old-end (/= end old-end))
           (mevedel-notes--refresh-label-stack old-end))
-        (mevedel-notes--refresh-label-stack end)))
+        (if (and face-changed (eq 'line (overlay-get note 'mevedel-span)))
+            (mevedel-notes--refresh-label-stacks-in (overlay-start note) end)
+          (mevedel-notes--refresh-label-stack end))))
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
     (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)
     (add-hook 'window-size-change-functions #'mevedel-notes--refit-labels nil t)))
