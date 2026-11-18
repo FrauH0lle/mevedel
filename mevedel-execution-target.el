@@ -518,13 +518,12 @@ Bash capability that probe established."
           (error "Target readiness has not established a Bash capability"))
         (mevedel-execution-target--record-incarnation
          target
-         ;; Same discipline as the readiness probe: hold foreign timers
-         ;; while this command waits, with the deadline armed inside.
-         (mevedel-transport-with-exclusive-connection
-           (with-timeout (mevedel-execution-target--probe-timeout
-                          (signal 'mevedel-execution-target-error
-                                  (list "Target incarnation probe timed out")))
-             (mevedel-execution-target--probe-incarnation target bash)))))
+         (mevedel-transport-call-with-deadline
+          mevedel-execution-target--probe-timeout
+          (lambda () (mevedel-execution-target--probe-incarnation target bash))
+          (lambda ()
+            (signal 'mevedel-execution-target-error
+                    (list "Target incarnation probe timed out"))))))
     (mevedel-execution-target-refresh-incarnation target))
   target)
 
@@ -729,13 +728,10 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                    ;; mid-wait consumes a probe reply and both readers
                    ;; desync -- a flycheck stat has been observed parsing
                    ;; this probe's `env -0' dump.  One suspension covers
-                   ;; the whole probe; the deadline below is armed inside
-                   ;; it and still fires.
-                   (mevedel-transport-with-exclusive-connection
-                     (with-timeout
-                         (mevedel-execution-target--probe-timeout
-                          (signal 'mevedel-execution-target-error
-                                  (list "Target readiness probe timed out")))
+                   ;; the whole probe without blocking its own deadline.
+                   (mevedel-transport-call-with-deadline
+                    mevedel-execution-target--probe-timeout
+                    (lambda ()
                      (let* ((environment
                              (mevedel-execution-target--parse-environment
                               (mevedel-execution-target--process-output
@@ -819,7 +815,10 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                              :missing-dependencies missing
                              :install-hint install-hint
                              :incompatible-dependencies incompatible
-                             :incarnation incarnation))))
+                             :incarnation incarnation)))
+                    (lambda ()
+                      (signal 'mevedel-execution-target-error
+                              (list "Target readiness probe timed out"))))
                  (error
                   (list :status 'blocked
                         :reason 'probe-failed

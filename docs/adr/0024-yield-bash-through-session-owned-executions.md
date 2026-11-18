@@ -121,11 +121,11 @@ silently losing bytes. Read-only commands may overlap; other commands take a
 fair exclusive lane, released on yield so long-running work does not block
 admission. Managed Bash and fresh Eval impose no automatic timeout.
 
-Remote process-group status and signal probes hold foreign timers. TRAMP can
-still suspend a deadline during its own I/O; the outermost transport boundary
-restores enclosing `with-timeout` timers at their original absolute deadlines.
-Time spent in TRAMP counts, and an overdue timer can fire once the transport
-returns, not inside TRAMP's suspended interval.
+Remote process-group status and signal probes, target readiness, and target
+incarnation checks share an exclusive deadline. Foreign callbacks stay held,
+including timers armed by process filters during the operation. Only the
+private deadline can interrupt a synchronous TRAMP wait; an interrupted
+connection is discarded so its reply cannot reach the next command.
 
 Retired local spools from 64 KiB through 64 MiB use gzip level 1 only when it is
 smaller. A separate Python worker compresses after the 60-second terminal
@@ -170,6 +170,11 @@ on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.
 
 ## Decision history
+
+- **Restored deadlines after TRAMP returned (2026-11-18).** Re-arming the
+  overdue timer could not interrupt the wait. A 0.5-second status probe on a
+  paused Podman container returned normally after three seconds. The transport
+  now allows only a private deadline to fire during bounded waits.
 
 - **Delivery waited for the commit inside the producer (2026-10-20).** A
   completion handed to the mailbox returned only after its synchronous
