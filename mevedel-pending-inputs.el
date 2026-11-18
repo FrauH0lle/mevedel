@@ -1514,26 +1514,37 @@ failing wake cannot loop."
               ((mevedel-agent-control-wake-pending-p session)))
     (mevedel-pending-inputs-offer-idle-work data-buffer)))
 
-(defun mevedel-view--offer-follow-up-after-draft-change
-    (start _end old-length)
-  "Offer held idle work once an edit from START empties the composer.
-OLD-LENGTH is the length of the replaced text.  Automatic delivery leaves
-a composer draft alone, so a follow-up or a background-event turn holds
-until the user sends, clears, or deletes that draft.  A draft never holds a
-Goal continuation, so its deletion never starts one.  Only a deletion can
-empty the composer, and the whitespace scan stops at the first character of
-a real draft."
-  (when (and (> old-length 0)
+(defvar-local mevedel-view--removing-draft-text nil
+  "Whether the current edit removes nonblank composer text.")
+
+(defun mevedel-view--note-draft-deletion (start end)
+  "Record whether START to END removes any nonblank composer text."
+  (setq mevedel-view--removing-draft-text
+        (and (< start end)
              (markerp mevedel-view--input-marker)
              (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
              (>= start (mevedel-view--input-start))
-             (or (mevedel-view--pending-follow-ups)
-                 (mevedel-agent-control-wake-pending-p (mevedel-view--session)))
              (save-excursion
-               (goto-char (mevedel-view--input-start))
-               (skip-chars-forward " \t\n\r")
-               (= (point) (point-max))))
-    (mevedel-pending-inputs-schedule-held-input-delivery)))
+               (goto-char start)
+               (skip-chars-forward " \t\n\r" end)
+               (< (point) end)))))
+
+(defun mevedel-view--offer-follow-up-after-draft-change (&rest _)
+  "Offer held follow-ups or wakes when an edit empties the root composer."
+  (when mevedel-view--removing-draft-text
+    (setq mevedel-view--removing-draft-text nil)
+    (when (and (buffer-live-p mevedel--data-buffer)
+               (eq (current-buffer)
+                   (buffer-local-value 'mevedel--view-buffer mevedel--data-buffer))
+               (save-excursion
+                 (goto-char (mevedel-view--input-start))
+                 (skip-chars-forward " \t\n\r")
+                 (= (point) (point-max)))
+               (or (mevedel-view--pending-follow-ups)
+                   (eq 'composer-draft
+                       (buffer-local-value 'mevedel-pending-inputs--wake-refusal
+                                           mevedel--data-buffer))))
+      (mevedel-pending-inputs-schedule-held-input-delivery))))
 
 (defun mevedel-view--schedule-follow-up-drain (fsm)
   "Schedule the next follow-up after FSM completes successfully."

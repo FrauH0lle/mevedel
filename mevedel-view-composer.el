@@ -2022,6 +2022,7 @@ and other input properties remain untouched."
     (add-hook 'after-change-functions
               #'mevedel-view--refresh-skill-argument-hint-after-change
               nil t)
+    (add-hook 'before-change-functions #'mevedel-view--note-draft-deletion nil t)
     (add-hook 'after-change-functions
               #'mevedel-view--offer-follow-up-after-draft-change nil t)
     (unless mevedel-view--side-conversation-p
