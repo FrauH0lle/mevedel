@@ -763,7 +763,7 @@
                         (lambda (result)
                           (setq native-result result)
                           (funcall callback
-                                   (plist-put (copy-sequence result) :recovery-required
+                                   (plist-put (copy-sequence result) :pass-recovery-required
                                               "Injected recovery verification requirement")))
                         args))))
       (start)
@@ -776,7 +776,7 @@
       (should (eq 'success (plist-get (car results) :outcome)))
       (should-not (plist-get (car results) :error))
       (should (equal "Injected recovery verification requirement"
-                     (plist-get (car results) :recovery-required)))
+                     (plist-get (car results) :pass-recovery-required)))
       (should (= 1 (plist-get drain :batch)))
       (should (= 1 (plist-get (car results) :batch)))
       (dolist (key '(:id :entry :updated-files :applied-count :held-count :unapplied-count :notes-reviewed))

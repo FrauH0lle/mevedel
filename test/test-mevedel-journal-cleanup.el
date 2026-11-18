@@ -101,9 +101,9 @@
           ;; recovery budgets or prevent the next attempt from making progress.
           (let ((settle (symbol-function 'mevedel-journal-claim-settle)))
             (cl-letf (((symbol-function 'mevedel-journal-claim-settle)
-                       (lambda (claim status payload)
+                       (lambda (claim status payload &optional owner)
                          (unless (and (eq status 'completed) (not (string-empty-p payload)))
-                           (funcall settle claim status payload)))))
+                           (funcall settle claim status payload owner)))))
               (should (= 0 (plist-get (mevedel-journal-cleanup-expired workspace) :count)))))
           (mevedel-test--with-captured-messages nil
             (cl-letf (((symbol-function 'mevedel-journal-cleanup--apply)
@@ -195,8 +195,10 @@
                 claim-b (mevedel-journal-claim-acquire
                          (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root-b) 'mutation) 120))
           ;; A's budget of one group is exhausted with work left over.
-          (let ((result-a (mevedel-journal-cleanup--owned workspace-a claim-a 1))
-                (result-b (mevedel-journal-cleanup--owned workspace-b claim-b 50)))
+          (let ((result-a (mevedel-session-control-fs-call-with-locks
+                           (list (plist-get claim-a :directory)) (lambda (owner) (mevedel-journal-cleanup--owned workspace-a claim-a 1 owner))))
+                (result-b (mevedel-session-control-fs-call-with-locks
+                           (list (plist-get claim-b :directory)) (lambda (owner) (mevedel-journal-cleanup--owned workspace-b claim-b 50 owner)))))
             (should (equal '(:count 1 :more t) result-a))
             (should (equal '(:count 0 :more nil) result-b))))
       (when claim-a (mevedel-journal-claim-settle claim-a 'completed ""))
@@ -279,7 +281,8 @@
           (mevedel-session-control-fs-write-file
            (mevedel-journal-claim--path claim nil)
            (json-serialize (mevedel-journal-claim--record claim)))
-          (should (= 0 (plist-get (mevedel-journal-cleanup--owned workspace claim 50) :count)))
+          (should (= 0 (plist-get (mevedel-session-control-fs-call-with-locks
+                                   (list scope) (lambda (owner) (mevedel-journal-cleanup--owned workspace claim 50 owner))) :count)))
           (should-not (mevedel-journal-claim-outcome claim))
           (setq successor (mevedel-journal-claim-acquire scope 120))
           (should successor)

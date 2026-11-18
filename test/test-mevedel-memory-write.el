@@ -33,7 +33,7 @@
         (should (equal (concat workspace "/notes/shared/.mevedel/state/memory-write/root")
                        (mevedel-memory-write-control-directory (concat workspace "/notes/shared"))))))))
 
-(mevedel-deftest mevedel-memory-write--call
+(mevedel-deftest mevedel-memory-write--target
     (:vars* ((root (make-temp-file "mevedel-memory-state-" t))
              (memory (file-name-concat root "owner" ".mevedel" "memory"))
              (alias (file-name-concat root "other" ".mevedel" "memory"))
@@ -43,7 +43,7 @@
      :after-each ((delete-directory root t)))
   ,test
   (test)
-  :doc "standard memory and its alias share busy ownership and unresolved markers across workspaces"
+  :doc "standard memory and its alias share one physical lock across workspaces"
   (progn
     (make-directory memory t)
     (make-directory (file-name-directory alias) t)
@@ -56,16 +56,16 @@
                      (mevedel-memory-scope-capture other)))
            (id (caar (plist-get scope :roots)))
            (second-id (caar (plist-get second :roots))))
-      (mevedel-memory-write--call
-       scope id
-       (lambda (claim)
-         (should (equal (file-name-concat control "claims") (plist-get claim :directory)))
-         (should-error (mevedel-memory-write--call second second-id #'ignore))))
-      (should-not (file-exists-p (file-name-concat memory ".mevedel")))
-      (make-directory (file-name-concat control "pending"))
-      (write-region (make-string 64 ?a) nil
-                    (file-name-concat control "pending" (concat (make-string 64 ?b) ".pin")) nil 'silent)
-      (should-error (mevedel-memory-write--call second second-id #'ignore)))))
+      (let ((target (mevedel-memory-write--target scope id))
+            (contender (mevedel-memory-write--target second second-id)))
+        (should (equal control target))
+        (should (equal target contender))
+        (make-directory target t)
+        (let ((owner (mevedel-session-control-fs-lock-session-open target)))
+          (unwind-protect (should-error (mevedel-session-control-fs-lock-session-open contender .5) :type 'file-error)
+            (mevedel-session-control-fs-lock-session-close owner)))
+        (mevedel-session-control-fs-lock-session-close (mevedel-session-control-fs-lock-session-open contender .5))
+        (should-not (file-exists-p (file-name-concat memory ".mevedel")))))))
 
 (mevedel-deftest mevedel-memory-write--changes
     (:vars* ((root (make-temp-file "mevedel-memory-reverse-" t))
@@ -105,182 +105,6 @@
     (should-not (plist-member change :bytes))
     (should (equal after (mevedel-memory-write--after before (list change))))
     (should-not (mevedel-memory-write--changes before before))))
-
-(mevedel-deftest mevedel-memory-write--list
-    (:vars* ((root (make-temp-file "mevedel-memory-write-list-" t))
-             (workspace (mevedel-workspace--create :root root))
-             (id (make-string 64 ?a))
-             (directory (mevedel-memory-write--directory workspace))
-             (path (file-name-concat directory (concat id ".el"))))
-     :after-each ((delete-directory root t)))
-  ,test
-  (test)
-  :doc "keeps unreadable private records inspectable without changing their bytes"
-  (progn
-    (make-directory directory t)
-    (write-region "(broken state" nil path nil 'silent)
-    (let ((rows (mevedel-memory-write--list workspace)))
-      (should (= 1 (length rows)))
-      (should (equal id (plist-get (car rows) :id)))
-      (should (stringp (plist-get (car rows) :error)))
-      (should-not (plist-get (car rows) :intent))
-      (should-not (plist-get (car rows) :marked)))
-    (should (equal "(broken state" (mevedel-session-control-fs-read-file path)))))
-
-(mevedel-deftest mevedel-memory-write--recovery-candidates
-    (:vars* ((root (make-temp-file "mevedel-memory-write-candidates-" t))
-             (workspace (mevedel-workspace--create :root root))
-             (directory (mevedel-memory-write--directory workspace))
-             (pending (file-name-concat root "pending"))
-             (ids (mapcar (lambda (char) (make-string 64 char)) '(?a ?b ?c ?d)))
-             (inspected (make-hash-table :test #'equal)))
-     :before-each ((make-directory directory t)
-                   (make-directory pending t)
-                   (dolist (id ids)
-                     (write-region "(record)" nil (file-name-concat directory (concat id ".el")) nil 'silent))
-                   (puthash workspace inspected mevedel-memory-write--inspected))
-     :after-each ((remhash workspace mevedel-memory-write--inspected)
-                  (delete-directory root t)))
-  ,test
-  (test)
-  :doc "inspects unread records and known ones only while their marker exists"
-  (let ((marked (file-name-concat pending (concat (nth 1 ids) ".pin"))))
-    (puthash (nth 1 ids) marked inspected)
-    (puthash (nth 2 ids) (file-name-concat pending (concat (nth 2 ids) ".pin")) inspected)
-    (puthash (nth 3 ids) 'retired inspected)
-    (write-region "hash" nil marked nil 'silent)
-    (should (equal (list (nth 0 ids) (nth 1 ids))
-                   (mevedel-memory-write--recovery-candidates workspace)))
-    (delete-file marked)
-    (should (equal (list (nth 0 ids))
-                   (mevedel-memory-write--recovery-candidates workspace))))
-  :doc "forgets identities whose records were collected"
-  (progn
-    (puthash (nth 2 ids) 'retired inspected)
-    (delete-file (file-name-concat directory (concat (nth 2 ids) ".el")))
-    (mevedel-memory-write--recovery-candidates workspace)
-    (should-not (gethash (nth 2 ids) inspected)))
-  :doc "native fallback bounds every marker program instead of probing all warm markers together"
-  (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) sizes)
-    (dotimes (n 20)
-      (let ((id (secure-hash 'sha256 (number-to-string n))))
-        (push id ids)
-        (write-region "(record)" nil (file-name-concat directory (concat id ".el")) nil 'silent)))
-    (dolist (id ids)
-      (let ((pin (file-name-concat pending (concat id ".pin"))))
-        (puthash id pin inspected)
-        (write-region "hash" nil pin nil 'silent)))
-    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-               (lambda (operations &rest args)
-                 (push (length operations) sizes)
-                 (apply program operations args))))
-      (should (equal (sort (copy-sequence ids) #'string<)
-                     (sort (mevedel-memory-write--recovery-candidates workspace) #'string<))))
-    (should (cl-every (lambda (size) (<= size 8)) sizes)))
-  :doc "leaves writes on an unobservable target to the full inspection"
-  (progn
-    (dolist (id ids)
-      (puthash id (file-name-concat pending (concat id ".pin")) inspected))
-    (cl-letf (((symbol-function 'mevedel-session-control-fs-paths-exist)
-               (lambda (_) (error "Target unavailable"))))
-      (should (equal ids (mevedel-memory-write--recovery-candidates workspace))))))
-
-(mevedel-deftest mevedel-memory-write--mutate ()
-  ,test
-  (test)
-  :doc "target fencing rejects stale writes and deletes on local and TRAMP roots"
-  (let ((directory (make-temp-file "mevedel-memory-fence-" t)))
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp '("memory-fence")
-          (dolist (prefix '("" "/mevedelmock:memory-fence:"))
-            (let* ((root (file-name-as-directory (concat prefix directory)))
-                   (claims (file-name-concat root (if (equal prefix "") "local" "remote")))
-                   (path (file-name-concat root "topic.md"))
-                   (claim (mevedel-journal-claim-acquire claims 180))
-                   (before (list :path path :exists nil))
-                   (after (list :path path :exists t :bytes "Owner content.\n" :mode #o640)))
-              (mevedel-memory-write--mutate claim before after)
-              (should (mevedel-change-same-p
-                       after (mevedel-tool-patch--snapshot path)))
-              (should (mevedel-journal-claim--finish claim 'expired ""))
-              (let* ((successor (mevedel-journal-claim-acquire claims 180))
-                     (new (list :path path :exists t :bytes "Successor content.\n" :mode #o600)))
-                (mevedel-memory-write--mutate successor after new)
-                ;; Even a freshly matching file observation cannot authorize
-                ;; an old mutation after takeover has settled its claim.
-                (should-error (mevedel-memory-write--mutate claim new after))
-                (should-error (mevedel-memory-write--mutate claim new before))
-                (should (mevedel-change-same-p
-                         new (mevedel-tool-patch--snapshot path)))
-                (mevedel-memory-write--mutate successor new before)
-                (should-not (file-exists-p path))
-                (mevedel-journal-claim-settle successor 'completed "")))))
-      (delete-directory directory t)))
-  :doc "an admitted paused mutation excludes takeover until its target program finishes"
-  (let* ((directory (make-temp-file "mevedel-memory-paused-" t))
-         (path (file-name-concat directory "topic.md"))
-         (claims (file-name-concat directory "claims"))
-         (claim (mevedel-journal-claim-acquire claims 180))
-         (before (list :path path :exists nil))
-         (after (list :path path :exists t :bytes "Committed before takeover.\n" :mode #o640))
-         (pause (file-name-concat directory "paused"))
-         (ready (file-name-concat directory "contender-ready"))
-         (deadline (+ (float-time) 30)) processes buffers)
-    (unwind-protect
-        (cl-labels
-            ((start (name form)
-               (let ((runner (file-name-concat directory (concat name ".el")))
-                     (output (generate-new-buffer " *memory-fence-client*")))
-                 (push output buffers)
-                 (with-temp-file runner
-                   (insert ";;; -*- lexical-binding: t -*-\n")
-                   (prin1 `(progn (setq load-path ',load-path)
-                                  (require 'mevedel-memory-write) ,form)
-                          (current-buffer)))
-                 (push (make-process :name name :buffer output :noquery t :sentinel #'ignore
-                                     :command (list (file-name-concat invocation-directory invocation-name)
-                                                    "--batch" "-Q" "-l" runner)) processes)))
-             (wait-for (file)
-               (while (and (not (file-exists-p file)) (< (float-time) deadline))
-                 (accept-process-output nil 0.01))
-               (should (file-exists-p file))))
-          (start "paused-writer"
-                 `(let ((run (symbol-function 'mevedel-session-control-fs-run-program)))
-                    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                               (lambda (operations &optional lock)
-                                 (let ((mevedel-session-control-fs--test-pause-file (and lock ,pause)))
-                                   (funcall run operations lock)))))
-                      (mevedel-memory-write--mutate ',claim ',before ',after))))
-          (wait-for pause)
-          (start "contender"
-                 `(progn (write-region "ready" nil ,ready nil 'silent)
-                         (unless (mevedel-journal-claim--finish ',claim 'expired "")
-                           (error "Takeover did not settle"))))
-          (wait-for ready)
-          (accept-process-output nil 0.1)
-          (should-not (file-exists-p (mevedel-journal-claim--path claim t)))
-          (write-region "continue" nil (concat pause ".continue") nil 'silent)
-          (while (and (seq-some #'process-live-p processes) (< (float-time) deadline))
-            (accept-process-output nil 0.01))
-          (dolist (process processes)
-            (ert-info ((with-current-buffer (process-buffer process) (buffer-string)))
-              (should-not (process-live-p process))
-              (should (= 0 (process-exit-status process)))))
-          (should (mevedel-change-same-p after (mevedel-tool-patch--snapshot path)))
-          (should (eq 'expired (plist-get (mevedel-journal-claim-outcome claim) :status)))
-          (should-error (mevedel-memory-write--mutate claim after before)))
-      (write-region "continue" nil (concat pause ".continue") nil 'silent)
-      (dolist (process processes) (when (process-live-p process) (delete-process process)))
-      (dolist (buffer buffers) (kill-buffer buffer))
-      (delete-directory directory t))))
-
-(mevedel-deftest mevedel-memory-write--scope
-  (:doc "returns the captured scope of the intent's source pass")
-  (progn
-    (should (equal '(:workspace "w")
-                   (mevedel-memory-write--scope
-                    (list :accepted (list :prepared (list :scope '(:workspace "w")))))))
-    (should-not (mevedel-memory-write--scope nil))))
 
 (provide 'test-mevedel-memory-write)
 ;;; test-mevedel-memory-write.el ends here

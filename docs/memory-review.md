@@ -493,7 +493,7 @@ reviews and manual changes. Changed topic files or affected index entries remain
 stale; cancelled application holds the remaining proposals. Completion reports
 the number of distinct files confirmed written by that run, counting a shared index once and
 excluding idempotently returned decisions from another call. A successful
-review can still leave held, stale, unavailable, or recovery-required proposals.
+review can still leave held, stale, or unavailable proposals.
 Neither syntactic validation nor the updated-file count establishes that the
 new memory is correct.
 
@@ -520,19 +520,17 @@ positions without selecting a window. Resolved candidates move to History.
 Rows show action, type, title, status, and exact target/origin. A candidate's
 status reflects the same read-only freshness check acceptance runs: a recorded
 `stale` decision that would now apply reads `ready`, and a pending or stale
-candidate whose targets changed since capture reads `superseded` (only `r`
-resolves it). The history collector batches decision and write evidence and
+candidate whose targets changed since capture reads `superseded` (an explicit decision never overwrites a third state). The history collector batches private decision slots and
 shares one authenticated bundle at a time across each pass's rows. Locality
 classification happens in that same scan; checked recovery still reads separately.
-The header shows workspace, pending/recovery counts,
+The header shows workspace, pending counts,
 history retention, and this client's running pass. Opening requests checked workspace
 recovery without blocking the table. Initial history collection independently
 reads committed data even while recovery is pending, dispatching or active; the
 header labels the committed snapshot and pending recovery rather than implying
 reconciliation has completed. While its bounded observer remains active, recovery
 completion requests a fresh history scan only if that recovery changed committed
-state (published or released evidence, finished expiry, or reconciled a marked
-write); a no-op recovery keeps the scan in flight and the workspace's counts.
+state (published or released evidence, or finished expiry); a no-op recovery keeps the scan in flight and the workspace's counts.
 The recovery owner exposes this as a per-workspace generation, an observation
 for presentation only. After 180 seconds, display observation
 ends without cancelling workspace recovery or discarding rows or an active scan.
@@ -547,14 +545,12 @@ views and failed scans show distinct notices; these are not selectable rows or
 decision targets. Switching views reuses snapshots rather than rescanning history.
 Reopening Candidates or History can also reuse unchanged terminal rows (applied,
 rejected, reversed and completed) from this Emacs process. The display child
-compares pinned recursive metadata for workspace state, public journal and
-original write-marker parents: membership, type, device, inode, size, mtime,
+compares pinned recursive metadata for workspace state and public journal: membership, type, device, inode, size, mtime,
 ctime, mode and owner. Symlinks, failed or unrunnable checks, changed metadata,
 or a different workspace root, workspace identity, client or configured memory
 roots select a full scan. Non-terminal passes are always authenticated again,
-including their terminal siblings. Newly discovered historical marker locations
-need a covered scan before they can seed reuse; changes during collection also
-withhold reuse. No reuse state is persisted or shared between clients. Metadata
+including their terminal siblings. Applied reversible rows also recheck their
+target for an incomplete reversal. Changes during collection withhold reuse. No reuse state is persisted or shared between clients. Metadata
 equality is only a display hint, not content authentication or an atomic snapshot.
 Memories inventories configured topics independently. `g`, completed decisions
 and settled review updates request fresh observations. Current job, context,
@@ -600,8 +596,7 @@ while that history remains and the current files still match. Unrelated topics
 are untouched. History also includes completed reviews with no candidates;
 details show the retention deadline or unresolved dependency.
 
-The main cockpit's Memory row shows pending/stale proposals, interrupted-write
-recovery, and unavailable-record counts separately. Opening and rendering the
+The main cockpit's Memory row shows cached proposal counts. Opening and rendering the
 main cockpit use cached observations without reading journal or memory files.
 The row says `not checked` before an observation exists and marks observations
 older than ten seconds as `cached`. Show Candidates or History in the Memory
@@ -619,10 +614,10 @@ the reader. Evidence inspection still works if a public digest is unavailable.
 Pending diffs include unrelated current index edits when freshness checks pass.
 If they fail, inspection retains the captured diff and shows the current conflict
 or unavailable-state reason. Applied/reversed diffs come from the exact retained
-write intent. `a` accepts, `r` rejects, `A` accepts pending and stale proposals sequentially,
+decision slot. `a` accepts, `r` rejects, `A` accepts pending and stale proposals sequentially,
 and `R` rejects pending proposals. Rejection is one key; use a prefix argument to
-enter an optional reason. `u` performs checked reversal. `c` reconciles an
-interrupted write; `U` explicitly rolls back a known interrupted attempt.
+enter an optional reason. `u` performs checked reversal, including finishing a partial reversal.
+Accept or Reject explicitly resolves an interrupted application.
 `v` opens a separate inspector for this client's running request. Admitted
 evidence and model response occupy separate sections; incoming source changes
 update the reader without moving focus. Closing the inspector leaves the request
@@ -648,14 +643,14 @@ new arrivals and changed versions do not extend that cohort. Completed attempts
 are authenticated against accepted pass identities and exact admitted notes.
 Attempted is not confirmed
 deleted. An empty selection requests no empty current-memory review.
-Pending/recovery-required and blocked notes remain held; propose/manual drain leaves decisions for approval rather
+Pending and blocked notes remain held; propose/manual drain leaves decisions for approval rather
 than deleting their files. Other sessions' turns do not stop the drain; notes
 they use wait (see [Readiness](memory-notes.md#shared-working-note-lifecycle)). Running local consolidation, application or
 cleanup and a busy transport wait with a 60-second retry, so drain neither
 races that work nor spins on empty reviews. Closing its
 originating buffer or exiting stops it; a failed review stops without retry.
-An accepted review also stops the drain if application reports an error or a
-recovery requirement. Acceptance, actual application counts and the diagnostic
+An accepted review also stops the drain if application reports an error or the
+pass needs recovery to verify publication, settlement or cycle progress. Acceptance, actual application counts and the diagnostic
 remain unchanged; a published review is not proof that every proposal applied.
 A changed chunked note reports `restart-required`, not a failed review; its
 changed version waits for a later cohort rather than being retried in the

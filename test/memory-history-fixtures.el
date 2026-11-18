@@ -31,9 +31,7 @@
 (defun mevedel-test-memory-history-create (workspace batches items bytes &optional pending)
   "Create BATCHES accepted passes in WORKSPACE with ITEMS decisions each.
 Each shared note contains BYTES bytes.  Return the accepted bundles.
-PENDING leaves their proposals undecided.  Applications use the native owned
-path under a fresh workspace claim each; they skip the per-call recovery of
-`mevedel-memory-decision-apply', a no-op on this fully published history."
+PENDING leaves their proposals undecided; otherwise apply each normally."
   (let* ((root (mevedel-workspace-root workspace))
          (shared (file-name-concat root ".mevedel" "shared")) bundles)
     (make-directory shared t)
@@ -56,14 +54,8 @@ path under a fresh workspace claim each; they skip the per-call recovery of
               (mevedel-memory-store-publish workspace (plist-get prepared :id))
               (unless pending
                 (dolist (proposal (plist-get accepted :proposals))
-                  (let ((owner (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
-                    (should owner)
-                    (unwind-protect
-                        (should (eq 'applied
-                                    (plist-get (mevedel-memory-decision--apply-owned
-                                                workspace (list :claim owner) (plist-get prepared :id) (plist-get proposal :id))
-                                               :status)))
-                      (mevedel-journal-claim-settle owner 'cancelled "")))))
+                  (should (eq 'applied (plist-get (mevedel-memory-decision-apply
+                                                   workspace (plist-get prepared :id) (plist-get proposal :id)) :status)))))
               (push accepted bundles))
           (mevedel-journal-claim-settle claim 'cancelled ""))))))
 

@@ -19,26 +19,13 @@ content stay in private control storage. Public text alone cannot prove acceptan
 or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
-Recovery authenticates decision metadata in batches of eight, then groups the
-bounded metadata by pass; every decision and write intent still undergoes
-authentication. Each pass group shares its authenticated bundle and matching
-coordinator proof with the write reader. Publication discards all pending
-metadata and bundle observations. The read-only cockpit collector reuses its freshly
-authenticated write intents when the identity, intent hash and source-bundle
-hash match the decision; these observations never authorize a later action.
-Pending automatic selection refreshes its public observation
-and discards proofs after applying a proposal. Completed pass recovery still
-authenticates every bundle and recovers accepted expiry under mutation ownership,
-but avoids republication when exact public bytes match and no spare pins remain.
-These operation-local observations do not survive a new application claim.
-An explicit serial request by one actor and origin may retain only its clean
-recovery predecessor's exact claim/outcome identity, never those authenticated
-content observations. The decision owner exposes four verbs (apply, reject,
-reverse, recover-write) over one executor; callers carry an opaque continuation,
-not claims, write intents, or child replies. The accepted bundle is authenticated
-once per continuously owned phase, never across acceptance settlement, a new
-claim or a child handoff. Write-adjacent ownership, deadline, bytes, mode,
-cancellation, reference and live-buffer checks remain fresh.
+Decision recovery authenticates immutable slots against their accepted pass before
+publishing them. Read-only inspection batches independent slots and isolates an
+unreadable proposal; a displayed result never authorizes a later action. Pass
+recovery authenticates accepted bundles and finishes already-authorized expiry.
+Apply, Reject and Reverse recheck the accepted proposal and current target under
+the locks below. They need not wait for a provider, and they never create a
+private write intent or a target marker.
 
 Local automatic application uses one parent-owned fixed-deadline workspace
 claim per proposal. The first maintenance worker performs publication/store
@@ -77,23 +64,15 @@ unchanged. Fresh citation rereads batch at most eight paths per original root
 without crossing capture, inventory or final editor-check boundaries. Sequential
 callbacks yield between proposals, keeping the pass
 registered through application completion rather than reporting the queue entry
-as completion. Scheduled recovery also discovers marked or unavailable write
-identities in the child, sharing the write reader's pass grouping. Only identities
-cross back, bounded to 65,536 within an 8 MiB reply; overflow and child failure
-fail visibly rather than becoming empty or truncated selection. The discovery
-listing is the cutoff; later arrivals wait for another recovery. Scheduled
-marked-write reconciliation uses the same owned recovery prelude, but its fresh
-authority, marker and live state classification remain in the editor.
-Original-target ownership never crosses the child in this design. Automatic
-local decisions are accepted durably in the editor, and resolved write markers
-retire under its still-owned target claim. A targeted child reauthenticates only
-the exact accepted decision identity/hash and performs publication and the pass
-settlement/pin-release check, rather than running full recovery again. The
-operation remains registered through publication; acceptance alone, failed
-marker retirement or interrupted publication cannot establish continuity.
-Confirmed newly written-file accounting survives publication failure or
-cancellation, and accepted unpublished decisions remain recoverable.
-Synchronous decisions use the same accept, retire, then publish order. Publication
+as completion. Scheduled recovery publishes decisions; it never decides how to finish
+an interrupted target write. For automatic application the child operation's
+claim fences its recovery and publication lifecycle, not target mutation or slot
+election. Only the editor's exact target and workspace lock owners conduct that
+transaction. The editor elects the slot first; a publication child authenticates
+that decision and checks settlement/pin release. The operation remains registered
+through publication; a failure cannot establish continuity. Confirmed changes
+survive cancellation or publication failure; an unpublished decision can be
+published later. Synchronous decisions follow the same election-before-publication order. Publication
 reauthenticates the decision identity/hash and bundle under one mutation claim,
 checks exact pass-review bytes, and republishes an absent or damaged projection.
 Repair of existing text verifies the observed hash and the unsettled mutation
@@ -102,16 +81,12 @@ can refuse pin release but cannot prove it; every terminal decision still needs
 private authentication. Read-only inspection copies mutable leaves and grants no
 authority for a later action.
 
-Automatic note forward writes recheck that no open session uses the note, cancellation
-and unsaved buffers at their mutation boundary; checked rollback keeps its
-separate ownership proof. The final note-use check is local and follows all
-yielding ownership/root and buffer checks. An earlier admission check cannot
-protect a reader admitted during that IO; a late hold uses checked abandonment.
-Reentrant replies cannot enter an executing continuation. Reply identity, origin
-binding and freshly read workspace identity fence delayed continuations.
-Cancellation fences the child before stopping it; an executing editor transaction
-retains its fixed, unrenewed workspace claim until unwind so checked rollback
-remains possible. Expiry or takeover still prevents rollback and retains evidence.
+Automatic note writes recheck current use, cancellation and unsaved buffers
+at the mutation boundary, after any yielding ownership checks. A hold before
+writing does not elect an application. Reentrant replies cannot enter an
+executing continuation. Reply identity, origin binding and a fresh workspace
+identity check protect delayed continuations. Cancellation fences the child;
+the target transaction unwinds under its original lock owners.
 Allowed or delivered quit during setup, continuation or cleanup remains visible
 cancellation and prevents subsequent application. Interrupted mutation finishes
 checked rollback
@@ -211,8 +186,8 @@ current configuration. Remote or uncertain historical state routes to native
 editor recovery under the same claim, preserving accepted-expiry recovery and
 original remote authority without returning accepted proofs. This conservative
 preflight adds an all-history read and can increase total work.
-Manual/unsupported remote operations remain synchronous. Remaining editor-side
-intent, commit and finalization IO can still block; this is not an asynchronous
+Manual/unsupported remote operations remain synchronous. Editor-side
+target checks, writes and slot election can still block; this is not an asynchronous
 filesystem transaction or a guarantee of imperceptible background processing.
 
 Successful completed-turn saves freeze one immutable evidence bundle and pin its
@@ -371,35 +346,24 @@ does not postpone journal work. Accepted outcomes, confirmed application counts
 and diagnostics remain distinct. Request bounds do not grow, and finite
 batching makes no provider-cost, throughput or capacity claim.
 
-Application holds both workspace and original target-root claims. It persists
-complete private intent and a hash-only target marker before mutations. Curated
-writes, rollback, claim settlement, and marker retirement share a target-side
-`flock` and guarded pinned program. Claim expiry alone cannot remove an unresolved
-marker. Reconciliation compares exact before/after states; it does not infer a
-successful write from an unmarked intent. Reversal is a separate accepted intent
-and decision, preserving the original application as evidence.
-Settlement reports observed unchanged targets without inferring an interruption.
-A known admission hold or cancellation may abandon an exact prepared intent
-without deciding the proposal only after checked rollback and freshly proven
-complete before-state. Original authority, tokens and live buffers are checked
-before and after electing and authenticating the exact coordinator's cancelled
-empty-payload outcome on its original host. The still-owned target's locked
-program verifies its token, disk before-state and exact marker before deleting
-that marker alone. The immutable unmarked intent remains, with no accepted public
-decision. This immutable outcome is invocation-local evidence, not a cached proof
-or permission to run paths on another host. After, mixed or uncertain states
-retain normal accounted recovery; incomplete retirement failures stay visible.
-Local scheduled discovery reads retained writes in the child, not through
-editor-side cold singleton authentication or a warm bulk-marker probe.
-Synchronous/native recovery fully inspects only records whose marker exists,
-plus any record this client has not yet read successfully; marker observations
-are bounded to eight per program. A record's marker path and pass retirement
-are immutable facts remembered per workspace object, never whether the marker
-exists. Editor inspection of selected candidates yields between records. Only a
-marked candidate
-starts another owned recovery operation, which rereads its evidence; unmarked
-records do not repeat full publication recovery. Unreadable records report their
-diagnostic and remain inspectable without blocking independent work.
+Each decision acquires the original target-root flock first, then the workspace
+journal mutation flock, on their respective hosts. The two acquisitions share a
+20-second budget. Both stay held through file mutation, buffer synchronization
+and election by exclusive creation of the proposal slot on the **same workspace
+helper**. Lost acknowledgement or observed owner death refuses continuation;
+no replacement process inherits an operation. Across hosts, observing the target
+alive is not a simultaneous liveness proof. Publication and pass acceptance
+keep their journal claims; no flock spans a provider request.
+
+With no terminal slot, Accept completes before-state rows and leaves exact after
+rows alone. Reject restores exact after rows and leaves before rows alone. A
+third state is never overwritten. An already absent shared note cannot be
+restored: only Accept can acknowledge the deletion. An already applied curated
+proposal can be reversed in the same fashion; the separate reverse slot preserves
+the original decision. An interrupted reversal that could still finish pins the
+history needed for retry. An exact manual undo is indistinguishable and retains
+that evidence too. An unrelated later edit allows ordinary expiry. See the
+[decision table](../memory-recovery.md) for user-facing outcomes.
 
 Index freshness is checked per affected destination: the proposal's topic and
 merge sources must retain their captured entries or absence. Unrelated manual
@@ -1524,3 +1488,52 @@ event instead. The command loop checks that no real input intervened and runs
 the transaction with normal quit handling. A minibuffer, recursive edit or
 active command defers it; the next idle timer only reposts the event. No
 target lock is held while waiting. Interactive decisions stay synchronous.
+
+### 2026-11-18: pre-slot passes and previously accepted expiry
+
+Newly prepared passes identify the decision-slot format. Automatic application
+does not select earlier passes, even if they appear pending. Explicit Accept,
+Reject and Reverse refuse them with an explanation: the next review can
+propose the change again if it is still relevant. The absence of a new slot
+is **not** evidence that an older proposal was never rejected. No decision
+history is migrated; this upgrade does not modify durable memory files,
+retained journals, or old private decisions.
+
+Journal expiry is a separate authorization. An expiry accepted before the
+upgrade can still finish its exact, hash-checked deletions once. A finished
+old manifest does not block a new review. Only the expiry reader recognizes
+the old dependency paths; new expiry never selects pre-slot passes or writes
+old-format manifests. A malformed manifest refuses recovery and names the file.
+
+A reversal may restore files before its slot is elected. After a crash the
+applied slot is the only durable evidence for retry. At expiry, check the
+changed rows at the original target: retain that applied pass when at least
+one is exactly back at before and all are at before or after. An identical
+manual undo is indistinguishable and also retains history. If authority or
+observation is unavailable, retain rather than discard the evidence. A third
+state (such as a later index edit) prevents reversal and does not extend
+retention. A recorded reversal expires normally. For a possible interrupted
+reversal, Reverse finishes the remaining rows; Accept returns the existing
+decision and never rewrites the user's files.
+
+### 2026-11-18: Decision-slot performance gate waived
+
+The user waived the goal of halving control programs per decision. Slots
+used 42–66% fewer programs for explicit decisions, but only 13–30% fewer
+for automatic decisions including both workers. The reason to ship was the
+closed race between target writes and slot election, and less code to maintain.
+
+Automatic editor cost was measured separately: worker time does not occupy
+the editor command loop. These are medians per proposal in alternating,
+CPU-pinned local runs of compiled claim/fence and slot builds. Each of three
+fresh batch editors applied four proposals; the probe supplied idle admission
+and checked the target effect. Editor wall time sums non-overlapping apply,
+special-event, timer and worker-sentinel calls, including their synchronous
+waits but excluding idle waits for workers. It is not a typing-latency measure.
+
+| Automatic application | Samples per build | Editor programs, claims → slots | Editor wall ms, claims → slots |
+|---|---:|---:|---:|
+| First topic | 3 | 48 → 25 | 373 → 207 |
+| Following topic | 9 | 47 → 27 | 375 → 206 |
+| First note deletion | 3 | 39 → 28 | 293 → 198 |
+| Following note deletion | 9 | 41 → 29 | 314 → 209 |

@@ -410,12 +410,10 @@ cleanup admission is distinguished from queued timers and transport callbacks.
 An already-active local cleanup postpones new automatic consolidation and drain
 admission without waiting in the editor; explicit review reports the busy state
 before acquiring a pass claim. Queued cleanup does not block admission. These
-observations grant no storage authority; native claims still fence every owner.
-When an interactive memory decision encounters this client's active cleanup,
-it waits for that batch to release ownership, with quitting available and a
-120-second bound. Queued idle cleanup does not delay decisions. Bulk decisions
-defer newly scheduled cleanup until the command finishes. Other owners still
-prevent conflicting decisions.
+observations grant no storage authority. A decision takes the original target
+lock, then the workspace journal lock. Cleanup holds that same workspace lock
+from history selection through manifest election; queued idle cleanup holds no
+lock. Both decision lock acquisitions share a 20-second budget.
 Completed general reviews become eligible only after all their examined digests are gone,
 their own evidence pins are released, and their accepted private state matches
 the public record. A digest and its covering review expire on separate
@@ -426,15 +424,16 @@ and the proposal table skip retired passes, including interrupted deletions.
 Retirement retains the completion date and general/focused scope, without the
 focus text, so expiry does not erase the scheduling history of general reviews.
 Every proposal must have a terminal applied, rejected, or reversed decision, and
-the group must satisfy the resolution-based history deadline. Unpublished decisions, unresolved
-write intents, outstanding target markers, and unavailable original targets
-retain the group. The manifest includes the complete related public decision
-history and exact private pass, decision, and write filenames with accepted
+the group must satisfy the resolution-based history deadline. Pre-upgrade
+passes, unpublished slots, and applied records whose reversal may be incomplete
+or whose original target cannot be checked retain their history. The manifest
+includes the complete related public decision history and exact private pass
+and decision-slot filenames with accepted
 hashes; it cannot name arbitrary workspace files. Its encoded size is capped at
 4 MiB before acceptance or deletion. A group may contain more than fifty public
 records; splitting it would break retained reversal dependencies. Current curated
 memory files are never deleted by journal expiry. Readers skip retired history
-even when an interrupted deletion leaves only a private write intent behind.
+even when cleanup was interrupted before it removed the private records.
 Prompt and cockpit observations are invalidated after cleanup.
 
 Private `.mevedel/state/journal/` directories serve separate purposes:
@@ -444,15 +443,14 @@ Private `.mevedel/state/journal/` directories serve separate purposes:
 | `captures` | Frozen inputs and per-capture attempts; payload retires with its processed digest. |
 | `coverage` | Minimal turn identities preventing duplicate capture; retained. |
 | `mutation`, `digest-run`, `consolidation` | Numbered ownership claims and outcomes; obsolete settled pairs are pruned after their deadlines. |
-| `passes`, `decisions`, `writes` | Exact review evidence, decisions and transaction snapshots; removed with expired history after recovery dependencies end. Failed/abandoned preparations retain a diagnostic window of the configured history duration after their deadline. |
+| `passes`, `decision-slots` | Exact review evidence and immutable decision records; removed with expired history after recovery dependencies end. Failed/abandoned preparations retain a diagnostic window of the configured history duration after their deadline. |
 | `evidence-pins` | References preventing early evidence deletion; released when resolved, empty directories removed. |
 | `expiry` | Accepted cleanup manifests and completion receipts; collected after completion and claim expiry. Unaccepted abandoned manifests are collected after fencing and expiry. |
 | `expired`, `retired-passes` | Minimal retirement identities preventing late recovery from republishing deleted records; retained. |
 
 Claim pruning always preserves the newest generation, unexpired or unsettled
 attempts, and any claim still referenced by recovery/history. It covers capture
-attempts and configured shared memory-root claims too; outstanding target write
-markers block pruning there. Acquisition, settlement, and pruning use the same
+attempts as well as journal claims. Acquisition, settlement, and pruning use the same
 target lock and check the observed generation inside it. Delayed callers cannot
 recreate a removed generation. Thus bulky coordination history is bounded by
 active dependencies and batch progress, while minimal identity records remain.

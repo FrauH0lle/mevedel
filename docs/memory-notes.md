@@ -37,7 +37,7 @@ Boundaries are inclusive multiples of 86,400 seconds; future mtimes wait.
 A note version is its path and content hash; modification age uses actual mtime,
 including a same-byte touch. Note deletion freshly rechecks that age after
 approval and preparatory IO; renewed age is a nonterminal hold, not authorization
-from an older capture. A pending/recovery-required decision suppresses its exact version.
+from an older capture. A pending proposal suppresses its exact version.
 Prior completed review, rejection or reversal outcomes do not start an additional
 seven-day reconsideration timer; rejection evidence remains available to later
 reviews. A review leaves notes that open sessions are using for later. A note is in use while a

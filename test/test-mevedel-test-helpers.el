@@ -450,9 +450,11 @@
   (test)
   :doc "contains relative subprocess writes and removes private cwd on success or error"
   (dolist (fail '(nil t))
-    (let (root)
+    (let ((this-command 'outer) root)
       (let ((body (lambda ()
                     (setq root default-directory)
+                    (should-not this-command)
+                    (setq this-command 'undo)
                     (should (equal root temporary-file-directory))
                     (should (equal root (getenv "TMPDIR")))
                     (should (zerop (call-process "sh" nil nil nil "-c"
@@ -465,6 +467,7 @@
                      (error-message-string
                       (should-error (mevedel-test--call-with-isolation body)))))
           (mevedel-test--call-with-isolation body)))
+      (should (eq this-command 'outer))
       (should-not (file-exists-p root))))
   :doc "reports unread events, restores the baseline and runs after failed bodies"
   (dolist (variable '(unread-command-events unread-input-method-events

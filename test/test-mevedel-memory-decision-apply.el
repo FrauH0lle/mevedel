@@ -15,8 +15,103 @@
 (require 'mevedel-session-control-fs)
 (require 'mevedel-memory-write)
 (require 'mevedel-journal-capture)
+(require 'mevedel-journal-cleanup)
 (require 'mevedel-session-persistence)
 (require 'mevedel-system)
+
+(defun mevedel-test-memory-decision-owner-loss (workspace pass item memory victim successor)
+  "Kill VICTIM after writing ITEM, then run SUCCESSOR on PASS in WORKSPACE.
+Verify the exact rebased index in MEMORY, including its trailing blank line."
+  (let* ((id (plist-get item :id))
+         (index (file-name-concat memory "MEMORY.md"))
+         (topic (file-name-concat memory "topic.md"))
+         (original "Unrelated prose.\n- [Topic](topic.md) - original\n\n")
+         (batch (symbol-function 'mevedel-memory-write--batch))
+         (elect (symbol-function 'mevedel-memory-decision--elect))
+         killed)
+    (write-region original nil index nil 'silent)
+    (cl-labels ((kill-owner (process)
+                  (should (process-live-p process))
+                  (signal-process process 'SIGKILL)
+                  (with-timeout (3 (ert-fail "Lock owner did not die"))
+                    (while (process-live-p process) (accept-process-output process .01)))
+                  (setq killed t)))
+      (cl-letf (((symbol-function 'mevedel-memory-write--batch)
+                 (lambda (target &rest args)
+                   (prog1 (apply batch target args)
+                     (when (eq victim 'target) (kill-owner target)))))
+                ((symbol-function 'mevedel-memory-decision--elect)
+                 (lambda (ws owner &rest args)
+                   (when (eq victim 'workspace) (kill-owner owner))
+                   (apply elect ws owner args))))
+        (should-error (mevedel-memory-decision-apply workspace pass id))))
+    (should killed)
+    (should (string-suffix-p "New topic.\n" (mevedel-session-control-fs-read-file topic)))
+    (should-not (mevedel-memory-decision-status workspace id))
+    (let ((dir (mevedel-memory-decision--directory workspace)))
+      (should (= 1 (length (directory-files dir nil "\\.index-"))))
+      (if (eq successor 'reject)
+          (progn
+            (should (eq 'rejected (plist-get (mevedel-memory-decision-reject workspace pass id) :status)))
+            (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file topic))))
+        (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass id) :status)))
+        (should (string-prefix-p "Unrelated prose.\n" (mevedel-session-control-fs-read-file index)))
+        (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass id) :status))))
+      (should-not (directory-files dir nil "\\.index-"))
+      (should (equal original (mevedel-session-control-fs-read-file index))))))
+
+(defun mevedel-test-memory-cleanup-race (workspace pass item memory first)
+  "Race FIRST against its peer on PASS's ITEM in WORKSPACE with root MEMORY."
+  (let* ((root (mevedel-workspace-root workspace)) (id (plist-get item :id))
+         (mutex (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root) 'mutation))
+         (ready (file-name-concat root "owner-ready")) (release (file-name-concat root "release"))
+         (runner (file-name-concat root "contender.el")) (deadline (+ (float-time) 15))
+         (output (generate-new-buffer " *memory-cleanup-race*")) process)
+    (unwind-protect
+        (progn
+          (with-temp-file runner
+            (insert ";;; -*- lexical-binding: t -*-\n")
+            (prin1
+             `(progn
+                (setq load-path ',load-path)
+                (require 'mevedel-journal-cleanup) (require 'mevedel-memory-decision)
+                (require 'mevedel-system)
+                (let ((mevedel-memory-dirs (list ,memory)) (workspace (mevedel-workspace--create :root ,root))
+                      (mevedel-journal-cleanup--inhibit-scheduling t) (mevedel-memory-history-max-age-days 0))
+                  (advice-add ',(if (eq first 'apply) 'mevedel-memory-decision--elect 'mevedel-journal-cleanup--owned)
+                              :before (lambda (&rest _)
+                                        (write-region "held" nil ,ready nil 'silent)
+                                        (while (and (not (file-exists-p ,release)) (< (float-time) ,deadline)) (sleep-for .01))
+                                        (unless (file-exists-p ,release) (error "Contender never reached mutex"))))
+                  ,(if (eq first 'apply)
+                       `(unless (eq 'applied (plist-get (mevedel-memory-decision-apply workspace ,pass ,id) :status))
+                          (error "Apply did not commit"))
+                     '(unless (mevedel-journal-cleanup-expired workspace t) (error "Cleanup did not run")))))
+             (current-buffer)))
+          (setq process (make-process :name "memory-cleanup-race" :buffer output :noquery t :sentinel #'ignore
+                                      :command (list (file-name-concat invocation-directory invocation-name) "-Q" "--batch" "-l" runner)))
+          (while (and (not (file-exists-p ready)) (process-live-p process) (< (float-time) deadline))
+            (accept-process-output process .01))
+          (unless (file-exists-p ready) (ert-fail (with-current-buffer output (buffer-string))))
+          (let* ((second-edge (if (eq first 'apply) 'mevedel-journal-claim-acquire 'mevedel-session-control-fs--acquire))
+                 (original (symbol-function second-edge))
+                 (mevedel-journal-cleanup--inhibit-scheduling t) (mevedel-memory-history-max-age-days 0))
+            (cl-letf (((symbol-function second-edge)
+                       (lambda (dir &rest args)
+                         (when (and (equal dir mutex) (not (file-exists-p release)))
+                           ;; Prove the first real critical section excludes this independent client.
+                           (should (= 1 (call-process "flock" nil nil nil "-xn" dir "true")))
+                           (write-region "contending" nil release nil 'silent))
+                         (apply original dir args))))
+              (if (eq first 'apply) (should (mevedel-journal-cleanup-expired workspace t))
+                (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass id) :status))))))
+          (while (and (process-live-p process) (< (float-time) deadline)) (accept-process-output process .01))
+          (unless (and (not (process-live-p process)) (zerop (process-exit-status process)))
+            (ert-fail (with-current-buffer output (buffer-string))))
+          (should (file-exists-p release))
+          (should (string-suffix-p "New topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
+      (when (and process (process-live-p process)) (delete-process process))
+      (kill-buffer output))))
 
 (mevedel-deftest mevedel-memory-decision-apply
     (:vars* ((root (make-temp-file "mevedel-memory-application-" t))
@@ -44,6 +139,35 @@
         (mevedel-memory-store-publish workspace pass)))
     ,test)
   (initial-review test)
+  :doc "apply races cleanup while its target write is acknowledged but its slot has not been elected"
+  t (mevedel-test-memory-cleanup-race workspace pass item memory 'apply)
+  :doc "cleanup selects the pending pass while a second editor starts applying its proposal"
+  t (mevedel-test-memory-cleanup-race workspace pass item memory 'cleanup)
+  :doc "journal inference admission and its publication evidence do not lock out decisions"
+  t
+  (let* ((journal (mevedel-journal-store-directory root))
+         (digest (mevedel-journal-claim-acquire (mevedel-journal-store-claim-directory journal 'digest-run) 120)))
+    (should digest)
+    (unwind-protect
+        (progn
+          (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :status)))
+          (should (mevedel-journal-claim-owned-p digest)))
+      (mevedel-journal-claim-settle digest 'cancelled "")))
+  :doc "an active publication claim delays only public projection, not the decision or its files"
+  t
+  (let* ((journal (mevedel-journal-store-directory root)) (id (plist-get item :id))
+         (writer (mevedel-journal-claim-acquire (mevedel-journal-store-claim-directory journal 'mutation) 120)))
+    (should writer)
+    (unwind-protect
+        (let ((result (mevedel-memory-decision-apply workspace pass id)))
+          (should (eq 'applied (plist-get (plist-get result :decision) :status)))
+          (should (string-match-p "Decision saved" (plist-get result :error)))
+          (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace id) :status)))
+          (should (string-suffix-p "New topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))
+          (should (= 1 (length (mevedel-journal-store-entries root)))))
+      (mevedel-journal-claim-settle writer 'completed ""))
+    (mevedel-memory-decision-recover workspace)
+    (should (= 2 (length (mevedel-journal-store-entries root)))))
   :doc "a timer cannot enter a blocking synchronous decision or modify the target"
   t
   (let (result blocked)
@@ -58,7 +182,7 @@
     (should (string-match-p "Cannot wait for a memory decision" (error-message-string result)))
     (should-not blocked)
     (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
-  :doc "applies complete topic/index changes with private intent and an immutable decision"
+  :doc "applies complete topic/index changes with one immutable decision slot"
   t
   (let* (notifications
          (notify (lambda (files) (push files notifications)))
@@ -73,12 +197,17 @@
     (should (equal "- [Topic](topic.md) - Updated context\n" (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))
     (should-not (string-match-p "New topic" (plist-get decision :text)))
     (should (= 2 (length (mevedel-journal-store-entries root))))
-    (let ((intent (plist-get (mevedel-memory-decision--read
-                             workspace (file-name-concat (mevedel-memory-decision--directory workspace)
-                                                         (concat (plist-get decision :decision-id) ".el"))) :intent)))
-      (should intent)
-      (should (eq 'after (mevedel-memory-write--state intent)))
-      (should-not (file-exists-p (mevedel-memory-write--pin intent)))))
+    (let ((record (mevedel-memory-decision--read workspace (car (mevedel-memory-decision--slots workspace (plist-get item :id))))))
+      (should (equal (plist-get item :before) (plist-get record :before)))
+      (should (equal (plist-get item :id) (plist-get (plist-get record :metadata) :decision-id)))
+      (dolist (row (plist-get record :after))
+        (should (equal (plist-get (cdr row) :bytes) (mevedel-session-control-fs-read-file (plist-get (cdr row) :path)))))))
+  :doc "workspace owner dies before election; successor Accept completes and retains exact reversal"
+  t (mevedel-test-memory-decision-owner-loss workspace pass item memory 'workspace 'apply)
+  :doc "workspace owner dies before election; successor Reject restores exact rebased bytes"
+  t (mevedel-test-memory-decision-owner-loss workspace pass item memory 'workspace 'reject)
+  :doc "target owner dies after write acknowledgement; no slot is elected for the dead target"
+  t (mevedel-test-memory-decision-owner-loss workspace pass item memory 'target 'reject)
   :doc "checked reversal restores an applied proposal and remains terminal and idempotent"
   t
   (let* ((applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision))
@@ -111,149 +240,51 @@
         (kill-buffer buffer)))
     (should (equal applied (mevedel-memory-decision-status workspace (plist-get item :id))))
     (should (eq 'reversed (plist-get (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision) :status))))
-  :doc "completed reversal is reconciled after a crash before its decision"
+  :doc "a reversal interrupted after restoring targets is completed only by explicit Reverse"
   t
-  (let* ((applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision))
-         (original (plist-get (mevedel-memory-decision--published workspace applied) :intent)) reverse)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq reverse (mevedel-memory-write--prepare-reverse workspace claim target original))
-       (mevedel-memory-write--run workspace claim target reverse)))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should (equal applied (mevedel-memory-decision-status workspace (plist-get item :id))))
-    (let ((decision (plist-get (mevedel-memory-decision-recover-write workspace (plist-get reverse :id) (plist-get reverse :hash)) :decision)))
-      (should (eq 'reversed (plist-get decision :status)))
-      (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))
-      (should-not (file-exists-p (mevedel-memory-write--pin reverse)))
-      (should (equal decision (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision)))))
-  :doc "partial reversal stays fenced and checked rollback restores the applied state"
+  (let ((id (plist-get item :id)) reached)
+    (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass id) :status)))
+    (cl-letf (((symbol-function 'mevedel-memory-decision--elect)
+               (lambda (&rest _) (setq reached t) (error "Interrupted before reversal slot"))))
+      (should-error (mevedel-memory-decision-reverse workspace pass id)))
+    (should reached)
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))
+    (mevedel-memory-decision-recover workspace)
+    (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace id) :status)))
+    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass id) :status))))
+  :doc "a partial reversal restores only the row still at its applied state"
   t
-  (let* ((applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision))
-         (original (plist-get (mevedel-memory-decision--published workspace applied) :intent)) reverse)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq reverse (mevedel-memory-write--prepare-reverse workspace claim target original))
-       (mevedel-tool-patch-commit (list (car (plist-get reverse :changes))))))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should (eq 'recovery-required
-                (plist-get (plist-get (mevedel-memory-decision-recover-write workspace (plist-get reverse :id) (plist-get reverse :hash)) :decision) :status)))
-    (should-error (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision))
-    (should (file-exists-p (mevedel-memory-write--pin reverse)))
-    (should (eq 'applied
-                (plist-get (plist-get (mevedel-memory-decision-recover-write workspace (plist-get reverse :id) (plist-get reverse :hash) :rollback t) :decision) :status)))
-    (should (eq 'after (mevedel-memory-write--state original)))
-    (should-not (file-exists-p (mevedel-memory-write--pin reverse)))
-    (should (eq 'reversed (plist-get (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision) :status))))
-  :doc "an untouched reversal resolves to applied and can be retried explicitly"
+  (let* ((id (plist-get item :id)) (topic (file-name-concat memory "topic.md"))
+         (batch (symbol-function 'mevedel-memory-write--batch)) written)
+    (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass id) :status)))
+    (write-region "Original topic.\n" nil topic nil 'silent)
+    (cl-letf (((symbol-function 'mevedel-memory-write--batch)
+               (lambda (target checks after &optional mode)
+                 (setq written (mapcar (lambda (row) (plist-get row :path)) after))
+                 (funcall batch target checks after mode))))
+      (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass id) :status))))
+    (should (equal written (list (file-name-concat memory "MEMORY.md")))))
+  :doc "activation republishes a private slot without writing over unsaved editor changes"
   t
-  (let* ((applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision))
-         (original (plist-get (mevedel-memory-decision--published workspace applied) :intent)) reverse)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id (lambda (target) (setq reverse (mevedel-memory-write--prepare-reverse workspace claim target original))))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should (eq 'applied
-                (plist-get (plist-get (mevedel-memory-decision-recover-write workspace (plist-get reverse :id) (plist-get reverse :hash)) :decision) :status)))
-    (should (eq 'after (mevedel-memory-write--state original)))
-    (should (eq 'reversed (plist-get (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision) :status))))
-  :doc "recovery retains unrelated index edits in a committed attempt without an explicit intent identity"
-  t
-  (let ((manual "# Manual heading\n- [Topic](topic.md) - original\n") intent)
-    (write-region manual nil (file-name-concat memory "MEMORY.md") nil 'silent)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (let ((input (mevedel-memory-decision--application-input accepted item)))
-         (should (eq 'fresh (plist-get input :status)))
-         (setq intent (mevedel-memory-write--prepare workspace claim target accepted
-                                                   (plist-get input :proposal) (plist-get input :scope))))
-       (mevedel-memory-write--run workspace claim target intent)))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should (equal (list (plist-get intent :id)) (mevedel-memory-write--recovery-candidates workspace)))
-    (should (eq 'applied (plist-get (car (mevedel-memory-decision-recover-pending workspace)) :status)))
-    (should-not (file-exists-p (mevedel-memory-write--pin intent)))
-    ;; The settled intent stays retained for reversal but needs no inspection.
-    (should (member (concat (plist-get intent :id) ".el")
-                    (directory-files (mevedel-memory-write--directory workspace))))
-    (should-not (mevedel-memory-write--recovery-candidates workspace))
-    (should-not (mevedel-memory-decision-recover-pending workspace))
-    (should (eq 'reversed (plist-get (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :decision) :status)))
-    (should (equal manual (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md")))))
-  :doc "activation recovery coalesces and settles a committed attempt with journaling disabled"
-  t
-  (let ((mevedel-memory-decision--inhibit-recovery nil)
-        (mevedel-journal-enabled nil) intent)
+  (let* ((mevedel-memory-decision--inhibit-recovery nil) (mevedel-journal-enabled nil)
+         (id (plist-get item :id)) buffer completed)
     (unwind-protect
         (progn
-          (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-          (mevedel-memory-write--call
-           scope root-id
-           (lambda (target)
-             (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-             (mevedel-memory-write--run workspace claim target intent)))
-          (mevedel-journal-claim-settle claim 'cancelled "")
-          (should-not (mevedel-session-persistence-choose-entry workspace))
+          (cl-letf (((symbol-function 'mevedel-memory-decision--publish) (lambda (&rest _) (error "Stopped before publication"))))
+            (should-error (mevedel-memory-decision-apply workspace pass id)))
+          (should (= 1 (length (mevedel-journal-store-entries root))))
+          (setq buffer (find-file-noselect (file-name-concat memory "topic.md")))
+          (with-current-buffer buffer (goto-char (point-max)) (insert "Unsaved correction.\n"))
+          (mevedel-memory-decision-schedule-recovery workspace (lambda () (setq completed t)))
           (mevedel-memory-decision-schedule-recovery workspace)
           (should (= 1 (hash-table-count mevedel-memory-decision--recovery-pending)))
-          (should-not (mevedel-memory-decision-status workspace (plist-get item :id)))
-          (let ((deadline (+ (float-time) 5)))
-            (while (and (or (> (hash-table-count mevedel-memory-decision--recovery-pending) 0)
-                                 (> (hash-table-count mevedel-memory-decision--recovery-workers) 0))
-                        (< (float-time) deadline))
-              (accept-process-output nil 0.05)))
-          (should (= 0 (hash-table-count mevedel-memory-decision--recovery-pending)))
-          (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
-          (should-not (file-exists-p (mevedel-memory-write--pin intent))))
-      (mevedel-memory-decision-stop-recovery)))
-  :doc "async recovery checks unsaved editor buffers before settling marked writes"
-  t
-  (let ((mevedel-memory-decision--inhibit-recovery nil) intent buffer completed)
-    (unwind-protect
-        (progn
-          (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-          (mevedel-memory-write--call
-           scope root-id
-           (lambda (target)
-             (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-             (mevedel-memory-write--run workspace claim target intent)))
-          (mevedel-journal-claim-settle claim 'cancelled "")
-          (setq buffer (find-file-noselect (file-name-concat memory "topic.md")))
+          (with-timeout (10 (ert-fail "Publication recovery did not complete"))
+            (while (not completed) (accept-process-output nil .01)))
+          (should (= 2 (length (mevedel-journal-store-entries root))))
           (with-current-buffer buffer
-            (goto-char (point-max)) (insert "Unsaved correction.\n"))
-          (mevedel-memory-decision-schedule-recovery workspace (lambda () (setq completed t)))
-          (let ((deadline (+ (float-time) 10)))
-            (while (and (not completed) (< (float-time) deadline))
-              (accept-process-output nil .01)))
-          (should completed)
-          (should (eq 'recovery-required
-                      (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
-          (should (file-exists-p (mevedel-memory-write--pin intent)))
-          (with-current-buffer buffer
-            (should (buffer-modified-p))
-            (should (string-suffix-p "Unsaved correction.\n" (buffer-string)))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (set-buffer-modified-p nil))
-        (kill-buffer buffer))
+            (should (buffer-modified-p)) (should (string-suffix-p "Unsaved correction.\n" (buffer-string)))))
+      (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
       (mevedel-memory-decision-stop-recovery)))
-  :doc "an unmarked orphan cannot claim a coincidentally matching external edit"
-  t
-  (let (intent)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-       (delete-file (mevedel-memory-write--pin intent))))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (mevedel-tool-patch-commit (plist-get intent :changes))
-    (should-not (mevedel-memory-decision-recover-pending workspace))
-    (should-not (mevedel-memory-decision-status workspace (plist-get item :id)))
-    (should (eq 'after (mevedel-memory-write--state intent))))
   :doc "unrelated manual index edits survive application and reversal"
   t
   (let* ((index (file-name-concat memory "MEMORY.md"))
@@ -374,17 +405,15 @@
       (should (eq 'reversed (plist-get (plist-get (mevedel-memory-decision-reverse workspace id (plist-get (cadr items) :id)) :decision) :status)))
       (let ((input (mevedel-memory-decision--application-input batch (car items))))
         (should (equal (plist-get (car items) :before) (plist-get (plist-get input :proposal) :before))))))
-  :doc "an index edit after preparation cannot be overwritten by the prepared transaction"
+  :doc "an index edit after preparation cannot be overwritten by the locked batch"
   t
-  (let* ((index (file-name-concat memory "MEMORY.md"))
-         (original (symbol-function 'mevedel-memory-write--prepare))
+  (let* ((index (file-name-concat memory "MEMORY.md")) (id (plist-get item :id))
+         (batch (symbol-function 'mevedel-memory-write--batch))
          (foreign "# Concurrent change\n- [Topic](topic.md) - original\n"))
-    (cl-letf (((symbol-function 'mevedel-memory-write--prepare)
-               (lambda (&rest args)
-                 (prog1 (apply original args)
-                   (write-region foreign nil index nil 'silent)))))
-      (should (eq 'recovery-required
-                  (plist-get (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision) :status))))
+    (cl-letf (((symbol-function 'mevedel-memory-write--batch)
+               (lambda (&rest args) (write-region foreign nil index nil 'silent) (apply batch args))))
+      (should-error (mevedel-memory-decision-apply workspace pass id)))
+    (should-not (mevedel-memory-decision-status workspace id))
     (should (equal foreign (mevedel-session-control-fs-read-file index)))
     (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
   :doc "unsaved index edits prevent application even when disk entries match"
@@ -477,8 +506,8 @@
         (should (string-suffix-p "..." (plist-get decision :reason))))))
   :doc "a root claim held outside this workspace prevents application"
   t
-  (mevedel-memory-write--call
-   scope root-id
+  (mevedel-session-control-fs-call-with-locks
+   (list (mevedel-memory-write--target scope root-id))
    (lambda (_target)
      (should-error (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision))
      (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
@@ -505,8 +534,8 @@
                        (_ (mevedel-workspace-identity-ensure ,other))
                        (scope (mevedel-memory-scope-capture workspace))
                        (deadline (+ (float-time) 25)))
-                  (mevedel-memory-write--call
-                   scope (caar (plist-get scope :roots))
+                  (mevedel-session-control-fs-call-with-locks
+                   (list (mevedel-memory-write--target scope (caar (plist-get scope :roots))))
                    (lambda (_target)
                      (write-region "ready" nil ,ready nil 'silent)
                      (while (and (not (file-exists-p ,release)) (< (float-time) deadline))
@@ -531,64 +560,57 @@
           (should (equal "Other workspace edit.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
       (when (and process (process-live-p process)) (delete-process process))
       (kill-buffer output)))
-  :doc "completed target writes are reconciled after a crash before the decision"
+  :doc "an index operation failure after the topic rename restores its exact original bytes"
   t
-  (let (intent)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-       (should (eq 'before (mevedel-memory-write--state intent)))
-       (should (file-exists-p (mevedel-memory-write--pin intent)))
-       (mevedel-memory-write--run workspace claim target intent)))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should-not (mevedel-memory-decision-status workspace (plist-get item :id)))
-    (let ((decision (plist-get (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash)) :decision)))
-      (should (eq 'applied (plist-get decision :status)))
-      (should-not (file-exists-p (mevedel-memory-write--pin intent)))
-      (should (equal decision (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision)))))
-  :doc "a partial write stays visible and blocks every competing workspace at the root"
+  (let* ((id (plist-get item :id)) (index (file-name-concat memory "MEMORY.md"))
+         (topic (file-name-concat memory "topic.md"))
+         (run (symbol-function 'mevedel-session-control-fs-lock-session-run)) injected)
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-lock-session-run)
+               (lambda (owner ops)
+                 (when (eq (plist-get (car ops) :op) 'begin-files)
+                   (let ((first (seq-position ops topic (lambda (op path) (and (eq 'write-mode (plist-get op :op))
+                                                                              (equal path (plist-get op :path)))))))
+                     (should first)
+                     (should (equal index (plist-get (nth (1+ first) ops) :path)))
+                     (setq ops (append (seq-take ops (1+ first)) (list (list :op 'absent :path topic)) (nthcdr (1+ first) ops))
+                           injected t)))
+                 (funcall run owner ops))))
+      (should (string-search "all changes rolled back"
+                             (error-message-string (should-error (mevedel-memory-decision-apply workspace pass id))))))
+    (should injected)
+    (should-not (mevedel-memory-decision-status workspace id))
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file topic)))
+    (should (equal "- [Topic](topic.md) - original\n" (mevedel-session-control-fs-read-file index))))
+  :doc "SIGKILL between the topic and index renames leaves no slot; Reject restores the topic"
   t
-  (let (intent)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-       (mevedel-tool-patch-commit (list (car (plist-get intent :changes))))))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (let ((decision (plist-get (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash)) :decision)))
-      (should (eq 'recovery-required (plist-get decision :status)))
-      (should (eq 'mixed (mevedel-memory-write--state intent)))
-      (should-error (mevedel-memory-write--call scope root-id #'ignore))
-      (should-error (plist-get (mevedel-memory-decision-reject workspace pass (plist-get item :id)) :decision))
-      (should (file-exists-p (mevedel-memory-write--pin intent)))))
-  :doc "explicit rollback refuses foreign edits and restores only a known partial attempt"
+  (let* ((id (plist-get item :id)) (topic (file-name-concat memory "topic.md"))
+         (index (file-name-concat memory "MEMORY.md"))
+         (original mevedel-session-control-fs--program-script))
+    ;; Kill the dedicated target owner and its batch after the real rename, before rollback.
+    (let ((mevedel-session-control-fs--program-script
+           (string-replace "    case \"$op\" in\n      write-mode|delete-file|mkdir)\n"
+                           (concat "    if [[ $op == write-mode && $leaf == topic.md ]]; then kill -KILL \"$$\" \"$BASHPID\"; fi\n"
+                                   "    case \"$op\" in\n      write-mode|delete-file|mkdir)\n") original)))
+      (should-not (equal original mevedel-session-control-fs--program-script))
+      (should-error (mevedel-memory-decision-apply workspace pass id)))
+    (should (string-suffix-p "New topic.\n" (mevedel-session-control-fs-read-file topic)))
+    (should (equal "- [Topic](topic.md) - original\n" (mevedel-session-control-fs-read-file index)))
+    (should-not (mevedel-memory-decision-status workspace id))
+    (should (eq 'rejected (plist-get (mevedel-memory-decision-reject workspace pass id) :status)))
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file topic))))
+  :doc "a third-state edit during a partial application is preserved by both Accept and Reject"
   t
-  (let (intent)
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-write--call
-     scope root-id
-     (lambda (target)
-       (setq intent (mevedel-memory-write--prepare workspace claim target accepted item))
-       (mevedel-tool-patch-commit (list (car (plist-get intent :changes))))))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (let* ((change (car (plist-get intent :changes)))
-           (path (plist-get change :path))
-           (written (mevedel-session-control-fs-read-file path)))
-      (write-region "User changed this file.\n" nil path nil 'silent)
-      (should (eq 'recovery-required
-                  (plist-get (plist-get (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash) :rollback t) :decision) :status)))
-      (should (equal "User changed this file.\n" (mevedel-session-control-fs-read-file path)))
-      (should (file-exists-p (mevedel-memory-write--pin intent)))
-      (write-region written nil path nil 'silent)
-      (let ((decision (plist-get (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash) :rollback t) :decision)))
-        (should (eq 'unavailable (plist-get decision :status)))
-        (should (eq 'before (mevedel-memory-write--state intent)))
-        (should-not (file-exists-p (mevedel-memory-write--pin intent)))
-        (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
-      (should (eq 'applied (plist-get (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision) :status))))))
+  (let* ((id (plist-get item :id)) (topic (file-name-concat memory "topic.md")) (index (file-name-concat memory "MEMORY.md")))
+    (let ((changes (mevedel-memory-apply--changes (mevedel-memory-scope--root scope root-id) item (plist-get scope :new-file-mode))))
+      (mevedel-tool-patch-commit (list (seq-find (lambda (c) (equal topic (plist-get c :path))) changes))))
+    (write-region "User edit.\n" nil index nil 'silent)
+    (dolist (act '(mevedel-memory-decision-apply mevedel-memory-decision-reject))
+      (should (eq 'stale (plist-get (funcall act workspace pass id) :status)))
+      (should (equal "User edit.\n" (mevedel-session-control-fs-read-file index)))
+      (should (string-suffix-p "New topic.\n" (mevedel-session-control-fs-read-file topic))))
+    (write-region "- [Topic](topic.md) - original\n" nil index nil 'silent)
+    (should (eq 'rejected (plist-get (mevedel-memory-decision-reject workspace pass id) :status)))
+    (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file topic)))))
 
 (provide 'test-mevedel-memory-decision-apply)
 ;;; test-mevedel-memory-decision-apply.el ends here

@@ -132,8 +132,7 @@ explain retention for humans; they grant neither recall nor deletion authority."
                  (dolist (state states)
                    (pcase state
                      ((or 'pending 'stale) (push "Awaiting proposal decisions" reasons))
-                     ('recovery-required (push "Write recovery required" reasons))
-                     ('unavailable (push "Proposal or recovery evidence requires inspection" reasons))
+                     ('unavailable (push "Proposal requires inspection" reasons))
                      (_ (unless (mevedel-memory-decision-terminal-status-p state)
                           (push "Unresolved proposal decision" reasons)))))
                  (unless states (push "Proposal acceptance requires inspection" reasons)))

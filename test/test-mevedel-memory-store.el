@@ -115,7 +115,7 @@
                    (id (plist-get prepared :id))
                    (restored (mevedel-memory-store-read workspace id)))
               (should (equal prepared restored))
-              (should (equal scope (plist-get restored :scope)))
+              (should (equal (append '(:decision-format slots) scope) (plist-get restored :scope)))
               (should (equal prepared (mevedel-memory-store-prepare workspace claim scope (list entry) "")))
               (should-not (mevedel-journal-cleanup-expired workspace t))
               (should (= 1 (length (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root)))))

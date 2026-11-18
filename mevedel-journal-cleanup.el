@@ -64,7 +64,7 @@
          (cl-every
           (lambda (record)
             (and (hash-table-p record) (= 3 (hash-table-count record))
-                 (mevedel-journal-store-id-p (gethash "id" record))
+                 (mevedel-journal-store-decision-id-p (gethash "id" record))
                  (mevedel-journal-store-id-p (gethash "sha256" record))
                  (mevedel-journal-store-file-name-p (gethash "file" record))
                  (string-suffix-p (concat "-" (mevedel-journal-store--record-id (list :decision-id (gethash "id" record)) 'decision) ".md")
@@ -73,18 +73,24 @@
                      (and (hash-table-p record) (= 2 (hash-table-count record))
                           (stringp (gethash "file" record))
                           (mevedel-journal-store-id-p (gethash "sha256" record)))) private)
-         (let ((required (append (list (format "passes/%s/accepted.el" id) (format "passes/%s/prepared.el" id))
-                                 (mapcar (lambda (record) (format "decisions/%s.el" (gethash "id" record))) related)))
-               (paths (mapcar (lambda (record) (gethash "file" record)) private)))
+         (let* ((paths (mapcar (lambda (record) (gethash "file" record)) private))
+                ;; Only replay of an existing expiry may consume the old grammar.
+                (old (seq-some (lambda (path) (string-match-p "\\`\\(?:decisions\\|writes\\)/" path)) paths))
+                (required (append (list (format "passes/%s/accepted.el" id) (format "passes/%s/prepared.el" id))
+                                  (mapcar (lambda (record) (format "%s/%s.el" (if old "decisions" "decision-slots")
+                                                                  (gethash "id" record))) related))))
            (and (= (length paths) (length (delete-dups (copy-sequence paths))))
+                (or (not old) (cl-every (lambda (r) (mevedel-journal-store-id-p (gethash "id" r))) related))
                 (cl-every (lambda (path) (member path paths)) required)
-                (cl-every (lambda (path) (or (member path required)
-                                             (string-match-p (concat "\\`writes/" mevedel-journal-store-hash-regexp "\\.el\\'") path))) paths))))))
+                (cl-every (lambda (path)
+                            (or (member path required)
+                                (and old (string-match-p (concat "\\`writes/" mevedel-journal-store-hash-regexp "\\.el\\'") path)))) paths))))))
 
 (defun mevedel-journal-cleanup--read (root path)
   "Read a bounded immutable expiry manifest at PATH under journal ROOT."
   (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-journal-cleanup--max-bytes)))
-         (object (json-parse-string text))
+         (object (condition-case err (json-parse-string text)
+                   (json-error (error "Invalid journal expiry manifest %s: %s" path (error-message-string err)))))
          (generation (and (hash-table-p object) (gethash "generation" object)))
          (owner (and (hash-table-p object) (gethash "owner" object)))
          (expires (and (hash-table-p object) (gethash "expires-at" object)))
@@ -117,7 +123,7 @@
                                          (intern kind)) ".md")
                             file))))
                   entries))
-      (error "Invalid journal expiry manifest"))
+      (error "Invalid journal expiry manifest: %s" path))
     (list :path path :hash (secure-hash 'sha256 text) :entries entries
           :token (list :directory (mevedel-journal-store-claim-directory root 'mutation)
                        :generation generation :owner owner :expires-at expires))))
@@ -233,8 +239,28 @@ manifests are verified but not counted."
          (file-name-concat (mevedel-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
          "\\`[^.]"))))
 
-(defun mevedel-journal-cleanup--owned (workspace claim limit)
+(defun mevedel-journal-cleanup-pending-pass-p (root pass)
+  "Whether an accepted, unfinished expiry in journal ROOT retires PASS.
+Call while holding the workspace mutation flock to exclude new elections."
+  (seq-some
+   (lambda (path)
+     (unless (mevedel-session-control-fs-path-exists-p (concat path ".done"))
+       (let* ((manifest (mevedel-journal-cleanup--read root path))
+              (outcome (mevedel-journal-claim-outcome (plist-get manifest :token))))
+         (and (eq 'completed (plist-get outcome :status))
+              (not (string-empty-p (plist-get outcome :payload)))
+              (or (equal (plist-get outcome :payload) (plist-get manifest :hash))
+                  (error "Accepted journal expiry manifest changed: %s" path))
+              (seq-some (lambda (entry) (and (equal "consolidation" (gethash "kind" entry))
+                                             (equal pass (gethash "id" entry))))
+                        (plist-get manifest :entries))))))
+   (mevedel-session-control-fs-list-directory
+    (file-name-concat (mevedel-journal-store-state-directory root) "expiry")
+    (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'"))))
+
+(defun mevedel-journal-cleanup--owned (workspace claim limit owner)
   "Recover and accept expiry for WORKSPACE under CLAIM.
+OWNER holds its workspace flock from selection through manifest election.
 Select at most LIMIT content groups, including recovery.  Return
 \(:count DELETED :more MORE), where MORE is non-nil when LIMIT was reached."
   (let* ((workspace-root (mevedel-workspace-root workspace))
@@ -281,7 +307,7 @@ Select at most LIMIT content groups, including recovery.  Return
         (mevedel-session-control-fs-make-directory directory t)
         (unless (mevedel-session-control-fs-create-file path text)
           (error "Journal expiry manifest already exists"))
-        (when (mevedel-journal-claim-settle claim 'completed (secure-hash 'sha256 text))
+        (when (mevedel-journal-claim-settle claim 'completed (secure-hash 'sha256 text) owner)
           (cl-incf deleted
                    (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))))
     (list :count deleted
@@ -337,7 +363,10 @@ error in the editor, ends with nil."
                 (if (and claim digest consolidation)
                     (let* ((collected (iter-yield-from (mevedel-journal-gc workspace claim)))
                            (_ (iter-yield nil))
-                           (owned (mevedel-journal-cleanup--owned workspace claim (plist-get collected :remaining)))
+                           (owned (mevedel-session-control-fs-call-with-locks
+                                   (list (plist-get claim :directory))
+                                   (lambda (owner) (mevedel-journal-cleanup--owned
+                                                    workspace claim (plist-get collected :remaining) owner))))
                            (deleted (plist-get owned :count))
                            ;; A short batch already inspected the remaining work.
                            ;; Rescanning on any progress lets cleanup feed itself:

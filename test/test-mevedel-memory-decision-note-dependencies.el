@@ -146,14 +146,6 @@
       (should injected))
     (should (equal old-note (read-file note-path)))
     (should-not (mevedel-memory-decision-status workspace (plist-get note :id)))
-    ;; Uninspected immutable intents are candidates even when unmarked.  Prove
-    ;; marker retirement through authenticated inspection, not that hint list.
-    (let ((writes (mevedel-memory-write--list workspace)))
-      (should (= 1 (length writes)))
-      (should-not (plist-get (car writes) :error))
-      (should-not (plist-get (car writes) :marked))
-      (should-not (file-exists-p (mevedel-memory-write--pin (plist-get (car writes) :intent)))))
-    (should-not (mevedel-memory-write--recovery-candidates workspace))
     (uncite)
     (should (eq 'applied (plist-get (apply-item note) :status))))
   :doc "same-byte touch after approval capture resets age and remains a nonterminal hold"

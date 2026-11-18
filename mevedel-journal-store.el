@@ -57,6 +57,15 @@ authorizes access nor decides whether stored evidence can be deleted."
   (concat "\\`" mevedel-journal-store-hash-regexp "\\'")
   "Exact journal identity spelling.")
 
+(defconst mevedel-journal-store-decision-id-regexp
+  (concat mevedel-journal-store-hash-regexp "\\(?:\\.reverse\\|\\.attempt-[1-9][0-9]*\\)?")
+  "Proposal and optional decision slot suffix, for composing file patterns.")
+
+(defun mevedel-journal-store-decision-id-p (id)
+  "Return non-nil if ID names one immutable decision slot."
+  (and (stringp id) (let ((case-fold-search nil))
+                      (string-match-p (concat "\\`" mevedel-journal-store-decision-id-regexp "\\'") id))))
+
 (defun mevedel-journal-store-id-p (id)
   "Return non-nil when ID is an exact lowercase journal identity string."
   (and (stringp id)
@@ -214,11 +223,12 @@ KIND selects the digest, consolidation, or decision schema."
              (push key keys)
              (unless
                  (pcase key
-                   ((or :capture-id :pass-id :decision-id :proposal-id :state-hash :workspace :source-revision)
+                   (:decision-id (mevedel-journal-store-decision-id-p value))
+                   ((or :capture-id :pass-id :proposal-id :state-hash :workspace :source-revision)
                     (mevedel-journal-store-id-p value))
                    (:trigger (memq value mevedel-journal-store-triggers))
                    ((or :focus :reason) (and (stringp value) (<= (string-bytes value) 4096)))
-                   (:status (memq value '(applied rejected stale unavailable recovery-required reversed)))
+                   (:status (memq value '(applied rejected stale unavailable reversed)))
                    ((or :digests :proposals)
                     (and (proper-list-p value)
                          (or (eq key :proposals) (<= (length value) 20))

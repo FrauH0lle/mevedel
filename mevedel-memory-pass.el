@@ -284,7 +284,7 @@ yields to input."
                        (if (and (memq (plist-get result :outcome) '(success restart-required))
 				(not (plist-get result :stopped))
 				(not (plist-get result :error))
-				(not (plist-get result :recovery-required)))
+				(not (plist-get result :pass-recovery-required)))
 			   (progn
                              (plist-put state :notes-remaining (plist-get result :notes-remaining))
                              (plist-put state :remaining (plist-get result :remaining))
@@ -292,7 +292,7 @@ yields to input."
 			 (remhash key mevedel-memory-pass--drains)
 			 (plist-put state :status
                                     (cond ((plist-get result :stopped) 'aborted)
-					  ((or (plist-get result :error) (plist-get result :recovery-required)) 'error)
+					  ((or (plist-get result :error) (plist-get result :pass-recovery-required)) 'error)
 					  (t (plist-get result :outcome)))))
                        (funcall (plist-get state :callback)
 				(append (list :batch (plist-get state :batch)) result))))
@@ -852,7 +852,7 @@ here are diagnostic only."
 					     :mode (plist-get (plist-get state :telemetry) :mode)
                                              :queue-duration-ms (plist-get (plist-get state :telemetry) :queue-duration-ms)
 					     :stopped (plist-get state :stop-apply)
-					     :recovery-required (or recovery-error (and accepted (not entry)))
+					     :pass-recovery-required (or recovery-error (and accepted (not entry)))
 					     :remaining (if entry
 							    (+ (or (plist-get (plist-get state :selection) :remaining) 0)
 							       (or (plist-get result :omitted-digests) 0))
@@ -880,7 +880,7 @@ here are diagnostic only."
                                     (setf (mevedel-workspace-memory-schedule workspace)
                                           (list :after (if failed (+ (float-time) 600) 0))))
                                 (error
-                                 (plist-put (plist-get state :result) :recovery-required (error-message-string err)))))
+                                 (plist-put (plist-get state :result) :pass-recovery-required (error-message-string err)))))
                             (when (plist-get state :stop-apply)
                               (plist-put (plist-get state :result) :stopped t))
                             (when-let* ((cycle (plist-get state :cycle)))
@@ -893,7 +893,7 @@ here are diagnostic only."
                                        (plist-get (plist-get state :cycle) :inflight)
                                        (not (plist-get state :stop-apply))
                                        (not (plist-get (plist-get state :result) :error))
-                                       (not (plist-get (plist-get state :result) :recovery-required)))
+                                       (not (plist-get (plist-get state :result) :pass-recovery-required)))
                               ;; Continue by a new idle admission, never recursive
                               ;; provider dispatch or an expanding arrival chain.
                               (mevedel-memory-pass-schedule workspace))
@@ -968,7 +968,7 @@ Return non-nil if any existed."
         (when-let* ((cancel (plist-get (plist-get state :request) :cancel))) (funcall cancel))))
     (when drain
       (funcall (plist-get drain :callback) (list :outcome 'aborted :batch (plist-get drain :batch)
-                                               :recovery-required (plist-get drain :error))))
+                                               :pass-recovery-required (plist-get drain :error))))
     (and (or state drain deferred) t)))
 
 (defun mevedel-memory-pass--publish (workspace payload)
@@ -1247,7 +1247,7 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 	   (finish (lambda (result)
 		     (plist-put state :admission-aborted t)
 		     (mevedel-memory-pass--finish state result)
-		     (when-let* ((failure (plist-get (plist-get state :result) :recovery-required)))
+		     (when-let* ((failure (plist-get (plist-get state :result) :pass-recovery-required)))
 		       ;; The cancelled drain's callback may no longer be current.
 		       ;; Settlement failure must still be visible, not quiet loss.
 		       (mevedel-diagnostic-warning (mevedel-diagnostic-scope workspace) 'mevedel

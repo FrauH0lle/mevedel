@@ -63,7 +63,6 @@
     (cl-flet ((seen (action status &rest keys)
                 (list (append (list :action action :hash "v1" :status status :at (- now day)) keys))))
       (should (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v1"))
-      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'recovery-required) "v1"))
       (dolist (status '(applied rejected reversed stale unavailable))
         (should-not (mevedel-memory-notes--suppressed (seen 'note-delete status) "v1")))
       (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v9")))))

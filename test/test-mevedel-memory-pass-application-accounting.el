@@ -26,7 +26,7 @@
 (defun mevedel-test-application--accepted (proposals &optional pass mode)
   "Wrap PROPOSALS in bookkeeping metadata for PASS with frozen MODE."
   (list :prepared (list :id (or pass "current")
-                        :scope (list :roots (list (cons "notes" (list :kind 'notes :mode (or mode 'auto))))))
+                        :scope (list :decision-format 'slots :roots (list (cons "notes" (list :kind 'notes :mode (or mode 'auto))))))
         :proposals proposals))
 
 (defmacro mevedel-test-application--fixture (&rest body)
@@ -43,7 +43,8 @@
           (state (list :workspace workspace :origin-buffer (current-buffer) :settled t))
           (_identity (mevedel-workspace-identity-ensure root)))
      (unwind-protect
-         (progn ,@body)
+         ;; These symbolic proposal names have no persisted slots.
+         (cl-letf (((symbol-function 'mevedel-memory-decision-status) (lambda (&rest _) nil))) ,@body)
        (when-let* ((job (plist-get state :application)))
          (plist-put job :done t)
          (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer))))

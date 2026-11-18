@@ -102,7 +102,7 @@
             (should (= 3 callbacks))
             (should (mevedel-journal-claim-owned-p claim)))
         (mevedel-journal-claim-settle claim 'cancelled ""))))
-  :doc "resource access during the final ownership check holds deletion and abandons its prepared write"
+  :doc "resource access during the final ownership check holds deletion without electing a slot"
   (dolist (automatic-p '(nil t))
     (mevedel-test-decision-transaction
       (let* ((first (mevedel-memory-decision-apply workspace pass (plist-get (car proposals) :id)))
@@ -116,7 +116,7 @@
               (with-current-buffer conversation
                 (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
               (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
-                         (lambda (ws root target changes currentp &optional before-write)
+                         (lambda (ws root target changes currentp &optional before-write acknowledged)
                            (funcall commit ws root target changes
                                     (lambda ()
                                       (prog1 (funcall currentp)
@@ -128,7 +128,7 @@
                                             (mevedel-resource-prepare
                                              'read (mevedel-memory-notes-address (plist-get proposal :file))
                                              (list :session mevedel--session))))))
-                                    before-write))))
+                                    before-write acknowledged))))
                 (setq result (mevedel-memory-decision-apply
                               workspace pass (plist-get proposal :id)
                               :automatic (and automatic-p automatic)
@@ -138,88 +138,27 @@
               (should (eq 'held (plist-get result :status)))
               (should-not (plist-get result :continuation))
               (should (file-exists-p path))
-              (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-              ;; Checked abandonment retires the marker, not the source note.
-              (should-not (plist-get (mevedel-memory-decision-inspect
-                                     workspace :pass pass :proposal (plist-get proposal :id)) :writes)))
+              (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id))))
           (kill-buffer conversation))))))
 
 (mevedel-deftest mevedel-memory-decision-apply/persistence ()
-  ,test
-  (test)
-  :doc "intent and marker batches refuse directory failures and exclusive-create collisions without deleting notes"
-  (dolist (fault '(directory collision))
-    (dolist (stage '(intent marker))
-      (mevedel-test-decision-transaction
-        (let* ((program (symbol-function 'mevedel-session-control-fs--run-program))
-               (proposal (car proposals))
-               (note (plist-get (cdr (car (plist-get proposal :before))) :path))
-               injected blocker error-text)
-          (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-                     (lambda (operations &rest args)
-                       (when-let* ((create (seq-find
-                                           (lambda (op)
-                                             (and (eq (plist-get op :op) 'create)
-                                                  (string-match-p
-                                                   (if (eq stage 'intent) "/writes/[^/]+\\.el\\'" "/pending/[^/]+\\.pin\\'")
-                                                   (plist-get op :path)))) operations))
-                                   ((not injected)))
-                         (setq injected t)
-                         ;; Exercise the real carrier's failure, not a stubbed
-                         ;; exception that could miss the combined operations.
-                         (should (= 2 (length operations)))
-                         (should (eq 'make-directory (plist-get (car operations) :op)))
-                         (setq blocker (if (eq fault 'directory)
-                                           (directory-file-name (file-name-directory (plist-get create :path)))
-                                         (plist-get create :path)))
-                         (if (eq fault 'directory)
-                             (when (file-directory-p blocker) (delete-directory blocker))
-                           (make-directory (file-name-directory blocker) t))
-                         (write-region "Foreign state" nil blocker nil 'silent))
-                       (apply program operations args))))
-            (setq error-text
-                  (error-message-string
-                   (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))))))
-          (should injected)
-          (if (eq fault 'collision)
-            (should (equal (if (eq stage 'intent) "Memory write intent already exists"
-                             "Memory root marker already exists") error-text))
-            (should (string-match-p "Portable control operation failed" error-text))
-            (should (string-match-p (regexp-quote blocker) error-text)))
-          (should (equal "Foreign state" (mevedel-session-control-fs-read-file blocker)))
-          (should (file-exists-p note))
-          (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))))
-  :doc "changed intent and marker bytes after persistence are refused before forward deletion"
-  (dolist (stage '(intent marker))
-    (mevedel-test-decision-transaction
-      (let* ((program (symbol-function 'mevedel-session-control-fs--run-program))
-             (proposal (car proposals))
-             (note (plist-get (cdr (car (plist-get proposal :before))) :path))
-             injected changed error-text)
-        (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-                   (lambda (operations &rest args)
-                     (prog1 (apply program operations args)
-                       (when-let* ((create (seq-find
-                                           (lambda (op)
-                                             (and (eq (plist-get op :op) 'create)
-                                                  (string-match-p
-                                                   (if (eq stage 'intent) "/writes/[^/]+\\.el\\'" "/pending/[^/]+\\.pin\\'")
-                                                   (plist-get op :path)))) operations))
-                                   ((not injected)))
-                         (setq injected t changed (plist-get create :path))
-                         (should (= 2 (length operations)))
-                         (write-region "\n" nil changed t 'silent))))))
-          (setq error-text
-                (error-message-string
-                 (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))))))
-        (should injected)
-        (if (eq stage 'intent)
-            (should (equal "Memory write intent changed" error-text))
-          (should (string-match-p "Portable control operation failed" error-text))
-          (should (string-match-p (regexp-quote changed) error-text)))
-        (should (string-suffix-p "\n" (mevedel-session-control-fs-read-file changed)))
-        (should (file-exists-p note))
-        (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))))
+  (mevedel-test-decision-transaction
+    (let* ((proposal (car proposals)) (id (plist-get proposal :id))
+           (note (plist-get (cdar (plist-get proposal :before)) :path))
+           (slot (file-name-concat (mevedel-memory-decision--directory workspace) (concat id ".el")))
+           (elect (symbol-function 'mevedel-memory-decision--elect)) injected)
+      ;; Only the elector may create the slot. Even a foreign file arriving
+      ;; after the target acknowledged deletion must never be overwritten.
+      (cl-letf (((symbol-function 'mevedel-memory-decision--elect)
+                 (lambda (&rest args)
+                   (should-not (file-exists-p note))
+                   (setq injected t)
+                   (write-region "Foreign state" nil slot nil 'silent)
+                   (apply elect args))))
+        (should-error (mevedel-memory-decision-apply workspace pass id)))
+      (should injected)
+      (should (equal "Foreign state" (mevedel-session-control-fs-read-file slot)))
+      (should-error (mevedel-memory-decision-status workspace id)))))
 
 (mevedel-deftest mevedel-memory-decision-inspect/transaction ()
   ,test
@@ -258,9 +197,6 @@
       (should (= 3 (length (plist-get (mevedel-memory-decision-inspect workspace) :rows)))))))
 
 (mevedel-deftest mevedel-memory-decision-apply/serial ()
-  ,test
-  (test)
-  :doc "intact serial continuity skips history; an intervening accepted decision is recovered before return"
   (mevedel-test-decision-transaction
     (let ((recover (symbol-function 'mevedel-memory-decision-recover))
           (program (symbol-function 'mevedel-session-control-fs--run-program))
@@ -269,74 +205,14 @@
                  (lambda (&rest args) (cl-incf recoveries) (apply recover args)))
                 ((symbol-function 'mevedel-session-control-fs--run-program)
                  (lambda (&rest args) (cl-incf programs) (apply program args))))
-        (setq continuation
-              (plist-get (mevedel-memory-decision-apply workspace pass (plist-get (car proposals) :id)) :continuation))
-        (should (= 1 recoveries))
-        (setq programs 0)
-        (setq continuation
-              (plist-get (mevedel-memory-decision-apply workspace pass (plist-get (cadr proposals) :id)
-                                                       :continuation continuation) :continuation))
-        (should (= 1 recoveries))
-        ;; Compiled matched 1-pass/4-note probe: 60 programs per sequenced
-        ;; application. Twenty percent slack allows 72, not another scan.
-        (should (<= programs 72))
-        (let (injected)
-          (cl-letf (((symbol-function 'mevedel-journal-store-publish-decision)
-                     (lambda (&rest _args) (setq injected t) (error "Injected publication interruption"))))
-            (should (equal "Injected publication interruption"
-                           (error-message-string
-                            (should-error (mevedel-memory-decision-reject
-                                           workspace pass (plist-get (nth 2 proposals) :id) :reason "Foreign decision"))))))
-          (should injected))
-        (should-not (mevedel-memory-decision-status workspace (plist-get (nth 2 proposals) :id)))
-        (let ((before recoveries))
-          (should (eq 'applied (plist-get (mevedel-memory-decision-apply
-                                          workspace pass (plist-get (car proposals) :id)
-                                          :continuation continuation) :status)))
-          (should (= (1+ before) recoveries)))
-        (should (equal "Foreign decision"
-                       (plist-get (mevedel-memory-decision-status workspace (plist-get (nth 2 proposals) :id)) :reason))))))
-  :doc "early and prepared late holds both discard continuity and force recovery on the next decision"
-  (dolist (late '(nil t))
-    (mevedel-test-decision-transaction
-      (let* ((first (mevedel-memory-decision-apply workspace pass (plist-get (car proposals) :id)))
-             (proposal (cadr proposals))
-             (path (plist-get (cdr (car (plist-get proposal :before))) :path))
-             (prepare (symbol-function 'mevedel-memory-write--prepare))
-             (abandon (symbol-function 'mevedel-memory-write--abandon))
-             (recover (symbol-function 'mevedel-memory-decision-recover))
-             (buffer (find-file-noselect path))
-             (prepared 0) (abandoned 0) (recoveries 0) held holding)
-        (unwind-protect
-            (cl-letf (((symbol-function 'mevedel-memory-write--prepare)
-                       (lambda (&rest args)
-                         (prog1 (apply prepare args)
-                           (cl-incf prepared)
-                           (when late (setq holding t)))))
-                      ((symbol-function 'mevedel-memory-notes-in-use-p)
-                       (lambda (&rest _) holding))
-                      ((symbol-function 'mevedel-memory-write--abandon)
-                       (lambda (&rest args) (cl-incf abandoned) (apply abandon args)))
-                      ((symbol-function 'mevedel-memory-decision-recover)
-                       (lambda (&rest args) (cl-incf recoveries) (apply recover args))))
-              (unless late (with-current-buffer buffer (insert "unsaved")))
-              (setq held (mevedel-memory-decision-apply
-                          workspace pass (plist-get proposal :id) :continuation (plist-get first :continuation)))
-              (should (eq 'held (plist-get held :status)))
-              (should-not (plist-get held :continuation))
-              (should (= (if late 1 0) prepared abandoned))
-              (should (= 0 recoveries))
-              (should (file-exists-p path))
-              (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-              (should-not (plist-get (mevedel-memory-decision-inspect
-                                     workspace :pass pass :proposal (plist-get proposal :id)) :writes))
-              (setq holding nil late nil)
-              (should (eq 'applied (plist-get (mevedel-memory-decision-apply
-                                              workspace pass (plist-get (nth 2 proposals) :id)
-                                              :continuation (plist-get held :continuation)) :status)))
-              (should (= 1 recoveries)))
-          (with-current-buffer buffer (set-buffer-modified-p nil))
-          (kill-buffer buffer))))))
+        (dolist (proposal proposals)
+          (setq programs 0)
+          (let ((result (mevedel-memory-decision-apply workspace pass (plist-get proposal :id) :continuation continuation)))
+            (should (eq 'applied (plist-get result :status)))
+            (setq continuation (plist-get result :continuation)))
+          ;; Matched four-note probe: 31 programs per decision.
+          (should (<= programs 38)))
+        (should (zerop recoveries))))))
 
 (provide 'test-mevedel-memory-decision-transaction)
 ;;; test-mevedel-memory-decision-transaction.el ends here

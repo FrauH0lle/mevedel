@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Real accepted passes and write-backed decisions exercise recovery and pending
+;; Real accepted passes and slot-backed decisions exercise recovery and pending
 ;; selection over retained history.  Counters observe real readers, not stubs
 ;; replacing authentication or application.
 
@@ -24,58 +24,6 @@
 (require 'memory-history-fixtures
          (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
 
-(mevedel-deftest mevedel-memory-write--list/history
-    (:vars* ((root (mevedel-test-memory-history-root 'write-list/history))
-             (workspace (mevedel-workspace--create :root root))
-             (mevedel-memory-dirs nil)
-             (mevedel-journal-cleanup--inhibit-scheduling t)
-             (identity (mevedel-workspace-identity-ensure root))
-             (bundles (mevedel-test-memory-history-build
-                       'write-list/history root
-                       (lambda () (mevedel-test-memory-history-create workspace 2 3 100)))))
-            :after-each ((remhash workspace mevedel-memory-write--inspected)
-                         (delete-directory root t)))
-  ,test
-  (test)
-  :doc "authenticates one source bundle per pass and preserves all write rows"
-  (let ((reader (symbol-function 'mevedel-memory-store-accepted)) (calls 0))
-    (cl-letf (((symbol-function 'mevedel-memory-store-accepted)
-               (lambda (&rest args) (cl-incf calls) (apply reader args))))
-      (let ((rows (mevedel-memory-write--list workspace)))
-        (should (= 6 (length rows)))
-        (dolist (row rows)
-          (should (plist-get row :intent))
-          (should-not (plist-get row :error))
-          (should-not (plist-get row :marked)))))
-    (should (= 2 calls)))
-  :doc "the read-only collector authenticates each write once, not once per decision"
-  (let ((reader (symbol-function 'mevedel-memory-write--read)) (calls 0))
-    (cl-letf (((symbol-function 'mevedel-memory-write--read)
-               (lambda (&rest args) (cl-incf calls) (apply reader args))))
-      (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
-        (should (= 6 (length rows)))
-        (dolist (row rows)
-          (should (eq 'applied (plist-get row :status)))
-          (should-not (plist-get row :error)))))
-    (should (= 6 calls)))
-  :doc "new observations reject changed source and intent bytes after a successful listing"
-  (let* ((rows (mevedel-memory-write--list workspace))
-         (row (car rows))
-         (intent (plist-get row :intent))
-         (source (file-name-concat (mevedel-memory-store--directory workspace (plist-get intent :pass)) "accepted.el"))
-         (write (file-name-concat (mevedel-memory-write--directory workspace) (concat (plist-get intent :id) ".el"))))
-    (dolist (path (list source write))
-      (let ((text (mevedel-session-control-fs-read-file path)))
-        (unwind-protect
-            (progn
-              (write-region (concat text "\n") nil path nil 'silent)
-              (let* ((changed (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace)))
-                     (item (seq-find (lambda (item) (equal (plist-get intent :pass) (plist-get item :id))) changed)))
-                (should (eq 'unavailable (plist-get item :status)))
-                (should (equal (if (equal path source) "Accepted memory bundle changed" "Memory write intent changed")
-                               (plist-get item :error)))))
-          (write-region text nil path nil 'silent))))))
-
 (mevedel-deftest mevedel-memory-decision--record-batch
     (:vars* ((root (mevedel-test-memory-history-root 'decision--record-batch))
              (workspace (mevedel-workspace--create :root root))
@@ -86,40 +34,28 @@
                        'decision--record-batch root
                        (lambda () (mevedel-test-memory-history-create workspace 1 2 100))))
              (paths (mevedel-session-control-fs-list-directory
-                     (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp)))
+                     (mevedel-memory-decision--directory workspace) mevedel-memory-decision--file-regexp)))
      :after-each ((delete-directory root t)))
   ,test
   (test)
-  :doc "authenticates the same bounded metadata using two programs per batch, not per decision"
+  :doc "authenticates the same bounded metadata using one program per batch, not per decision"
   (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) (calls 0) ordinary batched)
     (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                (lambda (&rest args) (cl-incf calls) (apply program args))))
       (setq ordinary (mapcar (lambda (path) (cons path (mevedel-memory-decision--record workspace path))) paths))
-      (should (= 4 calls))
-      (setq calls 0 batched (mevedel-memory-decision--record-batch workspace paths))
       (should (= 2 calls))
+      (setq calls 0 batched (mevedel-memory-decision--record-batch workspace paths))
+      (should (= 1 calls))
       (should (equal ordinary batched)))
     (dolist (row batched)
-      (should (= 8 (length (cdr row))))
+      (should (equal (plist-get (cdr row) :hash) (secure-hash 'sha256 (mevedel-session-control-fs-read-file (car row)))))
       (should-not (plist-get (cdr row) :accepted))))
-  :doc "rejects a decision changed between its byte read and batched authentication"
-  (let* ((path (car paths))
-         (text (mevedel-session-control-fs-read-file path))
-         (program (symbol-function 'mevedel-session-control-fs-run-program)) injected)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                   (lambda (operations &rest args)
-                     (prog1 (apply program operations args)
-                       (when (and (not injected) (equal paths (mapcar (lambda (op) (plist-get op :path)) operations)))
-                         (setq injected t)
-                         (write-region (concat text "\n") nil path nil 'silent))))))
-          (let ((failure (should-error (mevedel-memory-decision--record-batch workspace paths)
-                                       :type 'file-error)))
-            (should (equal "Portable control operation failed" (cadr failure)))
-            (should (equal path (caddr failure))))
-          (should injected))
-      (write-region text nil path nil 'silent))
-    (should (= 2 (length (mevedel-memory-decision--record-batch workspace paths)))))
+  :doc "a fresh batch rejects damaged slot bytes without discarding the evidence"
+  (let* ((path (car paths)) (text (mevedel-session-control-fs-read-file path)))
+    (should (= 2 (length (mevedel-memory-decision--record-batch workspace paths))))
+    (write-region (concat text "\n") nil path nil 'silent)
+    (should (equal "Accepted memory decision changed" (error-message-string (should-error (mevedel-memory-decision--record-batch workspace paths)))))
+    (should (equal (concat text "\n") (mevedel-session-control-fs-read-file path))))
   :doc "publication discards metadata proofs before inspecting the next decision"
   (let* ((first (mevedel-memory-decision--record workspace (cadr paths)))
          (metadata (plist-get first :metadata))
@@ -167,7 +103,7 @@
             :after-each ((delete-directory root t)))
   ,test
   (test)
-  :doc "recovery authenticates one bounded bundle per pass despite interleaved write-backed decisions"
+  :doc "recovery authenticates one bounded bundle per pass despite interleaved slot-backed decisions"
   (let ((reader (symbol-function 'mevedel-memory-store-accepted))
         (listing (symbol-function 'mevedel-session-control-fs-list-directory))
         (reads 0) paths)
@@ -189,41 +125,6 @@
         ;; Fully published history is a no-op recovery.
         (should-not (mevedel-memory-decision-recover workspace))))
     (should (= 3 reads)))
-  :doc "write evidence reuses only the exact coordinator and source proofs from this read"
-  (let* ((accepted (car bundles))
-         (proposal (car (plist-get accepted :proposals)))
-         (decision (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-         (path (file-name-concat (mevedel-memory-decision--directory workspace)
-                                 (concat (plist-get decision :decision-id) ".el")))
-         (private (mevedel-memory-decision--read workspace path))
-         (intent (plist-get private :intent))
-         (coordinator (plist-get private :claim))
-         (program (symbol-function 'mevedel-session-control-fs-run-program))
-         (calls 0) ordinary reused ordinary-calls)
-    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-               (lambda (&rest args) (cl-incf calls) (apply program args))))
-      (setq ordinary (mevedel-memory-write--read workspace (plist-get intent :id) (plist-get intent :hash) accepted)
-            ordinary-calls calls calls 0
-            reused (mevedel-memory-write--read workspace (plist-get intent :id) (plist-get intent :hash)
-                                               accepted nil coordinator))
-      (should (equal ordinary reused))
-      (should (= 1 (- ordinary-calls calls))))
-    ;; A different decision coordinator is legitimate after write recovery.
-    ;; Its proof must not replace the original coordinator's authentication.
-    (dolist (other (list (plist-put (copy-sequence coordinator) :owner (make-string 64 ?f))
-                        (plist-put (copy-sequence coordinator) :directory root)))
-      (setq calls 0)
-      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                 (lambda (&rest args) (cl-incf calls) (apply program args))))
-        (should (equal ordinary
-                       (mevedel-memory-write--read workspace (plist-get intent :id) (plist-get intent :hash)
-                                                  accepted nil other))))
-      (should (= ordinary-calls calls)))
-    (should (equal "Invalid memory write intent"
-                   (error-message-string
-                    (should-error
-                     (mevedel-memory-write--read workspace (plist-get intent :id) (plist-get intent :hash)
-                                                (cadr bundles) nil coordinator))))))
   :doc "pending selection reads the public journal once and never reapplies terminal history"
   (let ((reader (symbol-function 'mevedel-journal-store-entries))
         (calls 0) notified)
@@ -244,35 +145,27 @@
       (mevedel-test-memory-history-owned workspace
         (should-not (mevedel-memory-store-recover workspace))))
     (should (= 0 calls)))
-  :doc "each new observation rejects tampered accepted bytes, claim outcomes and write evidence"
+  :doc "each new observation rejects tampered accepted bytes, claim outcomes and decision slots"
   (let* ((accepted (car bundles))
          (prepared (plist-get accepted :prepared))
          (proposal (car (plist-get accepted :proposals)))
          (decision (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-         (private (mevedel-memory-decision--published workspace decision))
-         (intent (plist-get private :intent))
          (decision-path (file-name-concat (mevedel-memory-decision--directory workspace)
                                           (concat (plist-get decision :decision-id) ".el")))
          (paths (list (file-name-concat (mevedel-memory-store--directory workspace (plist-get prepared :id)) "accepted.el")
                       (mevedel-journal-claim--path (plist-get prepared :claim) t)
-                      decision-path
-                      (file-name-concat (mevedel-memory-write--directory workspace) (concat (plist-get intent :id) ".el")))))
-    (should (equal "Invalid memory write intent"
-                   (error-message-string
-                    (should-error (mevedel-memory-write--read workspace (plist-get intent :id)
-                                                             (plist-get intent :hash) (cadr bundles))))))
+                      decision-path)))
     (dolist (path paths)
       (let ((text (mevedel-session-control-fs-read-file path))
             (expected (cond ((equal path decision-path) "Accepted memory decision changed")
-                            ((equal path (car (last paths))) "Memory write intent changed")
                             (t "Accepted memory bundle changed"))))
         (unwind-protect
             (progn
               (write-region (cond ((equal path (mevedel-journal-claim--path (plist-get prepared :claim) t))
                                    (string-replace (plist-get accepted :hash) (make-string 64 ?f) text))
                                   ((equal path decision-path)
-                                   ;; A forged grouping hint must not bypass authentication.
-                                   (string-replace (plist-get prepared :id) (make-string 64 ?f) text))
+                                   ;; A noncanonical slot must not pass a fresh observation.
+                                   (concat text "\n"))
                                   (t (concat text "\n")))
                             nil path nil 'silent)
               (mevedel-test-memory-history-owned workspace
@@ -313,25 +206,25 @@
          (proposal (car (plist-get accepted :proposals)))
          (path (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el"))
          (text (mevedel-session-control-fs-read-file path))
-         (retire (symbol-function 'mevedel-memory-write--retire)) injected)
+         (publish (symbol-function 'mevedel-memory-decision--publish-accepted)) injected)
     (unwind-protect
-        ;; Retirement runs after durable acceptance settled the owned phase
-        ;; and before publication: change the bundle in that gap.
-        (cl-letf (((symbol-function 'mevedel-memory-write--retire)
+        (cl-letf (((symbol-function 'mevedel-memory-decision--publish-accepted)
                    (lambda (&rest args)
-                     (prog1 (apply retire args)
-                       (setq injected t)
-                       (write-region (concat text "\n") nil path nil 'silent)))))
+                     (setq injected t)
+                     (write-region (concat text "\n") nil path nil 'silent)
+                     (apply publish args))))
           (should (equal "Accepted memory bundle changed"
                          (error-message-string
                           (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id)))))))
       (write-region text nil path nil 'silent))
     (should injected)
-    ;; The accepted decision exists privately but was never published.
-    (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-    (should-not (plist-get (mevedel-memory-decision-inspect workspace :pass pass :proposal (plist-get proposal :id)) :writes))
-    (mevedel-memory-decision-recover-pending workspace)
-    (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status))))
+    (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
+    (should-not (seq-find (lambda (entry) (equal (plist-get entry :proposal-id) (plist-get proposal :id)))
+                          (mevedel-journal-store-entries root)))
+    (mevedel-test-memory-history-owned workspace (should (mevedel-memory-decision-recover workspace)))
+    (should (seq-find (lambda (entry) (and (equal (plist-get entry :proposal-id) (plist-get proposal :id))
+                                           (eq 'applied (plist-get entry :status))))
+                      (mevedel-journal-store-entries root))))
   :doc "a later pass bundle changed after selection fails closed at its own owned application"
   (let* ((created (mevedel-test-memory-history-create workspace 2 1 100 t))
          (pending (car created))

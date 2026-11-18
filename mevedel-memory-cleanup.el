@@ -25,16 +25,9 @@ FILE is relative to the private journal state directory."
     (list :file file :sha256 expected)))
 
 (defun mevedel-memory-cleanup--history (workspace accepted entries)
-  "Capture terminal ACCEPTED pass history in WORKSPACE from public ENTRIES.
-Every decision must be published, every proposal terminal, and every
-write resolved without a target marker. Signal when dependencies remain."
+  "Capture published, terminal ACCEPTED pass slots in WORKSPACE from ENTRIES."
   (let ((history (mevedel-memory-decision-retention workspace accepted entries)))
-    (list :private (mapcar (lambda (file)
-                             ;; Write intents are recaptured byte-exactly here.
-                             (if (string-prefix-p "writes/" (plist-get file :file))
-                                 (mevedel-memory-cleanup--file workspace (plist-get file :file) (plist-get file :sha256))
-                               file))
-                           (plist-get history :private))
+    (list :private (plist-get history :private)
           :related (vconcat (plist-get history :related))
           :expires (+ (plist-get history :resolved-at) (* mevedel-memory-history-max-age-days 86400)))))
 
@@ -60,7 +53,7 @@ dependencies; this function never deletes or publishes state."
                  (accepted (mevedel-memory-store-accepted workspace id))
                  (review (plist-get accepted :review))
                  (prepared (plist-get accepted :prepared)))
-            (when (and accepted
+            (when (and (mevedel-memory-decision--slot-eligible-p accepted)
                        (cl-every (lambda (digest)
                                    (not (mevedel-session-control-fs-path-exists-p
                                          (mevedel-memory-store--pin workspace id (plist-get digest :id)))))

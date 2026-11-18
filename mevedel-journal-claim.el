@@ -163,10 +163,14 @@ OBSERVATION is a native read result from this operation's batch, as for
       (error "Journal outcome does not belong to this claim"))
     outcome))
 
-(defun mevedel-journal-claim--finish (token status payload)
+(defun mevedel-journal-claim--finish (token status payload &optional owner)
   "Exclusively settle TOKEN with STATUS and PAYLOAD.
+OWNER, when supplied, must still hold the exact claim-directory flock.
 The exclusive create is the election between the owner and a takeover.
 Return the accepted outcome, or nil when another outcome already won."
+  (when (and owner (not (and (process-live-p owner)
+                             (equal (process-get owner 'lock) (plist-get token :directory)))))
+    (error "Journal settlement lost its original lock owner"))
   (let ((record (append (mevedel-journal-claim--record token)
                         (list :status (symbol-name status) :payload payload))))
     (let ((results
@@ -179,7 +183,7 @@ Return the accepted outcome, or nil when another outcome already won."
                            :content (number-to-string (plist-get token :expires-at)))))
              (list (list :op 'create :path (mevedel-journal-claim--path token t)
                          :content (json-serialize record))))
-            (plist-get token :directory))))
+            (or owner (plist-get token :directory)))))
       (unless (seq-some (lambda (result) (memq (plist-get result :status) '(conflict mismatch absent))) results)
         (mapc #'mevedel-session-control-fs-program-value results)
         (plist-put record :status status)))))
@@ -250,15 +254,16 @@ admission claim; it must be future and no later than SECONDS from now."
             (mapc #'mevedel-session-control-fs-program-value results)
             token))))))
 
-(defun mevedel-journal-claim-settle (token status payload)
+(defun mevedel-journal-claim-settle (token status payload &optional owner)
   "Settle TOKEN with STATUS and a frozen string PAYLOAD.
+If supplied, OWNER elects the outcome under its continuously held flock.
 STATUS is `completed', `failed', or `cancelled'.  Return the accepted
 outcome, or nil for an expired, foreign, or already-settled token.  Only a
 successful completed outcome authorizes publication of its exact payload."
   (unless (and (memq status '(completed failed cancelled)) (stringp payload))
     (error "Invalid journal claim settlement"))
   ;; The election's own `verify' of the claim bytes is the ownership proof.
-  (mevedel-journal-claim--finish token status payload))
+  (mevedel-journal-claim--finish token status payload owner))
 
 (iter-defun mevedel-journal-claim-prune (directory protected limit)
   "Yield while deleting at most LIMIT settled claim pairs in DIRECTORY.

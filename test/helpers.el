@@ -649,6 +649,8 @@ Always restore unread events and close only connections created by BODY."
   (let* ((root (file-name-as-directory (make-temp-file "mc-" t)))
          (temporary-file-directory root)
          (default-directory root)
+         ;; A command invoked directly (notably `undo') can leave this set.
+         (this-command nil)
          (process-environment (copy-sequence process-environment))
          (tramp-compat-temporary-file-directory root)
          ;; TRAMP expands this under the target's own remote-tmpdir too, so an

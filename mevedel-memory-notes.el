@@ -515,13 +515,13 @@ When PATHS is a hash table of current inventory paths, omit absent sources."
                   (gethash (plist-get proposal :file) table))))))))
 
 (defun mevedel-memory-notes--suppressed (observations version)
-  "Return a pending or recovery hold for VERSION in OBSERVATIONS, or nil.
+  "Return a pending decision hold for VERSION in OBSERVATIONS, or nil.
 Completed outcomes remain evidence, not a second modification-age clock."
   (when (seq-some (lambda (observation)
                     (and (equal version (plist-get observation :hash))
-                         (memq (plist-get observation :status) '(pending recovery-required))))
+                         (eq (plist-get observation :status) 'pending)))
                   observations)
-    "A previous decision is still pending or requires recovery"))
+    "A previous decision is still pending"))
 
 
 ;;
@@ -1145,10 +1145,11 @@ the cockpit or retain their review's history.  Return (REJECTED . FAILED)."
                 ;; A pending write or another owner leaves the older
                 ;; disposition for a later supersession or the cockpit.
                 (condition-case nil
-                    (progn
-                      (mevedel-memory-decision-reject workspace id (plist-get proposal :id)
-                                                      :reason mevedel-memory-notes-superseded-reason)
-                      (cl-incf rejected))
+                    (if (eq 'rejected (plist-get (mevedel-memory-decision--transact
+                                                  workspace id (plist-get proposal :id) 'reject :superseded-by pass
+                                                  :reason mevedel-memory-notes-superseded-reason) :status))
+                        (cl-incf rejected)
+                      (cl-incf failed))
                   (error (cl-incf failed)))))))))
     (cons rejected failed)))
 
@@ -1217,28 +1218,20 @@ empty; absence is a state.  Links and other entries signal."
       (setq directory (file-name-directory (directory-file-name directory))))
     (nreverse ancestors)))
 
-(defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
+(defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write acknowledged)
   "Permanently delete shared-note CHANGES below ROOT in WORKSPACE.
 TARGET and CURRENTP guard the existing write operation.  BEFORE-WRITE rechecks
 forward admission; a final local-use check follows the yielding ownership
 checks.  Active use and unsaved buffers still prevent deletion.
 The native deletion checks the reviewed bytes and mode.  No undo or trash copy
-is created, and this entry point cannot restore a deleted file."
-  (let ((lock (plist-get target :directory)))
+is created, and this entry point cannot restore a deleted file.  Call
+ACKNOWLEDGED only after checking the deletion reply from TARGET."
+  (progn
     (dolist (change changes)
       (let* ((before (plist-get change :before))
              (path (plist-get before :path))
              (relative (file-relative-name path (plist-get root :dir)))
-             (fence (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
-                                :content (json-serialize (mevedel-journal-claim--record target)))
-                          (list :op 'absent :path (mevedel-journal-claim--path target t))
-                          (list :op 'before-time :path lock
-                                :content (number-to-string (plist-get target :expires-at)))))
-             (proof (cond ((not (plist-get before :exists)) (list (list :op 'absent :path path)))
-                          ((plist-get before :directory)
-                           (list (list :op 'directory-p :path path) (list :op 'verify-list :path path :content "")))
-                          (t (list (list :op 'verify-hash :path path :content (plist-get before :hash))
-                                   (list :op 'verify-mode :path path :content (format "%o" (plist-get before :mode))))))))
+             (proof (mevedel-memory-write--verify before)))
         (unless (and (eq (plist-get change :action) 'delete)
                      (equal path (plist-get change :path))
                      (not (plist-get (plist-get change :after) :exists)))
@@ -1252,20 +1245,19 @@ is created, and this entry point cannot restore a deleted file."
         (when (mevedel-memory-notes-in-use-p workspace relative)
           (signal 'mevedel-memory-decision--held '("Shared file is in active local use")))
         (dolist (result
-                 (mevedel-session-control-fs-run-program
-                  (append
-                   fence proof
+                 (mevedel-session-control-fs-lock-session-run
+                  target (append proof
                    (cons (list :op (if (plist-get before :directory) 'delete-empty-directory 'delete-file)
                                :path path)
                          (mapcar (lambda (directory)
                                    (list :op 'delete-empty-directory :path directory :optional t))
-                                 (mevedel-memory-notes--ancestors path (plist-get root :dir)))))
-                  lock))
+                                 (mevedel-memory-notes--ancestors path (plist-get root :dir)))))))
           ;; Ancestors that are not empty simply stay.
           (unless (or (eq (plist-get result :status) 'ok)
                       (and (eq (plist-get result :op) 'delete-empty-directory)
                            (not (equal (plist-get result :path) path))))
-            (mevedel-session-control-fs-program-value result)))))))
+            (mevedel-session-control-fs-program-value result))))))
+  (when acknowledged (funcall acknowledged)))
 
 (provide 'mevedel-memory-notes)
 ;;; mevedel-memory-notes.el ends here

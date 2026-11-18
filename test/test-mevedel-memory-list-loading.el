@@ -184,7 +184,7 @@
       (should-not mevedel-memory-list--job)
       (let ((header (mevedel-memory-list--header nil context)))
         (should (string-search "History not loaded" header))
-        (should (string-search "0 pending | 0 recovery (cached)" header)))
+        (should (string-search "0 pending (cached)" header)))
       ;; Refresh and recovery completion keep Memories history-free.
       (mevedel-test-memory-list-await)
       (mevedel-memory-list-refresh)
@@ -197,7 +197,7 @@
       (mevedel-test-memory-list-await)
       (should (eq 'candidates mevedel-memory-list--view))
       (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
-      (should (string-search "1 pending | 0 recovery |" (mevedel-memory-list--header nil context)))
+      (should (string-search "1 pending |" (mevedel-memory-list--header nil context)))
       (should (= 1 (length tabulated-list-entries)))))
   :doc "earlier topic rows show at once marked refreshing, and refresh in place, including on g"
   (progn
@@ -262,7 +262,7 @@
         (should-not (string-search "refreshing memories" (mevedel-memory-list--header nil context))))))
   :doc "observed alerts open Candidates, which wait for the history scan"
   (progn
-    (setf (mevedel-workspace-memory-observation workspace) (list :at (float-time) :pending 0 :recovery 1 :unavailable 0))
+    (setf (mevedel-workspace-memory-observation workspace) (list :at (float-time) :pending 1 :unavailable 0))
     (mevedel-memory-list-open context)
     (with-current-buffer "*mevedel memory*"
       (should mevedel-memory-list--job)

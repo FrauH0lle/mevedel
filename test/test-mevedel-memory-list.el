@@ -49,7 +49,7 @@
   (should (equal ,expected (and (mevedel-memory-list--terminal-p (list :status ,status)) t)))
   (status expected)
   'applied t 'rejected t 'reversed t 'completed t
-  'pending nil 'stale nil 'unavailable nil 'recovery-required nil)
+  'pending nil 'stale nil 'unavailable nil)
 
 (mevedel-deftest mevedel-memory-list--details
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "memory-note-report-" t))))
@@ -174,8 +174,8 @@
                     buffer)))
       ,test))
   (test)
-  :doc "the main cockpit reports pending and recovery counts from an observation without disturbing a draft"
-  (let ((draft "> quoted\nsecond line") intent)
+  :doc "the main cockpit reports cached and refreshed pending counts without disturbing a draft"
+  (let ((draft "> quoted\nsecond line"))
     (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
     (cl-letf (((symbol-function 'transient-setup) #'ignore))
       (with-current-buffer view (mevedel-menu-open 'top)))
@@ -183,25 +183,11 @@
     (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (with-current-buffer view
       (should (string-search "1 pending" (mevedel-menu--memory-description))))
-    (let* ((accepted (mevedel-memory-store-accepted workspace
-                      (plist-get (car (mevedel-memory-list--collect context)) :pass)))
-           (scope (plist-get (plist-get accepted :prepared) :scope))
-           (proposal (car (plist-get accepted :proposals))))
-      (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-      (mevedel-memory-write--call
-       scope (plist-get proposal :root)
-       (lambda (target) (setq intent (mevedel-memory-write--prepare workspace claim target accepted proposal))))
-      (mevedel-journal-claim-settle claim 'cancelled ""))
+    (mevedel-memory-decision-reject workspace (plist-get (car (mevedel-memory-list--collect context)) :pass) id)
     (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (setf (plist-get (mevedel-workspace-memory-observation workspace) :at) 0)
     (with-current-buffer view
       (should (string-search "cached" (mevedel-menu--memory-description))))
-    (mevedel-memory-list--collect context)
-    (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :recovery)))
-    (with-current-buffer view
-      (should (string-search "1 recovery" (mevedel-menu--memory-description))))
-    (mevedel-memory-decision-recover-write workspace (plist-get intent :id) (plist-get intent :hash))
-    (mevedel-memory-decision-reject workspace (plist-get intent :pass) id)
     (mevedel-memory-list--collect context)
     (should (= 0 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (with-current-buffer view
@@ -480,13 +466,14 @@
     (should (string-search "This is already documented."
 					  (mevedel-report-test-text (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context))))
     (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))
-  :doc "another active pass does not prevent read-only inspection or lose its ownership"
+  :doc "another active pass does not prevent inspection or a decision, or lose its ownership"
   (progn
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
     (with-current-buffer (save-window-excursion (open-for-inspection))
       (mevedel-cockpit-goto-id id)
       (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))
-      (should-error (mevedel-memory-list-accept)))
+      (mevedel-memory-list-accept)
+      (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace id) :status))))
     (should-not (mevedel-journal-claim-outcome claim))
     (should (equal claim (mevedel-journal-claim-current (mevedel-memory-store--claim-directory workspace)))))
   :doc "accepted proposals remain inspectable when their public review cannot be republished"

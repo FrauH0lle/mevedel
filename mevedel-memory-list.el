@@ -39,8 +39,6 @@
 (defvar-local mevedel-memory-list--job nil "Current read-only history scan.")
 (defvar-local mevedel-memory-list--error nil "Last history scan failure.")
 (defvar-local mevedel-memory-list--recovery nil "Display watcher for checked recovery.")
-(defvar mevedel-memory-list--markers nil
-  "Authenticated pending-marker directories from the latest history inspection.")
 (defvar-local mevedel-memory-list--recovery-warning nil "Retired recovery watch limitation.")
 (defvar-local mevedel-memory-list--notice nil "Non-row table status overlay.")
 
@@ -78,7 +76,7 @@
   "Project ROW to display metadata, without accepted evidence or write proofs."
   (let (display)
     (dolist (key '(:id :kind :pass :created :status :error :check :target :title :type
-                       :file :configured :root :client))
+                       :file :configured :root :client :reversal-hold))
       (when (plist-member row key) (setq display (plist-put display key (plist-get row key)))))
     (when-let* ((proposal (plist-get row :proposal)))
       (setq display (plist-put display :proposal
@@ -299,7 +297,7 @@ token stops it; a changed root or memory configuration restarts it."
                                (cl-every (lambda (row)
                                            (and (plist-get row :id)
                                                 (or (memq (plist-get row :status)
-                                                          '(pending stale unavailable recovery-required))
+                                                          '(pending stale unavailable))
                                                     (mevedel-memory-list--terminal-p row))
                                                 (not (cl-some (lambda (key) (plist-member row key))
                                                               '(:accepted :decision :write)))))
@@ -320,14 +318,12 @@ token stops it; a changed root or memory configuration restarts it."
               ;; Clear old rows and update the error header without resurrecting it.
               (mevedel-memory-list--unavailable mevedel-memory-list--error))))))))
 
-(defun mevedel-memory-list--fingerprint (workspace markers)
-  "Return WORKSPACE history and MARKERS' metadata hashes, or nil on uncertainty.
+(defun mevedel-memory-list--fingerprint (workspace)
+  "Return WORKSPACE history metadata hashes, or nil on uncertainty.
 This is a display hint, not content authentication or an atomic snapshot."
   (condition-case nil
       (let* ((journal (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
-             (directories (delete-dups
-                           (append (list (directory-file-name
-                                          (file-name-directory (mevedel-journal-store-state-directory journal))) journal) markers)))
+             (directories (list (directory-file-name (file-name-directory (mevedel-journal-store-state-directory journal))) journal))
              (results (mevedel-session-control-fs-run-program
                        (mapcar (lambda (path)
                                  (when (file-remote-p path) (error "Remote history metadata"))
@@ -359,15 +355,14 @@ This is a display hint, not content authentication or an atomic snapshot."
                     ;; must not reuse rows its fresh check would make unavailable.
                     (mapcar (lambda (root) (file-truename (expand-file-name (plist-get root :dir))))
                             (plist-get options :roots))))
-         (configured (mapcar (lambda (root)
-                               (file-name-concat (mevedel-memory-write-control-directory (plist-get root :dir)) "pending"))
-                             (plist-get options :roots)))
-         (markers (sort (delete-dups (append configured (plist-get previous :markers))) #'string<))
-         (fingerprint (mevedel-memory-list--fingerprint workspace markers))
+         (fingerprint (mevedel-memory-list--fingerprint workspace))
          (same (and fingerprint (equal key (plist-get previous :key))
                     (equal fingerprint (plist-get previous :fingerprint))))
          (old (and same (plist-get previous :rows)))
-         (changing (seq-remove #'mevedel-memory-list--terminal-p old))
+         (changing (seq-filter (lambda (row) (or (and (eq 'applied (plist-get row :status))
+                                                     (not (mevedel-memory-proposal-note-action-p
+                                                           (plist-get (plist-get row :proposal) :action))))
+                                                (not (mevedel-memory-list--terminal-p row)))) old))
          (passes (mapcar (lambda (row) (plist-get row :pass)) changing))
          (reused (and same (not (memq nil passes))
                       (seq-remove (lambda (row) (member (plist-get row :pass) passes)) old)))
@@ -376,26 +371,12 @@ This is a display hint, not content authentication or an atomic snapshot."
     (when (and same (not changing))
       (setf (mevedel-workspace-memory-observation workspace)
             (plist-put (copy-sequence (plist-get previous :observation)) :at (float-time))))
-    ;; Write inspection records only authenticated original marker locations.
-    ;; Keep prior locations when some passes were skipped in this scan.
-    (unless same (setq markers (copy-sequence configured)))
-    (dolist (marker mevedel-memory-list--markers)
-      (cl-pushnew marker markers :test #'equal))
-    (setq markers (sort markers #'string<))
-    (let* ((after (mevedel-memory-list--fingerprint workspace markers))
-           ;; Never label rows with newer metadata than the scan observed.
-           (stable (and fingerprint after
-                        (cl-every (lambda (path)
-                                    (seq-some (lambda (entry)
-                                                (or (equal path (car entry))
-                                                    (string-prefix-p (file-name-as-directory (car entry)) path)))
-                                              fingerprint)) markers)
-                        (cl-every (lambda (entry) (equal entry (assoc (car entry) after))) fingerprint)
-                        after)))
+    (let* ((after (mevedel-memory-list--fingerprint workspace))
+           (stable (and (equal fingerprint after) after)))
       (if (and same (not stable))
           ;; Reused rows may be stale: this open performs the normal full scan.
           (mevedel-memory-list--scan workspace (append '(:previous nil) options))
-        (list :rows rows :key key :markers markers :fingerprint stable
+        (list :rows rows :key key :fingerprint stable
               :observation (mevedel-workspace-memory-observation workspace))))))
 
 (defun mevedel-memory-list-scan-child (workspace payload)
@@ -456,9 +437,9 @@ This is a display hint, not content authentication or an atomic snapshot."
 
 (defun mevedel-memory-list--candidate-count (context)
   "Return CONTEXT's last observed candidate count, or nil when unknown.
-Count pending, recovery-required and unavailable rows, as Candidates shows."
+Count pending and unavailable rows, as Candidates shows."
   (when-let* ((observation (mevedel-workspace-memory-observation (mevedel-cockpit-context-workspace context))))
-    (apply #'+ (mapcar (lambda (key) (or (plist-get observation key) 0)) '(:pending :recovery :unavailable)))))
+    (apply #'+ (mapcar (lambda (key) (or (plist-get observation key) 0)) '(:pending :unavailable)))))
 
 (defun mevedel-memory-list-candidates ()
   "Show outstanding memory candidates."
@@ -534,14 +515,12 @@ REUSED contains display-only rows of unchanged, entirely terminal passes."
          (rows (append (reverse reused) (plist-get snapshot :rows)))
          last-pass)
     (when (plist-get snapshot :native) (throw 'mevedel-memory-list-native '(:native t)))
-    (setq mevedel-memory-list--markers (plist-get snapshot :markers))
     (dolist (row rows)
       (when (string> (or (plist-get row :created) "") (or last-pass ""))
         (setq last-pass (plist-get row :created))))
     (setf (mevedel-workspace-memory-observation workspace)
           (list :at (float-time) :last-pass last-pass
                 :pending (seq-count (lambda (row) (mevedel-memory-decision-actionable-status-p (plist-get row :status))) rows)
-                :recovery (seq-count (lambda (row) (eq (plist-get row :status) 'recovery-required)) rows)
                 :unavailable (seq-count (lambda (row) (eq (plist-get row :status) 'unavailable)) rows)))
     (sort (mapcar #'mevedel-memory-list--display-row rows)
           (lambda (left right) (string> (or (plist-get left :created) "") (or (plist-get right :created) ""))))))
@@ -557,6 +536,7 @@ REUSED contains display-only rows of unchanged, entirely terminal passes."
                   (or (plist-get proposal :title) (plist-get item :title)
                       (and (eq (plist-get item :kind) 'review) "No proposed changes") "Unavailable record")
                   (pcase (list (plist-get item :status) (plist-get item :check))
+                    (`(applied ,_) (if (plist-get item :reversal-hold) "check reversal" "applied"))
                     ('(stale fresh) "ready")
                     (`(,_ waiting) "awaits extraction")
                     (`(,_ stale) "superseded")
@@ -601,10 +581,8 @@ REUSED contains display-only rows of unchanged, entirely terminal passes."
               (cond ((not observation) "proposals not checked")
                     ;; Counts from an earlier scan, not this table's snapshot.
                     ((not mevedel-memory-list--snapshot)
-                     (format "%d pending | %d recovery (cached)"
-                             (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0)))
-                    (t (format "%d pending | %d recovery"
-                               (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0))))
+                     (format "%d pending (cached)" (or (plist-get observation :pending) 0)))
+                    (t (format "%d pending" (or (plist-get observation :pending) 0))))
               mevedel-memory-history-max-age-days
               (if-let* ((drain (mevedel-memory-pass-drain-status workspace)))
                   (format " | drain batch %d (%s), %s notes remain"
@@ -690,7 +668,7 @@ Check original root authority before disclosing private topic contents."
              :body (mevedel-report-fields
                     (list "Status" status)
                     (when-let* ((reason (plist-get proposal :reason))) (list "Reason" reason))
-                    (list "Decision" (or (plist-get decision :reason) "Pending"))
+                    (list "Decision" (or (plist-get inspection :reversal-hold) (plist-get decision :reason) "Pending"))
                     (when input (list "Current check" (or (plist-get input :reason) "Ready to apply")))
                     (list "History" (mevedel-memory-list--retention workspace accepted))))
        (list :id 'body :title "Proposed body" :mode 'markdown-mode
@@ -787,27 +765,6 @@ Check original root authority before disclosing private topic contents."
 (defun mevedel-memory-list-reverse ()
   "Reverse the selected applied proposal if its files remain unchanged."
   (interactive) (mevedel-memory-list--act 'reverse))
-
-(defun mevedel-memory-list-recover (&optional rollback)
-  "Reconcile the selected pending write, or explicitly ROLLBACK its attempt."
-  (interactive)
-  (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
-         (item (mevedel-cockpit-surface-selected))
-         (writes (and (plist-get item :proposal)
-                      (plist-get (mevedel-memory-decision-inspect
-                                  workspace :pass (plist-get item :pass) :proposal (plist-get item :id))
-                                 :writes))))
-    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
-      (unless writes (user-error "No marked write to recover for this proposal"))
-      (unwind-protect
-          (dolist (write writes)
-            (mevedel-memory-decision-recover-write workspace (plist-get write :id) (plist-get write :hash)
-                                                   :rollback rollback))
-        (mevedel-memory-list-refresh)))))
-
-(defun mevedel-memory-list-rollback ()
-  "Roll back the selected interrupted write only from recorded states."
-  (interactive) (mevedel-memory-list-recover t))
 
 (defun mevedel-memory-list-running ()
   "Inspect this client's running consolidation without changing its request buffer."
@@ -944,8 +901,6 @@ limit this explicit command.  Proposals still follow the configured mode."
            ("A" "Accept all pending proposals" mevedel-memory-list-accept-all)
            ("R" "Reject all pending proposals" mevedel-memory-list-reject-all)
            ("u" "Reverse an applied proposal" mevedel-memory-list-reverse)
-           ("c" "Reconcile interrupted write" mevedel-memory-list-recover)
-           ("U" "Roll back interrupted write" mevedel-memory-list-rollback)
            ("v" "Inspect running consolidation" mevedel-memory-list-running)
            ("k" "Kill running consolidation" mevedel-memory-list-kill)
            ("m" "Run consolidation (prefix: focus)" mevedel-remember)

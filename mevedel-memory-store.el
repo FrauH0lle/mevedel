@@ -44,6 +44,8 @@ strings with up to fourfold escaping, plus decoded content and metadata.")
   (unless (mevedel-journal-claim-owned-p claim)
     (error "Memory pass ownership is unavailable")))
 
+(define-error 'mevedel-memory-store-mutation-busy "Journal mutation is busy")
+
 (defun mevedel-memory-store--mutation (workspace function)
   "Call FUNCTION with WORKSPACE's journal mutation claim.
 FUNCTION rechecks the claim before each mutation; accepted immutable outcomes
@@ -52,7 +54,7 @@ remain recoverable if an operation fails after committing its publication."
                 (mevedel-journal-store-claim-directory
                  (mevedel-journal-store-directory (mevedel-workspace-root workspace)) 'mutation)
                 120)))
-    (unless claim (error "Journal mutation is busy"))
+    (unless claim (signal 'mevedel-memory-store-mutation-busy nil))
     (unwind-protect
         (funcall function claim)
       (mevedel-journal-claim-settle claim 'completed ""))))
@@ -166,7 +168,7 @@ No coverage is consumed."
          (unless (and (eq (plist-get entry :kind) 'digest)
                       (equal entry (mevedel-journal-store-read root (plist-get entry :file))))
            (error "Selected journal evidence changed")))
-       (let* ((data (list :id id :claim (mevedel-journal-claim--record claim) :scope scope
+       (let* ((data (list :id id :claim (mevedel-journal-claim--record claim) :scope (cons :decision-format (cons 'slots scope))
                           :entries (mapcar #'mevedel-memory-store--entry entries) :focus focus
                           :created (mevedel-journal-store-timestamp (- (plist-get claim :expires-at) 180))))
               (text (mevedel-memory-store--print data))

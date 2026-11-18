@@ -71,7 +71,7 @@
                                             (concat (plist-get decision :decision-id) ".el")))
                          :metadata)
                         :decision-id))))
-      (should (= calls 2)))
+      (should (= calls 1)))
     (should (equal decision (plist-get (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) :reason "A second reason") :decision)))
     (should (equal decision (mevedel-memory-decision-status workspace (plist-get proposal :id))))
     (should (equal "Abandoned choice" (plist-get decision :reason)))
@@ -113,9 +113,9 @@
                  (apply publish args)))
               ((symbol-function 'mevedel-session-control-fs-run-program)
                (lambda (operations &rest args)
-                 (when (seq-some (lambda (op)
+                 (when (and damaged (seq-some (lambda (op)
                                    (and (eq 'verify-hash (plist-get op :op))
-                                        (equal file (plist-get op :path)))) operations)
+                                        (equal file (plist-get op :path)))) operations))
                    (setq raced t)
                    (write-region "Intervening projection" nil file nil 'silent))
                  (apply program operations args))))
@@ -124,24 +124,23 @@
     (should raced)
     (should (equal "Intervening projection" (mevedel-session-control-fs-read-file file)))
     (should (file-exists-p pin))
-    (should (= 1 (length (directory-files (mevedel-memory-decision--directory workspace)
-                                         nil mevedel-memory-write-intent-file-regexp)))))
+    (should (= 1 (length (mevedel-memory-decision--slots workspace (plist-get proposal :id))))))
   :doc "review repair refuses a fenced mutation owner before overwriting the projection"
   (let* ((file (file-name-concat (mevedel-journal-store-directory root) (plist-get review :file)))
          (pin (mevedel-memory-store--pin workspace pass (plist-get digest :id)))
          (publish (symbol-function 'mevedel-memory-decision--publish))
          (program (symbol-function 'mevedel-session-control-fs-run-program))
-         fenced)
+         damaged fenced)
     (cl-letf (((symbol-function 'mevedel-memory-decision--publish)
                (lambda (&rest args)
+                 (setq damaged t)
                  (write-region "Damaged projection" nil file nil 'silent)
                  (apply publish args)))
               ((symbol-function 'mevedel-session-control-fs-run-program)
                (lambda (operations &optional lock)
-                 (when (seq-some (lambda (op)
+                 (when (and damaged lock (seq-some (lambda (op)
                                   (and (eq 'verify-hash (plist-get op :op))
-                                       (equal file (plist-get op :path)))) operations)
-                   (should lock)
+                                       (equal file (plist-get op :path)))) operations))
                    (setq fenced (mevedel-journal-claim-settle
                                  (mevedel-journal-claim-current lock) 'cancelled "")))
                  (funcall program operations lock))))
@@ -271,18 +270,17 @@
                                     workspace pass (plist-get proposal :id)) :status)))))
       (when timer (cancel-timer timer))
       (iter-close iterator)))
-  :doc "busy ownership and unknown proposal identity cannot create decisions"
+  :doc "unknown proposals cannot create slots and a decision does not settle a live pass claim"
   (progn
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (should-error (plist-get (mevedel-memory-decision-reject workspace pass (plist-get proposal :id)) :decision))
-    (should-not (mevedel-journal-claim-outcome claim))
-    (mevedel-journal-claim-settle claim 'cancelled "")
-    (should-error (plist-get (mevedel-memory-decision-reject workspace pass (make-string 64 ?f)) :decision))
-    (should (equal (list review digest) (mevedel-journal-store-entries root))))
+    (should-error (mevedel-memory-decision-reject workspace pass (make-string 64 ?f)))
+    (should (equal (list review digest) (mevedel-journal-store-entries root)))
+    (should (eq 'rejected (plist-get (mevedel-memory-decision-reject workspace pass (plist-get proposal :id)) :status)))
+    (should-not (mevedel-journal-claim-outcome claim)))
   :doc "an accepted rejection recovers after the owner stops before public publication"
   (progn
-    (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-    (mevedel-memory-decision--accept workspace (list :claim claim) accepted proposal 'rejected "Superseded")
+    (cl-letf (((symbol-function 'mevedel-memory-decision--publish) (lambda (&rest _) (error "Publication stopped"))))
+      (should-error (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) :reason "Superseded")))
     (should (equal (list review digest) (mevedel-journal-store-entries root)))
     (mevedel-memory-decision-recover workspace)
     (let ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id))))
@@ -311,12 +309,26 @@
      root (list :decision-id (make-string 64 ?e) :pass-id pass :proposal-id (plist-get proposal :id)
                 :workspace identity :created "2026-09-07T12:00:00Z" :status 'rejected
                 :reason "Forged rejection" :state-hash (make-string 64 ?f)))
-    (should-error (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+    (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
     (should-error (plist-get (mevedel-memory-decision-reject workspace pass (plist-get proposal :id)) :decision))
     (should (file-exists-p (mevedel-memory-store--pin workspace pass (plist-get digest :id))))
     (let ((evidence (mevedel-memory-decision-rejections workspace)))
       (should-not (string-match-p "Forged rejection" evidence))
       (should (= 1 (gethash "omitted" (json-parse-string evidence))))))
+  :doc "a public decision must match the private slot before evidence pins can be released"
+  (let* ((id (plist-get proposal :id))
+         (pin (mevedel-memory-store--pin workspace pass (plist-get digest :id)))
+         (mutation (mevedel-journal-claim-acquire
+                    (mevedel-journal-store-claim-directory
+                     (mevedel-journal-store-directory root) 'mutation) 180))
+         decision)
+    (unwind-protect
+        (setq decision (plist-get (mevedel-memory-decision-reject workspace pass id :reason "Original reason") :decision))
+      (mevedel-journal-claim-settle mutation 'cancelled ""))
+    (should (file-exists-p pin))
+    (mevedel-journal-store-publish-decision root (plist-put (copy-sequence decision) :reason "Changed reason"))
+    (should-error (mevedel-memory-decision--settled-p workspace accepted))
+    (should (file-exists-p pin)))
   :doc "changed accepted before-state cannot authorize a rejection"
   (let* ((path (file-name-concat (mevedel-memory-store--directory workspace pass) "prepared.el"))
          (original (mevedel-session-control-fs-read-file path)))
@@ -422,30 +434,22 @@
   (:doc "ends a proposal's lifecycle only for applied, rejected, and reversed")
   (progn
     (dolist (status '(applied rejected reversed)) (should (mevedel-memory-decision-terminal-status-p status)))
-    (dolist (status '(pending stale unavailable recovery-required nil))
+    (dolist (status '(pending stale unavailable nil))
       (should-not (mevedel-memory-decision-terminal-status-p status)))))
 
 (mevedel-deftest mevedel-memory-decision-actionable-status-p
   (:doc "awaits a decision only while pending or stale")
   (progn
     (dolist (status '(pending stale)) (should (mevedel-memory-decision-actionable-status-p status)))
-    (dolist (status '(applied rejected reversed unavailable recovery-required))
+    (dolist (status '(applied rejected reversed unavailable))
       (should-not (mevedel-memory-decision-actionable-status-p status)))))
 
 (mevedel-deftest mevedel-memory-decision-written-status-p
   (:doc "names decisions whose write reached the target")
   (progn
     (dolist (status '(applied reversed)) (should (mevedel-memory-decision-written-status-p status)))
-    (dolist (status '(rejected stale unavailable recovery-required))
+    (dolist (status '(rejected stale unavailable))
       (should-not (mevedel-memory-decision-written-status-p status)))))
-
-(mevedel-deftest mevedel-memory-decision-resolved-write-status-p
-  (:doc "settles a write attempt for applied, reversed, and unavailable only")
-  (progn
-    (dolist (status '(applied reversed unavailable))
-      (should (mevedel-memory-decision-resolved-write-status-p status)))
-    (dolist (status '(rejected stale recovery-required pending))
-      (should-not (mevedel-memory-decision-resolved-write-status-p status)))))
 
 (provide 'test-mevedel-memory-decision)
 ;;; test-mevedel-memory-decision.el ends here

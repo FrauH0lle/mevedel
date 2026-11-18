@@ -131,6 +131,10 @@ Journal-only consolidation keeps its separate existing admission policy; ordinar
 turn/digest events need not launch a new note cycle. `manual`, `propose` and `auto`
 remain distinct: manual requires an explicit request, propose leaves decisions
 for approval, and auto applies extraction followed by disposal without prompts.
+When a later accepted review captures the changed regular file, automatic
+supersession may reject the older deletion without changing the file. It must
+verify the newer review and exact present version first. A subsequent edit,
+a missing file, or an ordinary manual Reject does not receive this exception.
 Explicit review/drain may bypass daily timing but not in-use or transaction safety.
 An empty cycle makes no model request. No session or idle opportunity means no
 background inference, not a promise of wall-clock deletion while Emacs is closed.

@@ -89,29 +89,29 @@ Shared-note actions return the note module's checked changes instead.
 The caller must persist these states and check every captured dependency,
 including unchanged indexes, before applying with workspace and target
 ownership. The patch transaction rechecks each change's expected snapshot."
-  (let* ((id (plist-get proposal :root))
-         (root (mevedel-memory-scope--root scope id))
+  (let* ((id (plist-get proposal :root)) (root (mevedel-memory-scope--root scope id)))
+    (dolist (row (plist-get proposal :before))
+      (unless (equal (cdr row) (mevedel-memory-scope-before scope id (car row)))
+        (error "Proposal before-state differs from its captured scope")))
+    (mevedel-memory-apply--changes root proposal (plist-get scope :new-file-mode))))
+
+(cl-defun mevedel-memory-apply--changes (root proposal new-mode)
+  "Derive exact changes for frozen ROOT and PROPOSAL with NEW-MODE, without IO."
+  (let* (
          (action (plist-get proposal :action))
          (file (plist-get proposal :file))
          (body (plist-get proposal :body))
          (before (plist-get proposal :before))
-         (affected (delete-dups (append (list file) (plist-get proposal :merged-files)
-                                        (unless (memq action (cons 'instructions mevedel-memory-proposal-note-actions))
-                                          (list "MEMORY.md")))))
          changes)
     (when (mevedel-memory-proposal-note-action-p action)
-      (unless (and (eq (plist-get root :kind) 'notes)
-                   (equal (cdr (assoc file before)) (mevedel-memory-scope-before scope id file)))
+      (unless (eq (plist-get root :kind) 'notes)
         (error "Shared-note proposal differs from its captured scope"))
-      (cl-return-from mevedel-memory-apply-changes (mevedel-memory-notes-changes proposal)))
+      (cl-return-from mevedel-memory-apply--changes (mevedel-memory-notes-changes proposal)))
     (unless (and (memq action '(promote update merge remove instructions))
                  (eq (eq action 'instructions) (eq (plist-get root :kind) 'instructions))
                  (stringp body) (not (string-search "\0" body))
                  (not (cl-some #'mevedel--invalid-message-char-p body)))
       (error "Invalid accepted memory action"))
-    (dolist (name affected)
-      (unless (equal (cdr (assoc name before)) (mevedel-memory-scope-before scope id name))
-        (error "Proposal before-state differs from its captured scope")))
     (cl-labels
         ((snapshot (name) (or (cdr (assoc name before)) (error "Missing proposal before-state")))
          (emit (name text exists)
@@ -123,7 +123,7 @@ ownership. The patch transaction rechecks each change's expected snapshot."
                (push (append (list :path (plist-get original :path) :before original :action (if exists 'write 'delete))
                              (when exists (list :content text :bytes bytes
                                                 :mode (or (plist-get original :mode)
-                                                          (plist-get scope :new-file-mode)
+                                                          new-mode
                                                           (logand #o666 (default-file-modes))))))
                      changes)))))
       (if (eq action 'instructions)

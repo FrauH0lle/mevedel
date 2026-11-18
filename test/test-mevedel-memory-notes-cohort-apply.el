@@ -89,14 +89,9 @@
     (recreate)
     (let ((input (plist-get (mevedel-memory-decision-inspect workspace :pass pass :proposal (plist-get note :id)) :check)))
       (should (eq 'waiting (plist-get input :status))))
-    ;; The program-backed hold runs at the deletion boundary: the prepared
-    ;; intent is abandoned unmarked and no decision is recorded.
+    ;; The program-backed hold runs at the deletion boundary, before election.
     (should (eq 'held (plist-get (apply-note) :status)))
-    (unchanged)
-    (let ((writes (mevedel-memory-write--list workspace)))
-      (should (= 1 (length writes)))
-      (should-not (plist-get (car writes) :marked)))
-    (should-not (mevedel-memory-write--recovery-candidates workspace)))
+    (unchanged))
   :doc "late recreation at final write admission is held immediately before mutation"
   (progn
     (prepare)
@@ -107,12 +102,7 @@
                    (apply commit args))))
         (should (eq 'held (plist-get (apply-note) :status))))
       (should injected))
-    (unchanged)
-    (let ((writes (mevedel-memory-write--list workspace)))
-      (should (= 1 (length writes)))
-      (should-not (plist-get (car writes) :error))
-      (should-not (plist-get (car writes) :marked)))
-    (should-not (mevedel-memory-write--recovery-candidates workspace)))
+    (unchanged))
   :doc "ordinary noncohort capture retains byte-mode-age semantics rather than gaining a new identity lock"
   (progn
     (prepare t)

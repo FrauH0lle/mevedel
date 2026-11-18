@@ -9,7 +9,6 @@
 (eval-when-compile (require 'cl-lib))
 (require 'generator)
 (require 'mevedel-memory-store)
-(require 'mevedel-memory-write)
 
 ;; `mevedel-memory-cycle'
 (declare-function mevedel-memory-cycle-inflight-claim "mevedel-memory-cycle" (workspace))
@@ -116,10 +115,6 @@ references instead of guessing that their claim can be removed."
       (iter-yield nil)
       (let ((path (file-name-concat directory "prepared.el")))
         (when (mevedel-session-control-fs-path-exists-p path) (push path files))))
-    (dolist (kind '("decisions" "writes"))
-      (iter-yield nil)
-      (setq files (append files (mevedel-session-control-fs-list-directory
-                                 (file-name-concat (mevedel-journal-store-state-directory root) kind) mevedel-memory-write-intent-file-regexp))))
     (dolist (path files)
       (iter-yield nil)
       (let* ((data (car (mevedel-memory-store--read-lisp path)))
@@ -161,15 +156,6 @@ directories in one batch."
                         (file-name-concat (mevedel-journal-store-state-directory root) "captures") mevedel-journal-store-id-regexp))
       (iter-yield nil)
       (push (cons (file-name-concat directory "attempts") nil) directories))
-    (dolist (memory (mevedel-system--memory-roots workspace))
-      (iter-yield nil)
-      (let ((control (mevedel-memory-write-control-directory
-                      (file-truename (plist-get memory :dir)))))
-        ;; Pending markers may belong to another workspace.  Keep their
-        ;; target history until that workspace has finished recovery.
-        (when (and (mevedel-session-control-fs-directory-p control)
-                   (not (mevedel-session-control-fs-list-directory (file-name-concat control "pending") "\\`[^.]")))
-          (push (cons (file-name-concat control "claims") nil) directories))))
     (dolist (entry directories)
       (iter-yield nil)
       (when (and (> remaining 0) (mevedel-session-control-fs-directory-p (car entry)))

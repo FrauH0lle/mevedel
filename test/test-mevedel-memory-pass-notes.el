@@ -110,9 +110,9 @@
                                (start (&rest args)
                                  (setq result nil state (apply #'mevedel-memory-pass-start workspace
                                                                (lambda (value) (setq result value)) args)))
-                               (finish ()
+                               (finish (&optional entries)
                                  (funcall callback
-                                          (append (list :outcome 'success :entries nil :reply reply
+                                          (append (list :outcome 'success :entries entries :reply reply
                                                 :notes (mapcar (lambda (document) (plist-get document :id))
                                                                (mevedel-memory-notes-documents scope-seen))
                                                 :policy (list :backend backend :model 'test-model))
@@ -583,12 +583,24 @@
                    (should (eq 'applied (status (proposal 'note-delete "busy.md")))))
                  :doc "a later review supersedes an earlier undecided disposal of the same file"
                  (let ((mevedel-memory-consolidation-mode 'propose)
+                       (mevedel-memory-consolidation-min-digests 1)
+                       (mevedel-memory-consolidation-min-hours 0)
                        (path (note "draft.md" "First draft.\n")))
+                   (mevedel-journal-store-publish-digest
+                    root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                               :workspace identity :trigger 'session-end :segment 1 :source-revision (make-string 64 ?c)
+                               :turns '(1) :turn-ids (list (make-string 64 ?b))
+                               :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" (- now 3600) t) :model "test:model")
+                    "## Done\n- Observed: Draft.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")
                    (should (start :automatic t))
+                   (should (= 1 (length entries-seen)))
                    (setq reply (text nil))
-                   (finish)
-                   (let ((first-pass (pass)) (first (proposal 'note-delete "draft.md")))
-                     (note "draft.md" "Second draft with an open handoff.\n")
+                   (finish entries-seen)
+                   (let ((first-pass (pass)) (first (proposal 'note-delete "draft.md"))
+                         (pin (mevedel-memory-store--pin workspace (pass) (plist-get (car entries-seen) :id)))
+                         (changed (encode-coding-string "Second draft: café.\r\n\r\n" 'utf-8-unix)))
+                     (should (file-exists-p pin))
+                     (note "draft.md" changed)
                      (cl-incf now (* 2 86400))
                      (should (start :automatic t))
                      (setq reply (text nil))
@@ -597,8 +609,26 @@
                        (should (eq 'rejected (plist-get decision :status)))
                        (should (equal mevedel-memory-notes-superseded-reason (plist-get decision :reason))))
                      (should-not (equal first-pass (pass)))
+                     (should-not (file-exists-p pin))
                      (should-not (status (proposal 'note-delete "draft.md")))
-                     (should (file-exists-p path))))
+                     (should (equal changed (bytes path)))))
+                 :doc "an edit after a newer note review prevents superseding the old disposition"
+                 (let ((mevedel-memory-consolidation-mode 'propose)
+                       (path (note "draft.md" "First draft.\n")))
+                   (should (start :automatic t))
+                   (setq reply (text nil)) (finish)
+                   (let ((first (proposal 'note-delete "draft.md"))
+                         (supersede (symbol-function 'mevedel-memory-notes-supersede)) counts)
+                     (note "draft.md" "Second draft.\n") (cl-incf now (* 2 86400))
+                     (should (start :automatic t)) (setq reply (text nil))
+                     (cl-letf (((symbol-function 'mevedel-memory-notes-supersede)
+                                (lambda (ws bundle)
+                                  (note "draft.md" "Third draft.\n")
+                                  (setq counts (funcall supersede ws bundle)))))
+                       (mevedel-test--with-captured-messages nil (finish)))
+                     (should (equal '(0 . 1) counts))
+                     (should-not (mevedel-memory-decision-status workspace (plist-get first :id)))
+                     (should (equal "Third draft.\n" (mevedel-session-control-fs-read-file path)))))
                  :doc "an extraction applies before deleting its source with an unresolved open part"
                  (let ((path (note "mixed.md" "Finding: index entries must be unique.\nOpen: port the fix.\n")))
                    (should (start :automatic t))
@@ -639,13 +669,14 @@
                                                          :status))))
                    (should (file-exists-p kept))
                    (should (= 1 (plist-get (capture) :notes)))
-                   ;; Failing after the write still records the completed state.
+                   ;; Losing the return after deletion cannot elect a decision.
                    (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
                               (lambda (&rest args) (apply real args) (error "Interrupted"))))
-                     (should (eq 'applied (plist-get (mevedel-memory-decision-apply
-                                                      workspace (pass) (plist-get (proposal 'note-delete "gone.md") :id))
-                                                     :status))))
-                   (should-not (file-exists-p gone)))
+                     (should-error (mevedel-memory-decision-apply workspace (pass) (plist-get (proposal 'note-delete "gone.md") :id))))
+                   (should-not (file-exists-p gone))
+                   (should-not (status (proposal 'note-delete "gone.md")))
+                   (should (eq 'applied (plist-get (mevedel-memory-decision-apply
+                                                    workspace (pass) (plist-get (proposal 'note-delete "gone.md") :id)) :status))))
                  :doc "large binary attachments are deleted without inference or copies"
                  (let* ((large (let ((bytes (make-string (* 3 1024 1024) 0)))
                                  (dotimes (index (length bytes) bytes)

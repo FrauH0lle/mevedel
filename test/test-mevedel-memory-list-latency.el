@@ -5,6 +5,7 @@
 
 ;;; Code:
 
+(require 'mevedel-memory-decision)
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
@@ -192,7 +193,8 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
       (should-not (plist-get result :native))
       (should-not (plist-get result :error))
       (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows)))
-      (should (= 2 (seq-count (lambda (row) (eq 'unavailable (plist-get row :status))) rows)))))
+      (should (equal (list pass) (mapcar (lambda (row) (plist-get row :pass))
+                                        (seq-filter (lambda (row) (eq 'unavailable (plist-get row :status))) rows))))))
   :doc "retirement after proof authentication cannot leave an applied row"
   (progn
     (mevedel-test-memory-history-create workspace 1 2 64)
@@ -206,29 +208,24 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
                  (apply run operations args))))
       (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
         (should raced)
-        (should (= 3 (length rows)))
+        (should (= 1 (length rows)))
         (should (cl-every (lambda (row) (eq 'unavailable (plist-get row :status))) rows))))))
   :doc "a corrupt decision does not contaminate a healthy pass in the same batch"
   (progn
     (mevedel-test-memory-history-create workspace 2 1 64)
     (write-region "invalid" nil (car (mevedel-session-control-fs-list-directory
-                                    (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp)) nil 'silent)
+                                    (mevedel-memory-decision--directory workspace) mevedel-memory-decision--file-regexp)) nil 'silent)
   (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
     (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows)))
     (should (seq-some (lambda (row) (eq 'unavailable (plist-get row :status))) rows))))
-  :doc "a write disappearing after grouping does not abort independent passes"
+  :doc "a slot disappearing after listing does not abort independent passes"
   (progn
     (mevedel-test-memory-history-create workspace 2 1 64)
-    (let ((group (symbol-function 'mevedel-memory-write--groups)) removed)
-    (cl-letf (((symbol-function 'mevedel-memory-write--groups)
-               (lambda (&rest args)
-                 (let ((groups (apply group args)))
-                   (maphash (lambda (pass ids)
-                              (when (and pass (not removed))
-                                (setq removed t)
-                                (delete-file (file-name-concat (mevedel-memory-write--directory workspace)
-                                                               (concat (car ids) ".el"))))) groups)
-                   groups))))
+    (let ((batch (symbol-function 'mevedel-memory-decision--record-batch)) removed)
+    (cl-letf (((symbol-function 'mevedel-memory-decision--record-batch)
+               (lambda (ws paths)
+                 (unless removed (delete-file (car paths)) (setq removed t))
+                 (funcall batch ws paths))))
       (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
         (should removed)
         (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows))))))))
@@ -313,17 +310,16 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
       (should (= 6 (length rows)))
       (should (= 1 (seq-count (lambda (row) (eq 'rejected (plist-get row :status))) rows)))
       (should (= 1 (seq-count (lambda (row) (eq 'pending (plist-get row :status))) rows)))))
-  :doc "retirement, expiry, write evidence and marker membership changes force full scans"
-  (dolist (kind '(retirement expiry write marker))
+  :doc "retirement, expiry and changed decision slots force full scans"
+  (dolist (kind '(retirement expiry slot))
     (let* ((first (scan)) (pass (plist-get (car (plist-get (car first) :rows)) :pass))
            (warm (scan (car first))) path)
       (should (plist-get (car first) :fingerprint))
       (pcase kind
         ('retirement (setq path (file-name-concat root ".mevedel/state/journal/retired-passes" pass)))
         ('expiry (setq path (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el")))
-        ('write (setq path (car (mevedel-session-control-fs-list-directory
-                                (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
-        ('marker (setq path (file-name-concat (car (plist-get (car first) :markers)) "new.pin"))))
+        ('slot (setq path (car (mevedel-session-control-fs-list-directory
+                               (mevedel-memory-decision--directory workspace) mevedel-memory-decision--file-regexp)))))
       (let ((before (when (file-exists-p path) (mevedel-session-control-fs-read-file path))))
         (make-directory (file-name-directory path) t)
         (unwind-protect
@@ -334,29 +330,23 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
                 (should (> (cdr second) (* 3 (cdr warm))))
                 (should (equal (plist-get (car second) :rows) (plist-get (car (scan)) :rows)))))
           (if before (write-region before nil path nil 'silent) (delete-file path))))))
-  :doc "reversals replace applied rows and historical marker roots need a covered baseline"
+  :doc "a reversal invalidates the covered baseline and replaces the applied row"
   (let* ((item (topic)) (first (scan)) (baseline (scan (car first))))
-    (should-not (plist-get (car first) :fingerprint))
+    (should (plist-get (car first) :fingerprint))
     (should (plist-get (car baseline) :fingerprint))
     (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace (car item) (cdr item)) :status)))
     (let* ((second (scan (car baseline)))
            (row (seq-find (lambda (row) (equal (cdr item) (plist-get row :id))) (plist-get (car second) :rows))))
       (should-not (equal (plist-get (car baseline) :fingerprint) (plist-get (car second) :fingerprint)))
       (should (eq 'reversed (plist-get row :status)))))
-  :doc "a newly discovered external marker cannot certify rows read before its creation"
-  (let* ((item (topic))
-         (intent (plist-get (seq-find (lambda (row) (equal (car item) (plist-get (plist-get row :intent) :pass)))
-                                     (mevedel-memory-write--list workspace)) :intent))
-         (pin (mevedel-memory-write--pin intent)) first)
-    (let ((mevedel-test-memory-list--fault (list 'write pin (plist-get intent :hash))))
-      (setq first (scan)))
-    (should (= 2 mevedel-test-memory-list--checks))
-    (should-not (plist-get (car first) :fingerprint))
-    (let ((second (scan (car first))))
-      (should (plist-get (car second) :fingerprint))
-      (should (eq 'recovery-required
-                  (plist-get (seq-find (lambda (row) (equal (cdr item) (plist-get row :id)))
-                                       (plist-get (car second) :rows)) :status)))))
+  :doc "exact external undo is visible even when history metadata stays unchanged"
+  (let* ((item (topic)) (first (scan)))
+    (delete-file (file-name-concat root "memory/guide.md"))
+    (let* ((second (scan (car first)))
+           (row (seq-find (lambda (r) (equal (cdr item) (plist-get r :id))) (plist-get (car second) :rows))))
+      (should (equal (plist-get (car first) :fingerprint) (plist-get (car second) :fingerprint)))
+      (should (eq 'applied (plist-get row :status)))
+      (should (string-match-p "Choose Reverse" (plist-get row :reversal-hold)))))
   :doc "configured roots, workspace identity and client identity invalidate unchanged metadata"
   (let* ((first (scan)) (previous (car first)))
     (should (plist-get previous :fingerprint))
@@ -375,8 +365,6 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
   (let* ((memory (file-name-concat root "memory"))
          (replacement (file-name-concat root "replacement-memory")))
     (topic)
-    ;; Without write markers the replacement leaves the history metadata unchanged.
-    (delete-directory (file-name-concat memory ".mevedel/state/memory-write/root/pending"))
     (let* ((mevedel-memory-dirs (list memory))
            (baseline (scan (car (scan)))))
       (should (plist-get (car baseline) :fingerprint))

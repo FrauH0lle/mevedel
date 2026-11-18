@@ -11,25 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Replace the memory claim/fence protocol with one locked program per decision
-  under the existing per-root memory lock directory, using the carrier's
-  `begin-files`/`commit-files` transaction (a probe showed it undoes the first
-  file when a later write fails; process death was not probed). Decision
-  records become exclusively created slot files (`decisions/PROPOSAL.el`,
-  `.reverse.el`, `.attempt-N.el`). Journal publication keeps its claim: it
-  spans provider requests and needs takeover by a successor. The 2026-11-14
-  design sketch estimates about 1,010 lines in 37 functions removed for
-  150–250 new, and about 25 instead of 64 helper programs per following topic
-  apply (no prototype). The user approved its four decisions (2026-11-14):
-  replace ADR 0117's "matching files never count as applied" with a completion
-  rule (a proposal whose files are each at the before-state or exact
-  after-state is finished on accept and undone on reject); remove
-  `recovery-required` and "U Roll back interrupted write"; a concurrent apply
-  waits up to 20 s for the lock; no migration of decision history. Before it
-  lands: a matched measurement against today's 64 / 88 / 57 programs (stop if
-  the gain falls well short of half), and fault-injection tests for an index
-  failure after the topic write, a kill between renames, the cross-host gap,
-  reject during that gap, and cleanup during apply.
 
 ## Proactive sessions
 

@@ -46,7 +46,7 @@ Data model
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
   mevedel-memory-decision.el  owned proposal transactions, publication, inspection, and recovery
   mevedel-memory-apply.el     complete topic/index and instruction transaction preparation
-  mevedel-memory-write.el     private decision intents, shared-root ownership, and checked rollback
+  mevedel-memory-write.el     exact before/after row classification and checked target batches
   mevedel-memory-library.el   current topic inventory and structured user deletion
   mevedel-memory-list.el      candidates/memories/history cockpit, diffs, decisions, recovery
   mevedel-hooks.el            project/user/skill/agent hook loading + runner

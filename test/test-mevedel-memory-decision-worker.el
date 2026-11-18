@@ -25,7 +25,7 @@
          (mevedel-memory-decision--recovery-workers (make-hash-table :test #'equal))
          (key-a "a-claim") (key-b "b-claim") warnings messages
          (job (list :diagnostic-scope (mevedel-workspace-root a)
-                    :claim (list :directory key-a :expires-at (+ (float-time) 30))
+                    :claim (list :directory key-a :owner "a-owner" :expires-at (+ (float-time) 30))
                     :currentp (lambda () t))))
     (cl-letf (((symbol-function 'display-warning)
                (lambda (_type text &rest _) (push text warnings)))
@@ -34,7 +34,9 @@
       (mevedel-memory-decision--recovery-failed a key-a "Invalid bundle")
       (mevedel-memory-decision--recovery-failed b key-b "Invalid bundle")
       (puthash key-a job mevedel-memory-decision--recovery-workers)
-      (mevedel-memory-decision--recover-next-write a job)
+      (cl-letf (((symbol-function 'mevedel-memory-store--assert-owned) #'ignore)
+                ((symbol-function 'mevedel-memory-decision--recovery-release) #'ignore))
+        (mevedel-memory-decision--recovered a job '(:ok t :operation-id "a-owner" :changed nil)))
       (mevedel-memory-decision--recovery-failed b key-b "Invalid bundle")
       (mevedel-memory-decision--recovery-failed a key-a "Invalid bundle"))
     (should (= 3 (length warnings)))
@@ -45,141 +47,33 @@
 (require 'memory-history-fixtures
          (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
 
-(defun mevedel-test-recovery-mark (workspace accepted claim)
-  "Prepare an authentic marked write for WORKSPACE ACCEPTED under CLAIM."
-  (let ((proposal (car (plist-get accepted :proposals))))
-    (mevedel-memory-write--call
-     (plist-get (plist-get accepted :prepared) :scope) (plist-get proposal :root)
-     (lambda (target) (mevedel-memory-write--prepare workspace claim target accepted proposal)))))
-
-(mevedel-deftest mevedel-journal-worker-start/recovery-selection ()
-  ,test
-  (test)
-  :doc "real recovery child returns complete identities beyond the small reply bound without touching targets"
-  (let* ((root (make-temp-file "mevedel-recovery-selection-" t))
-         (workspace (mevedel-workspace--create :root root))
-         (mevedel-memory-dirs nil)
-         (mevedel-memory-consolidation-mode 'auto)
-         (mevedel-journal-cleanup--inhibit-scheduling t)
-         (kill-emacs-hook kill-emacs-hook)
-         (_identity (mevedel-workspace-identity-ensure root))
-         (accepted (car (mevedel-test-memory-history-create workspace 1 1 100)))
-         (_pending (car (mevedel-test-memory-history-create workspace 1 1 100 t)))
-         (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-         (intent (mevedel-test-recovery-mark workspace _pending claim))
-         (marker (mevedel-memory-write--pin intent))
-         (path (plist-get (cdr (car (plist-get (car (plist-get _pending :proposals)) :before))) :path))
-         (expected (list (plist-get intent :id))) result child)
-    (unwind-protect
-        (progn
-          ;; Unreadable retained rows must remain visible, not disappear from selection.
-          (dotimes (n 80)
-            (let ((id (secure-hash 'sha256 (format "unavailable-%d" n))))
-              (push id expected)
-              (write-region "(:invalid t)" nil
-                            (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el")) nil 'silent)))
-          (setq child (mevedel-journal-worker-start
-                       workspace 'memory-recover (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) (lambda (value) (setq result value))))
-          (with-timeout (30 (ert-fail "Recovery child did not reply"))
-            (while (not result) (accept-process-output nil .01)))
-          (should (plist-get result :ok))
-          (should-not (plist-get result :error))
-          (should (equal (plist-get claim :owner) (plist-get result :operation-id)))
-          (should (equal (sort expected #'string<) (sort (copy-sequence (plist-get result :writes)) #'string<)))
-          (should (cl-every #'stringp (plist-get result :writes)))
-          (should (file-exists-p marker))
-          (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
-          (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace
-                                          (plist-get (car (plist-get accepted :proposals)) :id)) :status))))
-      (mevedel-journal-claim-settle claim 'cancelled "")
-      (when (and child (process-live-p child)) (delete-process child))
-      (delete-directory root t))))
-
 (mevedel-deftest mevedel-journal-worker-start/selection-error
   (:doc "real discovery IO failure is an error reply, never an empty candidate set")
   (let* ((root (make-temp-file "mevedel-recovery-io-" t))
          (workspace (mevedel-workspace--create :root root))
          (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-         (directory (mevedel-memory-write--directory workspace))
+         (directory (mevedel-memory-decision--directory workspace))
          (kill-emacs-hook kill-emacs-hook)
          child result)
     (unwind-protect
         (progn
           (make-symbolic-link root directory)
           (setq child (mevedel-journal-worker-start
-                       workspace 'memory-recover (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) (lambda (value) (setq result value))))
+                       workspace 'memory-recover (list :claim claim :operation-id (plist-get claim :owner)) (lambda (value) (setq result value))))
           (with-timeout (20 (ert-fail "Discovery failure did not reply"))
             (while (not result) (accept-process-output nil .01)))
           (should-not (plist-get result :ok))
           (should (stringp (plist-get result :error)))
           (should (string-match-p (regexp-quote directory) (plist-get result :error)))
-          (should-not (plist-member result :writes)))
+          (should-not (plist-member result :changed)))
       (mevedel-journal-claim-settle claim 'cancelled "")
       (when (and child (process-live-p child)) (delete-process child))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-memory-decision-schedule-recovery/fresh-selection ()
-  ,test
-  (test)
-  :doc "selected identities are fresh hints: late arrivals wait, removed markers and unsaved edits survive"
-  (dolist (change '(marker unsaved collected))
-    (let* ((root (make-temp-file "mevedel-recovery-fresh-" t))
-           (workspace (mevedel-workspace--create :root root))
-           (mevedel-memory-decision--inhibit-recovery nil)
-           (mevedel-memory-dirs nil)
-           (mevedel-memory-consolidation-mode 'auto)
-           (mevedel-journal-cleanup--inhibit-scheduling t)
-           (kill-emacs-hook kill-emacs-hook)
-           (_identity (mevedel-workspace-identity-ensure root))
-           (accepted (car (mevedel-test-memory-history-create workspace 1 1 100 t)))
-           (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-           (intent (mevedel-test-recovery-mark workspace accepted claim))
-           (id (plist-get intent :id))
-           (marker (mevedel-memory-write--pin intent))
-           (path (plist-get (cdr (car (plist-get (car (plist-get accepted :proposals)) :before))) :path))
-           (directory (mevedel-memory-write--directory workspace))
-           (late (file-name-concat directory (concat (make-string 64 ?f) ".el")))
-           (start (symbol-function 'mevedel-journal-worker-start))
-           completed delivered observed buffer diagnostics)
-      (unwind-protect
-          (progn
-            (mevedel-journal-claim-settle claim 'cancelled "")
-            (mevedel-test--with-captured-diagnostics diagnostics
-              (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation payload callback &rest args)
-                           (apply start ws operation
-                                  payload (lambda (reply)
-                                    (unless delivered
-                                      (setq delivered t observed (plist-get reply :writes))
-                                      (write-region "(:invalid t)" nil late nil 'silent)
-                                      (pcase change
-                                        ('marker (delete-file marker))
-                                        ('collected (delete-file (file-name-concat directory (concat id ".el"))))
-                                        ('unsaved
-                                         (setq buffer (find-file-noselect path))
-                                         (with-current-buffer buffer (insert "unsaved")))))
-                                    (funcall callback reply)) args))))
-                (mevedel-memory-decision-schedule-recovery
-                 workspace (lambda () (setq completed t)))
-                (with-timeout (30 (ert-fail "Selected write did not finish"))
-                  (while (not completed) (accept-process-output nil .01)))))
-            (should delivered)
-            (should (equal (list id) observed))
-            (should-not (string-match-p (make-string 64 ?f) diagnostics))
-            (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
-            (when buffer
-              (should (buffer-modified-p buffer))
-              (should (file-exists-p marker))
-              (should (eq 'recovery-required (plist-get (mevedel-memory-decision-status workspace
-                                                        (plist-get intent :proposal)) :status)))))
-        (when buffer (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
-        (mevedel-memory-decision-stop-recovery)
-        (delete-directory root t)))))
-
 (mevedel-deftest mevedel-memory-decision-schedule-recovery/selection ()
   ,test
   (test)
-  :doc "cold and warm scheduled recovery issue no editor-side retained-write or marker probes"
+  :doc "cold and warm scheduled recovery issue no editor-side decision slot probes"
   (let* ((root (make-temp-file "mevedel-recovery-parent-" t))
          (workspace (mevedel-workspace--create :root root))
          (mevedel-memory-decision--inhibit-recovery nil)
@@ -188,10 +82,9 @@
          (mevedel-journal-cleanup--inhibit-scheduling t)
          (kill-emacs-hook kill-emacs-hook)
          (_identity (mevedel-workspace-identity-ensure root))
-         (_history (progn (mevedel-test-memory-history-create workspace 1 4 100)
-                          (remhash workspace mevedel-memory-write--inspected)))
+         (_history (mevedel-test-memory-history-create workspace 1 4 100))
          (program (symbol-function 'mevedel-session-control-fs-run-program))
-         (writes (file-name-as-directory (mevedel-memory-write--directory workspace)))
+         (slots (file-name-as-directory (mevedel-memory-decision--directory workspace)))
          probes)
     (unwind-protect
         (dotimes (_ 2)
@@ -200,7 +93,7 @@
                        (lambda (operations &rest args)
                          (dolist (op operations)
                            (when-let* ((path (plist-get op :path))
-                                       ((or (string-prefix-p writes path) (string-match-p "/pending/" path))))
+                                       ((string-prefix-p slots path)))
                              (push op probes)))
                          (apply program operations args))))
               (mevedel-memory-decision-schedule-recovery
@@ -226,9 +119,7 @@
                   ((symbol-function 'mevedel-memory-decision-recover)
                    (lambda (&rest _) (ert-fail "Publication recovery ran in editor")))
                   ((symbol-function 'mevedel-memory-store-recover)
-                   (lambda (&rest _) (ert-fail "Store recovery ran in editor")))
-                  ((symbol-function 'mevedel-memory-decision--recover-writes)
-                   (lambda (&rest _) (ert-fail "Empty store inspected a write"))))
+                   (lambda (&rest _) (ert-fail "Store recovery ran in editor"))))
           (make-directory (mevedel-memory-store--claim-directory workspace) t)
           (mevedel-memory-decision-schedule-recovery
            workspace (lambda ()
@@ -253,8 +144,8 @@
 (mevedel-deftest mevedel-memory-decision-schedule-recovery/selection-failure ()
   ,test
   (test)
-  :doc "failed, incomplete, foreign, oversized and forged-fallback replies never mean empty recovery"
-  (dolist (failure '(child missing foreign malformed oversized fallback))
+  :doc "failed, incomplete, foreign, malformed and forged-fallback replies never mean empty recovery"
+  (dolist (failure '(child missing foreign malformed fallback))
     (let* ((root (make-temp-file "mevedel-recovery-invalid-" t))
            (workspace (mevedel-workspace--create :root root))
            (mevedel-memory-decision--inhibit-recovery nil)
@@ -276,8 +167,7 @@
                                             ('child '(:error "Injected discovery failure"))
                                             ('missing (list :ok t :operation-id (plist-get reply :operation-id)))
                                             ('foreign (plist-put reply :operation-id "foreign"))
-                                            ('malformed (plist-put reply :writes '("not-an-identity")))
-                                            ('oversized (plist-put reply :writes (make-list 65537 (make-string 64 ?a))))
+                                            ('malformed (plist-put reply :changed 'invalid))
                                             ('fallback '(:ok t :synchronous t :operation-id "foreign"))))
                                     (funcall callback reply)) args))))
                 (mevedel-memory-decision-schedule-recovery
@@ -286,116 +176,10 @@
                   (while (mevedel-memory-decision-recovering-p workspace) (accept-process-output nil .01)))))
             (should delivered)
             (should-not completed)
-            (should (string-match-p (if (eq failure 'child) "Injected discovery failure" "Invalid memory recovery selection reply") diagnostics))
+            (should (string-match-p (if (eq failure 'child) "Injected discovery failure" "Invalid memory recovery reply") diagnostics))
             (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status))))
         (mevedel-memory-decision-stop-recovery)
         (delete-directory root t)))))
-
-(mevedel-deftest mevedel-memory-decision--recover-next-write ()
-		 ,test
-		 (test)
-		 :doc "inspects one fresh write per callback, yields between records, and preserves origin"
-		 (let* ((root (make-temp-file "mevedel-recovery-yield-" t))
-			(workspace (mevedel-workspace--create :root root))
-			(directory (mevedel-memory-write--directory workspace))
-			(inspect (symbol-function 'mevedel-memory-write--list))
-			(origin (current-buffer)) groups ticks completed job timer warnings)
-		   (unwind-protect
-		       (progn
-			 (make-directory directory t)
-			 (dotimes (n 4)
-			   (write-region "(:invalid t)" nil (file-name-concat directory (concat (secure-hash 'sha256 (number-to-string n)) ".el")) nil 'silent))
-			 (cl-letf (((symbol-function 'display-warning) (lambda (_ text &rest _) (push text warnings)))
-				   ((symbol-function 'mevedel-memory-write--list)
-				    (lambda (&rest args)
-				      (push (cadr args) groups)
-				      (push (and timer (not (memq timer timer-list))) ticks)
-				      (setq timer (run-at-time 0 nil #'ignore))
-				      (apply inspect args))))
-			   (setq job (mevedel-memory-decision--start-recovery
-				      workspace (lambda () (should (eq origin (current-buffer))) (setq completed t)) origin #'always (mevedel-memory-store--claim-directory workspace)))
-			   (with-temp-buffer
-			     (let ((deadline (+ (float-time) 10)))
-			       (while (and (not completed) (< (float-time) deadline)) (accept-process-output nil .005))))
-			   (should completed)
-			   (should (= 4 (length warnings)))
-			   (should (cl-every (lambda (text) (string-match-p "Memory write .* is unavailable:" text)) warnings))
-			   (should (= 4 (length groups)))
-			   (should (cl-every (lambda (ids) (= 1 (length ids))) groups))
-			   (should (equal '(t t t nil) ticks)))
-			 (should-not (gethash (plist-get (plist-get job :claim) :directory) mevedel-memory-decision--recovery-workers)))
-		     (when timer (cancel-timer timer))
-		     (mevedel-memory-decision-stop-recovery)
-		     (delete-directory root t)))
-		 :doc "cancellation during a record check cannot rearm the job or run its callback"
-		 (let* ((root (make-temp-file "mevedel-recovery-check-stop-" t))
-			(workspace (mevedel-workspace--create :root root))
-			(key (mevedel-memory-store--claim-directory workspace))
-			(_identity (mevedel-workspace-identity-ensure root))
-			(accepted (let ((mevedel-memory-dirs nil) (mevedel-memory-consolidation-mode 'auto))
-				    (car (mevedel-test-memory-history-create workspace 1 1 100 t))))
-			(claim (mevedel-journal-claim-acquire key 180))
-			(intent (mevedel-test-recovery-mark workspace accepted claim))
-				(job (list :claim claim :released t :origin (current-buffer) :currentp #'always
-				   :writes (list (plist-get intent :id) (make-string 64 ?b))
-				   :callback (lambda () (ert-fail "Cancelled checks admitted review")))))
-		   (unwind-protect
-		       (progn
-			 (mevedel-journal-claim-settle claim 'cancelled "")
-			 (puthash key job mevedel-memory-decision--recovery-workers)
-			 (cl-letf (((symbol-function 'mevedel-memory-decision--recover-writes)
-				    (lambda (actual ids &optional operation-claim)
-				      (should (eq actual workspace))
-				      (should (equal (list (plist-get intent :id)) ids))
-				      (should (mevedel-journal-claim-owned-p (plist-get operation-claim :claim)))
-				      (mevedel-memory-decision-stop-recovery))))
-			   (mevedel-memory-decision--recover-next-write workspace job)
-			   (let ((deadline (+ (float-time) 10)))
-			     (while (and (gethash key mevedel-memory-decision--recovery-workers) (< (float-time) deadline))
-			       (accept-process-output nil .01))))
-				 ;; Reconciling a marked write changes committed state.
-				 (should (= 1 (mevedel-memory-decision-recovery-generation workspace)))
-			 (should-not (gethash key mevedel-memory-decision--recovery-workers))
-			 (should-not (plist-get job :timer))
-			 (mevedel-memory-decision--recover-next-write workspace job))
-		     (mevedel-memory-decision-stop-recovery)
-		     (delete-directory root t)))
-		 :doc "deadline and quit release the inspection registry without admitting a review"
-		 (dolist (failure '(deadline quit))
-		   (let* ((root (make-temp-file "mevedel-recovery-check-failure-" t))
-			  (workspace (mevedel-workspace--create :root root))
-			  (key (mevedel-memory-store--claim-directory workspace))
-			  (_identity (mevedel-workspace-identity-ensure root))
-			  (accepted (let ((mevedel-memory-dirs nil) (mevedel-memory-consolidation-mode 'auto))
-				      (car (mevedel-test-memory-history-create workspace 1 1 100 t))))
-			  (claim (mevedel-journal-claim-acquire key 180))
-			  (intent (mevedel-test-recovery-mark workspace accepted claim))
-				  (job (list :claim (copy-sequence claim) :released t :origin (current-buffer) :currentp #'always
-				     :writes (list (plist-get intent :id))
-				     :callback (lambda () (ert-fail "Failed checks admitted review")))) diagnostics entered)
-		     (unwind-protect
-			 (progn
-			   (mevedel-journal-claim-settle claim 'cancelled "")
-			   (puthash key job mevedel-memory-decision--recovery-workers)
-			   (if (eq failure 'deadline)
-			       (progn
-				 (plist-put (plist-get job :claim) :expires-at (1- (float-time)))
-				 (mevedel-test--with-captured-diagnostics diagnostics
-									  (mevedel-memory-decision--recover-next-write workspace job))
-				 (should (string-match-p "Memory recovery timed out" diagnostics)))
-			     (cl-letf (((symbol-function 'mevedel-memory-decision--recover-writes)
-					(lambda (&rest _) (setq entered t) (signal 'quit nil))))
-			       (mevedel-test--with-captured-diagnostics diagnostics
-									(mevedel-memory-decision--recover-next-write workspace job)
-									(let ((deadline (+ (float-time) 10)))
-									  (while (and (gethash key mevedel-memory-decision--recovery-workers) (< (float-time) deadline))
-									    (accept-process-output nil .01))))
-			       (should entered)
-			       (should (string-empty-p diagnostics))))
-			   (should-not (gethash key mevedel-memory-decision--recovery-workers))
-			   (should-not (plist-get job :timer)))
-		       (mevedel-memory-decision-stop-recovery)
-		       (delete-directory root t)))))
 
 (mevedel-deftest mevedel-memory-decision-schedule-recovery/completion ()
   ,test
@@ -861,13 +645,11 @@
 						   (should (eq 'empty (plist-get (car outcomes) :outcome)))
 						   (deliver timer)))
 					       (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status)))
-					       (should (= 0 callbacks))
 					       (if (eq scenario 'cancel)
-						   (should (equal '(decisions) events))
-						 (should (equal '(store decisions) events))
-						 (deliver (plist-get job :timer))
-						 (should (= 1 callbacks)))
-					       (when (eq scenario 'recovery-first)
+                                                   (progn (should (= 0 callbacks)) (should (equal '(decisions) events)))
+                                                 (should (equal '(store decisions) events))
+                                                 (should (= 1 callbacks)))
+                                               (when (eq scenario 'recovery-first)
 						 (deliver (plist-get drain :timer))
 						 (should (eq 'empty (plist-get (car outcomes) :outcome))))))
 				     (mevedel-memory-pass-cancel workspace)
