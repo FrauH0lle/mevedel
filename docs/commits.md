@@ -24,6 +24,7 @@ effect in a `BREAKING CHANGE:` footer.
 
 ## Body
 
+Use short, plain sentences to explain the problem and why the change fixes it.
 Explain shared rationale once, then identify changed files and affected functions
 or variables. Separate distinct changes in the same file with a blank line:
 
@@ -48,8 +49,12 @@ function list and description:
 ```
 
 Use “Ditto” for an identical change in another file
-when its meaning remains clear. Include relevant validation, limitations, and
-compatibility effects; avoid claims unsupported by the actual checks.
+when its meaning remains clear.
+
+Summarize relevant checks and outcomes. Include reproduction steps when they
+help the reviewer, rather than pasting routine test transcripts. Keep conditions
+and limitations that affect the result, and note relevant compatibility effects.
+Do not claim more than the checks establish.
 
 These names are illustrative. A commit description should make the change
 understandable without requiring the reader to reconstruct the conversation.

@@ -193,6 +193,28 @@ boundary on later work. When evidence changes the trade, change the ADR.
   put this at 21% and the check was redundant with the target-side proof" is.
 - Do not defer to an ADR you disagree with. Argue with it, in it.
 
+## Visual aids
+
+Show a relationship when a reader can see it faster than they can reconstruct
+it from prose. Use a small timeline for a race, a call trace for a failing path,
+a state diagram for a lifecycle, or a table for a comparison. This applies to
+chat, reviews, commits, PRs, code comments, and documentation. If a sentence is
+clearer, use the sentence.
+
+Label the relevant actors or states, show only the steps that matter, and state
+the consequence next to the visual. For a race, put the competing contexts side
+by side. In a code comment, show the order or invariant the code must preserve,
+not a trace that will go stale when the implementation changes.
+
+```text
+Old request          New request
+queues cleanup
+                     takes ownership
+cleanup runs late
+```
+
+The old cleanup must not clear the new request's state.
+
 ## Maintained documentation
 
 The `docs/` tree documents the system as it exists now: implemented behavior,

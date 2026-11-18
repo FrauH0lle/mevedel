@@ -14,6 +14,9 @@ or reviewing a diff, read [CODING_STANDARDS.md](CODING_STANDARDS.md). It owns
 the deep-harness, compatibility and migration, ADR, and documentation review
 rules, and points to the development guide's conventions.
 
+When explaining order, flow, ownership, or a tradeoff to a human, including in
+chat and reviews, see [Visual aids](CODING_STANDARDS.md#visual-aids).
+
 ## Documentation map
 
 Before planning or changing an unfamiliar area, consult the
