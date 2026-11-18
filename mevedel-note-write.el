@@ -71,7 +71,6 @@
      ((zerop hits) (error "Note match not found in lines %d–%d" start end))
      ((not range) (error "Note occurrence %d is out of range (%d matches in lines %d–%d)"
                          occurrence hits start end))
-     ((and select (= hits 1)) (error "Note occurrence requires more than one match"))
      ((and (not select) (> hits 1))
       (error "Note match is ambiguous: %d matches in lines %d–%d; specify occurrence"
              hits start end)))
