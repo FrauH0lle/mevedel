@@ -35,7 +35,7 @@
 
 (require 'json)
 
-(defconst mevedel-collaboration--protocol-version 4
+(defconst mevedel-collaboration--protocol-version 5
   "The sealed host/guest payload protocol, checked at hello.
 See relay/README.md for what changes with it.")
 
@@ -446,51 +446,58 @@ share this queue so a departure cannot overtake an earlier hello."
 (defconst mevedel-collaboration--max-unbound-peers 256
   "Unbound peers remembered as already told, so each hears once.")
 
+(cl-defstruct (mevedel-collaboration--binding
+               (:constructor mevedel-collaboration--make-binding))
+  "State of one guest connection.  Unannounced peers have no challenge."
+  challenge (last-seq 0) refused nonce)
+
+(defun mevedel-collaboration--protocol-error ()
+  "Return the refusal for a guest speaking an incompatible protocol."
+  (list :t "error" :code "protocol-mismatch" :proto mevedel-collaboration--protocol-version
+        :message (format "Protocol mismatch: host speaks %d. Reload the viewer after updating the relay, or update mevedel on the host."
+                         mevedel-collaboration--protocol-version)))
+
 (defun mevedel-collaboration--transport-refusal (transport peer frame)
   "Return nil when guest FRAME belongs to PEER's current TRANSPORT connection.
 Otherwise return t to drop it silently, or the frame that refuses it.
 Only a binding's first refusal is answered.  A frame without a challenge
 comes from a client of an older protocol; one with a stale challenge or a
 sequence number at or below the last accepted was repeated or reordered."
-  ;; A binding is (CHALLENGE LAST-SEQ REFUSED NONCE); CHALLENGE is nil for
-  ;; a peer the relay never announced, NONCE nil until its first frame.
   (let* ((peers (plist-get transport :peers))
          (binding (gethash peer peers))
+         (expected (and binding (mevedel-collaboration--binding-challenge binding)))
          (challenge (plist-get frame :challenge))
+         (nonce (plist-get frame :nonce))
          (seq (plist-get frame :seq)))
     (cond
-     ((and (car binding) (equal challenge (car binding))
-           (natnump seq) (> seq (cadr binding))
+     ((and expected (equal challenge expected)
+           (natnump seq) (> seq (mevedel-collaboration--binding-last-seq binding))
            ;; The nonce identifies the socket: every frame needs a valid one,
            ;; so the first accepted frame always adopts it, and a relay
            ;; handing another socket this peer's recorded challenge cannot pass.
-           (let ((nonce (plist-get frame :nonce)))
-             ;; Base64url, so the nonce the host echoes costs a known size.
-             (and (stringp nonce)
-                  (string-match-p
-                   (format "\\`[A-Za-z0-9_-]\\{1,%d\\}\\'"
-                           mevedel-collaboration--max-guest-nonce-chars)
-                   nonce)
-                  (or (null (nth 3 binding)) (equal nonce (nth 3 binding))))))
-      (setf (cadr binding) seq)
-      (unless (nth 3 binding)
-        (setf (nth 3 binding) (plist-get frame :nonce)))
+           (stringp nonce)
+           (string-match-p
+            (format "\\`[A-Za-z0-9_-]\\{1,%d\\}\\'"
+                    mevedel-collaboration--max-guest-nonce-chars)
+            nonce)
+           (let ((bound-nonce (mevedel-collaboration--binding-nonce binding)))
+             (or (null bound-nonce) (equal nonce bound-nonce))))
+      (setf (mevedel-collaboration--binding-last-seq binding) seq
+            (mevedel-collaboration--binding-nonce binding) nonce)
       nil)
-     ((nth 2 binding) t)
+     ((and binding (mevedel-collaboration--binding-refused binding)) t)
      ((not binding)
       (if (>= (hash-table-count peers) mevedel-collaboration--max-unbound-peers)
           t
-        (puthash peer (list nil 0 t nil) peers)
+        (puthash peer (mevedel-collaboration--make-binding :refused t) peers)
         (list :t "notice"
               :message "The host ignored a frame from a connection it has not bound yet.")))
      (t
-      (setf (nth 2 binding) t)
+      (setf (mevedel-collaboration--binding-refused binding) t)
       (if challenge
           (list :t "notice"
                 :message "The host ignored a frame the relay repeated or reordered.")
-        (list :t "error"
-              :message (format "protocol mismatch: host speaks %d"
-                               mevedel-collaboration--protocol-version)))))))
+        (mevedel-collaboration--protocol-error))))))
 
 (defun mevedel-collaboration--transport-receive (transport frame)
   "Decode websocket FRAME for TRANSPORT and dispatch it."
@@ -527,7 +534,7 @@ sequence number at or below the last accepted was repeated or reordered."
                ;; A fresh challenge per connection, a reconnect included.
                (let ((challenge (mevedel-collaboration--base64url
                                  (mevedel-collaboration--random-bytes 16))))
-                 (puthash peer (list challenge 0 nil nil) peers)
+                 (puthash peer (mevedel-collaboration--make-binding :challenge challenge) peers)
                  (mevedel-collaboration--transport-deliver
                   transport #'mevedel-collaboration--transport-send
                   transport peer (list :t "challenge" :challenge challenge))))
@@ -598,28 +605,13 @@ this loop masks in place."
 (defconst mevedel-collaboration--broadcast-types
   '("record" "remove" "notice" "status" "store-artifacts" "agents"
     "history-index" "goal" "tasks" "background-work" "discussions" "bye"
-    ("editing" . "event"))
+    "editing-event")
   "Frame types the host may send to every guest at once.
-An entry (TYPE . REQ-ID) admits TYPE only with that request id: shared
-editing broadcasts its change events, never a reply to one request.
 Broadcasts carry no guest's nonce, so a relay can replay them to any
 guest; a reply or anything else meant for one guest must name its peer.")
 
-(defun mevedel-collaboration--transport-check-broadcast (frame)
-  "Signal an error unless FRAME, a plist or its JSON text, may be broadcast."
-  (let ((type (if (stringp frame)
-                  (and (string-match "\\`{\"t\":\"\\([^\"]+\\)\"" frame)
-                       (match-string 1 frame))
-                (plist-get frame :t))))
-    (unless (or (member type mevedel-collaboration--broadcast-types)
-                (and (consp frame)
-                     (member (cons type (plist-get frame :reqId))
-                             mevedel-collaboration--broadcast-types)))
-      (error "Frame type %S may not be broadcast; send it to its peer" type))))
-
 (defun mevedel-collaboration--transport-send (transport peer frame)
   "Seal and send plist FRAME to PEER through TRANSPORT.
-FRAME may also be its JSON text, already encoded.
 
 PEER 0 broadcasts to every guest, only the frame types in
 `mevedel-collaboration--broadcast-types' (others signal an error);
@@ -635,22 +627,19 @@ ends the session for every guest.  Callers keep frames within
 `mevedel-collaboration--max-frame-json-bytes', which leaves room for the
 nonce added here; the error surfaces any frame that does not, instead of
 losing it silently."
-  (when (zerop peer)
-    (mevedel-collaboration--transport-check-broadcast frame))
+  (when (and (zerop peer)
+             (not (member (plist-get frame :t) mevedel-collaboration--broadcast-types)))
+    (error "Frame type %S may not be broadcast; send it to its peer" (plist-get frame :t)))
   (when (mevedel-collaboration--transport-open-p transport)
     (when-let* ((encoded
                  (condition-case nil
                      (let ((nonce (when-let* (((/= peer 0))
-                                              (peers (plist-get transport :peers)))
-                                    (nth 3 (gethash peer peers)))))
+                                              (peers (plist-get transport :peers))
+                                              (binding (gethash peer peers)))
+                                    (mevedel-collaboration--binding-nonce binding))))
                        ;; A frame for one peer carries back its nonce, so the
                        ;; relay cannot answer a later connection with it.
-                       (cond
-                        ((not nonce) (if (stringp frame) frame (json-encode frame)))
-                        ((stringp frame)
-                         (concat (substring frame 0 -1) ",\"nonce\":"
-                                 (json-encode nonce) "}"))
-                        (t (json-encode (append frame (list :nonce nonce))))))
+                       (json-encode (if nonce (plist-put (copy-sequence frame) :nonce nonce) frame)))
                    (error nil))))
       (let ((bytes (string-bytes encoded)))
         (when (> bytes mevedel-collaboration--max-wire-json-bytes)

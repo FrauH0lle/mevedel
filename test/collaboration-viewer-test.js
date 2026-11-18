@@ -715,7 +715,7 @@ async function testEditingDeletion() {
   assert.equal(api.present('missing'), false);
   assert.equal(store.has('mevedel-editing::stale'), false, 'a stale draft without edits is dropped');
   const event = value => { const data=btoa(JSON.stringify(value));
-    api.receive({t:'editing',reqId:'event',offset:0,total:data.length,data}); };
+    api.receive({t:'editing-event',offset:0,total:data.length,data}); };
   event({event:'deleted', id:'board', actor:'Ann'});
   assert.equal(api.present('board'), false);
   assert.equal(catalogChanges, 2);
@@ -1565,7 +1565,7 @@ async function main() {
   await waitFor(() => first.sent.length === 1, 'sealed hello');
   const hello = await unsealRaw(key, first.sent[0]);
   assert.equal(hello.t, 'hello');
-  assert.equal(hello.proto, 4);
+  assert.equal(hello.proto, 5);
   assert.equal(hello.challenge, 'challenge-one');
   assert.equal(hello.seq, 1);
   assert.equal(hello.writeToken, base64url(writeToken));
@@ -1584,7 +1584,7 @@ async function main() {
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
-  await deliver({t: 'welcome', proto: 4, readOnly: false, recordCount: 3,
+  await deliver({t: 'welcome', proto: 5, readOnly: false, recordCount: 3,
                  workspace: 'ws',
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'},
@@ -2938,7 +2938,7 @@ async function main() {
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
   const reconnectSent = sockets[1].sent.length;
-  await deliverTo(sockets[1], {t: 'welcome', proto: 4, readOnly: false, recordCount: 2});
+  await deliverTo(sockets[1], {t: 'welcome', proto: 5, readOnly: false, recordCount: 2});
   await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
   const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
   assert.equal(reconnectedCatalog.t, 'editing');
@@ -3112,7 +3112,7 @@ async function main() {
   // the open tab falls back to Main chat, the tab goes, and the chip says why.
   boardTab().dispatch('click');
   const deletion = btoa(JSON.stringify({event: 'deleted', id: 'board-1', actor: 'Ross'}));
-  await deliverTo(sockets[1], {t: 'editing', reqId: 'event', offset: 0,
+  await deliverTo(sockets[1], {t: 'editing-event', offset: 0,
                                total: deletion.length, data: deletion});
   assert.equal(boardTab(), undefined, 'a deleted item has no tab');
   assert.match(textOf(nodes.filter.children.find(b => b.attributes['aria-pressed'] === 'true')), /^Main chat/);
@@ -3209,12 +3209,27 @@ async function main() {
   await waitFor(() => artifactSocket.sent.length >= 1, 'artifact link hello');
   nodes['terminal-title'].textContent = '';
   artifactSocket.dispatch('message', {data: await seal(key, 1, {
-    t: 'welcome', proto: 4, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
+    t: 'welcome', proto: 5, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
     title: 'SNT analysis pipeline', readOnly: false})});
   await waitFor(() => textOf(nodes['terminal-title']) === 'Artifact link', 'artifact link notice');
   assert.equal(textOf(nodes['terminal-message']), 'Paste this link into mevedel or an MCP client.');
   assert.equal(nodes.composer.hidden, true);
   assert.equal(artifactSocket.readyState, 3, 'the viewer leaves the artifact room');
+
+  // A v4 host sends its original message without a structured error code.
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), {...context});
+  await waitFor(() => sockets.length === dialed + 2, 'old host dial');
+  const oldHostSocket = sockets.at(-1);
+  oldHostSocket.dispatch('open');
+  oldHostSocket.dispatch('message', {data: await seal(key, 1, {t: 'challenge', challenge: 'old'})});
+  await waitFor(() => oldHostSocket.sent.length === 1, 'old host hello');
+  const oldHostHello = await unsealRaw(key, oldHostSocket.sent[0]);
+  assert.equal(oldHostHello.proto, 5);
+  oldHostSocket.dispatch('message', {data: await seal(key, 1, {
+    t: 'error', nonce: oldHostHello.nonce, message: 'protocol mismatch: host speaks 4'})});
+  await waitFor(() => textOf(nodes['terminal-title']) === 'Rejected', 'protocol refusal');
+  assert.match(textOf(nodes['terminal-message']), /host speaks 4.*update mevedel.*reload the viewer/);
+  assert.equal(oldHostSocket.readyState, 3, 'the viewer leaves the mismatched room');
 
   console.log('viewer protocol passed');
 }

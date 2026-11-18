@@ -696,7 +696,7 @@ test(
                 giveUpMs: 10000,
                 hello: () => ({
                   t: 'hello',
-                  proto: 4,
+                  proto: 5,
                   name: 'Forged role',
                   owner: true,
                   writable: true,

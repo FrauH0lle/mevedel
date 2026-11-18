@@ -43,10 +43,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   programs (63.5 → 37.4 ms) but whole operations did not get faster; more
   needs a long-lived helper process instead of one program per step (ADR 0101
   decision history, 2026-11-14).
-- Code-quality leftovers from the 2026-11-14 review pass 2: Codex
-  `prompt_cache_key` is placed per request at three sites; collaboration
-  connection binding uses an untyped positional list and JSON string surgery;
-  optional and mixed-type values added by performance fixes.
 
 ## Proactive sessions
 

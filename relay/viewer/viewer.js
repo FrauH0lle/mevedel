@@ -35,7 +35,7 @@
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
 
-  const PROTO = 4;
+  const PROTO = 5;
   const GIVE_UP_MS = 3 * 60 * 1000;
   // Covers the host's relay dial after it hands out a new room's link.
   const JOIN_GRACE_MS = 5 * 1000;
@@ -1351,7 +1351,7 @@
       setConnection('Loading…', 'connected');
       editing.welcome();
       restoreDestination();
-    } else if (frame.t === 'editing' || frame.t === 'editing-presence') {
+    } else if (frame.t === 'editing' || frame.t === 'editing-event' || frame.t === 'editing-presence') {
       editing.receive(frame);
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
@@ -1538,7 +1538,8 @@
     } else if (frame.t === 'error') {
       showTerminal(
         'Rejected',
-        typeof frame.message === 'string' ? frame.message
+        typeof frame.message === 'string' ? frame.message + (frame.code ? ''
+          : '. If the protocol differs, update mevedel on the host and reload the viewer.')
           : 'The host rejected this connection.');
     }
     // Unknown frame types from a newer host are tolerated silently.

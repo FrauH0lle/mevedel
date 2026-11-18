@@ -150,12 +150,12 @@ test('a protocol mismatch reaches the tool result', async (t) => {
   const good = await startFakeRoom();
   t.after(() => good.close());
   assert.equal(await main(['attach', good.link('view')], { env, stdout: sink(), stderr: sink() }), 0);
-  const old = await startFakeRoom({ mode: 'mismatch' });
+  const old = await startFakeRoom({ mode: 'coded-mismatch' });
   t.after(() => old.close());
   const pool = connectionPool({ idleMs: 100 });
   t.after(() => pool.closeAll());
   const result = await callTool('read_artifact', { name: 'snt-pipeline' },
     { env: { ...env }, connect: (entry, ctx) => pool.connect({ ...entry, link: old.link('view') }, ctx) });
   assert.ok(result.isError);
-  assert.match(result.content[0].text, /origin speaks protocol 5, this package speaks 4; update one/);
+  assert.match(result.content[0].text, /Origin speaks protocol 6, this package speaks 5; update mevedel or the remote-artifact package/);
 });

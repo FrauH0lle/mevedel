@@ -268,16 +268,17 @@ An editing frame's body travels as the chunked transfer it stands for."
 An editing transfer appears once, complete, as its `body' shorthand."
   (let (frames transfers)
     (dolist (text (plist-get consumer :texts) (nreverse frames))
-      (let ((frame (mevedel-artifact-room-test--parse text)))
-        (if (not (equal "editing" (alist-get 't frame)))
+      (let* ((frame (mevedel-artifact-room-test--parse text))
+             (type (alist-get 't frame)))
+        (if (not (member type '("editing" "editing-event")))
             (push frame frames)
-          (let* ((req-id (alist-get 'reqId frame))
+          (let* ((req-id (or (alist-get 'reqId frame) type))
                  (parts (concat (cdr (assoc req-id transfers))
                                 (alist-get 'data frame))))
             (setf (alist-get req-id transfers nil nil #'equal) parts)
             (when (= (length parts) (alist-get 'total frame))
               (setq transfers (assoc-delete-all req-id transfers))
-              (push `((t . "editing") (reqId . ,req-id)
+              (push `((t . ,type) (reqId . ,(alist-get 'reqId frame))
                       (body . ,(mevedel-artifact-room-test--parse
                                 (decode-coding-string (base64-decode-string parts)
                                                       'utf-8))))
@@ -618,8 +619,8 @@ object keys included, must be equal."
 
 (defun mevedel-artifact-room-test--replies (consumer)
   "Return the request replies CONSUMER received, without change events."
-  (cl-remove "event" (mevedel-artifact-room-test--frames consumer)
-             :key (lambda (frame) (alist-get 'reqId frame)) :test #'equal))
+  (cl-remove "editing-event" (mevedel-artifact-room-test--frames consumer)
+             :key (lambda (frame) (alist-get 't frame)) :test #'equal))
 
 (defun mevedel-artifact-room-test--exchange (consumer name bindings)
   "Play fixture NAME's consumer frames from CONSUMER with BINDINGS.
@@ -1125,7 +1126,7 @@ FUNCTION is a step of the editing queue: admission or commit."
            (events (lambda ()
                      (mapcar (lambda (frame) (alist-get 'body frame))
                              (cl-remove-if-not
-                              (lambda (frame) (equal "event" (alist-get 'reqId frame)))
+                              (lambda (frame) (equal "editing-event" (alist-get 't frame)))
                               (mevedel-artifact-room-test--frames consumer))))))
       (unwind-protect
           (progn
@@ -1161,7 +1162,7 @@ FUNCTION is a step of the editing queue: admission or commit."
                      (mapcar (lambda (frame)
                                (mevedel-artifact-room-test--normal (alist-get 'body frame)))
                              (cl-remove-if-not
-                              (lambda (frame) (equal "event" (alist-get 'reqId frame)))
+                              (lambda (frame) (equal "editing-event" (alist-get 't frame)))
                               (mevedel-artifact-room-test--frames consumer))))))
       (unwind-protect
           (progn

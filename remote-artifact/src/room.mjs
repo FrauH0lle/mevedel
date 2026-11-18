@@ -18,9 +18,13 @@
 import { parseLink } from './link.mjs';
 import { EditingAssembler, PROTOCOL, editingFrames, importKey, seal, unseal } from './protocol.mjs';
 
-export const UNAVAILABLE = 'Origin unavailable (revoked, deleted, or offline)';
+function originError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+const unavailable = () => originError('origin-unavailable', 'Origin unavailable (revoked, deleted, or offline)');
 /* The relay connected, but the origin never bound the connection. */
-export const OLDER_ORIGIN = 'Origin may run an older protocol; update mevedel on the host';
+const olderOrigin = () => originError('older-origin', 'Origin may run an older protocol; update mevedel on the host');
 
 const GOODBYES = {
   revoked: 'Origin unavailable: the host revoked this artifact link; ask them for a new one',
@@ -29,8 +33,8 @@ const GOODBYES = {
 };
 
 /* What the origin's goodbye for REASON means to the user. */
-export function goodbye(reason) {
-  return Object.hasOwn(GOODBYES, reason) ? GOODBYES[reason] : UNAVAILABLE;
+function goodbye(reason) {
+  return Object.hasOwn(GOODBYES, reason) ? originError('origin-goodbye', GOODBYES[reason]) : unavailable();
 }
 
 export class Room {
@@ -79,7 +83,7 @@ export class Room {
    * TIMEOUT-MS pass.
    */
   request(body, timeoutMs = 30000) {
-    if (this.#closed) return Promise.reject(new Error(this.#closed));
+    if (this.#closed) return Promise.reject(this.#closed);
     const reqId = this.#nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -93,7 +97,7 @@ export class Room {
   }
 
   close() {
-    this.end(UNAVAILABLE);
+    this.end(unavailable());
     try { this.#ws.close(); } catch { /* already closed */ }
   }
 
@@ -112,7 +116,7 @@ export class Room {
           return;
         }
         if ('nonce' in frame && frame.nonce !== this.#nonce) return;
-        if (frame.t === 'editing' && frame.reqId !== 'event' && frame.nonce === this.#nonce) {
+        if (frame.t === 'editing' && frame.nonce === this.#nonce) {
           const body = this.#assembler.add(frame);
           const pending = body !== undefined && this.#pending.get(frame.reqId);
           if (pending) {
@@ -135,11 +139,11 @@ export class Room {
     return this.#inbound;
   }
 
-  /* Fail every pending request, and every later one, with MESSAGE. */
-  end(message) {
+  /* Fail every pending request, and every later one, with ERROR. */
+  end(error) {
     if (this.#closed) return;
-    this.#closed = message;
-    for (const { reject } of this.#pending.values()) reject(new Error(message));
+    this.#closed = error;
+    for (const { reject } of this.#pending.values()) reject(error);
     this.#pending.clear();
   }
 }
@@ -157,34 +161,33 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
   const room = new Room(ws, key, parsed);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const fail = (message) => {
-      room.end(message);
+    const fail = (error) => {
+      room.end(error);
       if (!settled) {
         settled = true;
         clearTimeout(timer);
         try { ws.close(); } catch { /* already closed */ }
-        reject(new Error(message));
+        reject(error);
       }
     };
     // An origin of an older protocol never sends the challenge hello waits for.
     let opened = false;
     ws.addEventListener('open', () => { opened = true; });
-    const timer = setTimeout(() => fail(opened && !room.bound ? OLDER_ORIGIN : UNAVAILABLE), timeoutMs);
+    const timer = setTimeout(() => fail(opened && !room.bound ? olderOrigin() : unavailable()), timeoutMs);
     room.onFrame = (frame) => {
       if (settled) return;
       if (frame.t === 'error') {
-        const version = /speaks (\d+)/.exec(frame.message ?? '');
-        fail(version
-          ? `origin speaks protocol ${version[1]}, this package speaks ${PROTOCOL}; update one`
-          : `The origin refused the connection: ${frame.message}`);
+        fail(frame.code === 'protocol-mismatch'
+          ? originError(frame.code, `Origin speaks protocol ${frame.proto}, this package speaks ${PROTOCOL}; update mevedel or the remote-artifact package.`)
+          : new Error(`The origin refused the connection: ${frame.message}. If the protocol differs, update mevedel or the remote-artifact package.`));
       } else if (frame.t === 'welcome' && frame.room === 'artifact') {
         settled = true;
         clearTimeout(timer);
         room.welcome = frame;
         resolve(room);
       } else if (frame.t === 'welcome' || frame.t === 'lobby') {
-        fail('This is a session or lobby link, not an artifact link. Share the artifact at its '
-          + 'origin and attach the link that gives.');
+        fail(new Error('This is a session or lobby link, not an artifact link. Share the artifact at its '
+          + 'origin and attach the link that gives.'));
       } else if (frame.t === 'bye') {
         fail(goodbye(frame.reason));
       }
@@ -198,7 +201,7 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
       if (typeof event.data !== 'string') room.receive(event.data);
     });
     // A goodbye arrives just before the close; let it be read first.
-    ws.addEventListener('close', () => room.drained().then(() => fail(UNAVAILABLE)));
-    ws.addEventListener('error', () => room.drained().then(() => fail(UNAVAILABLE)));
+    ws.addEventListener('close', () => room.drained().then(() => fail(unavailable())));
+    ws.addEventListener('error', () => room.drained().then(() => fail(unavailable())));
   });
 }

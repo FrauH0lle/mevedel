@@ -6,20 +6,23 @@ envelopes between them and serves the static viewer. It never holds a room
 key: every session payload is AES-256-GCM sealed end to end, and the key
 travels only in the share link's URL fragment.
 
-The sealed host/viewer payload protocol is **4**. Update the Emacs host and
-viewer together. Rebuild the relay binary after viewer changes because the
-assets are embedded; reload browser tabs after updating. Tool presentation
-metadata does not change the relay's content-blind forwarding contract.
+The sealed payload protocol is **5**. Update the Emacs host, browser viewer
+and `mevedel-remote-artifact` clients together. Rebuild the relay binary to
+serve the updated viewer, then reload browser tabs. The relay's content-blind
+forwarding protocol is unchanged.
 
 Every guest frame is bound to its connection, so a relay that records sealed
 frames cannot replay them. On `peer-joined` the host sends that peer
 `{"t":"challenge","challenge":"<22 base64url chars>"}`; the guest sends
 `hello` only after it and adds `"challenge"` and an increasing `"seq"`,
-starting at 1, to every frame. The host acts on no other frame and answers
-only the first per connection: one without a challenge with `error`
-`protocol mismatch: host speaks 4`, a stale challenge or a `seq` at or below
-the last accepted with a `notice`, and one from a peer the relay never
-announced with a `notice` that the connection is not bound yet.
+starting at 1, to every frame. The host answers only the first binding refusal
+per connection: no challenge gets `error` with code `protocol-mismatch` and
+the host's `proto`; a stale challenge or non-increasing `seq` gets a `notice`;
+an unannounced peer gets a `notice` that the connection is not bound yet.
+
+Hosts reject a mismatched `hello` with the same `protocol-mismatch` error.
+Version 5 separates the broadcast `editing-event` type from peer-bound
+`editing` request and reply frames. Broadcast events omit `reqId`.
 Every guest frame also carries `"nonce"`, random per socket; the host keeps
 the first it accepts and adds it to each frame for that peer alone, and
 guests drop frames bearing another nonce. The host refuses a frame without

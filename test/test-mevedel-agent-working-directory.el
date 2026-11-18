@@ -90,8 +90,9 @@
                        'provider-request)))
             (cl-labels
                 ((launch (buffer task expected-cwd expected-directory &optional directory)
-                   (let* ((args (append (list :task_name task :message "Inspect the local files.")
-                                        (and directory (list :working_directory directory))))
+                   (let* ((args (list :task_name task :message "Inspect the local files."
+                                      :role "" :context "" :model "" :effort ""
+                                      :working_directory (or directory "")))
                           (before (length launches)) result)
                      (with-current-buffer buffer
                        (apply (gptel-tool-function provider)
@@ -204,7 +205,8 @@
                        (lambda (value &rest _) (setq result value))
                        (mapcar
                         (lambda (arg)
-                          (plist-get '(:target "/root/child" :message "Inspect the retained cwd again.")
+                          (plist-get '(:target "/root/child" :message "Inspect the retained cwd again."
+                                       :working_directory "")
                                      (intern (concat ":" (plist-get arg :name)))))
                         (gptel-tool-args send))))
               (should result)
@@ -219,6 +221,16 @@
               (should-not (buffer-local-value 'mevedel--conversation-working-directory parent))
               (should-not (buffer-local-value 'mevedel--conversation-working-directory sibling))
               (should (equal session-root (mevedel-session-working-directory session)))
+              (with-current-buffer child
+                (apply (gptel-tool-function send)
+                       (lambda (value &rest _) (setq result value))
+                       (mapcar
+                        (lambda (arg)
+                          (plist-get '(:target "" :message "Mail to the parent."
+                                       :working_directory "")
+                                     (intern (concat ":" (plist-get arg :name)))))
+                        (gptel-tool-args send))))
+              (should (equal "" (mevedel-tool-render-data-strip result)))
               (funcall (plist-get (car launches) :callback) "Retained directory inspected."))))
       (dolist (launch launches)
         (let ((buffer (plist-get launch :buffer)))

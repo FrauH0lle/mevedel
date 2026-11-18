@@ -65,8 +65,10 @@
   "Buffer-local UI collapse state keyed by fragment collapse keys.")
 
 (defvar-local mevedel-view-zone--regions nil
-  "Managed region overlays keyed by fixed zone name.
-The value `absent' records a zone proven to have no text.")
+  "Managed region overlays keyed by fixed zone name.")
+
+(defvar-local mevedel-view-zone--absent-zones nil
+  "Zone names proven to have no text since the last region-table reset.")
 
 (defconst mevedel-view-zone--names
   '(status interaction progress)
@@ -535,11 +537,10 @@ only zone rendering writes zone text, and creating a region, forgetting
 the zone or losing the table discards the proof."
   (and (null fragments)
        (null region)
-       (let ((table (mevedel-view-zone--region-table)))
-         (or (eq (gethash zone table) 'absent)
-             (unless (text-property-any (point-min) (point-max)
-                                        'mevedel-view-zone-namespace zone)
-               (puthash zone 'absent table))))))
+       (or (memq zone mevedel-view-zone--absent-zones)
+           (unless (text-property-any (point-min) (point-max)
+                                      'mevedel-view-zone-namespace zone)
+             (push zone mevedel-view-zone--absent-zones)))))
 
 (defun mevedel-view-zone--reconcile (region namespace text)
   "Reconcile rendered TEXT for NAMESPACE inside managed REGION."
@@ -577,14 +578,15 @@ the zone or losing the table discards the proof."
 (defun mevedel-view-zone--region-table ()
   "Return the current buffer's managed-zone region table."
   (unless (hash-table-p mevedel-view-zone--regions)
-    (setq mevedel-view-zone--regions (make-hash-table :test #'eq))
+    (setq mevedel-view-zone--regions (make-hash-table :test #'eq)
+          mevedel-view-zone--absent-zones nil)
     (mevedel-view-zone--watch-width))
   mevedel-view-zone--regions)
 
 (defun mevedel-view-zone--live-region (zone)
   "Return ZONE's live managed region, or nil."
   (let ((region (gethash zone (mevedel-view-zone--region-table))))
-    (cond ((not (overlayp region)) nil) ; none, or the `absent' proof
+    (cond ((not region) nil)
           ((eq (overlay-buffer region) (current-buffer)) region)
           (t (remhash zone mevedel-view-zone--regions) nil))))
 
@@ -731,7 +733,6 @@ the zone or losing the table discards the proof."
     (maphash
      (lambda (other-zone other)
        (when (and (not (eq other region))
-                  (overlayp other)
                   (eq (overlay-buffer other) (current-buffer)))
          (let* ((other-index
                  (- (length mevedel-view-zone--names)
@@ -1035,7 +1036,9 @@ live zone text keeps its current bounds until reconciliation finishes."
 		(setq region (make-overlay start end (current-buffer) t nil))
 		(overlay-put region 'mevedel-view-zone zone)
 		(overlay-put region 'evaporate nil)
-		(puthash zone region table))
+		(puthash zone region table)
+                (setq mevedel-view-zone--absent-zones
+                      (delq zone mevedel-view-zone--absent-zones)))
               (setq owned-p
                     (and (< (overlay-start region) (overlay-end region))
 			 (text-property-any
@@ -1131,14 +1134,13 @@ Use after a larger redraw has already removed the managed text."
           (unless (memq zone mevedel-view-zone--names)
             (error "Unknown managed zone: %S" zone))
           (when-let* ((region (gethash zone table)))
-            (when (overlayp region)
-              (delete-overlay region)))
+            (delete-overlay region))
+          (setq mevedel-view-zone--absent-zones
+                (delq zone mevedel-view-zone--absent-zones))
           (remhash zone table))
-      (maphash (lambda (_name region)
-                 (when (overlayp region)
-                   (delete-overlay region)))
-               table)
-      (clrhash table))))
+      (maphash (lambda (_name region) (delete-overlay region)) table)
+      (clrhash table)
+      (setq mevedel-view-zone--absent-zones nil))))
 
 (provide 'mevedel-view-zone)
 ;;; mevedel-view-zone.el ends here

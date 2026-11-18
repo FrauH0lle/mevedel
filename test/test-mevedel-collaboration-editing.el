@@ -277,7 +277,7 @@
                (lambda (_room peer req-id value) (push (list peer req-id value) sent))))
       (mevedel-collaboration-editing--changed
        'workspace '(:id "board" :deleted t :actor "Guest: Ann") nil))
-    (should (equal '((0 "event" (:event "deleted" :id "board" :actor "Ann"))) sent))
+    (should (equal '((0 nil (:event "deleted" :id "board" :actor "Ann"))) sent))
     (should-not (plist-get (gethash 1 guests) :editing-item))
     (should (equal "notes" (plist-get (gethash 2 guests) :editing-item))))
 
@@ -296,13 +296,13 @@
                  (should (eq sent-room room))
                  (push (list peer req-id value) sent))))
       (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :discussions []))
-      (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
+      (should (equal '((0 nil (:event "changed" :id "board" :kind "whiteboard"
                                   :title "Board" :revision 4)))
                      sent))
       (setq sent nil)
       (plist-put (gethash 2 guests) :editing-item "board")
       (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :discussions []))
-      (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
+      (should (equal '((0 nil (:event "changed" :id "board" :kind "whiteboard"
                                   :title "Board" :revision 4
                                   :update "u" :discussions [] :transactions [t])))
                      sent))))

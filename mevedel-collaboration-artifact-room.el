@@ -806,7 +806,7 @@ a deletion is left to the room's own lifecycle."
                      (mevedel-workspace-root workspace) (plist-get state :id)))
               ((> (hash-table-count (plist-get room :guests)) 0)))
     (mevedel-collaboration-editing--send
-     room 0 "event"
+     room 0 nil
      (list :event "changed" :id (plist-get state :id) :kind (plist-get state :kind)
            :title (plist-get state :title) :revision (plist-get state :revision))
      t)))
@@ -847,7 +847,7 @@ hear nothing."
                    ((not (equal fingerprint (plist-get room :files-fingerprint)))))
          (plist-put room :files-fingerprint fingerprint)
          (mevedel-collaboration-editing--send
-          room 0 "event"
+          room 0 nil
           (list :event "changed" :id (plist-get room :artifact) :kind "html"
                 :title (plist-get (mevedel-artifact-store-meta workspace (plist-get room :artifact))
                                   :title)

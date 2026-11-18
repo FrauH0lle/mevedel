@@ -54,8 +54,8 @@ the room.  START replaces the child's room dial."
          (seq 0)
          sent children)
     ;; Both peers' connections are bound, as after the relay's peer-joined.
-    (puthash 2 (list "c2" 0 nil nil) peers)
-    (puthash 3 (list "c3" 0 nil nil) peers)
+    (puthash 2 (mevedel-collaboration--make-binding :challenge "c2") peers)
+    (puthash 3 (mevedel-collaboration--make-binding :challenge "c3") peers)
     (puthash 2 (list :name "Writer" :writable t :owner nil :guest-id "w") guests)
     (puthash 3 (list :name "Owner" :writable t :owner t :guest-id "o") guests)
     (unwind-protect

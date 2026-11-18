@@ -10,7 +10,7 @@
       "from": "consumer",
       "frame": {
         "t": "hello",
-        "proto": 4,
+        "proto": 5,
         "name": "$NAME",
         "guestId": "$GUEST_ID",
         "writeToken": "$WRITE_TOKEN"

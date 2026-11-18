@@ -620,8 +620,9 @@ window.mevedelEditingView = {
         if (frame.id === current) port?.postMessage({ type: 'presence', ...frame });
         return;
       }
-      if (frame.t !== 'editing') return;
-      if (frame.reqId !== 'event' && !pending.has(frame.reqId)) return;
+      const event = frame.t === 'editing-event';
+      if (!event && (frame.t !== 'editing' || !pending.has(frame.reqId))) return;
+      const transferId = event ? 'event' : frame.reqId;
       if (
         !Number.isSafeInteger(frame.total) ||
         frame.total > 48 * 1024 * 1024 ||
@@ -629,15 +630,15 @@ window.mevedelEditingView = {
         frame.data.length > 65536
       )
         return;
-      let t = transfers.get(frame.reqId);
+      let t = transfers.get(transferId);
       if (frame.offset === 0) {
         const reserved = [...transfers.entries()].reduce(
-          (n, [id, value]) => n + (id === frame.reqId ? 0 : value.total),
+          (n, [id, value]) => n + (id === transferId ? 0 : value.total),
           frame.total,
         );
         if (reserved > 64 * 1024 * 1024) return;
         t = { offset: 0, total: frame.total, parts: [] };
-        transfers.set(frame.reqId, t);
+        transfers.set(transferId, t);
       }
       if (
         !t ||
@@ -645,22 +646,22 @@ window.mevedelEditingView = {
         t.total !== frame.total ||
         t.offset + frame.data.length > t.total
       ) {
-        transfers.delete(frame.reqId);
+        transfers.delete(transferId);
         return;
       }
       t.parts.push(frame.data);
       t.offset += frame.data.length;
       if (t.offset !== t.total) return;
-      transfers.delete(frame.reqId);
+      transfers.delete(transferId);
       let value;
       try {
         value = JSON.parse(decode(t.parts.join('')));
       } catch (_) {
         return;
       }
-      if (frame.reqId === 'event' && value.event === 'deleted') {
+      if (event && value.event === 'deleted') {
         removed(value);
-      } else if (frame.reqId === 'event') {
+      } else if (event) {
         const { id, kind, title, revision } = value,
           previous = catalog.get(id);
         catalog.set(id, { id, kind, title, revision });
@@ -673,9 +674,9 @@ window.mevedelEditingView = {
           port?.postMessage({ type: 'changed', ...value });
         }
       } else {
-        const entry = pending.get(frame.reqId);
+        const entry = pending.get(transferId);
         if (!entry) return;
-        pending.delete(frame.reqId);
+        pending.delete(transferId);
         clearTimeout(entry.timer);
         if (value.error) entry.reject(new Error(value.error));
         else entry.resolve(value.result);

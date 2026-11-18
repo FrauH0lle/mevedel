@@ -165,6 +165,7 @@
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
 (defvar mevedel-collaboration--protocol-version)
+(declare-function mevedel-collaboration--protocol-error "mevedel-collaboration-transport" ())
 
 ;; `mevedel-collaboration-task'
 (declare-function mevedel-collaboration--tasks-frame
@@ -277,16 +278,11 @@ sizes alone never accounted for."
           :final :json-false))))
 
 (defun mevedel-collaboration--records-frame (meta chunk final)
-  "Return the JSON text of frame plist META carrying CHUNK as its records.
-CHUNK is a list of encoded records, from
-`mevedel-collaboration--snapshot-chunks'; FINAL marks the last chunk.
-Splicing them saves encoding every record a second time."
-  (let ((head (json-encode (append meta (list :final (if final t :json-false))))))
-    (concat (substring head 0 -1)
-            ",\"records\":[" (string-join chunk ",") "]}")))
+  "Return META with its record array CHUNK and last-chunk flag FINAL."
+  (append meta (list :final (if final t :json-false) :records (vconcat chunk))))
 
 (defun mevedel-collaboration--snapshot-chunks (records &optional overhead)
-  "Split RECORDS into lists of encoded JSON records each under the wire bound.
+  "Split RECORDS into chunks each within the encoded wire bound.
 Send each list with `mevedel-collaboration--records-frame'.
 The bound belongs to the frame that goes on the wire, not to the records
 in it.  A record too large to travel in a frame of its own is dropped:
@@ -300,15 +296,15 @@ No records still make one empty chunk: a receiver waits for a final one."
          (limit mevedel-collaboration--max-frame-json-bytes)
          chunks current (size 0))
     (dolist (record records)
-      (let* ((json (json-encode (mevedel-collaboration--json-record record)))
-             (bytes (string-bytes json)))
+      (let* ((object (mevedel-collaboration--json-record record))
+             (bytes (string-bytes (json-encode object))))
         (unless (> (+ overhead bytes) limit)
           ;; One separator for every record after the first in the chunk.
           (when (and current
                      (> (+ overhead size 1 bytes) limit))
             (push (nreverse current) chunks)
             (setq current nil size 0))
-          (push json current)
+          (push object current)
           (setq size (+ size bytes (if (cdr current) 1 0))))))
     (when (or current (null chunks))
       (push (nreverse current) chunks))
@@ -843,10 +839,7 @@ Authority comes only from the tokens FRAME proves it holds."
     (if (not (equal proto mevedel-collaboration--protocol-version))
         (progn
           (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer
-           (list :t "error"
-                 :message (format "protocol mismatch: host speaks %d"
-                                  mevedel-collaboration--protocol-version)))
+           (plist-get room :transport) peer (mevedel-collaboration--protocol-error))
           nil)
       (let* ((name (mevedel-collaboration--sanitize-guest-name
                     (plist-get frame :name)))

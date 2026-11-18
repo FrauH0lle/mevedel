@@ -307,7 +307,7 @@ Retain full artifact lookup metadata in GUEST, not on the wire."
          (chunks (mevedel-collaboration--snapshot-chunks
                   records (mevedel-collaboration--agent-frame-overhead req-id path segment)))
          (digest (secure-hash 'sha256
-                              (mapconcat #'identity (apply #'append chunks) "\n")))
+                              (mapconcat #'json-encode (apply #'append chunks) "\n")))
          (meta (append (list :t "agent" :reqId req-id :path path :digest digest)
                        (when segment (list :segment segment)))))
     ;; A guest polls one agent transcript at a time.  Retain only identities,

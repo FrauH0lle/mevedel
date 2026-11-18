@@ -59,14 +59,19 @@
            (list :result value))
          args))
 
+(defun mevedel-tool-ui--optional-string (args key)
+  "Return optional argument KEY from ARGS, treating an empty string as omitted."
+  (let ((value (plist-get args key)))
+    (unless (equal value "") value)))
+
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
-        (role (plist-get args :role))
-        (context (plist-get args :context))
-        (model (plist-get args :model))
-        (effort (plist-get args :effort)))
+        (role (mevedel-tool-ui--optional-string args :role))
+        (context (mevedel-tool-ui--optional-string args :context))
+        (model (mevedel-tool-ui--optional-string args :model))
+        (effort (mevedel-tool-ui--optional-string args :effort)))
     (let ((cancel
            (mevedel-agent-control-spawn
             mevedel--session task-name message
@@ -101,7 +106,7 @@
             :context context
             :model model
             :effort effort
-            :working-directory (plist-get args :working_directory)
+            :working-directory (mevedel-tool-ui--optional-string args :working_directory)
             :parent-tool-use-id
             (mevedel-pipeline-active-tool-use-id))))
       (when (and (boundp 'mevedel--current-request)
@@ -110,13 +115,11 @@
 
 (defun mevedel-tool-ui--list-agents (args)
   "Return the retained agent roster described by ARGS."
-  (let ((path-prefix (plist-get args :path_prefix)))
-    (list :result
-          (json-serialize
-           (vconcat
-            (mevedel-agent-control-list-agents
-             mevedel--session
-             (unless (equal path-prefix "") path-prefix)))))))
+  (list :result
+        (json-serialize
+         (vconcat
+          (mevedel-agent-control-list-agents
+           mevedel--session (mevedel-tool-ui--optional-string args :path_prefix))))))
 
 (defun mevedel-tool-ui--interrupt-agent (args)
   "Interrupt the retained agent turn described by ARGS."
@@ -144,11 +147,11 @@
   (let* ((outcome
           (mevedel-agent-control-send-message
            mevedel--session
-           (plist-get args :target)
+           (mevedel-tool-ui--optional-string args :target)
            (plist-get args :message)
            :parent-tool-use-id
            (mevedel-pipeline-active-tool-use-id)
-           :working-directory (plist-get args :working_directory)))
+           :working-directory (mevedel-tool-ui--optional-string args :working_directory)))
          (delivery (plist-get outcome :delivery)))
     (list :result (if (eq delivery 'waiting)
                       "Agent starts when a slot frees."
