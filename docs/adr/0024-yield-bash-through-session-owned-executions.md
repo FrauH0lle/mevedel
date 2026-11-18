@@ -125,7 +125,8 @@ Remote process-group status and signal probes, target readiness, and target
 incarnation checks share an exclusive deadline. Foreign callbacks stay held,
 including timers armed by process filters during the operation. Only the
 private deadline can interrupt a synchronous TRAMP wait; an interrupted
-connection is discarded so its reply cannot reach the next command.
+connection is discarded so its reply cannot reach the next command. The
+timer-dispatch guard is installed only for the bounded call.
 
 Retired local spools from 64 KiB through 64 MiB use gzip level 1 only when it is
 smaller. A separate Python worker compresses after the 60-second terminal
