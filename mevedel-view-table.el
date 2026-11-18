@@ -33,6 +33,7 @@
 (declare-function mevedel-view--selected-text-properties
                   "mevedel-view-markdown" (position properties))
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
+(autoload 'mevedel-view--fontify-as "mevedel-view-fontify")
 (defvar mevedel-view-hide-markdown-markup)
 
 (defface mevedel-view-table-header
