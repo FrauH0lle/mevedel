@@ -174,6 +174,9 @@ OBJECT is a string or nil for the current buffer."
               (remove-text-properties pos next (list prop nil) object)))
           (setq pos next))))))
 
+(defvar mevedel-view-table--inline-font nil
+  "Font attributes that keep inline markup on the table's border grid.")
+
 (defun mevedel-view-table--display-cell (content)
   "Fontify CONTENT as prose and retain only its displayed glyphs.
 Keep the source positions on the remaining text for table splicing."
@@ -191,6 +194,10 @@ Keep the source positions on the remaining text for table splicing."
         ;; Pixel measurement and view buffers can run without Font Lock.
         (when-let* ((face (get-text-property pos 'font-lock-face text)))
           (add-face-text-property pos next face t text))
+        (when (and mevedel-view-table--inline-font
+                   (or (get-text-property pos 'font-lock-face text)
+                       (eq (get-text-property pos 'face content) 'link)))
+          (add-face-text-property pos next mevedel-view-table--inline-font nil text))
         (setq pos next)))
     (setq text (mevedel-view-table--unescape-cell text)
           pos 0)
@@ -720,7 +727,15 @@ table's position."
     (setq-local inhibit-field-text-motion t)
     (mevedel-view--render-markdown-url-links-in-range
      (point-min) (point-max))
-    (let* ((mevedel-view-table--cell-widths nil)
+    (let* ((mevedel-view-table--inline-font
+            (when (mevedel-view-table--pixel-capable-p window)
+              (with-current-buffer (window-buffer window)
+                (when-let* ((font (font-at 0 window (mevedel-view-table--border "│"))))
+                  ;; Keep the border's metrics without forcing its weight or slant.
+                  (list :font (font-spec :family (font-get font :family)
+                                         :foundry (font-get font :foundry)
+                                         :size (font-get font :size)))))))
+           (mevedel-view-table--cell-widths nil)
            (mevedel-view-table--column-pixels
             (when (mevedel-view-table--pixel-capable-p window)
               (mevedel-view-table--char-pixel-width window)))

@@ -246,5 +246,45 @@
               (should-not (mevedel-view-table--visible-stale window)))
           (set-face-attribute face frame :foreground color))))))
 
+(mevedel-deftest mevedel-view-table-graphical-line-height
+  (:doc "mixed inline Markdown keeps wide and wrapped rows on one pixel grid")
+  (progn
+    (skip-unless (and (display-graphic-p) (require 'markdown-ts-mode nil t)
+                      (mevedel-view--markdown-grammars-ready-p)
+                      (member "DejaVu Sans" (font-family-list))))
+    (let* ((frame (selected-frame))
+           (font (frame-parameter frame 'font))
+           (code 'markdown-ts-code-span)
+           (height (face-attribute code :height frame)))
+      (unwind-protect
+          (progn
+            (set-frame-font "DejaVu Sans-11" t nil t)
+            (set-face-attribute code frame :height 1.5)
+            (mevedel-test--with-displayed-buffer
+              (insert "| Case | Details |\n|---|---|\n"
+                      "| **Bold** and *italic* | `x|y` and [Docs](https://example.org) |\n"
+                      "| ~~Old~~ | Several words that wrap in a narrow window |\n\nAfter\n")
+              (mevedel-view-table-decorate (point-min) (point-max) nil)
+              (dotimes (narrow 2)
+                (when (= narrow 1)
+                  (split-window-right)
+                  (face-remap-add-relative 'default :height 1.2)
+                  (should (mevedel-view-table-rerender (selected-window))))
+                (goto-char (point-min))
+                (set-window-start (selected-window) (point-min))
+                (redisplay t)
+                (let (tops)
+                  (while (get-text-property (point) 'mevedel-view-table-source)
+                    (push (cdr (posn-x-y (posn-at-point))) tops)
+                    (forward-line 1))
+                  (push (cdr (posn-x-y (posn-at-point))) tops)
+                  (let ((heights (seq-mapn #'- tops (cdr tops))))
+                    (ert-info ((format "Narrow: %s; row heights: %S" narrow heights))
+                      (should (>= (length heights) 4))
+                      (should (> (car heights) 0))
+                      (should (apply #'= heights))))))))
+        (set-face-attribute code frame :height height)
+        (set-frame-font font t nil t)))))
+
 (provide 'test-mevedel-view-table-graphical)
 ;;; test-mevedel-view-table-graphical.el ends here

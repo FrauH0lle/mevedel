@@ -2429,7 +2429,8 @@ Markdown rendering adds small view-only affordances:
   path passes, so buttons and faces inside cells survive. Each cell uses the
   prose Markdown renderer for inline faces and markup visibility. Column
   measurements and wrapping use the displayed text rather than hidden
-  delimiters. Columns wider
+  delimiters. Inline styles use the border's font family and size so a
+  taller inline font does not break the vertical rules. Columns wider
   than 90% of the usable window width (window columns minus any
   `line-prefix` or `wrap-prefix` inset) shrink proportionally toward their
   longest-word minima and wrap their cells. If those words cannot fit, they
