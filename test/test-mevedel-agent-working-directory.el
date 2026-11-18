@@ -230,7 +230,8 @@
                                        :working_directory "")
                                      (intern (concat ":" (plist-get arg :name)))))
                         (gptel-tool-args send))))
-              (should (equal "" (mevedel-tool-render-data-strip result)))
+              (should (equal "Queued for /root."
+                             (mevedel-tool-render-data-strip result)))
               (funcall (plist-get (car launches) :callback) "Retained directory inspected."))))
       (dolist (launch launches)
         (let ((buffer (plist-get launch :buffer)))

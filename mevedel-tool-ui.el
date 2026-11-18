@@ -152,14 +152,17 @@
            :parent-tool-use-id
            (mevedel-pipeline-active-tool-use-id)
            :working-directory (mevedel-tool-ui--optional-string args :working_directory)))
+         (path (plist-get outcome :path))
          (delivery (plist-get outcome :delivery)))
-    (list :result (if (eq delivery 'waiting)
-                      "Agent starts when a slot frees."
-                    "")
+    (list :result (format (pcase-exhaustive delivery
+                            ('started "Delivered to %s; its turn started.")
+                            ('queued "Queued for %s.")
+                            ('waiting "Queued for %s; it starts when a slot frees."))
+                          path)
           :render-data
           (list :kind 'collaboration-event
                 :event 'interacted
-                :path (plist-get outcome :path)
+                :path path
                 :delivery delivery))))
 
 (defun mevedel-tool-ui--wait-summary (reason)

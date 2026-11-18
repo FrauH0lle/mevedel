@@ -918,7 +918,8 @@
                      (mevedel-tool-ui--send-message
                       '(:target "worker"
                         :message "Now review feature two."))))
-                (should (equal "" (plist-get result :result)))
+                (should (equal "Delivered to /root/worker; its turn started."
+                               (plist-get result :result)))
                 (should (equal "/root/worker"
                                (plist-get (plist-get result :render-data)
                                           :path))))
@@ -1054,7 +1055,7 @@
                    (mevedel-tool-ui--send-message
                     '(:target "/root/one"
                       :message "Incorporate this steering."))))
-              (should (equal "" (plist-get result :result))))
+              (should (equal "Queued for /root/one." (plist-get result :result))))
             (should (= 3 (length launches)))
             (should (= 3 (mevedel-agent-control--active-count session)))
             (should-not (mevedel-session-messages session))
@@ -1414,7 +1415,7 @@
 (mevedel-deftest mevedel-tool-ui--send-message ()
   ,test
   (test)
-  :doc "returns empty success with canonical interaction render data"
+  :doc "confirms mail queued for a running peer and retains interaction render data"
   (let* ((session (mevedel-tool-ui-test--session))
          (record (mevedel-agent-record--create
                   :id "peer-id" :path "/root/peer" :activity 'running))
@@ -1425,15 +1426,18 @@
       (setq result
             (mevedel-tool-ui--send-message
              '(:target "/root/peer" :message "hello"))))
-    (should (equal "" (plist-get result :result)))
+    (should (equal "Queued for /root/peer." (plist-get result :result)))
     (should (equal "/root/peer"
                    (plist-get (plist-get result :render-data) :path)))
     (should (eq 'queued
                 (plist-get (plist-get result :render-data) :delivery))))
 
-  :doc "preserves the initiating tool ID and reports capacity waits only"
-  (dolist (delivery '(queued started waiting))
+  :doc "preserves the initiating tool ID and confirms each delivery outcome"
+  (dolist (scenario '((queued . "Queued for /root/peer.")
+                      (started . "Delivered to /root/peer; its turn started.")
+                      (waiting . "Queued for /root/peer; it starts when a slot frees.")))
     (let ((mevedel--session (mevedel-tool-ui-test--session))
+          (delivery (car scenario))
           captured)
       (cl-letf (((symbol-function 'mevedel-pipeline-active-tool-use-id)
                  (lambda () "send/1"))
@@ -1448,9 +1452,7 @@
                                '(:parent-tool-use-id "send/1"
                                  :working-directory "next/"))
                          captured))
-          (should (equal (if (eq delivery 'waiting)
-                             "Agent starts when a slot frees." "")
-                         (plist-get result :result)))
+          (should (equal (cdr scenario) (plist-get result :result)))
           (should (eq delivery
                       (plist-get (plist-get result :render-data)
                                  :delivery))))))))
