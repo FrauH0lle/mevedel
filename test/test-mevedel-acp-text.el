@@ -10,6 +10,25 @@
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-acp-text)
 
+(mevedel-deftest mevedel-acp-text-request-authentication ()
+  ,test
+  (test)
+  :doc "reports the same advertised sign-in methods for startup and prompt failures"
+  (dolist (case '(("session/new" . startup) ("session/prompt" . response)))
+    (with-temp-buffer
+      (let ((process-environment (copy-sequence process-environment)) result)
+        (setenv "MEVEDEL_ACP_TEST_AUTH_FAILURE" (car case))
+        (mevedel-acp-text-request
+         (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
+               :cwd temporary-file-directory)
+         "hello" (lambda (response info) (setq result (cons response info))))
+        (mevedel-test--await 5 "ACP authentication failure did not settle" result)
+        (should-not (car result))
+        (should (eq (cdr case) (plist-get (cdr result) :stage)))
+        (should (= -32000 (plist-get (cdr result) :code)))
+        (should (equal (plist-get (cdr result) :error)
+                       "Authentication required for fixture-agent. Advertised sign-in methods: Browser sign-in, backup."))))))
+
 (mevedel-deftest mevedel-acp-text-request (:quiet t)
   ,test
   (test)
