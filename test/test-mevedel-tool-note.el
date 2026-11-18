@@ -317,6 +317,53 @@
         (should (string-search "beyond source" (plist-get outcome :result)))
         (should (equal "before\nold\nafter\n" (mevedel-test--read-file file)))))))
 
+(mevedel-deftest mevedel-tool-note-write/match
+  (:quiet t)
+  ,test
+  (test)
+  :doc "an exact expression gets a region tint and a label below its line"
+  (mevedel-tool-note-test--workspace
+    (write-region "before\n(use value)\nafter\n" nil file nil 'silent)
+    (let* ((id (mevedel-tool-note-test--create data-buf file :match "value"))
+           (note (mevedel-note-resolve id workspace))
+           (label (overlay-get note 'mevedel-label-overlay)))
+      (with-current-buffer (overlay-buffer note)
+        (should (equal "value" (buffer-substring-no-properties (overlay-start note) (overlay-end note))))
+        (should (eq 'char (overlay-get note 'mevedel-span)))
+        (should (eq 'mevedel-note-agent (get-char-property (overlay-start note) 'face)))
+        (should-not (eq 'mevedel-note-agent (get-char-property (overlay-end note) 'face)))
+        (should (= (overlay-end label) (1+ (overlay-end note))))
+        (should-not (get-text-property 0 'face (overlay-get label 'after-string)))
+        (should (string-match-p "\n.*Note .* · AI  Finding" (overlay-get label 'after-string))))))
+  :doc "a match can cross lines without expanding to the whole search range"
+  (mevedel-tool-note-test--workspace
+    (write-region "before\n(use value\n  again)\nafter\n" nil file nil 'silent)
+    (let* ((text "value\n  again")
+           (id (mevedel-tool-note-test--create data-buf file :match text :end_line 3))
+           (note (mevedel-note-resolve id workspace)))
+      (with-current-buffer (overlay-buffer note)
+        (should (equal text (buffer-substring-no-properties (overlay-start note) (overlay-end note)))))))
+  :doc "refuses missing, ambiguous and invalid occurrence requests without writing a note"
+  (mevedel-tool-note-test--workspace
+    (write-region "value\nvalue Value value\nother\n" nil file nil 'silent)
+    (dolist (case '(((:match "value") "ambiguous: 2 matches")
+                    ((:match "VALUE") "not found in lines 2–2")
+                    ((:match "value\nother") "not found in lines 2–2")
+                    ((:match "value" :occurrence 3) "out of range")
+                    ((:match "Value" :occurrence 1) "requires more than one match")
+                    ((:occurrence 1) "requires match")))
+      (let ((outcome (mevedel-tool-note-test--write
+                      data-buf (vector (append (list :action "create" :file_path file :start_line 2)
+                                               (car case))))))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search (cadr case) (plist-get outcome :result)))))
+    (should-not (mevedel-notes-open workspace))
+    (let* ((id (mevedel-tool-note-test--create data-buf file :match "value" :occurrence 2))
+           (note (mevedel-note-resolve id workspace)))
+      (with-current-buffer (overlay-buffer note)
+        (should (= (overlay-end note) (save-excursion (goto-char (overlay-start note))
+                                                     (line-end-position))))))))
+
 (mevedel-deftest mevedel-tool-note-write/tint (:quiet t)
   ,test
   (test)
@@ -356,7 +403,7 @@
                       (get-text-property 0 'face
                                          (overlay-get (overlay-get note 'mevedel-label-overlay)
                                                       'after-string))))
-          (undo-only 1)
+          (let (last-command this-command) (undo-only 1))
           (should (equal "before\nold\nafter\n" (buffer-string)))
           (should (= 11 (overlay-end note)))
           (should (= 11 (overlay-end (overlay-get note 'mevedel-label-overlay))))

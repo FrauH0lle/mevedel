@@ -25,6 +25,10 @@
                   (instruction &optional buffer))
 (autoload 'mevedel--delete-instruction "mevedel-note-source")
 
+;; `mevedel-notes'
+(declare-function mevedel-notes--refresh-label-stacks-in "mevedel-notes" (start end))
+(autoload 'mevedel-notes--refresh-label-stacks-in "mevedel-notes")
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -193,11 +197,19 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--delete-instruction-overlay (instruction)
   "Remove INSTRUCTION and its auxiliary presentation overlays."
-  (dolist (property '(mevedel-label-overlay mevedel-note-tint-overlay))
-    (when-let* ((overlay (overlay-get instruction property)))
-      (delete-overlay overlay)
-      (overlay-put instruction property nil)))
-  (delete-overlay instruction))
+  (let* ((label (overlay-get instruction 'mevedel-label-overlay))
+         (buffer (and label (overlay-buffer label)))
+         (end (and buffer (overlay-end label)))
+         (start (if (and buffer (eq 'line (overlay-get instruction 'mevedel-span)))
+                    (overlay-start label) end)))
+    (dolist (property '(mevedel-label-overlay mevedel-note-tint-overlay))
+      (when-let* ((overlay (overlay-get instruction property)))
+        (delete-overlay overlay)
+        (overlay-put instruction property nil)))
+    (delete-overlay instruction)
+    (when buffer
+      (with-current-buffer buffer
+        (mevedel-notes--refresh-label-stacks-in start end)))))
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
