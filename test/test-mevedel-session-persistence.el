@@ -883,6 +883,10 @@
                               (current-buffer)))
                           (list good bad)))
          (mevedel-workspace--registry nil)
+         ;; Earlier tests can leave a debounced agent save pending; the
+         ;; exit hook drains those sessions too.
+         (mevedel-session-persistence--deferred-agent-saves
+          (make-hash-table :test #'eq))
          events message quit-inhibited)
     (unwind-protect
         (cl-letf (((symbol-function 'buffer-list)
