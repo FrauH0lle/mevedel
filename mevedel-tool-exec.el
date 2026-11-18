@@ -189,6 +189,9 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
 
 (defun mevedel-tool-exec--execution-artifact-directory (session read-only-p)
   "Return SESSION's retained execution artifact directory, if available.
+Return nil for remote targets so live Bash and Monitor output stays in a
+client-local spool.  A process filter must not write into a busy TRAMP
+connection.  Recoverable output is published to the session separately.
 For READ-ONLY-P commands, do not initialize storage or Git exclusions;
 unsaved readers use the execution module's temporary spool instead."
   (unless (and (mevedel-session-execution-target session)
@@ -1115,7 +1118,7 @@ ARGS carries the original tool arguments, including the yield interval."
                        ""
                      (format ":\n%s" diagnostics))))))))
            :command
-           (list (expand-file-name invocation-name invocation-directory)
+           (list (mevedel--emacs-executable)
                  "-Q" "--batch" "-l" script-file)
            :workdir workdir
            :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)

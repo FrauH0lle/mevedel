@@ -5,8 +5,9 @@
 ;; against a headless compositor.  With cheaper presentation enabled, a
 ;; Lisp thread hides and shows a frame: waiting for the map event runs
 ;; GTK's own main loop iteration in that thread, which painted with the
-;; main thread's GL context and crashed.  It runs in a daemon of its own:
-;; stock pgtk hangs here after another thread waited in `sleep-for'.
+;; main thread's GL context and crashed.  The main thread pumps GTK while
+;; waiting, rather than joining a thread
+;; that needs GTK's main context to finish mapping its frame.
 ;; Observations go to the file named by MEVEDEL_NATIVE_RESULT.
 
 ;;; Code:
@@ -43,10 +44,28 @@
     (present-wayland-thread--wait 0.5)
     (let ((other (present-wayland-thread--frame display)))
       (present-wayland-thread--wait 1)
-      (thread-join (make-thread (lambda ()
-                                  (make-frame-invisible other)
-                                  (make-frame-visible other))
-                                "present-wayland-thread"))
+      (let* ((main (current-thread))
+             (worker (make-thread
+                      (lambda ()
+                        (setq present-wayland-thread--results
+                              (plist-put present-wayland-thread--results :thread-side
+                                         (not (eq main (current-thread)))))
+                        (make-frame-invisible other)
+                        (make-frame-visible other)
+                        (setq present-wayland-thread--results
+                              (plist-put present-wayland-thread--results :show-returned t)))
+                      "present-wayland-thread")))
+        ;; `sit-for' can return without yielding when frame input is queued.
+        (let ((end (+ (float-time) 5)))
+          (while (and (thread-live-p worker) (< (float-time) end))
+            (sleep-for 0.02)))
+        (when (thread-live-p worker)
+          (error "Frame-show thread did not finish: %S"
+                 (list :live (thread-live-p worker)
+                       :blocker (thread--blocker worker)
+                       :worker-backtrace (backtrace--frames-from-thread worker)
+                       :observed present-wayland-thread--results)))
+        (thread-join worker))
       (present-wayland-thread--wait 0.5)
       (setq present-wayland-thread--results
             (plist-put present-wayland-thread--results :visible

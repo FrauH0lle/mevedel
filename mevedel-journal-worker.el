@@ -32,7 +32,9 @@
 (defvar mevedel-memory-pass--inhibit-scheduling)
 
 ;; `mevedel-utilities'
+(declare-function mevedel--emacs-executable "mevedel-utilities" ())
 (declare-function mevedel-diagnostic-warning "mevedel-utilities" (scope type message &optional level buffer-name))
+(autoload 'mevedel--emacs-executable "mevedel-utilities")
 (autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
 ;; `subr'
@@ -139,7 +141,7 @@ owners must first fence mutation claims.  Unsolicited signals report errors."
                    :name "mevedel-journal-worker" :noquery t :connection-type 'pipe
                    :buffer nil
                    :command
-                   (list (expand-file-name invocation-name invocation-directory)
+                   (list (mevedel--emacs-executable)
 			 "--batch" "-Q" "--eval"
 			 (let ((print-length nil) (print-level nil))
                            (prin1-to-string `(setq load-path ',load-path)))

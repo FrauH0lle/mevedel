@@ -102,6 +102,9 @@ compaction evidence. Ordinary transcript segmentation omits leading root
 summaries for rendering, and edits can inherit the closing wrapper's ignored
 property; neither determines which summary the recovered model receives.
 
+The adapter's stderr handlers receive each original chunk, while its live
+diagnostic buffer retains only the most recent 65,536 characters.
+
 Connection ownership includes the protocol library's deferred drains and
 watchdogs. A connection-local filter holds timers the library schedules while a
 TRAMP operation is on the stack and arms them when it returns; outside one the

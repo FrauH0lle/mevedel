@@ -78,6 +78,8 @@
                         (require 'mevedel-tool-fs-search)
                         (require 'mevedel-execution)
                         (require 'mevedel-skills-core)
+                        ;; Installation correctness, not a host-load latency test.
+                        (setq mevedel-tool-fs-search-timeout 60)
                         ;; Do not pre-bind source dirs: exercise cold initializers.
                         (dolist (owner ',owners)
                           (should
@@ -96,9 +98,9 @@
                                                    address)
                                              options))
                                       ;; Progress watchdog, not a latency assertion:
-                                      ;; allow the helper's 20 s timeout to settle
+                                      ;; allow the helper's timeout to settle
                                       ;; even under full-suite contention.
-                                      (deadline (+ (float-time) 60))
+                                      (deadline (+ (float-time) 90))
                                       done result)
                                  (funcall
                                   (pcase operation

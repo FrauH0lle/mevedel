@@ -334,20 +334,21 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                   (stringp start-time) (stringp workdir)
                   (file-remote-p workdir)))
         'ambiguous
-      (with-timeout
-          (mevedel-execution-process--remote-control-timeout
-           (error "Target process status probe timed out"))
-        (with-temp-buffer
-          (setq default-directory workdir)
-          (pcase
-              (process-file
-               "bash" nil nil nil "-c"
-               mevedel-execution-process--remote-group-status-script
-               "mevedel-process-group" (number-to-string group-id)
-               start-time)
-            (0 'live)
-            (1 'dead)
-            (_ 'ambiguous)))))))
+      (mevedel-transport-with-exclusive-connection
+        (with-timeout
+            (mevedel-execution-process--remote-control-timeout
+             (error "Target process status probe timed out"))
+          (with-temp-buffer
+            (setq default-directory workdir)
+            (pcase
+                (process-file
+                 "bash" nil nil nil "-c"
+                 mevedel-execution-process--remote-group-status-script
+                 "mevedel-process-group" (number-to-string group-id)
+                 start-time)
+              (0 'live)
+              (1 'dead)
+              (_ 'ambiguous))))))))
 
 (defun mevedel-execution-process--remote-group-status (child)
   "Return CHILD's remote group status as `live', `dead', or `ambiguous'."
@@ -479,10 +480,11 @@ stay roots because a stopped shell's escaped children are reparented away."
           (if remote
               (pcase (mevedel-execution-process--remote-group-status child)
                 ('live
-                 (with-timeout
-                     (mevedel-execution-process--remote-control-timeout
-                      (error "Target process signal timed out"))
-                   (signal-process (- group-id) signal workdir)))
+                 (mevedel-transport-with-exclusive-connection
+                   (with-timeout
+                       (mevedel-execution-process--remote-control-timeout
+                        (error "Target process signal timed out"))
+                     (signal-process (- group-id) signal workdir))))
                 ;; A dead group needs no signal, and an ambiguous one must
                 ;; not be signalled: the pinned identity is the only thing
                 ;; stopping a recycled group number from taking it.  Neither

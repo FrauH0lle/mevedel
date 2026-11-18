@@ -76,15 +76,27 @@ control check does during redisplay.")
 
 The frame is counted with a dynamic binding, so a THUNK that exits through
 `throw', `keyboard-quit', or any signal still uncounts itself.  After the
-outermost frame restores TRAMP's suspended timer lists, re-arm any transport
-retry timer that was created inside and discarded with the temporary list,
-and arm the continuation timers held meanwhile.  Remote I/O that bypasses
-TRAMP's file-name handler, such as a direct process pipe, uses this so that
-`mevedel-transport-busy-p' sees it exactly as it sees a handler call."
-  (let ((outermost (zerop mevedel-transport--depth))
-        (mevedel-transport--depth (1+ mevedel-transport--depth)))
+outermost frame restores TRAMP's suspended timer lists, restore enclosing
+deadlines and re-arm pending retries and held continuations.  Remote I/O that
+bypasses TRAMP's file-name handler, such as a direct process pipe, uses this so
+that `mevedel-transport-busy-p' sees it exactly as it sees a handler call."
+  (let* ((outermost (zerop mevedel-transport--depth))
+         (deadlines (when outermost
+                      (cl-loop for timer in with-timeout-timers
+                               when (memq timer timer-list)
+                               collect (cons timer (timer--time timer)))))
+         (mevedel-transport--depth (1+ mevedel-transport--depth)))
     (unwind-protect (funcall thunk)
       (when outermost
+        ;; TRAMP re-arms these on its temporary list, then discards that list.
+        ;; Restore only enclosing deadlines, never foreign callback timers.
+        (pcase-dolist (`(,timer . ,deadline) deadlines)
+          (unless (or (timer--triggered timer)
+                      (and (memq timer timer-list)
+                           (equal deadline (timer--time timer))))
+            (cancel-timer timer)
+            (timer-set-time timer deadline)
+            (timer-activate timer)))
         (mevedel-transport--rearm-pending-timers)
         (mevedel-transport--release-held-timers)))))
 
@@ -284,10 +296,10 @@ overdue, which for everything on this path is a latency cost and not a
 correctness one.  A `with-timeout' a caller opened around BODY is charged for
 the time BODY took, so bounding remote work still bounds it.
 
-A timer BODY arms is armed on the bound lists, which are the ones Emacs
-consults while BODY runs, so it fires normally -- including the one a
-`with-timeout' opened inside BODY installs, which keeps a bounded probe
-bounded.  Only timers that existed beforehand are held.
+A timer BODY arms fires normally unless TRAMP temporarily suspends it.
+An enclosing `with-timeout' still counts time spent in TRAMP and can fire
+once the remote transport returns.  Only timers that existed beforehand
+are held for the entire exclusive section.
 
 One limit BODY must respect: `cancel-timer' inside BODY cannot reach a timer
 this macro suspended, because it is not on the bound list; that timer is

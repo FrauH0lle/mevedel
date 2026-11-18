@@ -32,6 +32,12 @@
 (defconst mevedel-acp--stderr-log-limit 65536
   "Characters of recent agent exits retained in the stderr log.")
 
+(defun mevedel-acp--trim-stderr (&rest _change)
+  "Retain only the recent stderr buffer tail after ACP's error handlers run."
+  (when (> (buffer-size) mevedel-acp--stderr-log-limit)
+    (with-silent-modifications
+      (delete-region (point-min) (- (point-max) mevedel-acp--stderr-log-limit)))))
+
 (defun mevedel-acp--cancel-timer (connection)
   "Cancel CONNECTION's pending control timeout."
   (when-let* ((timer (mevedel-acp-timer connection)))
@@ -414,6 +420,11 @@ immediately."
                  ;; process never respawns, so its handlers are wrapped once.
                  (when-let* ((process (alist-get :process client)))
                    (process-put process 'mevedel-acp-launch launch)
+                   (when-let* ((stderr (get-process (concat (process-name process) " stderr")))
+                               (buffer (process-buffer stderr)))
+                     (with-current-buffer buffer
+                       ;; acp.el consumes the whole inserted chunk before trimming.
+                       (add-hook 'after-change-functions #'mevedel-acp--trim-stderr t t)))
                    (let ((filter (process-filter process))
                          (sentinel (process-sentinel process)))
                      (set-process-filter

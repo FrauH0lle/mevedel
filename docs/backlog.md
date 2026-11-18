@@ -65,28 +65,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Execution
 
-### Live Emacs out of memory during long orchestration
-
-On 2026-11-12 the kernel OOM killer twice killed the user's live Emacs hosting
-a long implement-spec orchestration with about 40–60 retained sub-agent
-conversations, at about 57.9 GB and 56.5 GB anonymous RSS. Before the second
-kill, RSS stayed near 1.3 GB for about six hours, then reached about 57 GB
-within roughly two hours. Both kills occurred during long `WaitAgent` calls
-that ended with `Connection closed`; the test processes were not killed.
-Investigate retained conversations/transcripts, the long-wait path
-(`WaitAgent` and the MCP connection), and many concurrent full test suites
-(the user's suspicion). Reproduce a similar orchestration load with
-`memory-report` or periodic RSS sampling to locate the growth.
-The 2026-11-13 sweep found no mechanism offline. The growth was private anon
-memory (shmem 20 kB) at about 30 GB/h, GC time per collection stayed flat, and
-no telemetry byte stream rose with it. Not ruled out: the never-trimmed acp.el
-`acp-client-stderr(...)` buffer, GTK/Pango allocations, huge retained strings
-and an upstream PGTK leak. It added `memory-sample` telemetry; after the next
-occurrence, compare its `:rss-kb` growth with `:buffer-chars-total`,
-`:largest-buffer-chars` and `:image-cache-bytes` first (RSS growing alone
-points to C-side allocations or huge strings).
-During that sweep's own orchestration, sampled RSS stayed near 930 MB.
-
 ### Cargo command duration and editor stalls
 
 Reported command, run from the SNT-webapp root:
@@ -111,20 +89,6 @@ own-expiry reclaim remains asynchronous too. This removes that synchronous timer
 wait, not the unexplained Cargo build duration or every source of editor lag.
 The original filters hide build/lock messages and do not preserve the test
 command's exit code. Use raw output for further reproductions.
-
-### Journal worker cancellation through a launcher script
-
-When `invocation-name` names a shell launcher rather than the Emacs binary,
-journal workers cannot be cancelled. Fedora's `emacs-desktop` launcher leaves
-a zombie `readlink` child in its process group, and the journal stopper
-(`mevedel-journal-worker.el`, near the "not a group leader" check) refuses to
-signal it. Reproduced 2026-11-17 by `mevedel-cockpit-surfaces-open-quit-windows/test@8`:
-it fails through the launcher and passes when invocation points at the real
-Emacs executable (`/proc/self/exe`). Decide whether workers should launch the
-resolved Emacs executable or whether the stopper's group-leader check should
-tolerate a launcher, and keep the stopper's protection against signalling
-unrelated processes. Fresh Eval launches the same `invocation-name`; its
-managed process-group stop was not checked against this launcher.
 
 ## Proactive sessions
 
@@ -226,31 +190,3 @@ Defer until a concrete integration needs that coverage.
 - Configuration, cwd/files, tool-batch, and shell-environment events: add
   individually when a caller needs a boundary existing events cannot express;
   define the event's scope and control effects before implementation.
-
-## Flaky tests
-
-- Resource-installation search can exceed its 20 s production deadline under
-  heavy host load (2026-10-31). The search covers two fixture files (median
-  0.16 s isolated, 0.63 s maximum contended), but tracing caught synchronized
-  5-7 s event-loop stalls; the stall source is unidentified. The test watchdog
-  now sits above the production deadline.
-- `mevedel-agent-control-mail-batch/producer/test` stalled twice past 240 s in
-  parallel affected-tier runs (2026-11-16), but passed alone, in an isolated
-  24-test prefix replay on changed and pristine trees, and in 120 instrumented
-  stress runs. Confirmed mechanism for the missing deadline: installed TRAMP
-  2.8.2.31.1 discards an enclosing `with-timeout` timer during a direct TRAMP
-  file operation (here `mevedel-execution-process--append-spool`), while
-  `mevedel-transport-with-exclusive-connection` preserves it. The test wait
-  helper now also checks elapsed time. Why the producer predicate stayed false
-  is unexplained; production `with-timeout` uses around direct TRAMP
-  operations may share the lost-deadline mechanism.
-- `mevedel-execution-start-bash/remote/test@10` timed out once in a loaded
-  affected-tier run (2026-11-16) with `group-id nil` while waiting for the
-  fixture's zombie, before StopExecution. It passed in focused runs and in
-  three repeated runs each on the changed and pristine trees (113/113).
-- `mevedel-present-wayland/thread/test` skips on a suspected stock-pgtk
-  deadlock (thread waits in `gtk_main_iteration`, main thread in
-  `thread-join`). 2026-11-14 full run under load: 1 skip after the old 20 s
-  fixture timeout (20.08 s); isolated runs: 0 skips in 7, 3.79 to 3.87 s each.
-  The timeout is now 10 s. Root cause unconfirmed; the skip masks a real hang,
-  so capture a backtrace of the hung Emacs if it recurs.

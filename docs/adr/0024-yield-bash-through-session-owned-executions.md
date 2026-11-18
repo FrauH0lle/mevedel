@@ -121,6 +121,12 @@ silently losing bytes. Read-only commands may overlap; other commands take a
 fair exclusive lane, released on yield so long-running work does not block
 admission. Managed Bash and fresh Eval impose no automatic timeout.
 
+Remote process-group status and signal probes hold foreign timers. TRAMP can
+still suspend a deadline during its own I/O; the outermost transport boundary
+restores enclosing `with-timeout` timers at their original absolute deadlines.
+Time spent in TRAMP counts, and an overdue timer can fire once the transport
+returns, not inside TRAMP's suspended interval.
+
 Retired local spools from 64 KiB through 64 MiB use gzip level 1 only when it is
 smaller. A separate Python worker compresses after the 60-second terminal
 polling window; the owner retires unchanged raw output only after successful

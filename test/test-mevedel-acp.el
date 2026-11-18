@@ -39,6 +39,24 @@
 
 (defvar mevedel-gptel-stream-bridge-insert-batch-delay)
 
+(mevedel-deftest mevedel-acp--trim-stderr ()
+  (mevedel-acp-test--with-connection nil
+    (should ready)
+    (let* ((process (mevedel-acp--process connection))
+           (stderr (get-process (concat (process-name process) " stderr")))
+           (mevedel-acp--stderr-log-limit 64)
+           (chunk (concat (make-string 100 ?x) " recent error\n")))
+      (should stderr)
+      (setf (mevedel-acp-stderr connection) nil)
+      (with-current-buffer (process-buffer stderr)
+        (dotimes (_ 3)
+          (goto-char (point-max))
+          (insert chunk)
+          (should (= 64 (buffer-size)))
+          (should (string-suffix-p " recent error\n" (buffer-string)))))
+      ;; Trimming must not emit a synthetic error or hide the original chunk.
+      (should (equal (mevedel-acp-stderr connection) (concat chunk chunk chunk))))))
+
 (mevedel-deftest mevedel-acp--pace ()
   ,test
   (test)
