@@ -2,6 +2,7 @@
 name: "Read-only verification can rest on independently checked artifacts"
 description: "Inability to rerun a writing check is not absence of verification evidence"
 type: feedback
+modified: 2026-10-11
 ---
 
 # Read-only verification can rest on independently checked artifacts

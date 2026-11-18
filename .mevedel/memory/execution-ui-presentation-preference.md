@@ -2,6 +2,7 @@
 name: "Background-work UI: minimal, unified, and composer-stable"
 description: "Unify running work, keep the composer stable, and preserve time to inspect expanded completed entries"
 type: user
+modified: 2026-10-19
 ---
 
 # Execution and background-work UI preferences

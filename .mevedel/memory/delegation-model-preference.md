@@ -2,6 +2,7 @@
 name: "Delegation roles and model selection"
 description: "Keep design with the coordinator when appropriate; delegate implementation and choose models per task from what is configured."
 type: user
+modified: 2026-11-16
 ---
 
 # Delegation roles and model selection

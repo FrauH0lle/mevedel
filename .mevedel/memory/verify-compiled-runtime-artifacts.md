@@ -2,6 +2,7 @@
 name: "Verify the loaded runtime and dependency provenance"
 description: "Check loaded artifacts, compiled first use, initialization-time isolation, and dependencies without loading modules into the user's running Emacs."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Verify the loaded runtime and dependency provenance

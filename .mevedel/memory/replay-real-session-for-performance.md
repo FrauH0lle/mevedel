@@ -2,6 +2,7 @@
 name: "Reproduce performance with representative state and actual deferred work"
 description: "Use isolated representative state, preserve the original, and count deferred work only when the real workflow requires it."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Reproduce performance with representative state and actual deferred work

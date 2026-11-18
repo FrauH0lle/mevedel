@@ -2,6 +2,7 @@
 name: "Test both reentry orders and separate mechanism from incident attribution"
 description: "Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence."
 type: feedback
+modified: 2026-11-01
 ---
 
 # Test both reentry orders and separate mechanism from incident attribution

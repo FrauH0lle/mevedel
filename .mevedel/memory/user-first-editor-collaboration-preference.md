@@ -2,6 +2,7 @@
 name: "User-first, editor-native AI collaboration"
 description: "Support user-led, context-isolated collaboration, editor-native prototypes, and lightweight note interactions without redundant commands."
 type: user
+modified: 2026-11-15
 ---
 
 # User-first, editor-native AI collaboration

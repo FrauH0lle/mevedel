@@ -2,6 +2,7 @@
 name: "Preserve conversational continuity at plan handoff"
 description: "Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view"
 type: user
+modified: 2026-10-19
 ---
 
 # Preserve conversational continuity at plan handoff

@@ -2,6 +2,7 @@
 name: "Dim collapsed thinking blocks"
 description: "Use subdued font highlighting for collapsed thinking blocks"
 type: user
+modified: 2026-10-16
 ---
 
 # Dim collapsed thinking blocks

@@ -2,6 +2,7 @@
 name: "Reduce permission prompts' visual weight"
 description: "User finds sandbox and permission prompts imposing and prefers collapsing parts of them"
 type: user
+modified: 2026-10-13
 ---
 
 # Reduce permission prompts' visual weight

@@ -2,6 +2,7 @@
 name: "Background-wake design priorities and reference"
 description: "Consult Claude Code for background-wake design; the user weighs lost messages more heavily than wake-loop risk"
 type: user
+modified: 2026-10-19
 ---
 
 # Background-wake design priorities and reference

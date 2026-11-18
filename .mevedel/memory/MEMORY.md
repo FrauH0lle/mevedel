@@ -1,4 +1,3 @@
-- [Mevedel project-local skills](mevedel-project-local-skills.md) - dev workflow skills are local to this repo, not bundled for users
 - [Establish test conditions before attributing failures or coverage](controlled-test-attribution.md) - Isolate failures without defaulting to harness blame; establish real fixture conditions, delivered inputs, negative controls, and equivalent baselines.
 - [Verify the loaded runtime and dependency provenance](verify-compiled-runtime-artifacts.md) - Check loaded artifacts, compiled first use, initialization-time isolation, and dependencies without loading modules into the user's running Emacs.
 - [Reproduce remote-hook timing before claiming a fix](remote-hook-readiness-verification.md) - Green timing-dependent replays do not diagnose a stall; impose the suspected interleaving without weakening safeguards.
@@ -27,9 +26,8 @@
 - [Dim collapsed thinking blocks](collapsed-thinking-visual-preference.md) - Use subdued font highlighting for collapsed thinking blocks
 - [Protect long-running work without treating silence as refusal](sleep-and-long-running-work-preferences.md) - Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals
 - [Separate feature enablement from its command setting](separate-feature-toggle-from-command.md) - Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default
-- [Fix encountered issues without deferral](fix-review-findings-without-deferral.md) - Revisit the backlog during work and resolve authorized, relevant findings without silently deferring them.
+- [Fix encountered issues without deferral](fix-review-findings-without-deferral.md) - Fix authorized findings in the same pass; a full backlog sweep includes defects, debt, flaky tests, and the Inbox.
 - [Background-wake design priorities and reference](monitor-design-reference-preference.md) - Consult Claude Code for background-wake design; the user weighs lost messages more heavily than wake-loop risk
-- [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
 - [Preserve conversational continuity at plan handoff](plan-handoff-continuity-preference.md) - Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view
 - [Desktop/laptop sessions](two-machine-session-workflow.md) - TRAMP takeover is real usage; verify both clients
 - [Deployment access and diagnostic references](deployment-access-reference.md) - Use the recorded SSH configuration and deployment pointers to locate access details, then recheck current configuration and authority.
@@ -47,3 +45,4 @@
 - [User-first, editor-native AI collaboration](user-first-editor-collaboration-preference.md) - Support user-led, context-isolated collaboration, editor-native prototypes, and lightweight note interactions without redundant commands.
 - [Preserve agreed scope, including approved prototype visuals](preserve-agreed-scope-in-specifications.md) - Do not silently drop agreed work or an approved prototype's visual treatment when writing specifications or implementing them.
 - [Keep user-facing customization at the main package boundary](main-package-customization-preference.md) - Keybinding customization should work from the main package configuration without requiring submodule-specific setup.
+- [Separate applying draft wording from committing it](collaborative-wording-commit-approval.md) - When wording is still under collaborative review, applying edits does not mean the user has approved a commit.

@@ -2,6 +2,7 @@
 name: "Agent model attribution and read-only inspection"
 description: "Show accurate model/effort metadata and preserve the parent workspace during agent inspection"
 type: user
+modified: 2026-10-16
 ---
 
 # Agent model attribution and inspection

@@ -2,6 +2,7 @@
 name: "View changes must preserve rendering and CPU gains"
 description: "Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment"
 type: user
+modified: 2026-10-13
 ---
 
 # View changes must preserve rendering and CPU gains

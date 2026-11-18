@@ -2,6 +2,7 @@
 name: "Subscription quota integration sources"
 description: "Authoritative Codex, Claude SDK, and ACP pointers for subscription usage research"
 type: reference
+modified: 2026-10-30
 ---
 
 # Subscription quota integration sources

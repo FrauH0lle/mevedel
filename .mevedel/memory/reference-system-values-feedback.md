@@ -2,6 +2,7 @@
 name: "Do not attribute guesses or unchecked behavior to reference systems"
 description: "Check authoritative documentation, source, or observed behavior before using another product to justify a design"
 type: feedback
+modified: 2026-10-19
 ---
 
 # Do not attribute guesses or unchecked behavior to reference systems

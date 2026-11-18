@@ -2,6 +2,7 @@
 name: "Review observational Eval by its visible effects"
 description: "Unconfined execution alone is not a reason to defer task-relevant observational Eval; preserve safety boundaries and bounded explanations"
 type: feedback
+modified: 2026-10-16
 ---
 
 # Review observational Eval by its visible effects

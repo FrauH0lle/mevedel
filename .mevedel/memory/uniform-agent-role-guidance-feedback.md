@@ -2,6 +2,7 @@
 name: "Keep named-agent guidance uniform"
 description: "Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance"
 type: feedback
+modified: 2026-10-16
 ---
 
 # Keep named-agent guidance uniform

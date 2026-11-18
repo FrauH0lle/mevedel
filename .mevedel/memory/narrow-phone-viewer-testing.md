@@ -2,6 +2,7 @@
 name: "Narrow-phone collaboration viewer testing"
 description: "The user tests in iPhone 13 mini Safari; vertical space and real narrow-viewport renders matter"
 type: user
+modified: 2026-10-19
 ---
 
 Recorded 2026-10-15: Roland reviews collaboration viewer/editor layouts

@@ -2,6 +2,7 @@
 name: "Keep selected extraction automatic without making notes permanent"
 description: "Shared notes are disposable exchange material; selected automatic extraction should not become manual reminders or recurring confirmations."
 type: feedback
+modified: 2026-11-01
 ---
 
 # Keep selected extraction automatic without making notes permanent

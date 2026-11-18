@@ -2,6 +2,7 @@
 name: "Verify the real consumer boundary, not intermediate success"
 description: "Use the production path and caller identity; distinguish transport, persistence, rendering, and behavioral acceptance."
 type: feedback
+modified: 2026-11-03
 ---
 
 # Verify the real consumer boundary, not intermediate success

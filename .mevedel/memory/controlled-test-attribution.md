@@ -2,6 +2,7 @@
 name: "Establish test conditions before attributing failures or coverage"
 description: "Isolate failures without defaulting to harness blame; establish real fixture conditions, delivered inputs, negative controls, and equivalent baselines."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Establish test conditions before attributing failures or coverage

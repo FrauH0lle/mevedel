@@ -2,6 +2,7 @@
 name: "Investigate history before recommending removal of a boundary"
 description: "Read the commits and ADRs that introduced a boundary before proposing to remove it"
 type: feedback
+modified: 2026-10-11
 ---
 
 # Investigate history before recommending removal of a boundary

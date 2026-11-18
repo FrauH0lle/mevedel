@@ -2,6 +2,7 @@
 name: "Preserve agreed scope, including approved prototype visuals"
 description: "Do not silently drop agreed work or an approved prototype's visual treatment when writing specifications or implementing them."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Preserve agreed scope, including approved prototype visuals

@@ -2,6 +2,7 @@
 name: "Tool search is not the full capability boundary"
 description: "A missing dedicated tool does not establish that a capability is unavailable; consider authorized Emacs Eval."
 type: feedback
+modified: 2026-11-01
 ---
 
 # Tool search is not the full capability boundary

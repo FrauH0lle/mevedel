@@ -2,6 +2,7 @@
 name: "Separate feature enablement from its command setting"
 description: "Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default"
 type: user
+modified: 2026-10-16
 ---
 
 # Separate feature enablement from command configuration

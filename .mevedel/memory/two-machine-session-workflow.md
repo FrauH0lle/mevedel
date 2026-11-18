@@ -2,6 +2,7 @@
 name: "Desktop-host and laptop-client session workflow"
 description: "TRAMP session takeover is real usage; verify both clients and install fixes on the affected side"
 type: project
+modified: 2026-10-19
 ---
 
 Roland uses a desktop to host a project checkout and a laptop to join the

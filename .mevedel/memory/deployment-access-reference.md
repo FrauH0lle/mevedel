@@ -2,6 +2,7 @@
 name: "Deployment access and diagnostic references"
 description: "Use the recorded SSH configuration and deployment pointers to locate access details, then recheck current configuration and authority."
 type: reference
+modified: 2026-11-15
 ---
 
 # Deployment access and diagnostic references

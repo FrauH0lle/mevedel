@@ -2,6 +2,7 @@
 name: "Keep live inspection non-perturbing and diagnostics representative"
 description: "Bound probe overhead, preserve live-editor restrictions, distinguish navigation and observer effects, and persist intermittent evidence."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Keep live inspection non-perturbing and diagnostics representative

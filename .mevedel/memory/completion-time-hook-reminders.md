@@ -2,6 +2,7 @@
 name: "Completion-time reminders cannot enforce a finished turn"
 description: "Place guidance where it can affect the intended turn; do not mistake a context-only completion hook for enforcement"
 type: feedback
+modified: 2026-10-30
 ---
 
 # Completion-time reminders cannot enforce a finished turn

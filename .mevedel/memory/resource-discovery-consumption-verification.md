@@ -2,6 +2,7 @@
 name: "Trace unreadable addresses back to discovery"
 description: "Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals"
 type: feedback
+modified: 2026-10-13
 ---
 
 # Trace unreadable addresses back to discovery

@@ -2,6 +2,7 @@
 name: "Artifact collaboration across chats, machines, and tools"
 description: "Preserve viewing-chat context and unified discussions; local Emacs sessions should edit remote artifacts without becoming remote browser-chat participants."
 type: user
+modified: 2026-11-03
 ---
 
 # Artifact collaboration preferences

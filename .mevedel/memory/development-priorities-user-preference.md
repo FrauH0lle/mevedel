@@ -2,6 +2,7 @@
 name: "Correctness and simplicity without losing features or performance"
 description: "Reduce implementation and UX complexity without optimizing concept counts or imposing unevidenced restrictions."
 type: user
+modified: 2026-11-12
 ---
 
 # Mevedel development priorities

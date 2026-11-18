@@ -2,6 +2,7 @@
 name: "Preserve the requested editing surface"
 description: "A whiteboard redesign request means editing that whiteboard, not substituting a separate preview."
 type: feedback
+modified: 2026-10-11
 ---
 
 When asked to redesign selected whiteboard content, implement the change in that whiteboard. Do not substitute a separate HTML preview unless the current request asks for one.

@@ -2,6 +2,7 @@
 name: "Verify graphical results in an isolated, presenting environment"
 description: "Match graphical evidence to the claim; keep module loading and evaluation out of the user's running Emacs."
 type: feedback
+modified: 2026-11-15
 ---
 
 # Verify graphical results in an isolated, presenting environment

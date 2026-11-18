@@ -2,6 +2,7 @@
 name: "Correlate apparent stalls with suspend and resume"
 description: "Check system sleep windows before attributing telemetry gaps or post-resume connection errors to mevedel"
 type: feedback
+modified: 2026-10-19
 ---
 
 Recorded 2026-09-04: two desktop suspend windows explained the longest gaps

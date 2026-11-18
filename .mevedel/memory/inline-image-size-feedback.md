@@ -2,6 +2,7 @@
 name: "Judge inline image previews by displayed size"
 description: "Compact previews are a visual requirement, not a preference for pixel or fractional settings"
 type: feedback
+modified: 2026-10-12
 ---
 
 When adjusting Mevedel's inline image previews, judge the actual displayed size rather than whether the setting uses pixels or a window-width fraction. Preserve click-to-enlarge behavior.

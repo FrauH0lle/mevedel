@@ -2,6 +2,7 @@
 name: "Project naming taste"
 description: "Favor good sound and a genuine functional connection; Japanese aesthetics appeal without needing to dominate."
 type: user
+modified: 2026-11-12
 ---
 
 # Project naming taste

@@ -2,6 +2,7 @@
 name: "Show recurring advisories only once"
 description: "Repeated informational warnings become tedious; avoid repeatedly showing the same advisory"
 type: user
+modified: 2026-10-16
 ---
 
 # Show recurring advisories only once

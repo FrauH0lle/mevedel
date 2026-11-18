@@ -2,6 +2,7 @@
 name: "Distinguish the composer from the pinned prompt header"
 description: "An always-visible composer is not the pinned prompt header; preserve header readability and conversation continuity."
 type: feedback
+modified: 2026-11-03
 ---
 
 # Distinguish the composer from the pinned prompt header

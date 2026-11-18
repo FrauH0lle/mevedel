@@ -2,6 +2,7 @@
 name: "Keep user-facing customization at the main package boundary"
 description: "Keybinding customization should work from the main package configuration without requiring submodule-specific setup."
 type: user
+modified: 2026-11-15
 ---
 
 # Keep user-facing customization at the main package boundary

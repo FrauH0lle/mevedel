@@ -2,6 +2,7 @@
 name: "Reproduce remote-hook timing before claiming a fix"
 description: "Green timing-dependent replays do not diagnose a stall; impose the suspected interleaving without weakening safeguards."
 type: feedback
+modified: 2026-11-01
 ---
 
 # Reproduce remote-hook timing before claiming a fix

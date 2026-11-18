@@ -2,6 +2,7 @@
 name: "Finish quota-budgeted sweeps before the reset"
 description: "Weekly sweeps finish before the quota reset by default; post-reset continuation requires opt-in at intake."
 type: user
+modified: 2026-11-12
 ---
 
 # Finish quota-budgeted sweeps before the reset

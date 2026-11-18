@@ -2,6 +2,7 @@
 name: "Protect long-running work without treating silence as refusal"
 description: "Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals"
 type: user
+modified: 2026-10-16
 ---
 
 # Protect long-running work and remote reachability
