@@ -613,7 +613,9 @@ targets retain the root marker for checked recovery, never blind reapplication."
                                    (note "Permanently deleted the reviewed shared file; no undo copy was kept.")
                                    (t "Applied captured memory proposal.")))
                    ('reversed "Reversed the captured memory application.")
-                   ('unavailable (if failed "Attempt left targets unchanged." "Application left targets unchanged."))
+                   ('unavailable (cond ((eq (car-safe failed) 'mevedel-memory-apply-mode-refused) (cadr failed))
+                                       (failed "Attempt left targets unchanged.")
+                                       (t "Application left targets unchanged.")))
                    (_ "Targets need checked recovery.")))
          (decision (mevedel-memory-decision--accept workspace job (plist-get intent :accepted) (plist-get intent :item)
                                                      status reason intent)))
@@ -899,7 +901,8 @@ editor.  A callback alone grants no automatic authority."
           (mevedel-memory-decision--start-operation
        workspace
        (lambda (job live reply)
-         (if (not (or (plist-get reply :synchronous) (mevedel-memory-decision--idle-p)))
+         (if (if (plist-member job :idle-admitted) (not (plist-get job :idle-admitted))
+               (not (or (plist-get reply :synchronous) (mevedel-memory-decision--idle-p))))
              ;; Recovery yielded to the editor.  Release this fixed claim before
              ;; waiting for idle; the caller retains only the proposal identity.
              '(:status idle-wait)
@@ -1042,6 +1045,12 @@ notes.  The result and CONTINUATION are as for `mevedel-memory-decision-apply'."
   (mevedel-memory-decision--execute
    workspace (mevedel-memory-decision--context workspace (current-buffer)) continuation t
    (lambda (job)
+     ;; An expiry outcome can precede its retirement marker after a crash.
+     (mevedel-memory-store--mutation
+      workspace (lambda (_mutation)
+                  (mevedel-journal-cleanup-recover (mevedel-journal-store-directory (mevedel-workspace-root workspace)))))
+     (when (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) pass)
+       (user-error "Memory decision history has expired"))
      (let ((previous (mevedel-memory-decision-status workspace proposal)))
        (unless (and (equal pass (plist-get previous :pass-id))
                     (mevedel-memory-decision-written-status-p (plist-get previous :status)))
@@ -1189,6 +1198,7 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
   "Release JOB and deliver RESULT exactly once, after any editor work unwinds."
   (unless (plist-get job :done)
     (plist-put job :done t)
+    (when-let* ((retry (plist-get job :dispatch-retry))) (cancel-timer retry))
     (mevedel-memory-decision--stamp-round-trip job)
     (when (plist-member job :recovery-round-trip-ms)
       (plist-put result :recovery-round-trip-ms (plist-get job :recovery-round-trip-ms)))
@@ -1328,6 +1338,44 @@ Keep :error, :cancelled and timing alongside the decision's result."
       (plist-put job :executing nil)
       (mevedel-memory-decision--operation-finish job result))))
 
+(defun mevedel-memory-decision--queue-application (job reply)
+  "Queue REPLY for JOB at the command loop, once and without holding locks."
+  (plist-put job :dispatch-retry nil)
+  (unless (or (plist-get job :event-reply) (plist-get job :done) (plist-get job :stopped))
+    (plist-put job :event-reply reply)
+    (plist-put job :input-count num-input-keys)
+    (push 'mevedel-memory-application unread-command-events)))
+
+(defun mevedel-memory-decision--dispatch-application ()
+  "Resume one admitted automatic transaction from the command loop."
+  (interactive)
+  (when-let* ((job (catch 'pending
+                     (maphash (lambda (_ job) (when (plist-get job :event-reply) (throw 'pending job)))
+                              mevedel-memory-decision--operations)
+                     nil))
+              (reply (plist-get job :event-reply)))
+    (plist-put job :event-reply nil)
+    (if (or inhibit-quit this-command (active-minibuffer-window) (> (recursion-depth) 0))
+        ;; Input readers within an unrelated command also dispatch special events.
+        (plist-put job :dispatch-retry
+                   (run-with-idle-timer mevedel-memory-decision-automatic-idle-seconds nil
+                                        #'mevedel-memory-decision--queue-application job reply))
+      ;; The special event itself ends measured idle time, but consumes no input key.
+      (plist-put job :idle-admitted
+                 (and (= num-input-keys (plist-get job :input-count)) (not (input-pending-p))))
+      (if (plist-get job :idle-admitted) (mevedel-memory-decision--operation-ready job reply)
+        (mevedel-memory-decision--operation-finish job (list :ok t :value '(:status idle-wait)))))))
+
+(define-key special-event-map [mevedel-memory-application] #'mevedel-memory-decision--dispatch-application)
+
+(defun mevedel-memory-decision--receive (job reply)
+  "Route an admitted application REPLY for JOB out of its sentinel or timer."
+  (if (and inhibit-quit (plist-get job :application) (plist-get reply :ok)
+           (equal (plist-get reply :operation-id) (plist-get (plist-get job :claim) :owner))
+           (or (plist-get reply :synchronous) (mevedel-memory-decision--idle-p)))
+      (unless (plist-get job :dispatch-retry) (mevedel-memory-decision--queue-application job reply))
+    (mevedel-memory-decision--operation-ready job reply)))
+
 (defun mevedel-memory-decision--operation-ready (job reply)
   "Continue JOB from worker REPLY with fresh ownership and live editor checks."
   (when (and (not (plist-get job :done)) (not (plist-get job :executing))
@@ -1441,9 +1489,9 @@ crosses the child.  Unsupported targets recover synchronously in the editor."
                                  (when (plist-get job :recovered)
                                    (list :claim (plist-get recovery :claim) :outcome (plist-get recovery :outcome))))
                            payload)
-               (lambda (reply) (mevedel-memory-decision--operation-ready job reply)) :owner
+               (lambda (reply) (mevedel-memory-decision--receive job reply)) :owner
                job)
-            (mevedel-memory-decision--operation-ready
+            (mevedel-memory-decision--receive
              job (list :ok t :operation-id (plist-get claim :owner) :synchronous t)))))
       ((error quit)
        ;; Synchronous fallback also delivers the consumer callback here.  Once

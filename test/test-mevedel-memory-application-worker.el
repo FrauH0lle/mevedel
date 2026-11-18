@@ -63,7 +63,7 @@ This bounds a hung test, not application latency; multiple real children and
 checked writes must be able to finish under single-CPU contention."
   (let ((deadline (+ (float-time) 300)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
-      (accept-process-output nil .01)))
+      (mevedel-test--application-step)))
   (should (funcall predicate)))
 
 (defun mevedel-test-application-start (workspace accepted proposal context callback)
@@ -144,6 +144,38 @@ the public verb, not this helper, constructs and drives the operation."
                               workspace (plist-get (plist-get accepted :prepared) :id) original-id)
                              :status)))
       (should-not (file-exists-p path)))))
+
+(mevedel-deftest mevedel-memory-decision--dispatch-application
+  (:doc "a real minibuffer defers the transaction; idle reposts it, and duplicate events apply only once")
+  (mevedel-test-application-fixture
+    (let* ((entry (symbol-function 'mevedel-memory-decision--apply-owned))
+           (event 'mevedel-memory-application)
+           (handler (lookup-key special-event-map (vector event)))
+           calls prompt-seen)
+      (cl-letf (((symbol-function 'mevedel-memory-decision--apply-owned)
+                 (lambda (&rest args)
+                   (push (list inhibit-quit (active-minibuffer-window)) calls)
+                   (apply entry args))))
+        (mevedel-test-application-start workspace accepted proposal context (lambda (reply) (setq result reply)))
+        (mevedel-test-application-wait (lambda () (eq event (car unread-command-events))))
+        (pop unread-command-events)
+        (minibuffer-with-setup-hook
+            (lambda ()
+              (setq prompt-seen (active-minibuffer-window))
+              (funcall handler)
+              (should-not calls)
+              (should (file-exists-p path)))
+          (execute-kbd-macro (kbd "M-: nil RET")))
+        (should prompt-seen)
+        (mevedel-test-application-wait (lambda () (eq event (car unread-command-events))))
+        ;; The retry timer only posted the event, not the file transaction.
+        (should-not calls)
+        (should (file-exists-p path))
+        (mevedel-test-application-wait (lambda () result))
+        (funcall handler)
+        (should (equal calls '((nil nil))))
+        (should (eq 'applied (plist-get result :status)))
+        (should-not (file-exists-p path))))))
 
 (mevedel-deftest mevedel-memory-pass--apply-async ()
   ,test

@@ -80,6 +80,22 @@
     (should (equal "---\nname: \"Current [context]\"\ndescription: \"When this matters\"\ntype: project\n---\n\nNew lesson.\n"
                    (read-file "new topic.md")))
     (should (string-search "- [Current \\[context\\]](new%20topic.md) - When this matters\n" (read-file "MEMORY.md"))))
+  :doc "an absent topic keeps its captured mode in another editor; writing wider permissions is refused"
+  (dolist (pair '((#o600 . #o644) (#o644 . #o600)))
+    (cl-letf (((symbol-function 'default-file-modes) (lambda () (car pair))))
+      (setq scope (mevedel-memory-scope-capture workspace)))
+    (cl-letf (((symbol-function 'default-file-modes) (lambda () (cdr pair))))
+      (let* ((topic (car (mevedel-memory-apply-changes scope (proposal 'promote "new.md" "Body"))))
+             (before (plist-get topic :before))
+             (after (list :path (plist-get topic :path) :exists t :mode (plist-get topic :mode))))
+        (should (= (car pair) (plist-get after :mode)))
+        (if (= (car pair) #o600)
+            (should-not (mevedel-memory-apply-check-new-mode before after))
+          (let ((error (should-error (mevedel-memory-apply-check-new-mode before after))))
+            (should (string-match-p "0644 exceeds permitted new-file mode 0600" (error-message-string error)))))
+        (should-not (file-exists-p (plist-get after :path)))
+        ;; Completing a row at exact after doesn't create anything.
+        (should-not (mevedel-memory-apply-check-new-mode after after)))))
   :doc "Unicode titles and descriptions remain text in both patch content and UTF-8 files"
   (let ((item (proposal 'promote "unicode.md" "Body with \u754c.")))
     (setf (plist-get item :title) "\u754c topic"

@@ -1515,3 +1515,12 @@ next section, emptying the condensation. Headings now close only a header-only
 block without a separator. A JSON array value spread over several lines is
 joined until it parses. A shorter closing fence remains an error, as the
 existing contract requires.
+
+### 2026-11-18: resume automatic file transactions outside timers
+
+An idle timer can admit automatic work but cannot run its synchronous file
+transaction: Emacs inhibits quit while timers run. The timer posts a special
+event instead. The command loop checks that no real input intervened and runs
+the transaction with normal quit handling. A minibuffer, recursive edit or
+active command defers it; the next idle timer only reposts the event. No
+target lock is held while waiting. Interactive decisions stay synchronous.

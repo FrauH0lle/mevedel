@@ -246,6 +246,13 @@ TYPE and ARGS are passed through unchanged."
   `(with-timeout (,timeout (ert-fail ,message))
      (while (not ,condition) (accept-process-output nil 0.01))))
 
+(defun mevedel-test--application-step ()
+  "Process one automatic application event or wait for child output in batch."
+  (if (eq (car unread-command-events) 'mevedel-memory-application)
+      ;; Batch `read-event' returns this without the command loop's dispatch.
+      (funcall (lookup-key special-event-map (vector (pop unread-command-events))))
+    (accept-process-output nil .01)))
+
 (defmacro mevedel-test--with-idle-application (&rest body)
   "Run BODY with two seconds of idle time and short one-shot callbacks.
 Replace `run-with-idle-timer' with `run-at-time' after 0.01 seconds,

@@ -37,7 +37,7 @@
 DIAGNOSTICS returns bounded details when the expected callback never arrives."
   (let ((deadline (+ (float-time) 30)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
-      (accept-process-output nil .01)))
+      (mevedel-test--application-step)))
   (unless (funcall predicate)
     (ert-fail (list :missing-callback (and diagnostics (funcall diagnostics))))))
 

@@ -18,7 +18,7 @@
 (declare-function mevedel-tool-patch--assert-buffers-unmodified
                   "mevedel-tool-patch" (changes))
 (declare-function mevedel-tool-patch-commit
-                  "mevedel-tool-patch" (changes &optional currentp mutate))
+                  "mevedel-tool-patch" (changes &optional currentp mutate batch))
 (autoload 'mevedel-tool-patch--assert-buffers-unmodified "mevedel-tool-patch")
 (autoload 'mevedel-tool-patch-commit "mevedel-tool-patch")
 
@@ -357,7 +357,9 @@ BEFORE-WRITE, when non-nil, rechecks editor-only forward-write admission."
       (error "Memory mutation paths differ"))
     (when (plist-get after :exists)
       (mevedel-session-control-fs-make-directory (file-name-directory path) t))
-    (when before-write (funcall before-write))
+    (when before-write
+      (funcall before-write)
+      (mevedel-memory-apply-check-new-mode before after))
     (dolist (result
              (mevedel-session-control-fs-run-program
               (append

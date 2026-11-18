@@ -204,6 +204,7 @@ The request owner must account for these snapshots in context admission."
             (error (push (list :root id :reason (error-message-string err)) omissions))))))
     (list :workspace-root workspace-root :workspace (mevedel-workspace-identity-read workspace-root)
           :workspace-client (unless (file-remote-p workspace-root) client)
+          :new-file-mode (logand #o666 (default-file-modes))
           :workspace-target (mevedel-execution-target-identity
                              (mevedel-execution-target-create workspace-root))
           :excluded-roots (delete-dups excluded-roots)

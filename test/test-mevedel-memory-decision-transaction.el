@@ -42,7 +42,7 @@
   "Drive the event loop until PREDICATE is true, bounded by thirty seconds."
   (let ((deadline (+ (float-time) 30)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
-      (accept-process-output nil .01)))
+      (mevedel-test--application-step)))
   (should (funcall predicate)))
 
 (mevedel-deftest mevedel-memory-decision-apply/transaction ()

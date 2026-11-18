@@ -1293,15 +1293,16 @@ Preserve `find-buffer-visiting' file identity and alias matching."
   (when-let* ((buffer (find-buffer-visiting path)))
     (or (buffer-base-buffer buffer) buffer)))
 
-(defun mevedel-tool-patch-commit (changes &optional currentp mutate)
+(defun mevedel-tool-patch-commit (changes &optional currentp mutate batch)
   "Commit CHANGES as one filesystem and visited-buffer transaction.
 Each change may include :before, a snapshot whose bytes/absence/mode must still
 match before any write. Recheck snapshots before individual writes. CURRENTP,
 when supplied, must authorize writes, synchronization, and rollback mutations.
 MUTATE, when supplied, replaces the default filesystem mutation. It receives
 before/after snapshots and must check freshness and fence the replacement on
-the target; the same callback handles rollback. Buffer synchronization stays
-inside this transaction.
+the target; the same callback handles rollback.  BATCH, when non-nil, checks
+and applies the ordered lists of before/after snapshots in one target program
+instead of individual forward mutations.  Buffer synchronization stays here.
 Rollback never overwrites an intervening edit; it reports incomplete recovery."
     (require 'mevedel-overlays)
   (let ((owner-current-p currentp)
@@ -1392,7 +1393,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                                 (mevedel-tool-patch--snapshot
                                  (plist-get change :path)))
                               changes))
-           (expected nil)
+           expected batch-expected
            (created-directories
             (delete-dups
              (cl-mapcan
@@ -1425,16 +1426,16 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
               (mevedel-tool-patch--assert-current currentp)
               (unless (mevedel-change-same-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
                 (error "File changed before its transaction write: %s" (plist-get change :path)))
-              (push (list :path (plist-get change :path) :exists (eq (plist-get change :action) 'write)
+              (let ((after (list :path (plist-get change :path) :exists (eq (plist-get change :action) 'write)
                           :bytes (when (eq (plist-get change :action) 'write)
                                    (if (plist-member change :bytes) (plist-get change :bytes)
                                      (encode-coding-string (plist-get change :content) 'utf-8-unix)))
                           :mode (when (eq (plist-get change :action) 'write)
-                                  (or (plist-get change :mode) (plist-get snapshot :mode) (default-file-modes))))
-                    expected)
-              (if mutate
-                  (funcall mutate snapshot (car expected))
-                (pcase (plist-get change :action)
+                                  (or (plist-get change :mode) (plist-get snapshot :mode) (default-file-modes))))))
+                (if batch (push after batch-expected)
+                  (push after expected)
+                  (if mutate (funcall mutate snapshot after)
+                    (pcase (plist-get change :action)
                 ('write
                  (let* ((path (plist-get change :path))
                         (literal-p (plist-member change :bytes)))
@@ -1447,7 +1448,11 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                         (default-file-modes))
                     literal-p)))
                 ('delete
-                 (mevedel-pin-delete-file (plist-get change :path))))))
+                 (mevedel-pin-delete-file (plist-get change :path))))))))
+            (when batch
+              (mevedel-tool-patch--assert-current currentp)
+              (setq expected (nreverse batch-expected))
+              (funcall batch snapshots expected))
             (dolist (change changes)
               (mevedel-tool-patch--assert-current currentp)
               (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer

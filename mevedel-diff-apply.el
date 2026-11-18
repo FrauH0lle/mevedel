@@ -18,7 +18,7 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch-commit "mevedel-tool-patch" (changes &optional currentp mutate))
+(declare-function mevedel-tool-patch-commit "mevedel-tool-patch" (changes &optional currentp mutate batch))
 (declare-function mevedel-tool-patch-missing-parent-directories
                   "mevedel-tool-patch" (path))
 

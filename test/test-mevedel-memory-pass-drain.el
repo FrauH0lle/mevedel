@@ -89,7 +89,7 @@
             "## Done\n- Observed: Passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none"))
          (wait-for (predicate)
            (with-timeout (15 (ert-fail "Backlog review did not advance"))
-             (while (not (funcall predicate)) (accept-process-output nil .01))))
+             (while (not (funcall predicate)) (mevedel-test--application-step))))
          (start ()
            (setq drain (mevedel-memory-pass-drain workspace (lambda (result) (push result results)))))
          (deliver (timer)

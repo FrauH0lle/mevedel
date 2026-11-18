@@ -12,6 +12,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-reminders)
 (require 'mevedel-tool-patch)
+(require 'mevedel-instruction-edit)
 (require 'mevedel-journal-claim)
 (require 'mevedel-view)
 (require 'mevedel-view-interaction)
@@ -689,6 +690,35 @@
 (mevedel-deftest mevedel-tool-patch-commit ()
   ,test
   (test)
+  :doc "a single ordered batch still synchronizes buffers and rolls back a failed synchronization"
+  (let* ((root (make-temp-file "mevedel-patch-batch-" t))
+         (paths (mapcar (lambda (leaf) (file-name-concat root leaf)) '("a" "b")))
+         (changes (mapcar (lambda (path) (list :action 'write :path path :content "new")) paths))
+         (writer (lambda (_before after)
+                   (mevedel-tool-patch--write-file (plist-get after :path) (plist-get after :bytes)
+                                                   (plist-get after :mode) t)))
+         (calls 0)
+         (batch (lambda (before after)
+                  (should (equal paths (mapcar (lambda (row) (plist-get row :path)) before)))
+                  (should (equal paths (mapcar (lambda (row) (plist-get row :path)) after)))
+                  (cl-incf calls)
+                  (cl-mapc writer before after)))
+         buffer)
+    (unwind-protect
+        (progn
+          (dolist (path paths) (write-region "old" nil path nil 'silent))
+          (setq buffer (find-file-noselect (car paths)))
+          (cl-letf (((symbol-function 'mevedel-instruction-replace-buffer-contents)
+                     (lambda (&rest _) (error "Injected sync failure"))))
+            (should-error (mevedel-tool-patch-commit changes nil writer batch)))
+          (should (= 1 calls))
+          (dolist (path paths) (should (equal "old" (test-mevedel-tool-patch--read-bytes path))))
+          (mevedel-tool-patch-commit changes nil writer batch)
+          (should (= 2 calls))
+          (should (equal "new" (with-current-buffer buffer (buffer-string)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t)))
+
   :doc "Rolls back files and newly-created directories after an I/O failure"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-patch-rollback-" t)))

@@ -70,6 +70,17 @@ and unsupported link syntax instead of silently creating conflicting entries."
       (if (or (not replacement) inserted) result
         (concat result (unless (or (string-empty-p result) (string-suffix-p "\n" result)) "\n") replacement "\n")))))
 
+(define-error 'mevedel-memory-apply-mode-refused "New-file permissions refused")
+
+(defun mevedel-memory-apply-check-new-mode (before after)
+  "Refuse creating AFTER from absent BEFORE beyond this editor's permissions.
+An existing AFTER is not a creation and needs no mode change."
+  (when (and (not (plist-get before :exists)) (plist-get after :exists))
+    (let ((mode (plist-get after :mode)) (allowed (logand #o666 (default-file-modes))))
+      (unless (and (natnump mode) (= (logand mode allowed) mode))
+        (signal 'mevedel-memory-apply-mode-refused
+                (list (format "Captured mode %04o exceeds permitted new-file mode %04o" mode allowed)))))))
+
 (cl-defun mevedel-memory-apply-changes (scope proposal)
   "Prepare complete patch changes for accepted PROPOSAL in original SCOPE.
 Each change includes :before and exact proposed bytes; writes also carry
@@ -111,7 +122,9 @@ ownership. The patch transaction rechecks each change's expected snapshot."
              (unless (and (eq exists (plist-get original :exists)) (equal bytes (plist-get original :bytes)))
                (push (append (list :path (plist-get original :path) :before original :action (if exists 'write 'delete))
                              (when exists (list :content text :bytes bytes
-                                                :mode (or (plist-get original :mode) (logand #o666 (default-file-modes))))))
+                                                :mode (or (plist-get original :mode)
+                                                          (plist-get scope :new-file-mode)
+                                                          (logand #o666 (default-file-modes))))))
                      changes)))))
       (if (eq action 'instructions)
           (emit file body t)

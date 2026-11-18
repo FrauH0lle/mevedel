@@ -320,6 +320,32 @@
     (let ((applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :decision)))
       (should (eq 'applied (plist-get applied :status)))
       (should (equal applied (mevedel-memory-decision-status workspace (plist-get item :id))))))
+  :doc "promotion honors the capturing editor's mode without widening this editor's permissions"
+  nil
+  (dolist (modes '((#o600 #o644 "private.md") (#o644 #o600 "public.md")))
+    (let* ((filename (nth 2 modes)) (path (file-name-concat memory filename))
+           (scope (cl-letf (((symbol-function 'default-file-modes) (lambda () (car modes))))
+                    (mevedel-memory-scope-capture workspace)))
+           (reply (format (concat "## Promote\n```proposal\nroot: %S\nfile: %S\ntype: \"project\"\ntitle: \"Guide\"\n"
+                                  "hook: \"Context\"\nreason: \"New evidence\"\nevidence: []\n---\nGuide.\n```\n"
+                                  "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                          root-id filename)))
+      (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+      (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
+             (bundle (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil))
+             (id (plist-get (car (plist-get bundle :proposals)) :id))
+             (pass (plist-get prepared :id)))
+        (mevedel-memory-store-publish workspace pass)
+        (cl-letf (((symbol-function 'default-file-modes) (lambda () (cadr modes))))
+          (let ((result (mevedel-memory-decision-apply workspace pass id)))
+            (if (= (car modes) #o600)
+                (progn
+                  (should (eq (plist-get result :status) 'applied))
+                  (should (= #o600 (file-modes path)))
+                  (should (equal (plist-get result :decision) (mevedel-memory-decision-status workspace id))))
+              (should (eq (plist-get result :status) 'unavailable))
+              (should (string-match-p "0644.*0600" (plist-get result :reason)))
+              (should-not (file-exists-p path))))))))
   :doc "same-pass index changes compose while edits to the affected entry remain stale"
   nil
   (progn
