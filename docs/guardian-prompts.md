@@ -66,6 +66,13 @@ ordinary runtime metadata or settings can be approved once. A read-only claim
 in the justification is not proof; unknown effects or unseen code still require
 deferral, and this does not authorize unrelated private data or mutations.
 
+Observational inspection also includes task-relevant reads of ordinary project
+files and logs. Missing contents being read as data are not, by themselves,
+unknown code execution or a reason to defer. Task relevance and scope still
+need authorization. A changed expression likewise does not by itself require
+deferral: review its effects against the task and direct rules, without treating
+an earlier expression's approval as blanket authority.
+
 When the guardian workload resolves to Claude Code, the engine uses a fresh,
 tool-free ACP conversation with that same explicit system policy and quoted
 evidence. It has no root conversation ID or MCP endpoint. Cancelling or

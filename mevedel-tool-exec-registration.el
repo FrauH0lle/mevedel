@@ -160,7 +160,7 @@
 
   (mevedel-define-tool
    :name "Eval"
-   :description "Evaluate an Elisp expression and return the result."
+   :description "Evaluate Emacs Lisp for editor inspection or Lisp computation."
    :prompt-file "prompts/tools/eval.md"
    :handler #'mevedel-tool-exec--eval
    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")

@@ -123,6 +123,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-collection-cancel "mevedel-session-collection" (session))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -134,6 +135,7 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -1046,9 +1048,7 @@ performs no second abort even when the first one signals."
 
 (defun mevedel-view--on-view-killed ()
   "Hook run when the view buffer is killed.
-Clears `mevedel--view-buffer' on the associated data buffer and kills
-it.  The reference is cleared before killing so the data buffer's own
-kill hook sees nil and exits without re-entering this function."
+Unlink and kill the associated data buffer if it still owns this view."
   ;; Per-view timers must die with the view on every kill path, the
   ;; agent-transcript branch and the hookless fallback's survivor
   ;; included: a live timer holding a killed buffer is exactly the
@@ -1075,13 +1075,15 @@ kill hook sees nil and exits without re-entering this function."
                   (_ (buffer-live-p db)))
         (mevedel-view--abort-data-buffer-for-kill db)
         (mevedel-view-agent-cleanup-parent view-buffer)
-        (with-current-buffer db
-          (when (fboundp 'mevedel-permission-queue-abort-all)
-            (mevedel-permission-queue-abort-all mevedel--session))
-          (when (fboundp 'mevedel-plan-approval-abort)
-            (mevedel-plan-approval-abort mevedel--session))
-          (setq mevedel--view-buffer nil))
-        (kill-buffer db)))))
+        (when (with-current-buffer db
+                (when (fboundp 'mevedel-permission-queue-abort-all)
+                  (mevedel-permission-queue-abort-all mevedel--session))
+                (when (fboundp 'mevedel-plan-approval-abort)
+                  (mevedel-plan-approval-abort mevedel--session))
+                (when (eq mevedel--view-buffer view-buffer)
+                  (setq mevedel--view-buffer nil)
+                  t))
+          (kill-buffer db))))))
 
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
@@ -1096,8 +1098,15 @@ Kills the associated view buffer."
     (mevedel-permission-queue-abort-all mevedel--session))
   (when (fboundp 'mevedel-plan-approval-abort)
     (mevedel-plan-approval-abort mevedel--session))
+  ;; Settlement during this hook can schedule collection after its kill hook ran.
+  (when (and mevedel--session
+             (eq (mevedel-session-root-buffer mevedel--session) (current-buffer))
+             (fboundp 'mevedel-session-collection-cancel))
+    (mevedel-session-collection-cancel mevedel--session))
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
+    ;; Aborting can dirty the transcript; a second kill could prompt to save.
+    (setq mevedel--view-buffer nil)
     (kill-buffer vb)))
 
 (defun mevedel-view-toggle-auto-compaction (&optional event)
@@ -1285,24 +1294,29 @@ Resolve archives only on source projection, never during header redisplay."
     (nth 4 mevedel-view--continuation-prompt-cache)))
 
 (defvar-local mevedel-view--prompt-headers nil
-  "(CHARS-TICK . RUNS) for `mevedel-view--prompt-header-runs'.")
+  "(CHARS-TICK . RUNS) of validated prompt header marker pairs.")
 
 (defun mevedel-view--prompt-header-runs ()
-  "Return a vector of (START END PREVIEW) prompt header runs in buffer order.
-The header line asks for the pinned prompt on every redisplay; the few
-header runs change only with the text, so collect them once per text change.
-Every header is written together with its inserted text.  Fontification
-while scrolling changes properties only, so it must not invalidate them."
+  "Return a vector of (START END PREVIEW) prompt runs with marker bounds.
+The renderer clears the cache before inserting a new prompt header.
+Markers follow text edits; when text changes, check just the known
+headers for deletion or replacement.  Scroll-time fontification only
+changes properties and does not invalidate the cache."
   (let ((tick (buffer-chars-modified-tick)))
-    (if (eql tick (car mevedel-view--prompt-headers))
-        (cdr mevedel-view--prompt-headers)
+    (if (and mevedel-view--prompt-headers
+             (or (eql tick (car mevedel-view--prompt-headers))
+                 (cl-every (lambda (run) (< (car run) (cadr run)))
+                           (cdr mevedel-view--prompt-headers))))
+        (progn
+          (setcar mevedel-view--prompt-headers tick)
+          (cdr mevedel-view--prompt-headers))
       (let ((pos (point-min)) runs)
         (while (< pos (point-max))
           (let ((next (next-single-property-change
                        pos 'mevedel-view-prompt-preview nil (point-max)))
                 (preview (get-text-property pos 'mevedel-view-prompt-preview)))
             (when preview
-              (push (list pos next preview) runs))
+              (push (list (copy-marker pos t) (copy-marker next) preview) runs))
             (setq pos next)))
         (setq runs (vconcat (nreverse runs))
               mevedel-view--prompt-headers (cons tick runs))
@@ -1342,7 +1356,7 @@ Hidden headers are never selected."
         (setq lo (1- lo)))
       (when (> lo 0)
         (let ((run (aref runs (1- lo))))
-          (cons (nth 0 run) (nth 2 run)))))))
+          (cons (marker-position (nth 0 run)) (nth 2 run)))))))
 
 (defun mevedel-view--jump-to-pinned-prompt (position &optional event)
   "Reveal the pinned prompt at POSITION in the clicked window from EVENT."

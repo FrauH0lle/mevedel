@@ -505,6 +505,12 @@
                                         (plist-get data :instructions)))
                 (should (string-match-p "Lack of confinement alone is not a reason to ask"
                                         (plist-get data :instructions)))
+                (dolist (text '("observational reads of ordinary project files and logs"
+                                "Unseen file contents read as data are not unseen code"
+                                "read-only does not authorize unrelated private data"
+                                "different expression alone is not a reason to ask"))
+                  (should (string-match-p (regexp-quote text)
+                                          (plist-get data :instructions))))
                 (should (string-match-p "effects depend on unknown functions or unseen code"
                                         (plist-get data :instructions)))
                 (should-not (plist-get data :tools))))

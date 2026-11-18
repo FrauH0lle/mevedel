@@ -877,6 +877,10 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   identifiers, and non-UI strings stay ASCII (use `->` not `→`,
   `lambda`/`fn` not `λ`). Unicode is fine in `propertize`, overlays,
   prompts, and other strings the user actually sees.
+- **Code comments**: explain what the code cannot show, such as an ordering
+  requirement, a non-obvious invariant, or the reason for a workaround. Keep the
+  reasoning needed to change the code safely. Do not restate the code or narrate
+  the patch. Leave unrelated comments alone.
 - **No spec references in code comments**: don't write `(spec 13)` or
   `(see spec 19)`. Specs are implementation-phase artifacts; code
   comments must stand on their own. Describe what a slot/variable

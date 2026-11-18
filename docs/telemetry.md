@@ -219,7 +219,9 @@ cancellation releases the fence and leaves the machine retryable.
   fallback timer, never a separate sampler. Their lag events and summary go to
   workspace diagnostics with `:pass-id` and `:workload memory`; no session is
   manufactured. One heartbeat batches workspace rows into one locked target
-  program per workspace; quiet samples do not write. Diagnostic append time is
+  program per workspace; quiet samples do not write. The native sampler hands
+  those programs to the main thread so it never waits for a target in the
+  editor's GTK event loop. Diagnostic append time is
   excluded from native lag attribution so recording a stall cannot renew itself.
   Nested remote attribution checks a bounded set of supported wait/send dispatch
   frames; missing or truncated stacks conservatively retain diagnostic ownership.

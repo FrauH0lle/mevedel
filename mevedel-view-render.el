@@ -32,6 +32,9 @@
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
+;; `mevedel-view'
+(defvar mevedel-view--prompt-headers)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
@@ -4312,6 +4315,12 @@ the render so user toggles survive streaming ticks."
             (mevedel-view-stream-in-flight-turn-start-position)))
          (pre-rendered-user-visible-p
           (mevedel-view--pre-rendered-user-visible-p))
+         (history-tail (mevedel-view--history-tail-position))
+         ;; The send echo already anchors a fresh response at the history
+         ;; boundary.  Recovery is for a response that may already be drawn.
+         (fresh-tail-p (and (not settle-p)
+                            in-flight-p (>= in-flight-p history-tail)
+                            pre-rendered-user-visible-p))
          (pending mevedel-view--pending-tool-calls))
     (mevedel-view--debug-log
      'incremental-extract
@@ -4378,7 +4387,6 @@ the render so user toggles survive streaming ticks."
                  ;; (`marker-position' returns nil): they would crash
                  ;; `<=' / `delete-region' / `apply-collapse-states' below.
                  (history-start (mevedel-view--after-header-position))
-                 (history-tail (mevedel-view--history-tail-position))
                  (status-pos (and (markerp mevedel-view--status-marker)
                                   (marker-position mevedel-view--status-marker)))
                  (status-valid-p
@@ -4398,7 +4406,7 @@ the render so user toggles survive streaming ticks."
                  (rebuild-end-pos (marker-position rebuild-end))
                  ;; A retained tail already knows where to delete from.
                  (recovered-start
-                  (unless (and retained-p in-flight-p)
+                  (unless (or fresh-tail-p (and retained-p in-flight-p))
                     (mevedel-view--recover-in-flight-turn-start
                      data-from history-start rebuild-end-pos)))
                  (delete-start
@@ -4554,11 +4562,10 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-note-frame-refresh)
               (mevedel-note-frame-refresh))))))
-      ;; A retained tail rewrites only the in-flight turn (pending rows from
-      ;; its start, units from the tail) and the zones below it; anchor
-      ;; readers there without counting the whole transcript per chunk.
-      (and retained-p in-flight-p
-           (cons (min in-flight-p
+      ;; A fresh or retained tail rewrites only the in-flight turn and the
+      ;; zones below it; anchor readers there without counting old history.
+      (and (or fresh-tail-p retained-p) in-flight-p
+           (cons (min (if fresh-tail-p history-tail in-flight-p)
                       (or (mevedel-view-stream-in-flight-turn-start-position)
                           in-flight-p))
                  (point-max))))))
@@ -5933,6 +5940,7 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
       (let* ((guest (plist-get attribution :name))
              (background
               (eq (plist-get attribution :type) 'background-event)))
+        (unless background (setq mevedel-view--prompt-headers nil))
         (insert (propertize
                  (cond
                   (background "")
@@ -9188,6 +9196,7 @@ marker at the end of the inserted block."
             (shared-display (mevedel-transcript-audit-shared-context
                              text (plist-get attribution :shared)))
             user-end)
+        (unless background (setq mevedel-view--prompt-headers nil))
         (insert (propertize (cond
                              (background "")
                              (guest-name (format "%s (guest)\n" guest-name))

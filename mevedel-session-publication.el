@@ -1834,7 +1834,9 @@ failure signals here."
 (defun mevedel-session-publication-read-batch (directories listings)
   "Observe current publications for DIRECTORIES using fresh lease LISTINGS.
 Return an alist from directory to (:publication VALUE :sidecar-data PLIST),
-or (:error CONDITION).  Each stage batches pinned reads across directories;
+with :error CONDITION on failure.  A captured manifest is still returned
+when its sidecar fails, for callers that need the sidecar path.
+Each stage batches pinned reads across directories;
 lease, manifest and sidecar validation remain the ordinary native checks.
 LISTINGS must be observations from this discovery, never a retained cache."
   (let ((remote-file-name-inhibit-cache t)
@@ -1910,10 +1912,9 @@ LISTINGS must be observations from this discovery, never a retained cache."
             (error (plist-put row :error err))))))
     (mapcar (lambda (row)
               (cons (plist-get row :directory)
-                    (if (plist-get row :error)
-                        (list :error (plist-get row :error))
-                      (list :publication (plist-get row :publication)
-                            :sidecar-data (plist-get row :sidecar-data))))) rows)))
+                    (list :publication (plist-get row :publication)
+                          :sidecar-data (plist-get row :sidecar-data)
+                          :error (plist-get row :error)))) rows)))
 
 (defun mevedel-session-publication-read (session-dir &optional head names)
   "Return SESSION-DIR's captured immutable publication, or nil.

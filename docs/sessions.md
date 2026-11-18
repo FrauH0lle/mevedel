@@ -1194,8 +1194,15 @@ directory is listed in one more, and both observations are then shared with
 the reads they feed: legacy-control absence proofs are recorded in the durable
 transaction, so repeated refusal checks cost nothing, and each listing is
 handed to the publication read in place of its own listing round trip.
-Lease records, manifests, and sidecars are then
-read in bounded batches rather than separate programs for each session.
+Lease records, manifests, and sidecars are then read in batches rather than
+separate programs for each session. Over TRAMP, each read stage uses one
+program even when its request needs the input-file or direct-pipe carrier.
+An opening remote picker shares one directory and publication scan with its
+automatic age sweep and omits any sessions the sweep actually deletes. The
+picker separately batches the lease, pin, and release-fence probes needed to
+label its rows. These observations do not authorize an action:
+restore, takeover, and deletion still check current authority for the
+selected or expired session.
 Capturing a manifest canonicalizes its session root once and qualifies each
 validated relative artifact name beneath it. It does not repeatedly canonicalize
 the shared directories for every artifact. Actual reads still prove physical

@@ -263,7 +263,7 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
                           "DBUS_STARTER_ADDRESS=mevedel-invalid-starter-bus"
                           "DBUS_STARTER_BUS_TYPE=mevedel-invalid-starter-bus-type")
                         process-environment))
-               (`(,observed ,status . ,_)
+               (`(,observed ,status . ,trace)
                 (cl-letf (((symbol-function 'make-process)
                            (lambda (&rest arguments)
                              (let ((name (plist-get arguments :name)))
@@ -292,7 +292,10 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
       (should (eq 'enabled (plist-get observed :state)))
       (should (eq t (plist-get observed :thread-side)))
       (should (eq t (plist-get observed :show-returned)))
-      (should (eq t (plist-get observed :visible))))))
+      (should (eq t (plist-get observed :visible)))
+      (should (string-match-p
+               (regexp-quote "MEVEDEL-CHECKPOINT (:checkpoint showing-frame :live-p t :blocker nil)")
+               trace)))))
 
 (provide 'test-mevedel-present-wayland)
 

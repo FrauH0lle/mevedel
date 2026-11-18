@@ -215,6 +215,7 @@
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-cleanup-assessment "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability-assess-batch "mevedel-session-durability" (directories))
 (declare-function mevedel-session-durability-discard-session "mevedel-session-durability" (session prepare-function))
 (declare-function mevedel-session-durability-call-with-reserved-lease "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-disclose "mevedel-session-durability" (session))
@@ -1912,9 +1913,8 @@ reuses its previous classification."
   (make-hash-table :test #'equal)
   "Last live session enumeration per workspace root, as (t . RESULT).
 
-Enumerating a workspace costs several target round trips per session,
-so decorative consumers reuse the newest live listing instead of
-paying that on every redraw.  Every live enumeration refreshes it.")
+Decorative consumers reuse the newest live listing instead of rescanning
+the workspace on every redraw.  Every live enumeration refreshes it.")
 
 (defun mevedel-session-persistence--control-artifacts (entries)
   "Return control probe results for ENTRIES, in one program.
@@ -1972,15 +1972,45 @@ listing failed is left out, and lists for itself."
         (when (memq status '(ok absent))
           (push (cons entry (or (plist-get result :value) 'none)) alist))))))
 
+(defun mevedel-session-persistence--directory-entries (directory regexp)
+  "Observe real subdirectories in DIRECTORY matching REGEXP, with attributes."
+  (condition-case nil
+      (cl-loop for (path . attrs) in (directory-files-and-attributes directory t regexp)
+               when (eq t (file-attribute-type attrs)) collect (cons path attrs))
+    (file-missing nil)))
+
+(defun mevedel-session-persistence--publication-observations (entries)
+  "Return control, listing and publication observations for ENTRIES."
+  (when entries
+    (let* ((controls (mevedel-session-persistence--control-artifacts entries))
+           (listings (mevedel-session-persistence--lease-listings entries)))
+      (list controls listings
+            (if (file-remote-p (car entries))
+                ;; Larger programs use the input carrier rather than the
+                ;; optional archive; don't split a remote discovery into trips.
+                (mevedel-session-publication-read-batch entries listings)
+              (mapcan (lambda (batch)
+                        (mevedel-session-publication-read-batch batch listings))
+                      (seq-partition entries 32)))))))
+
+(defun mevedel-session-persistence--scan (workspace regexp)
+  "Observe WORKSPACE session directories matching REGEXP and their publications."
+  (mevedel-session-durability-with-transaction
+    (let ((entries (mevedel-session-persistence--directory-entries
+                    (mevedel-session-artifacts-sessions-dir workspace) regexp)))
+      (cons entries (mevedel-session-persistence--publication-observations
+                     (mapcar #'car entries))))))
+
 (defun mevedel-session-persistence--observed-update-time
-    (updated-at sidecar-path save-path)
+    (updated-at sidecar-path save-path &optional attributes)
   "Return when the session at SAVE-PATH was last updated, or nil.
 UPDATED-AT is authoritative when it parses as a session timestamp.
 Otherwise the sidecar at SIDECAR-PATH lends its modification time, then the
-directory itself."
+directory itself.  ATTRIBUTES supplies the already-listed directory attributes."
   (or (mevedel-session-persistence-parse-iso-time updated-at)
       (file-attribute-modification-time
        (or (and sidecar-path (file-attributes sidecar-path))
+           attributes
            (file-attributes save-path)))))
 
 (defun mevedel-session-persistence--incompatible-entry
@@ -2029,6 +2059,9 @@ controls signal, so the caller keeps an undiscoverable, uninspectable row."
       (signal (car err) (cdr err)))
     (when (seq-find (lambda (result) (eq (plist-get result :status) 'ok))
                    control-results)
+      ;; A shared scan may have run in a separate discovery transaction.
+      (when (eq 'absent (plist-get (car control-results) :status))
+        (mevedel-session-durability-note-no-pid-lock entry))
       (mevedel-session-codec-authority-mode-for-path entry nil authority-mode))
     (let* ((publication (if observation (plist-get observation :publication)
                           (mevedel-session-publication-read entry nil listing)))
@@ -2054,19 +2087,18 @@ controls signal, so the caller keeps an undiscoverable, uninspectable row."
          entry authority-mode status publication sidecar)))))
 
 (defun mevedel-session-persistence--enumerate-sessions
-    (workspace &optional cached)
+    (workspace &optional cached scan)
   "Return compatible and incompatible persisted sessions for WORKSPACE.
 
 The result is `(:sessions LIST :incompatible LIST)'.  When CACHED is non-nil,
-reuse the last live enumeration when one exists."
+reuse the last live enumeration when one exists.  SCAN is an optional fresh
+observation from this picker invocation, with any deleted directories removed."
   (let ((root (mevedel-workspace-root workspace)))
     (or (and cached
              (cdr (gethash
                    root
                    mevedel-session-persistence--list-sessions-cache)))
-        (let* ((sessions-dir
-                (mevedel-session-artifacts-sessions-dir workspace))
-               (authority-mode
+        (let* ((authority-mode
                 (mevedel-session-authority-mode-for-workspace workspace))
                sessions
                incompatible)
@@ -2074,46 +2106,27 @@ reuse the last live enumeration when one exists."
           ;; target clock reading that every entry's publication read repeats
           ;; are paid once for the whole listing.
           (mevedel-session-durability-with-transaction
-            (when (file-directory-p sessions-dir)
-              (let* ((entries
-                      (seq-filter
-                       #'file-directory-p
-                       (directory-files
-                        sessions-dir t
-                        "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)")))
-                     (controls
-                      (and entries
-                           (mevedel-session-persistence--control-artifacts
-                            entries)))
-                     (listings
-                      (and entries
-                           (mevedel-session-persistence--lease-listings
-                            entries)))
-                     (observations
-                      (when entries
-                        ;; Keep each read batch within the native archive
-                        ;; carrier's bound; all proofs belong to this listing.
-                        (cl-loop for batch on entries by (lambda (rest) (nthcdr 32 rest))
-                                 append (mevedel-session-publication-read-batch
-                                         (seq-take batch 32) listings)))))
-                (dolist (entry entries)
-                  (let ((record
-                         (condition-case err
-                             (mevedel-session-persistence--discover-entry
-                              entry authority-mode
-                              (cdr (assoc entry controls))
-                              (cdr (assoc entry listings))
-                              (cdr (assoc entry observations)))
-                           ;; Discovery itself failed, so not even the
-                           ;; transcript can be trusted for inspection.
-                           (error
-                            (mevedel-session-persistence--incompatible-entry
-                             entry authority-mode
-                             (list :status 'undiscoverable
-                                   :diagnostic (error-message-string err)))))))
-                    (if (eq (plist-get record :kind) 'incompatible)
-                        (push record incompatible)
-                      (push record sessions)))))))
+           (pcase-let ((`(,entries ,controls ,listings ,observations)
+                        (or scan (mevedel-session-persistence--scan
+                                  workspace "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)"))))
+             (pcase-dolist (`(,entry . ,_) entries)
+               (let ((record
+                      (condition-case err
+                          (mevedel-session-persistence--discover-entry
+                           entry authority-mode
+                           (cdr (assoc entry controls))
+                           (cdr (assoc entry listings))
+                           (cdr (assoc entry observations)))
+                        ;; Discovery itself failed, so not even the
+                        ;; transcript can be trusted for inspection.
+                        (error
+                         (mevedel-session-persistence--incompatible-entry
+                          entry authority-mode
+                          (list :status 'undiscoverable
+                                :diagnostic (error-message-string err)))))))
+                 (if (eq (plist-get record :kind) 'incompatible)
+                     (push record incompatible)
+                   (push record sessions))))))
           (setq sessions
                 (sort sessions
                       :key (lambda (item)
@@ -2277,7 +2290,7 @@ Pending journal captures are omitted: the journal settles them unattended."
        (_ "unreadable control data")))
    (remq 'journal-pins (plist-get assessment :reasons)) ", "))
 
-(defun mevedel-session-persistence--entry-authority (workspace entry)
+(defun mevedel-session-persistence--entry-authority (workspace entry &optional assessment)
   "Return `(:action LABEL :detail TEXT :held BOOL)' for WORKSPACE session ENTRY.
 
 The verb names the outcome of choosing this row, which the lease decides:
@@ -2288,8 +2301,7 @@ client is writing this session now, which is a narrower question than
 whether the row resumes: an expired lease offers a takeover precisely
 because nobody is writing it any more.
 
-One assessment shares the lease and retention probes; individual reasons do
-not trigger another authority read."
+ASSESSMENT, when supplied, is the picker batch's observation of ENTRY."
   (ignore workspace)
   (cond
    ((when-let* ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
@@ -2300,8 +2312,8 @@ not trigger another authority read."
                       "already open here")
             :held t)))
    (t
-    (let* ((status (mevedel-session-durability-cleanup-assessment
-                    (plist-get entry :save-path)))
+    (let* ((status (or assessment (mevedel-session-durability-cleanup-assessment
+                                  (plist-get entry :save-path))))
            (host (plist-get status :host))
            (elsewhere (and host (not (equal host (system-name))) host)))
       (cond
@@ -2427,9 +2439,16 @@ REFRESHED keeps an empty chooser open after deleting its last session."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
-  (mevedel-session-persistence-cleanup-expired workspace)
-  (let* ((enumeration
-          (mevedel-session-persistence--enumerate-sessions workspace))
+  (let* ((scan (when (file-remote-p (mevedel-workspace-root workspace))
+                 (mevedel-session-persistence--scan
+                  workspace "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)")))
+         (enumeration
+          (if scan
+              (progn
+                (mevedel-session-persistence-cleanup-expired workspace nil scan)
+                (mevedel-session-persistence--enumerate-sessions workspace nil scan))
+            (mevedel-session-persistence-cleanup-expired workspace)
+            (mevedel-session-persistence--enumerate-sessions workspace)))
          (sessions (mevedel-session-persistence-without-dedicated
                     workspace (plist-get enumeration :sessions)))
          (incompatible
@@ -2438,12 +2457,18 @@ REFRESHED keeps an empty chooser open after deleting its last session."
     (when (or sessions incompatible refreshed)
       (let* ((new-label "Start new session")
              (held-p nil)
+             (assessments
+              (when (and sessions (file-remote-p (mevedel-workspace-root workspace)))
+                (mevedel-session-durability-assess-batch
+                 (mapcar (lambda (entry) (plist-get entry :save-path)) sessions))))
              (session-candidates
               (mapcar
                (lambda (entry)
                  (let* ((authority
-                         (mevedel-session-persistence--entry-authority
-                          workspace entry))
+                         (if assessments
+                             (mevedel-session-persistence--entry-authority
+                              workspace entry (cdr (assoc (plist-get entry :save-path) assessments)))
+                           (mevedel-session-persistence--entry-authority workspace entry)))
                         (action (plist-get authority :action)))
                    ;; Whether another writer is live is already answered by
                    ;; the row's own authority read; asking the target again per
@@ -2920,7 +2945,7 @@ note stores are kept too.  Return non-nil only when it was deleted."
   (mevedel-session-persistence--delete-saved
    workspace save-path 0))
 
-(defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
+(defun mevedel-session-persistence-cleanup-expired (workspace &optional force scan)
   "Delete sessions older than `mevedel-session-max-age-days'.
 
 Scans session directories independently of resume compatibility.  Uses
@@ -2936,14 +2961,13 @@ deletion.  Sessions open in this Emacs are skipped; the others use
 lease renewal to be older than the cap.  Throttled to at most one sweep
 per `(workspace-type . workspace-id)' within
 `mevedel-session-persistence--cleanup-interval'; when FORCE is non-nil
-the throttle is bypassed.
+the throttle is bypassed.  SCAN may supply the picker's fresh directory and
+publication observations; entries deleted by the sweep are removed from it.
 
 Returns the number of sessions deleted, or nil when the cap is nil or the
 workspace was swept too recently."
-  (let ((sessions-dir
-         (mevedel-session-artifacts-sessions-dir workspace)))
-    (when mevedel-session-max-age-days
-      (let ((ws-key (mevedel-session-persistence--cleanup-key workspace)))
+  (when mevedel-session-max-age-days
+    (let ((ws-key (mevedel-session-persistence--cleanup-key workspace)))
       (when (or force (mevedel-session-persistence--cleanup-due-p workspace))
         (puthash ws-key (float-time)
                  mevedel-session-persistence--cleanup-throttle)
@@ -2953,45 +2977,39 @@ workspace was swept too recently."
               (candidates     nil)
               (note-candidates nil)
               (note-session-ids 'unread))
-          (dolist (save-path
-                   (and (file-directory-p sessions-dir)
-                        (directory-files sessions-dir t "\\`[^.]")))
-            (when (file-directory-p save-path)
-              (let* ((publication
-                      (condition-case nil
-                          (mevedel-session-publication-read save-path)
-                        (error nil)))
-                     (sidecar-path (plist-get publication :sidecar))
-                     (sidecar
-                      (condition-case nil
-                          (let ((data (and sidecar-path
-                                           (mevedel-session-codec-read sidecar-path))))
-                            (and (listp data) data))
-                        (error nil)))
-                     (parsed-time
-                      (mevedel-session-persistence--observed-update-time
-                       (plist-get sidecar :updated-at)
-                       sidecar-path save-path)))
-                (let ((candidate (list save-path
-                                       (and parsed-time (float-time parsed-time))
-                                       (plist-get sidecar :session-id))))
-                  (cond
-                   ((or (mevedel-session-persistence--note-p sidecar)
-                        (not (and (plist-member sidecar :preset-name)
-                                  (symbolp (plist-get sidecar :preset-name)))))
-                    (when (eq note-session-ids 'unread)
-                      (require 'mevedel-persistence)
-                      (setq note-session-ids
-                            (mevedel-instruction-store-note-session-ids workspace)))
-                    (unless (or (eq note-session-ids t)
-                                (member (plist-get sidecar :session-id) note-session-ids)
-                                (member (file-name-nondirectory (directory-file-name save-path))
-                                        note-session-ids))
-                      (if (mevedel-session-persistence--note-p sidecar)
-                          (push candidate note-candidates)
-                        (push candidate candidates))))
-                   ((not (mevedel-session-persistence--dedicated-p workspace sidecar))
-                    (push candidate candidates)))))))
+          (pcase-let ((`(,entries ,_controls ,_listings ,observations)
+                       (or scan (mevedel-session-persistence--scan workspace "\\`[^.]"))))
+            (dolist (entry entries)
+              (let ((save-path (car entry)))
+                (unless (string-prefix-p "." (file-name-nondirectory save-path))
+                  (let* ((observation (cdr (assoc save-path observations)))
+                         (publication (plist-get observation :publication))
+                         (data (plist-get observation :sidecar-data))
+                         (sidecar (and (listp data) data))
+                         (parsed-time
+                          (mevedel-session-persistence--observed-update-time
+                           (plist-get sidecar :updated-at)
+                           (plist-get publication :sidecar) save-path (cdr entry))))
+                    (let ((candidate (list save-path
+                                           (and parsed-time (float-time parsed-time))
+                                           (plist-get sidecar :session-id))))
+                      (cond
+                       ((or (mevedel-session-persistence--note-p sidecar)
+                            (not (and (plist-member sidecar :preset-name)
+                                      (symbolp (plist-get sidecar :preset-name)))))
+                        (when (eq note-session-ids 'unread)
+                          (require 'mevedel-persistence)
+                          (setq note-session-ids
+                                (mevedel-instruction-store-note-session-ids workspace)))
+                        (unless (or (eq note-session-ids t)
+                                    (member (plist-get sidecar :session-id) note-session-ids)
+                                    (member (file-name-nondirectory (directory-file-name save-path))
+                                            note-session-ids))
+                          (if (mevedel-session-persistence--note-p sidecar)
+                              (push candidate note-candidates)
+                            (push candidate candidates))))
+                       ((not (mevedel-session-persistence--dedicated-p workspace sidecar))
+                        (push candidate candidates)))))))))
           ;; The newest sessions are exempt regardless of age: the chooser
           ;; sweeps before any lock is taken, so without this floor a
           ;; 30-day absence would delete the session the user came back to
@@ -3005,7 +3023,7 @@ workspace was swept too recently."
                   (nthcdr mevedel-session-keep-recent-count candidates)))
           ;; Note conversations never consume the ordinary retention floor.
           (pcase-dolist (`(,save-path ,updated-secs ,session-id)
-                        (append note-candidates candidates))
+                         (append note-candidates candidates))
             (when (and updated-secs
                        (> (- now updated-secs) threshold-secs)
                        ;; A session open here may outlive its lease after
@@ -3019,11 +3037,13 @@ workspace was swept too recently."
                            (mevedel-session-persistence--delete-saved
                             workspace save-path threshold-secs note-session-ids)
                          (error nil)))
-              (cl-incf deleted)))
+              (cl-incf deleted)
+              (when scan
+                (setcar scan (assoc-delete-all save-path (car scan))))))
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
-          deleted))))))
+          deleted)))))
 
 
 ;;

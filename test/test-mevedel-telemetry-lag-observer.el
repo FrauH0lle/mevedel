@@ -73,7 +73,30 @@
                                                  (test-mevedel-telemetry-lag-observer--rows root))))))
         (mevedel-telemetry--lag-stop)
         (delete-directory root t)
-        (delete-directory other t)))))
+        (delete-directory other t))))
+
+  :doc "a worker heartbeat hands target program execution to the main thread"
+  (let* ((workspace (mevedel-workspace--create :root "/ssh:test:/workspace/"))
+         worker finished called)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                   (lambda (_operations &optional _root)
+                     (setq called (current-thread))
+                     nil)))
+          (setq worker
+                (make-thread
+                 (lambda ()
+                   (let ((mevedel-telemetry--lag-due (- (float-time) 2))
+                         (mevedel-telemetry--lag-pass-windows
+                          (list (list workspace :pass-id "worker"))))
+                     (mevedel-telemetry--lag-tick)
+                     (setq finished t)))))
+          (thread-join worker)
+          (should finished)
+          (should-not (eq called worker))
+          (mevedel-test--await 2 "heartbeat publication" called)
+          (should (eq called main-thread)))
+      (when (and worker (thread-live-p worker)) (thread-signal worker 'quit nil)))))
 
 (mevedel-deftest mevedel-telemetry--lag-observer-call
   ;; Keep 100 ms between the accounting stall and its recording threshold,

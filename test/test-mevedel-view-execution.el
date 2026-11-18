@@ -86,13 +86,15 @@ mouse events in them, which later interactive calls would read."
   ,test
   (test)
   :doc "zero work avoids listing, resources, buffers and timers"
-  (with-temp-buffer
-    (cl-letf (((symbol-function 'mevedel-execution-count-user) (lambda (_) 0))
-              ((symbol-function 'mevedel-execution-list-user) (lambda (_) (ert-fail "listed")))
-              ((symbol-function 'buffer-list) (lambda (&rest _) (ert-fail "scanned")))
-              ((symbol-function 'run-at-time) (lambda (&rest _) (ert-fail "timer")))
-              ((symbol-function 'mevedel-resource-visit-path) (lambda (&rest _) (ert-fail "resource"))))
-      (should-not (mevedel-view-execution-fragment (mevedel-session--create)))))
+  ;; Installing a primitive's native trampoline can itself schedule a timer.
+  (let ((native-comp-enable-subr-trampolines nil))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'mevedel-execution-count-user) (lambda (_) 0))
+                ((symbol-function 'mevedel-execution-list-user) (lambda (_) (ert-fail "listed")))
+                ((symbol-function 'buffer-list) (lambda (&rest _) (ert-fail "scanned")))
+                ((symbol-function 'run-at-time) (lambda (&rest _) (ert-fail "timer")))
+                ((symbol-function 'mevedel-resource-visit-path) (lambda (&rest _) (ert-fail "resource"))))
+        (should-not (mevedel-view-execution-fragment (mevedel-session--create))))))
   :doc "limits live rows, excludes foreground, preserves selected hidden identity"
   (mevedel-view-execution-test--with-view
     (setq live (cl-loop for n from 1 to 8

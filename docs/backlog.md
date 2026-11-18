@@ -11,15 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Typing lag (live probe 2026-11-07):
-  the stale-table scan and the stream-update anchor capture were fixed in the
-  2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
-  at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
-  header runs (about 13%) and full rerenders (about 14%). Re-profile the live
-  editor before further work.
-- Verify forced session takeover on the real desktop and laptop over TRAMP
-  using a disposable session, including old-holder cancellation and taking
-  control back ([ADR 0100](adr/0100-portable-project-session-authority.md)).
 - Replace the memory claim/fence protocol with one locked program per decision
   under the existing per-root memory lock directory, using the carrier's
   `begin-files`/`commit-files` transaction (a probe showed it undoes the first
@@ -94,29 +85,6 @@ Not planned: inbound webhooks (a polling Monitor serves them) and the article's
 deferred tool calls that end a run and resume when the user answers. A pending
 card blocks only its own session, and browser answers plus the absence timeout
 already cover being away.
-
-## View
-
-### Cursor jumps after switching back to a busy view
-
-Background redraws no longer move point out of the composer through the native
-partial-scroll reset that live recordings attributed on 2026-11-10 (ADR 0126).
-One captured jump remains unexplained: after the user switched back to a busy
-hidden view, the catch-up projection inserted about 1,900 characters above the
-composer and point landed at the start of the bottom status row, with partial
-vscroll zero before and after. One-second sampling does not identify the writer.
-Once point sits in a status row, later redraws keep it on that row as a visited
-row, so one misplacement drifts with status updates, including while hidden.
-Capture the reveal-time projection with the bounded call recorder before
-changing preservation policy.
-
-The user also reports permission-prompt arrival moving the caret one line below
-the prompt. Arrival-time RET targeting was removed when explicit `C-c C-j`
-visiting was introduced; no surviving automatic arrival jump is confirmed.
-Local real-permission fixtures preserve empty/multiline composer offsets after
-graphical redisplay and event-loop return, but do not assert screen-row stability
-or establish live equivalence. Capture the complete interaction materializer and
-subsequent redisplay, distinguishing arrival from explicit visiting. Still open.
 
 ## Hook extensions
 
