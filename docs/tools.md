@@ -50,8 +50,9 @@ ordered `operations` array. It belongs to the discoverable `notes` group;
 Read, Glob and Grep expose existing notes at `notes://`. Create takes a source
 path and inclusive 1-based line range. Use `match` to anchor exact,
 case-sensitive text within those lines instead of the whole range. It can span
-lines. If the text appears more than once, specify its 1-based `occurrence`;
-missing or ambiguous matches are rejected. Other operations identify a note by UUID.
+lines. If the text appears more than once, specify its 1-based `occurrence`.
+For a single match, omit `occurrence` or use `1`. Missing, ambiguous, or
+out-of-range matches are rejected. Other operations identify a note by UUID.
 Tags replace the complete list. Closing or deleting retains the note in recently
 closed rather than changing its source code.
 

@@ -321,10 +321,10 @@
   (:quiet t)
   ,test
   (test)
-  :doc "an exact expression gets a region tint and a label below its line"
+  :doc "occurrence 1 can select a unique match and gets a region tint and label"
   (mevedel-tool-note-test--workspace
     (write-region "before\n(use value)\nafter\n" nil file nil 'silent)
-    (let* ((id (mevedel-tool-note-test--create data-buf file :match "value"))
+    (let* ((id (mevedel-tool-note-test--create data-buf file :match "value" :occurrence 1))
            (note (mevedel-note-resolve id workspace))
            (label (overlay-get note 'mevedel-label-overlay)))
       (with-current-buffer (overlay-buffer note)
@@ -350,7 +350,7 @@
                     ((:match "VALUE") "not found in lines 2–2")
                     ((:match "value\nother") "not found in lines 2–2")
                     ((:match "value" :occurrence 3) "out of range")
-                    ((:match "Value" :occurrence 1) "requires more than one match")
+                    ((:match "Value" :occurrence 2) "out of range")
                     ((:occurrence 1) "requires match")))
       (let ((outcome (mevedel-tool-note-test--write
                       data-buf (vector (append (list :action "create" :file_path file :start_line 2)

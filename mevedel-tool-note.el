@@ -47,7 +47,7 @@ Send operations run together after the other operations and do not open a view."
                                 :start_line (:type integer)
                                 :end_line (:type integer)
                                 :match (:type string :description "Create only: exact case-sensitive text to anchor instead of whole lines; may span lines.")
-                                :occurrence (:type integer :description "Create only: 1-based position among multiple exact matches in the line range.")
+                                :occurrence (:type integer :description "Create only: 1-based position among exact matches in the line range.")
                                 :text (:type string)
                                 :tags (:type array :items (:type string))
                                 :prepared_change
