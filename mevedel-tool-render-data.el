@@ -594,10 +594,12 @@ Numbered ToolCall child ids select only their exact nested call metadata."
           (plist-get (car (nth 2 location)) :render-data)))))
 
 (defun mevedel-tool-render-data--reconcile-running
-    (data successor-execution-ids)
+    (data successor-execution-ids &optional lost-monitor)
   "Return (REPAIRED-DATA . COUNT) for stale executions in DATA.
 ToolCall render data may contain other ToolCalls and Bash calls; repair their
-children without changing successful siblings or unrelated outer metadata."
+children without changing successful siblings or unrelated outer metadata.
+SUCCESSOR-EXECUTION-IDS identifies records with newer facts.  Call
+LOST-MONITOR with the repaired facts for each monitor actually lost."
   (let ((count 0)
         (repaired data))
     (when (and (listp data)
@@ -614,14 +616,17 @@ children without changing successful siblings or unrelated outer metadata."
                           :termination compacted :outcome nil)
                '(:state lost :status error :live-execution-p nil
                         :termination lost :outcome failure)))
-            count 1))
+            count 1)
+      (when (and lost-monitor (eq (plist-get repaired :kind) 'monitor)
+                 (eq (plist-get repaired :state) 'lost))
+        (funcall lost-monitor repaired)))
     (when (and (listp data) (eq (plist-get data :kind) 'ptc))
       (let ((child-count 0) calls)
         (dolist (call (plist-get data :calls))
           (pcase-let ((`(,child . ,repaired-count)
                        (mevedel-tool-render-data--reconcile-running
                         (plist-get call :render-data)
-                        successor-execution-ids)))
+                        successor-execution-ids lost-monitor)))
             (cl-incf child-count repaired-count)
             (push (if (> repaired-count 0)
                       (mevedel-tool-render-data--plist-merge
@@ -636,13 +641,14 @@ children without changing successful siblings or unrelated outer metadata."
     (cons repaired count)))
 
 (defun mevedel-tool-render-data-reconcile-lost-executions
-    (buffer &optional successor-execution-ids)
-  "Mark stale running Bash render records in BUFFER as lost.
+    (buffer &optional successor-execution-ids lost-monitor)
+  "Mark stale running execution records in BUFFER as lost.
 
 This repairs transcript state after resume or fork.  It never attempts to
 reattach an operating-system process.  Records named by
 SUCCESSOR-EXECUTION-IDS are marked archived because a newer segment owns their
-terminal truth.  Return the number of repaired executions."
+terminal truth.  Call LOST-MONITOR with each lost monitor's repaired facts.
+Return the number of repaired executions."
   (let (records archived-records)
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
@@ -660,7 +666,7 @@ terminal truth.  Return the number of repaired executions."
                             (repair
                              (and data
                                   (mevedel-tool-render-data--reconcile-running
-                                   data successor-execution-ids))))
+                                   data successor-execution-ids lost-monitor))))
                   (goto-char end)
                   (when (and repair (> (cdr repair) 0))
                     (push (list begin end repair) records))))))
@@ -675,7 +681,7 @@ terminal truth.  Return the number of repaired executions."
                          for repair =
                          (mevedel-tool-render-data--reconcile-running
                           (plist-get (plist-get span :record) :render-data)
-                          successor-execution-ids)
+                          successor-execution-ids lost-monitor)
                          when (> (cdr repair) 0)
                          collect (cons span repair)))
           (dolist (entry (reverse archived-records))

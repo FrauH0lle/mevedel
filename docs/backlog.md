@@ -171,16 +171,6 @@ owning session's mailbox, waking an idle root like a `MONITOR` record does.
 - Keep the sleep inhibitor rule for waiting Monitors: a pending timer alone
   does not keep the machine awake.
 
-### Wake sources across restarts
-
-Monitors live only in the current Emacs runtime; resume and fork never restart
-them ([Monitor](tools.md#monitor)). After a restart the agent is not told that
-an event source it relied on is gone, so events are lost silently. At minimum,
-tell the agent on the next turn which monitors were lost. Consider an opt-in
-re-arm for monitors the agent marks as restartable, under the same restored-Goal
-constraint as timers. A polling Monitor (for example `gh run watch`) then also
-covers outside events such as CI without opening an inbound port.
-
 ### Notifications beyond permission prompts
 
 `mevedel-permission-notify-function` covers prompts only. Unattended work that
