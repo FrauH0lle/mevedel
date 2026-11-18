@@ -92,6 +92,25 @@ directory's target-side lock. Delayed activation verifies its exact candidate
 before writing, rather than recreating a removed candidate. No lock spans user
 confirmation or journal processing.
 
+The age sweep and remote chooser batch their read-only discovery across
+sessions. The cost in target programs depends on the read stages, not the
+number of healthy sessions. An expired candidate that reaches deletion still
+gets the same live authority and retention checks as an explicit action.
+
+In a local-shell TRAMP replay of opening the picker with 102 published
+sessions and the age sweep due, medians over three samples per build were:
+
+- TRAMP shell commands: 3,019 before, 528 after.
+- Target control programs: 932 before, 13 after, including 106 versus 2
+  that read publication payloads.
+- Wall time to present the picker: 19.52 seconds before, 5.86 seconds after.
+
+This fixture exercised the scan without deleting a session. It measures
+TRAMP command traffic and local processing, not network latency.
+Doubling the fixture to 204 sessions kept the first opening at 560 TRAMP
+commands and 13 control programs in one sample, the same as the first
+102-session opening. The target still does more work as the list grows.
+
 The chooser exposes recovery-blocked, unowned sessions with Recover, Discard,
 and Cancel. Discard revalidates session/publication, workspace, and target
 identity without restoring the conversation. It abandons recovery and settles

@@ -11,9 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Verify forced session takeover on the real desktop and laptop over TRAMP
-  using a disposable session, including old-holder cancellation and taking
-  control back ([ADR 0100](adr/0100-portable-project-session-authority.md)).
 - Replace the memory claim/fence protocol with one locked program per decision
   under the existing per-root memory lock directory, using the carrier's
   `begin-files`/`commit-files` transaction (a probe showed it undoes the first

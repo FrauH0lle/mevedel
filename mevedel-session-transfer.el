@@ -197,12 +197,17 @@ target directories would mutate the session on behalf of an observer."
            (<= (plist-get record :expires-at)
                (+ now mevedel-session-transfer--maximum-timeout)))))
 
-(defun mevedel-session-transfer-release-fence (directory generation)
-  "Return the validated live release fence for GENERATION, or nil."
+(defun mevedel-session-transfer-release-fence (directory generation &optional observation)
+  "Return the validated live release fence for GENERATION, or nil.
+Use OBSERVATION, a pinned read result, when supplied by session discovery."
   (let* ((path (mevedel-session-transfer--fence-path directory generation))
          (now (mevedel-session-durability--target-time directory)))
-    (when (mevedel-session-control-fs-path-exists-p path)
-      (let ((fence (mevedel-session-durability--read-plist path)))
+    (when (if observation (not (eq 'absent (plist-get observation :status)))
+            (mevedel-session-control-fs-path-exists-p path))
+      (let ((fence (if observation
+                       (car (read-from-string
+                             (mevedel-session-control-fs-program-value observation)))
+                     (mevedel-session-durability--read-plist path))))
         (unless (mevedel-session-transfer--valid-fence-p fence now)
           (error "Invalid portable control-transfer fence: %s" path))
         (when (> (plist-get fence :expires-at) now)

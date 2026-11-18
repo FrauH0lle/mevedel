@@ -28,6 +28,7 @@
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-journal-pins)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
@@ -3818,6 +3819,63 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
             (should-error (mevedel-session-persistence--discover-entry
                            entry 'portable controls nil))))
       (mevedel-session-persistence-lock-release entry session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-choose-entry-remote ()
+  ,test
+  (test)
+  :doc "batches startup retention and picker authority over TRAMP"
+  (let* ((root (make-temp-file "mevedel-picker-" t))
+         (remote (concat "/mevedelmock:picker:" (file-name-as-directory root)))
+         (mevedel-session-max-age-days 7)
+         (mevedel-journal-enabled nil)
+         (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal))
+         (run-program (symbol-function 'mevedel-session-control-fs-run-program))
+         (programs 0) candidates reserved)
+    (unwind-protect
+        (let ((workspace (test-mevedel-session-persistence--make-workspace root)))
+          ;; More than the carrier's optional read-archive limit of 32.
+          (dotimes (i 33)
+            (let ((session (mevedel-session-create (format "session-%02d" i) workspace)))
+              (with-temp-buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert "Saved prompt\n")
+                (mevedel-session-artifacts-save session (current-buffer) t))
+              (mevedel-session-durability-lease-release (mevedel-session-save-path session) session)
+              (when (zerop i) (setq reserved session))))
+          (let* ((lease-dir (file-name-concat (mevedel-session-save-path reserved) ".lease"))
+                 (head (mevedel-session-durability--lease-head lease-dir))
+                 (generation (plist-get head :generation))
+                 (fence (mevedel-session-transfer--fence-path lease-dir generation)))
+            (make-directory (file-name-directory fence) t)
+            (with-temp-file fence
+              (prin1 (list :protocol-version 1 :generation generation
+                           :request-id (make-string 32 ?b)
+                           :session-id (mevedel-session-session-id reserved)
+                           :owner-client-id (plist-get head :client-id)
+                           :requester-client-id (make-string 64 ?c)
+                           :expires-at (+ (mevedel-session-durability--target-time lease-dir) 60))
+                     (current-buffer))))
+          (mevedel-test--with-local-shell-tramp '("picker")
+            (let ((remote-workspace (mevedel-workspace--create
+                                     :type 'project :id "test-id" :root remote :name "picker")))
+              ;; Stop at the real chooser's presentation boundary, before
+              ;; a selection would need a fresh authority decision.
+              (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                         (lambda (&rest args)
+                           (when (car args) (cl-incf programs))
+                           (apply run-program args)))
+                        ((symbol-function 'completing-read)
+                         (lambda (_ collection &rest _)
+                           (setq candidates (all-completions "" collection))
+                           (throw 'displayed nil))))
+                (catch 'displayed (mevedel-session-persistence-choose-entry remote-workspace)))
+              (should (= 34 (length candidates)))
+              (should (= 32 (cl-count-if (lambda (row) (string-prefix-p "Resume" row)) candidates)))
+              (should (cl-find-if (lambda (row) (string-match-p "\\`Join +.*session-00" row)) candidates))
+              (should (<= programs 13)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
