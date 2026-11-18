@@ -17,9 +17,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
   header runs (about 13%) and full rerenders (about 14%). Re-profile the live
   editor before further work.
-- Verify forced session takeover on the real desktop and laptop over TRAMP
-  using a disposable session, including old-holder cancellation and taking
-  control back ([ADR 0100](adr/0100-portable-project-session-authority.md)).
 - Replace the memory claim/fence protocol with one locked program per decision
   under the existing per-root memory lock directory, using the carrier's
   `begin-files`/`commit-files` transaction (a probe showed it undoes the first

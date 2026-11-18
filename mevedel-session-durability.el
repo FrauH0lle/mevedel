@@ -111,7 +111,10 @@
 (declare-function mevedel-session-transfer--valid-request-p
                   "mevedel-session-transfer" (record &optional now))
 (declare-function mevedel-session-transfer-release-fence
+                  "mevedel-session-transfer" (directory generation &optional observation))
+(declare-function mevedel-session-transfer--fence-path
                   "mevedel-session-transfer" (directory generation))
+(autoload 'mevedel-session-transfer--fence-path "mevedel-session-transfer")
 (autoload 'mevedel-session-transfer--path "mevedel-session-transfer")
 (autoload 'mevedel-session-transfer--requests-operation
   "mevedel-session-transfer")
@@ -1492,28 +1495,79 @@ Only an explicit user takeover command should pass FORCE."
          (and owned existing)))
       (and owned t))))
 
-(defun mevedel-session-durability-cleanup-assessment (session-dir)
+(defun mevedel-session-durability--assessment-operations (session-dir)
+  "Return the read-only probes for an assessment of SESSION-DIR."
+  (list (list :op 'absent :path (file-name-concat session-dir ".lock") :optional t)
+        (list :op 'observation-time :path session-dir :optional t)
+        (list :op 'list-directory :path (mevedel-session-durability--lease-path session-dir) :optional t)
+        (list :op 'list-directory :path (file-name-concat session-dir ".journal-pins") :optional t)
+        (list :op 'directory-p :path (mevedel-session-recovery--root session-dir) :optional t)))
+
+(defun mevedel-session-durability-assess-batch (directories)
+  "Return picker assessments for DIRECTORIES on the same target.
+These observations are display evidence only, not permission to mutate."
+  (let* ((results (mevedel-session-control-fs-run-program
+                   (mapcan #'mevedel-session-durability--assessment-operations directories)))
+         (rows
+          (mapcar
+           (lambda (directory)
+             (let* ((probes (seq-take results 5))
+                    (listing (nth 2 probes))
+                    (names (plist-get listing :value)))
+               (setq results (nthcdr 5 results))
+               (list :directory directory :probes probes :head nil :fence nil
+                     :paths (when (eq 'ok (plist-get listing :status))
+                              (condition-case nil
+                                  (mevedel-session-durability--generation-paths
+                                   (mevedel-session-durability--lease-path directory)
+                                   (or names 'none))
+                                (error nil))))))
+           directories))
+         (records (mevedel-session-durability--read-records
+                   (mapcan (lambda (row) (copy-sequence (plist-get row :paths))) rows) t))
+         released)
+    (dolist (row rows)
+      (let* ((paths (plist-get row :paths))
+             (count (length paths))
+             (head (condition-case nil
+                       (mevedel-session-durability--validated-head paths (seq-take records count))
+                     (error 'invalid))))
+        (setq records (nthcdr count records))
+        (setf (plist-get row :head) head)
+        (when (and (listp head) (eq 'released (plist-get head :status)))
+          (push row released))))
+    (let ((fences (mevedel-session-control-fs-run-program
+                   (mapcar (lambda (row)
+                             (list :op 'read :optional t
+                                   :path (mevedel-session-transfer--fence-path
+                                          (mevedel-session-durability--lease-path (plist-get row :directory))
+                                          (plist-get (plist-get row :head) :generation))))
+                           released))))
+      (dolist (row released)
+        (setf (plist-get row :fence) (pop fences))))
+    (mapcar (lambda (row)
+              (let ((directory (plist-get row :directory)))
+                (cons directory (mevedel-session-durability-cleanup-assessment directory row))))
+            rows)))
+
+(defun mevedel-session-durability-cleanup-assessment (session-dir &optional observation)
   "Assess portable SESSION-DIR without acquiring or modifying authority.
 Return :state, :host, validated :head, symbolic :reasons, and :recoverable.
 Recovery blockers are publishing, unsettled-mutation, recovery and journal-pins;
 live-owner, transfer-reserved and invalid-authority prohibit explicit discard.
 Unreadable generation listings or records are unknown authority, not absence.
+OBSERVATION supplies the picker batch's probes, validated head and fence read.
 The returned observations belong to this call only, never a status cache."
   (let* ((remote-file-name-inhibit-cache t)
          (session-dir (mevedel-session-control-fs-physical-path session-dir))
          (directory (mevedel-session-durability--lease-path session-dir))
-         (pins-dir (file-name-concat session-dir ".journal-pins"))
          (recovery-dir (mevedel-session-recovery--root session-dir))
          head now names pins recovery recovery-names fence reasons
          (state 'unknown))
     (condition-case nil
-        (let* ((results
-                (mevedel-session-control-fs-run-program
-                 (list (list :op 'absent :path (file-name-concat session-dir ".lock"))
-                       (list :op 'observation-time :path session-dir)
-                       (list :op 'list-directory :path directory :optional t)
-                       (list :op 'list-directory :path pins-dir :optional t)
-                       (list :op 'directory-p :path recovery-dir :optional t))))
+        (let* ((results (if observation (plist-get observation :probes)
+                          (mevedel-session-control-fs-run-program
+                           (mevedel-session-durability--assessment-operations session-dir))))
                (listing (nth 2 results))
                (pin-result (nth 3 results))
                (recovery-result (nth 4 results)))
@@ -1528,14 +1582,18 @@ The returned observations belong to this call only, never a status cache."
             (error "Session has no portable lease; run scripts/migrate-sessions.el"))
           (setq names (plist-get listing :value))
           (mevedel-session-durability--validate-generation-names names)
-          (let* ((paths (mevedel-session-durability--generation-paths
-                         directory (or names 'none)))
-                 (records (mevedel-session-durability--read-records paths t)))
-            (setq head (mevedel-session-durability--validated-head paths records)))
+          (setq head
+                (if observation (plist-get observation :head)
+                  (let* ((paths (mevedel-session-durability--generation-paths
+                                 directory (or names 'none)))
+                         (records (mevedel-session-durability--read-records paths t)))
+                    (mevedel-session-durability--validated-head paths records))))
+          (when (eq head 'invalid) (error "Invalid portable lease head"))
           (when (eq (plist-get head :status) 'released)
             (let ((mevedel-session-durability--observed-time now))
               (setq fence (mevedel-session-transfer-release-fence
-                           directory (plist-get head :generation)))))
+                           directory (plist-get head :generation)
+                           (plist-get observation :fence)))))
           (setq state (cond ((and fence
                                   (not (equal mevedel-session-durability--client-id
                                               (plist-get fence :requester-client-id))))
