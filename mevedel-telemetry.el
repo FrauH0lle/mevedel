@@ -1132,6 +1132,21 @@ settled, expired and stopped handles are harmless.  Return nil."
              :input-pending (or (plist-get counts :input-pending) 0)))))))
   nil)
 
+(defun mevedel-telemetry--lag-publish-workspace-batch (batch)
+  "Append BATCH's sampled workspace rows on the main thread."
+  (if (not (eq (current-thread) main-thread))
+      ;; A synchronous target program can enter GTK through Emacs's wait loop.
+      (run-at-time 0.01 nil #'mevedel-telemetry--lag-publish-workspace-batch batch)
+    (maphash
+     (lambda (_root rows)
+       (when mevedel-telemetry-enabled
+         (condition-case err
+             (mevedel-telemetry--append-workspace
+              (car rows) (apply #'concat (nreverse (cdr rows))))
+           (error (mevedel-diagnostic-message (mevedel-diagnostic-scope (car rows)) "Workspace telemetry failed: %s"
+                    (error-message-string err))))))
+     batch)))
+
 (defun mevedel-telemetry--lag-tick ()
   "Record the loop's worst delay since the previous heartbeat.
 The delay is the later of this heartbeat's own, any timer's and any
@@ -1213,15 +1228,7 @@ never reports settling."
       (when mevedel-telemetry--workspace-batch
         (let ((batch mevedel-telemetry--workspace-batch)
               (mevedel-telemetry--workspace-batch nil))
-          (maphash
-           (lambda (_root rows)
-             (when mevedel-telemetry-enabled
-               (condition-case err
-                   (mevedel-telemetry--append-workspace
-                    (car rows) (apply #'concat (nreverse (cdr rows))))
-                 (error (mevedel-diagnostic-message (mevedel-diagnostic-scope (car rows)) "Workspace telemetry failed: %s"
-                                 (error-message-string err))))))
-           batch)))
+          (mevedel-telemetry--lag-publish-workspace-batch batch)))
       (unless (or mevedel-telemetry--lag-windows
                   mevedel-telemetry--lag-pass-windows)
         (mevedel-telemetry--lag-stop))
