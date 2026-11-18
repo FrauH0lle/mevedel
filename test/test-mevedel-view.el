@@ -1984,6 +1984,20 @@
       (should-not (buffer-live-p data-buf))
       (should-not (mevedel-session-control-transfer-root-buffer session))))
 
+  :doc "killing the data buffer does not re-enter its kill via the view"
+  (mevedel-view-test--with-buffers
+    (let ((kill (symbol-function 'kill-buffer))
+          (data-kills 0))
+      (cl-letf (((symbol-function 'kill-buffer)
+                 (lambda (&optional buffer)
+                   (when (eq (get-buffer (or buffer (current-buffer))) data-buf)
+                     (cl-incf data-kills))
+                   (funcall kill buffer))))
+        (kill-buffer data-buf))
+      (should (= 1 data-kills))
+      (should-not (buffer-live-p data-buf))
+      (should-not (buffer-live-p view-buf))))
+
   :doc "killing an agent view detaches its observer from retained data"
   (let ((data-buf (generate-new-buffer " *test-agent-data-kill-view*"))
         (view-buf (generate-new-buffer " *test-agent-view-kill-view*"))

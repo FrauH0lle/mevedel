@@ -123,6 +123,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-collection-cancel "mevedel-session-collection" (session))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -134,6 +135,7 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -1046,9 +1048,7 @@ performs no second abort even when the first one signals."
 
 (defun mevedel-view--on-view-killed ()
   "Hook run when the view buffer is killed.
-Clears `mevedel--view-buffer' on the associated data buffer and kills
-it.  The reference is cleared before killing so the data buffer's own
-kill hook sees nil and exits without re-entering this function."
+Unlink and kill the associated data buffer if it still owns this view."
   ;; Per-view timers must die with the view on every kill path, the
   ;; agent-transcript branch and the hookless fallback's survivor
   ;; included: a live timer holding a killed buffer is exactly the
@@ -1075,13 +1075,15 @@ kill hook sees nil and exits without re-entering this function."
                   (_ (buffer-live-p db)))
         (mevedel-view--abort-data-buffer-for-kill db)
         (mevedel-view-agent-cleanup-parent view-buffer)
-        (with-current-buffer db
-          (when (fboundp 'mevedel-permission-queue-abort-all)
-            (mevedel-permission-queue-abort-all mevedel--session))
-          (when (fboundp 'mevedel-plan-approval-abort)
-            (mevedel-plan-approval-abort mevedel--session))
-          (setq mevedel--view-buffer nil))
-        (kill-buffer db)))))
+        (when (with-current-buffer db
+                (when (fboundp 'mevedel-permission-queue-abort-all)
+                  (mevedel-permission-queue-abort-all mevedel--session))
+                (when (fboundp 'mevedel-plan-approval-abort)
+                  (mevedel-plan-approval-abort mevedel--session))
+                (when (eq mevedel--view-buffer view-buffer)
+                  (setq mevedel--view-buffer nil)
+                  t))
+          (kill-buffer db))))))
 
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
@@ -1096,8 +1098,15 @@ Kills the associated view buffer."
     (mevedel-permission-queue-abort-all mevedel--session))
   (when (fboundp 'mevedel-plan-approval-abort)
     (mevedel-plan-approval-abort mevedel--session))
+  ;; Settlement during this hook can schedule collection after its kill hook ran.
+  (when (and mevedel--session
+             (eq (mevedel-session-root-buffer mevedel--session) (current-buffer))
+             (fboundp 'mevedel-session-collection-cancel))
+    (mevedel-session-collection-cancel mevedel--session))
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
+    ;; Aborting can dirty the transcript; a second kill could prompt to save.
+    (setq mevedel--view-buffer nil)
     (kill-buffer vb)))
 
 (defun mevedel-view-toggle-auto-compaction (&optional event)
