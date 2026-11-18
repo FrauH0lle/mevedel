@@ -197,6 +197,19 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (error "Missing tree-sitter grammar %s: install both markdown and markdown-inline and pass --grammar-dir DIR (search: %S)"
              language treesit-extra-load-path))))
 
+(defun mevedel-graphical-check--resize-width (width)
+  "Set the selected frame to WIDTH columns and wait for the compositor."
+  (let ((deadline (+ (float-time) 5))
+        (unread-command-events nil))
+    (set-frame-width nil width)
+    (while (and (/= (frame-width) width) (< (float-time) deadline))
+      (setq unread-command-events nil)
+      (sit-for 0.02)
+      (redisplay t))
+    (unless (= (frame-width) width)
+      (error "Compositor did not resize the capture frame to %d columns (got %d)"
+             width (frame-width)))))
+
 (defun mevedel-graphical-check--capture (output)
   "Render a real transcript and save fontified frame exports under OUTPUT."
   (require 'helpers)
@@ -328,7 +341,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (let ((width (frame-width)))
         (unwind-protect
             (progn
-              (set-frame-width nil 60)
+              (mevedel-graphical-check--resize-width 60)
               (redisplay t)
               (mevedel-view-table-rerender (selected-window))
               (redisplay t)
@@ -336,7 +349,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                 (with-temp-file (file-name-concat output "view-narrow.png")
                   (set-buffer-multibyte nil)
                   (insert (x-export-frames nil 'png)))))
-          (set-frame-width nil width))))))
+          (mevedel-graphical-check--resize-width width))))))
 
 (defun mevedel-graphical-check--capture-tool-groups (output)
   "Render activity groups and save collapsed and expanded exports under OUTPUT.
