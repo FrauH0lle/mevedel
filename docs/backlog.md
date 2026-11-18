@@ -93,29 +93,6 @@ deferred tool calls that end a run and resume when the user answers. A pending
 card blocks only its own session, and browser answers plus the absence timeout
 already cover being away.
 
-## View
-
-### Cursor jumps after switching back to a busy view
-
-Background redraws no longer move point out of the composer through the native
-partial-scroll reset that live recordings attributed on 2026-11-10 (ADR 0126).
-One captured jump remains unexplained: after the user switched back to a busy
-hidden view, the catch-up projection inserted about 1,900 characters above the
-composer and point landed at the start of the bottom status row, with partial
-vscroll zero before and after. One-second sampling does not identify the writer.
-Once point sits in a status row, later redraws keep it on that row as a visited
-row, so one misplacement drifts with status updates, including while hidden.
-Capture the reveal-time projection with the bounded call recorder before
-changing preservation policy.
-
-The user also reports permission-prompt arrival moving the caret one line below
-the prompt. Arrival-time RET targeting was removed when explicit `C-c C-j`
-visiting was introduced; no surviving automatic arrival jump is confirmed.
-Local real-permission fixtures preserve empty/multiline composer offsets after
-graphical redisplay and event-loop return, but do not assert screen-row stability
-or establish live equivalence. Capture the complete interaction materializer and
-subsequent redisplay, distinguishing arrival from explicit visiting. Still open.
-
 ## Hook extensions
 
 ### Task transition events
