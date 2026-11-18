@@ -66,5 +66,26 @@
            (schema (plist-get (plist-get native :function) :parameters)))
       (should (member "description" (append (plist-get schema :required) nil))))))
 
+(mevedel-deftest mevedel-tool-exec--register/eval-guidance
+  (:before-each (mevedel-tool-exec--register))
+  ,test
+  (test)
+  :doc "Eval's native contract distinguishes Lisp work from shell execution"
+  (let* ((tool (mevedel-tool-get "Eval"))
+         (native (aref (gptel--parse-tools
+                        nil (list (mevedel-tool-gptel-tool tool))) 0))
+         (description (plist-get (plist-get native :function) :description)))
+    (should (string-match-p "editor inspection or Lisp computation"
+                            (mevedel-tool-description tool)))
+    (dolist (text '("result depends on the user's running Emacs state"
+                    "isolated Emacs Lisp checks that do not need live state"
+                    "Use Bash for shell commands"
+                    "Appropriate Emacs"
+                    "shell-command-to-string"
+                    "prefer Read, Glob, Grep"
+                    "use Bash's recovery path"
+                    "live Eval goes to the selected permission reviewer"))
+      (should (string-match-p (regexp-quote text) description)))))
+
 (provide 'test-mevedel-tool-exec-registration)
 ;;; test-mevedel-tool-exec-registration.el ends here

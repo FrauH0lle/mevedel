@@ -1666,6 +1666,14 @@ request after restart.
 
 ## Eval execution scope
 
+Use Eval for Emacs state inspection and Lisp computation, not as an alternative
+shell runner. Use Bash for shell commands rather than `shell-command-to-string`
+or similar Eval wrappers; appropriate Emacs APIs are fine. Prefer Read, Glob,
+Grep, and ApplyPatch for ordinary file work. A Bash confinement or
+permission failure follows Bash's recovery path; live Eval must not bypass it.
+Choose live only when the result needs the running editor's state; fresh and
+sandbox serve isolated Lisp work without live-state access or live-Eval review.
+
 Eval has three execution modes.  `live` is the default and runs inside the
 current Emacs process so it can inspect live session state.  Live mode
 restores the selected frame's window configuration by default, preventing

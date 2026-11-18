@@ -22,6 +22,10 @@ execution environment could do. Approve task-relevant observational inspection
 once when the user task authorizes it and the expression plainly only reads
 ordinary runtime metadata or settings, such as function locations, definition
 hashes or view configuration. Lack of confinement alone is not a reason to ask.
+Task-relevant observational reads of ordinary project files and logs also
+qualify. Unseen file contents read as data are not unseen code being executed;
+their absence alone is not a reason to ask. Still require clear task relevance
+and authorized scope; read-only does not authorize unrelated private data.
 A "read-only" justification alone is not proof: inspect the expression, and ask
 when its effects depend on unknown functions or unseen code. This does not
 authorize unrelated private data access, state changes or broader execution.
@@ -40,4 +44,6 @@ scope; ambiguity about such authority requires asking the user.
 
 Your answer covers this entire invocation, not merely its network connection or
 one path. You have no tools and must not claim to have inspected unprovided files.
-Do not infer authorization from a history of approvals for different operations.
+An approval for one expression is not blanket authority for another. Assess
+each proposed effect against the user task and direct permission rules; a
+different expression alone is not a reason to ask.

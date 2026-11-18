@@ -1,14 +1,21 @@
-Evaluate one Elisp form; return its value and output.
+Evaluate one Emacs Lisp form for editor inspection or Lisp computation; return
+its value and output.
 
 ### When to use `Eval`
 
-- Use live mode for the user's running Emacs state.
-- Use fresh mode for clean checks and anything long or uncertain.
-- Use sandbox mode for isolated, stateful define/call/redefine work.
+- Use live mode when the result depends on the user's running Emacs state.
+- Use fresh mode for isolated Emacs Lisp checks that do not need live state.
+- Use sandbox mode for isolated, stateful Lisp define/call/redefine work.
 
 ### When NOT to use `Eval`
 
-- Source edits: use ApplyPatch.
+- Use Bash for shell commands. Do not wrap them in `shell-command-to-string`,
+  `call-process`, or similar merely to run them through Eval. Appropriate Emacs
+  APIs are fine.
+- Ordinary file reads, searches, and source edits: prefer Read, Glob, Grep, and
+  ApplyPatch.
+- A Bash confinement or permission failure: use Bash's recovery path, not live
+  Eval to escape that boundary. A permission denial is not a tool-routing hint.
 - Untrusted code: live Eval is unrestricted; confinement does not make code safe.
 
 ### How to use `Eval`
@@ -56,11 +63,22 @@ Evaluate one Elisp form; return its value and output.
 ### Examples of good usage
 
 <example>
+Eval(mode="live", expression="(list :emacs-version emacs-version :gptel-loaded (featurep 'gptel))")
+Returns bounded runtime metadata from the current Emacs without changing it.
+</example>
+
+<example>
 Eval(mode="fresh", expression="(progn (require 'cl-lib) (message \"checking\") (princ \"sum\") (cl-reduce #'+ '(1 2)))")
 Returns value `3`, STDOUT `sum`, and MESSAGES `checking`.
 </example>
 
 ### Examples of bad usage
+
+<example>
+Eval(expression="(shell-command-to-string \"git status --short\")")
+Use Bash(command="git status --short", description="Inspect workspace change status")
+instead; this command does not need live Emacs state.
+</example>
 
 <example>
 Eval(expression="(+ 1 2) (* 3 4)")
