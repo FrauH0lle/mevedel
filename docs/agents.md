@@ -470,8 +470,8 @@ or relative retained paths tree-wide. An idle non-root recipient starts a turn w
 task. For an active recipient, or at capacity, it queues one canonical `MAIL`
 record containing type, sender path, recipient path, and payload. Agent mail to
 `/root` can wake the idle root; self-mail never starts a turn.
-Successful sends return an empty result, except when capacity delays activation:
-then the result says the agent starts when a slot frees. A collapsed
+Successful sends confirm the recipient path and whether the message was queued,
+started a turn, or is waiting for a slot. A collapsed
 `SendMessage: PATH` disclosure reports `message queued`, `started`, or
 `waiting for a slot`; its path opens the retained transcript and its body holds
 the sent message. Canonical `MAIL` payloads are retained in full without a

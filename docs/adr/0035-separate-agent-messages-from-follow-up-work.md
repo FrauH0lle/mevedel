@@ -11,12 +11,12 @@ Background event scheduler. Self-mail never starts a turn. The same text shape
 applies to Agent's initial task. Shared files can carry larger referenced
 material; there is no structured attachment or dual text/item protocol.
 
-Successful Agent returns the canonical child path. SendMessage has an empty
-successful model result when queued for an active recipient or started at once;
-at capacity it queues the message and reports that the agent starts when a slot
-frees. The original call retains target and text. Invalid targets and
-dispatch/delivery failures remain tool errors. Observation/control tools retain
-their own result shapes.
+Successful Agent returns the canonical child path. SendMessage confirms the
+recipient path and delivery outcome so the caller can distinguish success from
+failure without resending. At capacity it queues the message and reports that
+the agent starts when a slot frees. The original call retains target and text.
+Invalid targets and dispatch/delivery failures remain tool errors. Observation
+and control tools retain their own result shapes.
 
 Unread mail is durable root-session state and is delivered FIFO before the
 recipient's next sample, independently of WaitAgent. A communication record
