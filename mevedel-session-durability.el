@@ -3156,7 +3156,7 @@ not a completed result: process failure itself invalidates that cache."
             job context settle)))))))
 
 (defun mevedel-session-durability--heartbeat-reclaim (shadow callback)
-  "Reclaim SHADOW's own expired head or an expired claim; call CALLBACK.
+  "Reclaim SHADOW's expired active or claiming lease for this client only.
 CALLBACK receives SUCCESS and ERROR.  Election, predecessor comparison and
 abort follow `mevedel-session-durability--claim-next', using real programs."
   (let* ((directory (mevedel-session-durability--lease-path
