@@ -515,6 +515,8 @@ follow-ups run first, background events next, and Goal continuation last. The
 same holds apply: a composer draft, pending interactions, or a held follow-up
 drain prevents the wake, and dispatch uses current root permissions. Active
 `WaitAgent` delivery is unchanged and does not create a second root turn.
+An edit that empties a blocking root draft offers the wake again after the
+command. Sending the draft lets the user turn consume the mail instead.
 
 Wake marks are runtime-only; unread mail remains durable. Restarted sessions
 read restored mail at the next ordinary turn, and recovery-generated results do

@@ -20,9 +20,11 @@
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-recovery)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-tools)
 (require 'mevedel-transport)
 (require 'mevedel-turn)
 (require 'mevedel-view)
@@ -1991,6 +1993,7 @@
                  (lambda (&rest args) (push args continued))))
         (with-current-buffer view-buf
           (mevedel-view-test--insert-composer-draft "draft")
+          (should-not (mevedel-pending-inputs--event-wake-view data-buf))
           (should-not timers)
           (delete-region (mevedel-view--input-start) (point-max)))
         (should (= 1 (length timers)))
@@ -2095,11 +2098,51 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
         (should-not submitted)
         (with-current-buffer view-buf
           (should (equal draft (mevedel-view--input-text)))
-          (delete-region (mevedel-view--input-start) (point-max)))
+          (goto-char (point-max))
+          (insert " more")
+          (delete-char -1)
+          (should-not callbacks)
+          (delete-region (mevedel-view--input-start) (point-max))
+          (insert " ")
+          (delete-char -1))
+        (should (= 1 (length callbacks)))
         (while callbacks
           (let ((callback (pop callbacks))) (apply (car callback) (cdr callback))))
         (should (= 1 (length submitted)))
         (should (mevedel-agent-control-wake-pending-p session)))))
+
+  :doc "sending the blocking draft delivers the mail once in the user turn"
+  (mevedel-pending-inputs-test--with-session
+    (let ((root (make-temp-file "mevedel-draft-send-" t))
+          timers prompts background-turns)
+      (unwind-protect
+          (progn
+            (setf (mevedel-workspace-root workspace) root
+                  (mevedel-session-root-buffer session) data-buf)
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function &rest args)
+                         (when (eq function #'mevedel-pending-inputs--offer-idle-work-now)
+                           (push (cons function args) timers))))
+                      ((symbol-function 'mevedel--submit-generated-turn)
+                       (lambda (&rest args) (push args background-turns)))
+                      ((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (let* ((data (list :messages []))
+                                (fsm (gptel-make-fsm :info (list :buffer data-buf :data data))))
+                           (dotimes (_ 2) (mevedel-tools--handle-message-inject fsm))
+                           (setq prompts (append (plist-get data :messages) nil))))))
+              (mevedel-agent-control-enqueue-execution-result session "/root" "done" "exec-1" t)
+              (with-current-buffer view-buf
+                (mevedel-view-test--insert-composer-draft "User question")
+                (should-not (mevedel-pending-inputs--event-wake-view data-buf))
+                (mevedel-view-send)
+                (should (string-empty-p (mevedel-view--input-text))))
+              (dolist (timer timers) (apply (car timer) (cdr timer)))
+              (should-not background-turns)
+              (should (= 1 (length prompts)))
+              (should (string-search "done" (plist-get (car prompts) :content)))
+              (should-not (mevedel-agent-control-context-mailbox session))))
+        (delete-directory root t))))
 
   :doc "starts one fixed, attributed turn and leaves the mail for the request"
   (mevedel-pending-inputs-test--with-event
