@@ -12,6 +12,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-claude-code)
 (require 'mevedel-note-frame)
+(require 'mevedel-note-conversation)
 (require 'mevedel-notes)
 (require 'mevedel-notes-list)
 (require 'mevedel-models)
@@ -351,8 +352,8 @@
       (with-current-buffer source
         (goto-char (point-min))
         (should (eq source-key (key-binding (kbd "C-c C-b"))))
-        (goto-char (overlay-start note))
-        (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b")))))
+        (should-not (overlay-buffer note))
+        (should (= 1 (length (mevedel-notes-closed workspace)))))
       (with-current-buffer view
         (should (eq #'mevedel-note-revert-change (key-binding (kbd "C-c C-b"))))
         (call-interactively (key-binding (kbd "C-c C-b"))))
@@ -1475,7 +1476,7 @@
            (note-uuid (overlay-get note 'mevedel-uuid))
            (view (mevedel-note-send note))
            (data (buffer-local-value 'mevedel--data-buffer view))
-           outcome suggestion)
+           outcome suggestion suggestion-uuid)
       (should (mevedel-turn-busy-p data))
       (with-current-buffer data
         (mevedel-pipeline-run-tool-outcome
@@ -1488,7 +1489,8 @@
       (ert-info ((format "%S" outcome))
         (should (eq 'success (plist-get outcome :status))))
       (should (string-match "notes://\\([a-z0-9-]+\\)\\.md" (plist-get outcome :result)))
-      (setq suggestion (mevedel-note-resolve (match-string 1 (plist-get outcome :result)) workspace))
+      (setq suggestion-uuid (match-string 1 (plist-get outcome :result))
+            suggestion (mevedel-note-resolve suggestion-uuid workspace))
       (mevedel-note-conversation-test--answer (car sent) "The suggestion is ready.")
       (mevedel-note-apply-change suggestion)
       (should (equal "outside-before\nsuggested code\noutside-after\n"
@@ -1502,10 +1504,10 @@
           (mevedel-rewind)))
       (should (equal "outside-before\nselected code\noutside-after\n"
                      (mevedel-test--read-file file)))
-      (setq note (mevedel-note-resolve note-uuid workspace)
-            suggestion (mevedel-note-resolve (overlay-get suggestion 'mevedel-uuid) workspace))
+      (setq note (mevedel-note-resolve note-uuid workspace))
       (with-current-buffer source
-        (should (= 2 (length (mevedel--instructions-in (point-min) (point-max))))))
+        (should (= 1 (length (mevedel--instructions-in (point-min) (point-max))))))
+      (should-not (mevedel-note-resolve suggestion-uuid workspace))
       (mevedel-note-send note)
       (with-current-buffer data
         (mevedel-tool-patch-handler
@@ -1515,7 +1517,7 @@
       (mevedel-note-apply-change (mevedel-note-resolve note-uuid workspace))
       (should (equal "outside-before\nnew turn code\noutside-after\n"
                      (mevedel-test--read-file file)))
-      (should-error (mevedel-note-revert-change (overlay-get suggestion 'mevedel-uuid) nil workspace)
+      (should-error (mevedel-note-revert-change suggestion-uuid nil workspace)
                     :type 'user-error)
       (should (equal "outside-before\nnew turn code\noutside-after\n"
                      (mevedel-test--read-file file))))))
@@ -1699,6 +1701,122 @@
         (mevedel-note-record-applied record nil workspace)
         (should (equal "C-c C-z close" (hint)))
         (should-not (string-search "change ready" (or (label) "")))))))
+
+(defmacro mevedel-note-conversation-test--with-tree (&rest body)
+  "Run BODY with three nested notes in the ordinary send fixture."
+  (declare (indent 0))
+  `(mevedel-note-conversation-test--with-source
+     (erase-buffer)
+     (insert "one\ntwo\nthree\nfour\nfive\nsix\nseven\n")
+     (save-buffer)
+     (let ((parent (mevedel-note-make source 1 (point-max) :text "Parent brief"))
+           (child (mevedel-note-make source 5 29 :text "Child brief"))
+           (grandchild (mevedel-note-make source 9 24 :text "Grandchild brief")))
+       ,@body)))
+
+(mevedel-deftest mevedel-note-conversation--tree
+  (:quiet t)
+  ,test
+  (test)
+  :doc "all depths are included with immediate parents, never ancestors of the root"
+  (mevedel-note-conversation-test--with-tree
+    (should (equal (list parent child grandchild)
+                   (mapcar (lambda (entry) (plist-get entry :note))
+                           (mevedel-note-conversation--tree parent))))
+    (let ((tree (mevedel-note-conversation--tree child)))
+      (should (equal (list child grandchild)
+                     (mapcar (lambda (entry) (plist-get entry :note)) tree)))
+      (should (eq child (plist-get (cadr tree) :parent)))))
+  :doc "an independent conversation excludes its entire subtree"
+  (mevedel-note-conversation-test--with-tree
+    (overlay-put child 'mevedel-note-session-id "independent")
+    (let ((tree (mevedel-note-conversation--tree parent)))
+      (should (= 2 (length tree)))
+      (should (plist-get (cadr tree) :excluded)))))
+
+(mevedel-deftest mevedel-note-conversation--roots
+  (:quiet t :doc "batch roots dedupe descendants regardless of selection order")
+  (mevedel-note-conversation-test--with-tree
+    (should (equal (list parent)
+                   (mevedel-note-conversation--roots (list grandchild child parent child))))
+    (overlay-put child 'mevedel-note-session-id "independent")
+    (should (equal (list parent child)
+                   (mevedel-note-conversation--roots (list parent child grandchild))))))
+
+(mevedel-deftest mevedel-note-conversation--prompt
+  (:quiet t)
+  ,test
+  (test)
+  :doc "only the root has code; every descendant names its immediate parent"
+  (mevedel-note-conversation-test--with-tree
+    (let* ((session (mevedel-session-create "Preview" workspace root))
+           (prompt (mevedel-note-conversation--prompt parent session)))
+      (should (= 6 (cl-count ?` prompt)))
+      (should (string-search (format "Note %s at line 2, inside Note %s\n\nChild brief"
+                                     (overlay-get child 'mevedel-id)
+                                     (overlay-get parent 'mevedel-id)) prompt))
+      (should (string-search (format "Note %s at line 3, inside Note %s\n\nGrandchild brief"
+                                     (overlay-get grandchild 'mevedel-id)
+                                     (overlay-get child 'mevedel-id)) prompt))))
+  :doc "excluded child is one exact line without its text or descendants"
+  (mevedel-note-conversation-test--with-tree
+    (overlay-put child 'mevedel-note-session-id "independent")
+    (let ((prompt (mevedel-note-conversation--prompt
+                   parent (mevedel-session-create "Preview" workspace root))))
+      (should (string-search
+               (format "Note %s at line 2, inside Note %s, has its own conversation and is not part of this request."
+                       (overlay-get child 'mevedel-id) (overlay-get parent 'mevedel-id)) prompt))
+      (should-not (string-search "Child brief" prompt))
+      (should-not (string-search "Grandchild brief" prompt)))))
+
+(mevedel-deftest mevedel-note-preview-prompt
+  (:quiet t :doc "preview and send use identical generated text without preview side effects")
+  (mevedel-note-conversation-test--with-tree
+    (let* ((buffers (buffer-list))
+           (preview (mevedel-note-preview-prompt parent))
+           (text (with-current-buffer preview (buffer-string))))
+      (should-not sent)
+      (should-not (overlay-get parent 'mevedel-note-session-id))
+      (should (= 1 (length (cl-set-difference (buffer-list) buffers))))
+      (mevedel-note-send-batch (list grandchild parent child) :no-display t)
+      (let* ((data (plist-get (gptel-fsm-info (car sent)) :buffer))
+             (session (buffer-local-value 'mevedel--session data)))
+        (should (equal text (mevedel-note-conversation--prompt parent session)))
+        (with-current-buffer data
+          (should (string-search (string-trim-right text) (buffer-string))))
+        (dolist (note (list parent child grandchild))
+          (should (equal (overlay-get note 'mevedel-note-session-id)
+                         (mevedel-session-session-id session)))))
+      (should (= 1 (length sent))))))
+
+(mevedel-deftest mevedel-note-conversation--send-notes
+  (:quiet t)
+  ,test
+  (test)
+  :doc "sending a child includes its descendants, but both the parent and new descendants stay unsent on reopen"
+  (mevedel-note-conversation-test--with-tree
+    (let* ((view (mevedel-note-send child :no-display t))
+           (payload (decode-coding-string (car sent-payloads) 'utf-8-unix))
+           (id (overlay-get child 'mevedel-note-session-id)))
+      (should (string-search "Grandchild brief" payload))
+      (should-not (string-search "Parent brief" payload))
+      (should (equal id (overlay-get grandchild 'mevedel-note-session-id)))
+      (should-not (overlay-get parent 'mevedel-note-session-id))
+      (let ((new (mevedel-note-make source 10 12 :text "Not sent yet")))
+        (should (eq view (mevedel-note-send child :no-display t)))
+        (should-not (overlay-get new 'mevedel-note-session-id))
+        (should (= 1 (length sent))))))
+  :doc "selecting an independent child together with its parent refuses rather than losing either thread"
+  (mevedel-note-conversation-test--with-tree
+    (mevedel-note-send child :no-display t)
+    (should-error (mevedel-note-send-batch (list parent child) :no-display t) :type 'user-error)
+    (should-not (overlay-get parent 'mevedel-note-session-id))
+    (should (= 1 (length sent))))
+  :doc "invalid selections fail validation before any new conversation"
+  (mevedel-note-conversation-test--with-tree
+    (should-error (mevedel-note-send-batch (list parent 'invalid) :no-display t) :type 'user-error)
+    (should-error (mevedel-note-send-batch (list 'invalid parent) :no-display t) :type 'user-error)
+    (should-not sent)))
 
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here

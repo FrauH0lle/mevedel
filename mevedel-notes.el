@@ -21,6 +21,7 @@
 
 ;; `mevedel-note-conversation'
 (autoload 'mevedel-note-send "mevedel-note-conversation" nil t)
+(autoload 'mevedel-note-preview-prompt "mevedel-note-conversation" nil t)
 (autoload 'mevedel-note-send-batch "mevedel-note-conversation" nil t)
 (declare-function mevedel-note-conversation-refresh-hint
                   "mevedel-note-conversation" (&optional note))
@@ -301,12 +302,12 @@ Refuse unavailable sources before a caller starts mutating the notes."
                     (user-error "Source unavailable for note %s; no notes changed" uuid))))
             entries)))
 
-(defun mevedel-notes--display-text (note)
-  "Return NOTE's bounded, single-line display text, keeping authored text intact."
+(defun mevedel-notes--display-text (note &optional width)
+  "Return NOTE's single-line text bounded by WIDTH and 80 columns."
   (truncate-string-to-width
    (replace-regexp-in-string "[ \t\r\n]+" " "
                              (or (overlay-get note 'mevedel-note-text) ""))
-   80 nil nil "…"))
+   (min 80 (or width 80)) nil nil "…"))
 
 (defun mevedel-notes--actions-hint (&optional note)
   "Return the current modified-key menu hint for NOTE."
@@ -328,24 +329,57 @@ Refuse unavailable sources before a caller starts mutating the notes."
   "Announce the note and its next actions when point enters it."
   (unless (or (bound-and-true-p isearch-mode) executing-kbd-macro
               (active-minibuffer-window))
-    (let ((note (mevedel--highest-priority-instruction
-                 (mevedel--instructions-at (point) 'note))))
-      (unless (eq note mevedel-notes--last-hinted)
-        (setq mevedel-notes--last-hinted note)
-        (when note
-          (message "Note %s · %s · %s · %s"
-                   (overlay-get note 'mevedel-id)
-                   (mevedel-notes--author-name (overlay-get note 'mevedel-note-author))
-                   (mevedel-notes--display-text note)
-                   (mevedel-notes--actions-hint note)))))))
+    (let ((notes (sort (mevedel--instructions-at (point) 'note)
+                       (lambda (a b) (< (overlay-get a 'mevedel-id)
+                                        (overlay-get b 'mevedel-id))))))
+      (unless (equal notes mevedel-notes--last-hinted)
+        (setq mevedel-notes--last-hinted notes)
+        (when notes
+          (message "%s · %s"
+                   (mapconcat (lambda (note)
+                                (format "Note %s · %s  %s"
+                                        (overlay-get note 'mevedel-id)
+                                        (mevedel-notes--author-name
+                                         (overlay-get note 'mevedel-note-author))
+                                        (mevedel-notes--display-text note)))
+                              notes " | ")
+                   (if (cdr notes) "M-m: choose note"
+                     (mevedel-notes--actions-hint (car notes)))))))))
 
-(defun mevedel-notes--label-string (header text bar)
-  "Fill HEADER and full TEXT with BAR at the source indentation."
-  (let* ((width (max 4 (min fill-column (window-body-width
-                                       (get-buffer-window (current-buffer) t)))))
+(defvar-local mevedel-notes--window-width nil
+  "Width last fitted after a window resize.")
+
+(defun mevedel-notes--label-width ()
+  "Return the narrowest visible width, since labels are shared by windows."
+  (max 4 (if-let* ((windows (get-buffer-window-list nil nil 'visible)))
+             (apply #'min (mapcar #'window-body-width windows))
+           (window-body-width))))
+
+(defun mevedel-notes--refit-labels (_window)
+  "Refit the buffer's existing labels when their available width changes."
+  (let ((width (mevedel-notes--label-width)))
+    (unless (eql width mevedel-notes--window-width)
+      (setq mevedel-notes--window-width width)
+      (save-restriction
+        (widen)
+        (dolist (note (cdr (assq (current-buffer) (mevedel--instruction-alist))))
+          (when (and (overlay-buffer note) (overlay-get note 'mevedel-label-overlay))
+            (mevedel-notes--render note)))))))
+
+(defun mevedel-notes--label-string (header text bar &optional collapsed)
+  "Fill HEADER and TEXT with BAR at indentation, or truncate if COLLAPSED."
+  (let* ((window-width (mevedel-notes--label-width))
+         (width (if collapsed window-width (max 4 (min fill-column window-width))))
          (indent (min (current-indentation) (- width 3)))
          (prefix (concat (make-string indent ?\s) bar " ")))
-    (with-temp-buffer
+    (if collapsed
+        (concat "\n" prefix
+                (truncate-string-to-width
+                 (concat header (unless (string-empty-p text) "  ")
+                         (propertize (replace-regexp-in-string "[ \t\r\n]+" " " text)
+                                     'face 'default))
+                 (min 80 (- width indent 2)) nil nil "…"))
+      (with-temp-buffer
       (setq-local fill-column (- width indent 2))
       (insert header (if (string-empty-p text) "" "  ")
               (propertize text 'face 'default))
@@ -370,7 +404,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
         (beginning-of-line)
         (insert prefix)
         (forward-line 1))
-      (concat "\n" (buffer-string)))))
+        (concat "\n" (buffer-string))))))
 
 (defun mevedel-notes--render (note)
   "Render NOTE's label below its code."
@@ -397,8 +431,7 @@ Refuse unavailable sources before a caller starts mutating the notes."
                          ((eq author 'buddy) 'mevedel-note-label-buddy)
                          ((eq author 'agent) 'mevedel-note-label-agent)
                          (t 'mevedel-note-label-you)))
-             (text (when (eq 'expanded (overlay-get note 'mevedel-note-labels))
-                     (mevedel-notes--label-string
+             (text (mevedel-notes--label-string
                       (concat
                        (propertize
                         (format "Note %s · %s"
@@ -420,7 +453,8 @@ Refuse unavailable sources before a caller starts mutating the notes."
                                                (and paused " · paused"))
                                        'face 'shadow))))
                       (or (overlay-get note 'mevedel-note-text) "")
-                      (propertize (if (eq author 'buddy) "┆" "▍") 'face face)))))
+                      (propertize (if (eq author 'buddy) "┆" "▍") 'face face)
+                      (eq 'collapsed (overlay-get note 'mevedel-note-labels)))))
         (overlay-put note 'keymap mevedel-note-actions-map)
         (unless (eq code-face (overlay-get note 'face))
           (overlay-put note 'face code-face))
@@ -444,10 +478,12 @@ Refuse unavailable sources before a caller starts mutating the notes."
             (delete-overlay tint)
             (overlay-put note 'mevedel-note-tint-overlay nil)))
         (move-overlay label (overlay-start note) end)
+        (overlay-put label 'priority (overlay-get note 'priority))
         (unless (equal-including-properties text (overlay-get label 'after-string))
           (overlay-put label 'after-string text))))
     (add-hook 'after-change-functions #'mevedel-notes--after-change nil t)
-    (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)))
+    (add-hook 'post-command-hook #'mevedel-notes--entry-hint nil t)
+    (add-hook 'window-size-change-functions #'mevedel-notes--refit-labels nil t)))
 
 ;;;###autoload
 (defun mevedel-notes-toggle-labels ()
@@ -487,10 +523,21 @@ Refuse unavailable sources before a caller starts mutating the notes."
         (mevedel--delete-instruction-overlay note)))))
 
 (defun mevedel-notes--at-point ()
-  "Return the note at point, or refuse when there is none."
-  (or (mevedel--highest-priority-instruction
-       (mevedel--instructions-at (point) 'note))
-      (user-error "No note at point")))
+  "Return the note at point, choosing when notes overlap; refuse if absent."
+  (let ((notes (mevedel--instructions-at (point) 'note)))
+    (unless notes (user-error "No note at point"))
+    (if (not (cdr notes)) (car notes)
+      (let ((choices (mapcar
+                      (lambda (note)
+                        (cons (format "Note %s · %s  %s"
+                                      (overlay-get note 'mevedel-id)
+                                      (mevedel-notes--author-name
+                                       (overlay-get note 'mevedel-note-author))
+                                      (mevedel-notes--display-text note)) note))
+                      (sort notes (lambda (a b) (< (overlay-get a 'mevedel-id)
+                                                  (overlay-get b 'mevedel-id)))))))
+        (cdr (assoc (completing-read "Choose note: " (mapcar #'car choices) nil t)
+                    choices))))))
 
 (defun mevedel-notes--read-tags (note)
   "Read the complete tag set for NOTE."
@@ -618,22 +665,27 @@ Each such note gains the applied pair, with FILES only when RECORD belongs to
 another session's suggestion, and loses its prepared change and attention.
 Touch the store once."
   (dolist (entry (mevedel-notes-open workspace))
-    (when (equal (plist-get record :id)
-                 (plist-get (plist-get (plist-get entry :properties)
-                                       'mevedel-note-prepared-change) :id))
-      (when-let* ((item (mevedel-note-resolve (plist-get entry :uuid) workspace)))
-        (overlay-put item 'mevedel-note-applied-changes
-                     (cl-adjoin (append (list :session-id (plist-get record :session-id)
-                                              :turn (plist-get record :turn))
-                                        (unless (equal (plist-get record :session-id)
-                                                       (overlay-get item 'mevedel-note-session-id))
-                                          (list :files files)))
-                                (overlay-get item 'mevedel-note-applied-changes)
-                                :test #'equal))
-        (overlay-put item 'mevedel-note-prepared-change nil)
-        (overlay-put item 'mevedel-note-attention-state nil)
-        (mevedel-notes--render item)
-        (mevedel-note-conversation-refresh-hint item))))
+    (let ((props (plist-get entry :properties)))
+      (when (equal (plist-get record :id)
+                   (plist-get (plist-get props 'mevedel-note-prepared-change) :id))
+        (let* ((source (plist-get entry :source))
+               (id (plist-get record :session-id))
+               (pair (append (list :session-id id :turn (plist-get record :turn))
+                             (unless (equal id (plist-get props 'mevedel-note-session-id))
+                               (list :files files))))
+               (pairs (cl-adjoin pair (plist-get props 'mevedel-note-applied-changes)
+                                 :test #'equal)))
+          (if (overlayp source)
+              (progn
+                (overlay-put source 'mevedel-note-applied-changes pairs)
+                (overlay-put source 'mevedel-note-prepared-change nil)
+                (overlay-put source 'mevedel-note-attention-state nil)
+                (mevedel-notes--render source)
+                (mevedel-note-conversation-refresh-hint source))
+            (let ((stored (plist-get source :properties)))
+              (plist-put stored 'mevedel-note-applied-changes pairs)
+              (plist-put stored 'mevedel-note-prepared-change nil)
+              (plist-put stored 'mevedel-note-attention-state nil)))))))
   (mevedel-instruction-store-touch workspace))
 
 (defun mevedel-note-mark-stale (note)
@@ -766,6 +818,17 @@ Return the number dismissed.  User and Buddy notes are left alone."
         (when (> count 0) (mevedel-instruction-store-sync workspace)))
       count)))
 
+(defun mevedel-notes--store-closed (file instruction reason)
+  "Record FILE's serialized INSTRUCTION as closed with REASON."
+  (let ((properties (plist-get instruction :properties)))
+    (plist-put instruction :open-state (plist-get properties 'mevedel-note-state))
+    (plist-put instruction :closed-reason reason)
+    (plist-put instruction :closed-at (float-time))
+    (plist-put properties 'mevedel-note-state 'closed)
+    (push (list :file file :instruction instruction)
+          (plist-get (mevedel--instruction-state (mevedel--instruction-operation-state-key))
+                     :closed-notes))))
+
 (defun mevedel-note-close (note reason)
   "Move live NOTE to recently closed with REASON, retaining its attachments.
 REASON is `done', `deleted' or `dismissed'.  Closing never changes source code."
@@ -794,13 +857,8 @@ REASON is `done', `deleted' or `dismissed'.  Closing never changes source code."
                                   (progn (goto-char start) (- start (line-beginning-position)))
                                   (line-number-at-pos end)
                                   (progn (goto-char end) (- end (line-beginning-position)))))))
-                      :open-state (overlay-get note 'mevedel-note-state)
-                      :closed-reason reason :closed-at (float-time)
-                      :properties (plist-put properties 'mevedel-note-state 'closed))))
-          (push (list :file buffer-file-name :instruction instruction)
-                (plist-get (mevedel--instruction-state
-                            (mevedel--instruction-operation-state-key))
-                           :closed-notes))
+                      :properties properties)))
+          (mevedel-notes--store-closed buffer-file-name instruction reason)
           ;; Explicit closure wins over older source geometry undo.  Reserve the
           ;; display number until expiry, rather than retiring it on close.
           (overlay-put note 'mevedel-marked-for-deletion t)
@@ -809,6 +867,29 @@ REASON is `done', `deleted' or `dismissed'.  Closing never changes source code."
                 (delq note (alist-get buffer (mevedel--instruction-alist))))
           (mevedel-instruction-store-prune-closed workspace)
           (mevedel-instruction-store-touch workspace))))))
+
+(defun mevedel-notes-close-applied (note session-id workspace)
+  "Close NOTE as done, including notes it shares with SESSION-ID in WORKSPACE."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace))
+        (uuid (overlay-get note 'mevedel-uuid))
+        (shared (equal session-id (overlay-get note 'mevedel-note-session-id))))
+    (dolist (entry (mevedel-notes-open workspace))
+      (when (or (equal uuid (plist-get entry :uuid))
+                (and shared (equal session-id
+                                   (plist-get (plist-get entry :properties) 'mevedel-note-session-id))))
+        (let ((source (plist-get entry :source)))
+          (if (overlayp source)
+              (mevedel-note-close source 'done)
+            (let* ((file (plist-get entry :file))
+                   (stash (assoc file (mevedel--instruction-alist))))
+              (mevedel-notes--store-closed file source 'done)
+              (setf (plist-get (cdr stash) :instructions)
+                    (delq source (plist-get (cdr stash) :instructions)))
+              (unless (plist-get (cdr stash) :instructions)
+                (setf (mevedel--instruction-alist) (delq stash (mevedel--instruction-alist)))))))))
+    (mevedel-instruction-store-prune-closed workspace)
+    (mevedel-instruction-store-touch workspace)))
 
 ;;;###autoload
 (defun mevedel-note-done (&optional note)
@@ -924,11 +1005,12 @@ Return its live source overlay, retaining its text, tags and attachments."
       (setq note (or note (mevedel-notes--at-point)))
       (let* ((choices
               (append '((?s "send" "Send or reopen the note conversation")
+                        (?p "preview" "Preview the exact note prompt without sending")
                         (?i "edit" "Edit note text")
                         (?w "copy text" "Copy full note text to the kill ring")
                         (?x "done" "Mark note done"))
                       (if (eq 'expanded (overlay-get note 'mevedel-note-labels))
-                          '((?e "collapse" "Hide the note label"))
+                          '((?e "collapse" "Show a one-line note label"))
                         '((?e "expand" "Show the full note label")))
                       (if (mevedel-note-watching-p note)
                           '((?t "drop" "Stop watching this note"))
@@ -967,6 +1049,7 @@ Return its live source overlay, retaining its text, tags and attachments."
             (overlay-put label 'after-string original)))
         (pcase choice
           (?s (mevedel-note-send note))
+          (?p (mevedel-note-preview-prompt note))
           (?a (mevedel-note-apply-change note))
           (?r (mevedel-note-revert-change note))
           (?m (mevedel-note-merge-change note))

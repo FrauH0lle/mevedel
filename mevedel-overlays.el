@@ -104,7 +104,7 @@
 (autoload 'mevedel-workspace "mevedel-workspace")
 
 
-(defvar mevedel--default-instruction-priority -99)
+(defvar mevedel--default-instruction-priority 0)
 (defvar mevedel--highlighted-instruction nil)
 
 

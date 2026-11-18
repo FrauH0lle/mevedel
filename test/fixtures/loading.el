@@ -168,8 +168,10 @@ temporary one."
                (should (file-exists-p ".mevedel/instructions.el"))
                (kill-buffer source))
              (with-current-buffer (find-file-noselect "source.el")
-               (should-not (seq-some (lambda (ov) (overlay-get ov 'after-string))
-                                     (overlays-in (point-min) (point-max))))
+               (should (seq-some (lambda (ov)
+                                   (string-search "Note 1 · You  Cold note"
+                                                  (or (overlay-get ov 'after-string) "")))
+                                 (overlays-in (point-min) (point-max))))
                (mevedel-notes-toggle-labels)
                (should (seq-some
                         (lambda (ov)

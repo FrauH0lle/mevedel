@@ -6,6 +6,12 @@ guidance command for suggestions about a region. Remarks are workspace notes
 with Buddy as author, using the same labels and modified-key actions as your
 notes. They survive restarts and never edit your code.
 
+Every label shows `Note N · Buddy  text` beside the dashed bar. Collapsed labels
+keep one line, cut with `…` at 80 columns or the available width after indentation
+and bar; expanded labels wrap the full text. Nested labels stack, with the inner
+note's code tint taking priority. Entering overlapping notes names both in the
+echo area; `M-m` chooses the note before opening its actions.
+
 ```
 M-x mevedel-buddy-mode        watch this buffer
 M-x mevedel-buddy-global-mode watch every buffer in `mevedel-buddy-tracked-modes'

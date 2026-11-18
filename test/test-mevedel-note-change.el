@@ -134,7 +134,7 @@
       (should (equal (concat "before\nnew\nafter\n" tail) (mevedel-test--read-file file)))
       (mevedel-note-revert-change note 0)
       (should (equal (concat "before\nold\nafter\n" tail) (mevedel-test--read-file file)))))
-  :doc "batch proposals attach only to touched code and preserve a sibling's waiting change"
+  :doc "apply closes the whole batch, retaining a sibling's independent waiting change for restore"
   (mevedel-note-change-test--with-note
     (let ((sibling (with-current-buffer source
                      (goto-char (point-min))
@@ -151,7 +151,10 @@
       (should (eq 'ready (mevedel-notes-attention-state sibling)))
       (mevedel-note-apply-change note)
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
+      (should-not (overlay-buffer note))
+      (should-not (overlay-buffer sibling))
       (should (eq 'ready (mevedel-notes-attention-state sibling)))
+      (setq sibling (mevedel-note-restore (overlay-get sibling 'mevedel-uuid) workspace))
       (mevedel-note-apply-change sibling)
       (should (equal "BEFORE\nnew\nafter\n" (mevedel-test--read-file file)))))
   :doc "unsaved lines above notes do not attach a proposal to the wrong batch sibling"
@@ -394,9 +397,14 @@
       (should (equal "created\n" (mevedel-test--read-file created)))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (mevedel-note-resolve uuid workspace))
-      (should-not (overlay-get note 'mevedel-note-prepared-change))
-      (should (overlay-get note 'mevedel-note-applied-changes))
+      (should-not (mevedel-note-resolve uuid workspace))
+      (let* ((entry (cl-find uuid (mevedel-notes-closed workspace)
+                             :key (lambda (entry)
+                                    (plist-get (plist-get (plist-get entry :instruction) :properties)
+                                               'mevedel-uuid)) :test #'equal))
+             (properties (plist-get (plist-get entry :instruction) :properties)))
+        (should-not (plist-get properties 'mevedel-note-prepared-change))
+        (should (plist-get properties 'mevedel-note-applied-changes)))
       (mevedel-note-revert-change uuid 0 workspace)
       (should-not (file-exists-p created)))))
 
@@ -463,6 +471,8 @@
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
       (mevedel-note-apply-change note)
+      (setq note (mevedel-note-restore uuid workspace))
+      (mevedel-instruction-store-flush t)
       (setq applied (mevedel-session-artifacts-read-file-raw store))
       (mevedel-note-done note)
       (mevedel-instruction-store-flush t)
@@ -928,7 +938,7 @@
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
     (mevedel-note-apply-change note)
     (let ((uuid (overlay-get note 'mevedel-uuid)))
-      (mevedel-note-done note)
+      (should-not (overlay-buffer note))
       (mevedel-instruction-store-flush t)
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
@@ -956,12 +966,13 @@
       (mevedel-instruction-store-observe workspace)
       (should-not (mevedel-notes-closed workspace))
       (should (mevedel-note-resolve uuid workspace))))
-  :doc "the source key reverts the only applied turn without offering empty turns"
+  :doc "the restored source key reverts the only applied turn without offering empty turns"
   (mevedel-note-change-test--with-note
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
     (mevedel-note-apply-change note)
     (mevedel-session-artifacts-snapshot-modified session 1 (make-hash-table :test #'equal))
+    (setq note (mevedel-note-restore (overlay-get note 'mevedel-uuid) workspace))
     (with-current-buffer source
       (goto-char (overlay-start note))
       (call-interactively (lookup-key mevedel-note-actions-map (kbd "C-c C-b"))))
@@ -988,7 +999,7 @@
       (mevedel-note-change-test--propose
        data-buf "*** Begin Patch\n*** Delete File: old.txt\n*** Add File: new.txt\n+created file\n*** End Patch")
       (mevedel-note-apply-change note)
-      (mevedel-note-delete note)
+      (mevedel-note-delete (mevedel-note-restore uuid workspace))
       (should-not (file-exists-p old))
       (should (equal "created file\n" (mevedel-test--read-file new)))
       (mevedel-note-revert-change uuid 0 workspace)
@@ -1019,6 +1030,7 @@
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
     (mevedel-note-apply-change note)
+    (setq note (mevedel-note-restore (overlay-get note 'mevedel-uuid) workspace))
     (setf (mevedel-session-turn-count session) 1)
     (mevedel-note-change-test--propose
      data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-after\n+second turn\n*** End Patch")
@@ -1109,7 +1121,7 @@
       (should-not (overlay-get suggestion 'mevedel-note-session-id))
       (mevedel-note-apply-change suggestion)
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
-      (mevedel-note-done suggestion)
+      (should-not (overlay-buffer suggestion))
       (mevedel-instruction-store-flush t)
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
@@ -1171,7 +1183,7 @@
           (let* ((uuid (match-string 1 (plist-get result :result)))
                  (suggestion (mevedel-note-resolve uuid workspace)))
             (mevedel-note-apply-change suggestion)
-            (mevedel-note-done suggestion)
+            (should-not (overlay-buffer suggestion))
             (mevedel-instruction-store-flush t)
             (let* ((store (mevedel-instruction-store-path workspace))
                    (saved (mevedel-test--read-file store)))
@@ -1241,7 +1253,7 @@
     (let* ((uuid (match-string 1 (plist-get result :result)))
            (suggestion (mevedel-note-resolve uuid workspace)))
       (mevedel-note-apply-change suggestion)
-      (mevedel-note-done suggestion)
+      (should-not (overlay-buffer suggestion))
       (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
       (kill-buffer data-buf)
       (delete-directory (mevedel-session-save-path session) t)
@@ -1269,6 +1281,7 @@
     (let ((suggestion (mevedel-note-resolve (match-string 1 (plist-get result :result)) workspace)))
       (mevedel-note-apply-change suggestion)
       (should-not (overlay-get suggestion 'mevedel-note-session-id))
+      (setq suggestion (mevedel-note-restore (overlay-get suggestion 'mevedel-uuid) workspace))
       (with-current-buffer source
         (cl-letf (((symbol-function 'read-key) (lambda (&rest _) ?r)))
           (mevedel-note-menu suggestion)))
@@ -1287,7 +1300,7 @@
       (should-not (mevedel-session-control-transfer-root-buffer-for-id id))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
-      (setq note (mevedel-note-resolve uuid workspace))
+      (setq note (mevedel-note-restore uuid workspace))
       (with-current-buffer source
         (cl-letf (((symbol-function 'read-key)
                    (lambda (&rest _)
@@ -1364,6 +1377,66 @@
             ;; is back to its sent state and holds no prepared change.
             (should (equal '((sent nil t)) (last seen))))
         (advice-remove 'mevedel-instruction-store-flush spy)))))
+
+(mevedel-deftest mevedel-note-change--finish
+  (:quiet t)
+  ,test
+  (test)
+  :doc "apply closes included nested notes, leaving independent subtrees live and stale"
+  (mevedel-note-change-test--with-note
+    (with-current-buffer source
+      (move-overlay note (point-min) (point-max))
+      (let* ((child (mevedel-note-make source 1 8 :text "Included child"))
+             (grandchild (mevedel-note-make source 2 5 :text "Included grandchild" :span 'char))
+             (excluded (mevedel-note-make source 8 12 :text "Independent child"))
+             (excluded-child (mevedel-note-make source 9 10 :text "Excluded subtree" :span 'char)))
+        (mevedel-note-mark-sent (list child grandchild) (mevedel-session-session-id session))
+        (mevedel-note-mark-sent (list excluded) "independent")
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+        (let ((record (copy-tree (overlay-get note 'mevedel-note-prepared-change))))
+          (setq record (plist-put record :id "independent-change"))
+          (setq record (plist-put record :session-id "independent"))
+          (mevedel-note-hold-change (list excluded) record))
+        (mevedel-note-apply-change note)
+        (dolist (included (list note child grandchild))
+          (should-not (overlay-buffer included)))
+        (should (= 3 (length (mevedel-notes-closed workspace))))
+        (should (overlay-buffer excluded))
+        (should (overlay-buffer excluded-child))
+        (should (eq 'stale (mevedel-notes-attention-state excluded)))
+        (should (equal "independent" (overlay-get excluded 'mevedel-note-session-id))))))
+  :doc "applying closes a missing-source batch sibling without trying to visit it"
+  (mevedel-note-change-test--with-note
+    (let* ((other-file (file-name-concat root "other.txt"))
+           (id (mevedel-session-session-id session))
+           sibling uuid)
+      (write-region "Other note\n" nil other-file nil 'silent)
+      (with-current-buffer (find-file-noselect other-file)
+        (setq-local mevedel--workspace workspace)
+        (setq sibling (mevedel-note-create "Batch sibling")
+              uuid (overlay-get sibling 'mevedel-uuid))
+        (mevedel-note-mark-sent (list sibling) id)
+        (mevedel-note-change-test--propose
+         data-buf "*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch")
+        (mevedel-note-hold-change (list sibling) (overlay-get note 'mevedel-note-prepared-change))
+        (delete-file other-file)
+        (mevedel--stash-instructions-on-kill)
+        (kill-buffer (current-buffer)))
+      (should (plist-get (cl-find uuid (mevedel-notes-open workspace)
+                                 :key (lambda (entry) (plist-get entry :uuid)) :test #'equal)
+                         :source-missing))
+      (mevedel-note-apply-change note)
+      (should-not (mevedel-notes-open workspace))
+      (should-not (find-buffer-visiting other-file))
+      (let* ((entry (cl-find other-file (mevedel-notes-closed workspace)
+                             :key (lambda (entry) (plist-get entry :file)) :test #'equal))
+             (instruction (plist-get entry :instruction))
+             (properties (plist-get instruction :properties)))
+        (should (eq 'done (plist-get instruction :closed-reason)))
+        (should-not (plist-get properties 'mevedel-note-prepared-change))
+        (should (equal id (plist-get (car (plist-get properties 'mevedel-note-applied-changes))
+                                     :session-id)))))))
 
 (provide 'test-mevedel-note-change)
 ;;; test-mevedel-note-change.el ends here

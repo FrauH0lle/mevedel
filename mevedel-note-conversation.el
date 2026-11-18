@@ -177,8 +177,51 @@ Without NOTE, restore this session's hint during note conversation setup."
       "\\1\\\\\\2" text)
      'mevedel-mention-literal t)))
 
-(defun mevedel-note-conversation--prompt (note session)
+(defun mevedel-note-conversation--tree (note)
+  "Return NOTE's request tree with each parent and excluded conversation."
+  (let* ((start (overlay-start note)) (end (overlay-end note))
+         (session-id (overlay-get note 'mevedel-note-session-id))
+         (children (make-hash-table :test #'eq))
+         (parents (list note)))
+    (dolist (item (sort (mevedel--wholly-contained-instructions (overlay-buffer note) start end)
+                        :key (lambda (ov) (- (overlay-end ov) (overlay-start ov)))
+                        :reverse t))
+      (when (and (eq 'note (overlay-get item 'mevedel-instruction-type))
+                 (or (> (overlay-start item) start) (< (overlay-end item) end)))
+        ;; The most recently seen containing range is the narrowest parent.
+        (let ((parent (cl-find-if (lambda (ov)
+                                   (and (<= (overlay-start ov) (overlay-start item))
+                                        (>= (overlay-end ov) (overlay-end item))
+                                        (or (< (overlay-start ov) (overlay-start item))
+                                            (> (overlay-end ov) (overlay-end item)))))
+                                 parents)))
+          (push item (gethash parent children))
+          (push item parents))))
+    (cl-labels ((walk (item parent)
+                  (let* ((id (overlay-get item 'mevedel-note-session-id))
+                         (excluded (and parent id (not (equal session-id id)))))
+                    (cons (list :note item :parent parent :excluded excluded)
+                          (unless excluded
+                            (mapcan (lambda (child) (walk child item))
+                                    (sort (gethash item children) :key #'overlay-start)))))))
+      (walk note nil))))
+
+(defun mevedel-note-conversation--roots (notes)
+  "Return NOTES without duplicates or descendants covered by another selection."
+  (cl-remove-if
+   (lambda (note)
+     (cl-some (lambda (parent)
+                (and (not (eq parent note))
+                     (cl-find note
+                              (mevedel-note-conversation--tree parent)
+                              :key (lambda (entry)
+                                     (unless (plist-get entry :excluded) (plist-get entry :note))))))
+              notes))
+   (delete-dups (copy-sequence notes))))
+
+(defun mevedel-note-conversation--block (note session &optional parent)
   "Capture NOTE's authored text, code and explicit attachments for SESSION.
+If PARENT is non-nil, name it instead of repeating the shared code.
 Escape mention syntax in the frozen result so later requests, reloads and
 compaction cannot reinterpret captured code or attached prose as new input.
 Only note/ref mentions are frozen here; other authored mentions use the
@@ -192,15 +235,62 @@ ordinary request-time transform, where media has an active request owner."
              (or (overlay-get note 'mevedel-note-text) "") session)
             session t))))
     (with-current-buffer (overlay-buffer note)
-      (format "Note %s at %s:%d\n\n%s\n\nNoted code at send time:\n```\n%s\n```\n\n%s"
-              (overlay-get note 'mevedel-id) buffer-file-name
-              (line-number-at-pos (overlay-start note))
+      (format "%s\n\n%s%s\n\n%s"
+              (if parent
+                  (format "Note %s at line %d, inside Note %s"
+                          (overlay-get note 'mevedel-id)
+                          (line-number-at-pos (overlay-start note))
+                          (overlay-get parent 'mevedel-id))
+                (format "Note %s at %s:%d" (overlay-get note 'mevedel-id) buffer-file-name
+                        (line-number-at-pos (overlay-start note))))
               (plist-get expansion :text)
-              (mevedel-note-conversation--literal
-               (buffer-substring-no-properties (overlay-start note) (overlay-end note)))
+              (if parent ""
+                (format "\n\nNoted code at send time:\n```\n%s\n```"
+                        (mevedel-note-conversation--literal
+                         (buffer-substring-no-properties (overlay-start note) (overlay-end note)))))
               (mevedel-note-conversation--literal
                (mapconcat (lambda (item) (plist-get item :body))
                           (plist-get expansion :reminder-items) "\n\n"))))))
+
+(defun mevedel-note-conversation--prompt (note session)
+  "Build the exact generated request for NOTE and its descendants in SESSION."
+  (mevedel-note-conversation--render (mevedel-note-conversation--tree note) session))
+
+(defun mevedel-note-conversation--render (tree session)
+  "Render a note request TREE for SESSION."
+  (mapconcat
+   (lambda (entry)
+     (let ((item (plist-get entry :note)) (parent (plist-get entry :parent)))
+       (if (plist-get entry :excluded)
+           (with-current-buffer (overlay-buffer item)
+             (format "Note %s at line %d, inside Note %s, has its own conversation and is not part of this request."
+                     (overlay-get item 'mevedel-id) (line-number-at-pos (overlay-start item))
+                     (overlay-get parent 'mevedel-id)))
+         (mevedel-note-conversation--block item session parent))))
+   tree
+   "\n\n"))
+
+;;;###autoload
+(defun mevedel-note-preview-prompt (&optional note)
+  "Show the generated send text for NOTE without sending or creating a session.
+Provider policy, request-time mentions and tools are assembled only on send."
+  (interactive)
+  (setq note (or note (mevedel-notes--at-point)))
+  (let* ((workspace (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+         (session (mevedel-session-create
+                   "Note preview" workspace
+                   (with-current-buffer (overlay-buffer note) default-directory)))
+         (text (mevedel-note-conversation--prompt note session))
+         (buffer (get-buffer-create "*mevedel-note-preview*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text)
+        (goto-char (point-min))
+        (special-mode)
+        (visual-line-mode 1)))
+    (pop-to-buffer buffer)
+    buffer))
 
 (cl-defun mevedel-note-conversation--send-notes (notes &key no-display defer-write)
   "Send or reopen NOTES in one session and return its view.
@@ -209,10 +299,11 @@ sync to the caller's batch."
   (unless notes (user-error "Choose at least one note"))
   (require 'mevedel-note-settings)
   (let* ((note (car notes))
-         (workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+         (workspace (when (and (overlayp note) (overlay-buffer note))
+                      (mevedel--instruction-buffer-workspace (overlay-buffer note)))))
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
       (dolist (item notes)
-        (unless (and (overlayp item) (overlay-buffer item)
+        (unless (and workspace (overlayp item) (overlay-buffer item)
                      (eq (overlay-get item 'mevedel-instruction-type) 'note)
                      (equal (mevedel--instruction-workspace-key workspace)
                             (mevedel--instruction-workspace-key
@@ -231,8 +322,24 @@ sync to the caller's batch."
                      (mevedel--chat-buffer nil t workspace
                                            (with-current-buffer (overlay-buffer note)
                                              (file-name-directory buffer-file-name)))))
-             (session (buffer-local-value 'mevedel--session data)))
-        (dolist (item notes)
+             (session (buffer-local-value 'mevedel--session data))
+             (initial (or (not id)
+                          (and (zerop (or (mevedel-session-turn-count session) 0))
+                               (cl-some (lambda (item)
+                                          (eq 'unsent (overlay-get item 'mevedel-note-state)))
+                                        notes))))
+             (tree (and initial
+                        (cl-delete-duplicates
+                         (mapcan #'mevedel-note-conversation--tree
+                                 (mevedel-note-conversation--roots notes))
+                         :key (lambda (entry)
+                                (unless (plist-get entry :excluded) (plist-get entry :note)))
+                         :test (lambda (a b) (and a (eq a b))) :from-end t)))
+             (members (if initial
+                          (cl-loop for entry in tree unless (plist-get entry :excluded)
+                                   collect (plist-get entry :note))
+                        notes)))
+        (dolist (item members)
           (when (eq 'buddy (overlay-get item 'mevedel-note-author))
             (mevedel-note-keep item)))
         (condition-case err
@@ -247,19 +354,16 @@ sync to the caller's batch."
                 (let ((mevedel-instruction-store--inhibit
                        (if defer-write t mevedel-instruction-store--inhibit)))
                   (mevedel-session-artifacts-save session data nil t)))
-              (when (or (not id)
-                        (and (zerop (or (mevedel-session-turn-count session) 0))
-                             (eq 'unsent (overlay-get note 'mevedel-note-state))))
+              (when initial
                 (mevedel--submit-generated-turn
-                 (mapconcat (lambda (item) (mevedel-note-conversation--prompt item session))
-                            notes "\n\n"))))
+                 (mevedel-note-conversation--render tree session))))
           ((error quit)
            (unless id (mevedel-chat-discard-buffers data t))
            (signal (car err) (cdr err))))
-        (unless (and id (cl-every (lambda (item)
-                                   (eq 'sent (overlay-get item 'mevedel-note-state)))
-                                 notes))
-          (mevedel-note-mark-sent notes (mevedel-session-session-id session))
+        (when (or initial (cl-some (lambda (item)
+                                     (not (eq 'sent (overlay-get item 'mevedel-note-state))))
+                                   notes))
+          (mevedel-note-mark-sent members (mevedel-session-session-id session))
           (unless defer-write (mevedel-instruction-store-flush t)))
         (let ((view (buffer-local-value 'mevedel--view-buffer data)))
           (unless no-display

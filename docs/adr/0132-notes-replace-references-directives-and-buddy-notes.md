@@ -38,8 +38,11 @@ for its invited watch and remark lifecycle.
 starting with the note text, code captured at send time, explicit attachments
 and normal project instructions and capabilities, never another conversation's
 history. Journal digests, the edited-files reminder and an ambient Goal are not
-inherited. Several notes can share one batch session. The initial provider input
-is retained for inspection. Reopening resumes the same conversation.
+inherited. A send includes nested descendants, naming each immediate parent and
+capturing code once for the outer note. A descendant in another conversation and
+its subtree are excluded. A batch sends covered descendants only once. Preview
+shows the generated text before the send; the actual provider input is retained
+separately for inspection. Reopening resumes without adding newly nested notes.
 
 The ordinary session view and composer appear in an anchored child frame, using
 the presentation mechanism of [ADR 0106](0106-directive-frame-is-a-child-frame.md),
@@ -58,7 +61,7 @@ ordinary chats without the note layer.
 
 The source menu is one inline **Actions** row: `s` send/reopen, `t` take/drop,
 `i` edit, `g` tags, `x` done, `k` delete/dismiss, `b` keep a Buddy remark,
-`w` copy, `S` settings and `e` expand/collapse. Apply/merge (`a`/`m`) appear only
+`w` copy, `p` preview, `S` settings and `e` expand/collapse. Apply/merge (`a`/`m`) appear only
 for prepared changes, revert (`r`) only for applied changes. The conversation
 hint above the prompt shows `C-c C-z close`, plus
 `C-c C-a apply · C-c C-g merge` while a change waits.
@@ -75,7 +78,9 @@ Eval or other tools.
 
 A newer proposal replaces the waiting one, while older proposals remain in
 conversation history. Applying records the actual file changes under the
-originating session turn, and clears the waiting record from batch siblings.
+originating session turn, clears that waiting record and closes the notes in the
+conversation as done. Excluded notes stay open and track source edits normally.
+Applying an unlinked suggestion closes only that suggestion.
 Applied changes can be reverted individually with the shared checked reversal
 engine of [ADR 0131](0131-rewind-reverts-recorded-changes.md).
 Suggestions from another session retain their application-specific backup names
@@ -90,7 +95,7 @@ again resumes that note; explicitly setting the workspace dial resumes its
 takes for this Emacs session, including files visited later. At Active, nearby
 authored notes, including unsent notes, also supply goals for ideas; elsewhere
 Buddy behaves like Watching. Drop ends the watch without changing code or
-losing a conversation. Buddy may say the work looks done, but closing is explicit.
+losing a conversation. Buddy may say the work looks done but never closes a note.
 Sending or taking a Buddy remark first
 keeps it as the user's note, so an older review cannot retract it.
 

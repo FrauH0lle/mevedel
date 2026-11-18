@@ -10,11 +10,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Nested notes (a note inside another note's code) are supported by the
-  geometry, but not yet checked with the new label layout: stacked expanded
-  labels, tint priority, the `M-m` chooser and entry hints when point is in
-  both. Try it in practice and fix what looks wrong; NoteWrite can also
-  create nested whole-line notes.
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
 - Claude Code adapter exits silently (code 1) when mevedel sends the next
   prompt 0–330 ms after the previous `end_turn` (five times on 2026-11-07,
@@ -66,8 +61,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Code-quality leftovers from the 2026-11-14 review pass 2: Codex
   `prompt_cache_key` is placed per request at three sites; collaboration
   connection binding uses an untyped positional list and JSON string surgery;
-  optional and mixed-type values added by performance fixes; note creation is
-  written twice and its owner API uses two prefixes.
+  optional and mixed-type values added by performance fixes.
 
 ## Execution
 

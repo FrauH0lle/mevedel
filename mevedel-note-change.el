@@ -285,12 +285,14 @@ When SELECTED is non-nil, prepare only those reviewed changes."
         (with-current-buffer buffer (undo-boundary))))
     (mevedel-session-artifacts-record-applied
      session turn changes :application-backups foreign
-     :then (lambda (files) (mevedel-note-change--finish note record files)))))
+     :then (lambda (files) (mevedel-note-change--finish note record files workspace)))))
 
-(defun mevedel-note-change--finish (note record files)
-  "Retain applied RECORD ownership and FILES on NOTE and its batch siblings."
-  (mevedel-note-record-applied
-   record files (mevedel--instruction-buffer-workspace (overlay-buffer note)))
+(defun mevedel-note-change--finish (note record files &optional workspace)
+  "Record applied RECORD and FILES, then close its conversation's notes.
+NOTE identifies the applying suggestion; WORKSPACE survives source deletion."
+  (setq workspace (or workspace (mevedel--instruction-buffer-workspace (overlay-buffer note))))
+  (mevedel-note-record-applied record files workspace)
+  (mevedel-notes-close-applied note (plist-get record :session-id) workspace)
   (mevedel-instruction-store-flush t))
 
 (defun mevedel-note-change--review (note record)
@@ -341,7 +343,7 @@ Confirming a partial selection drops the rest of this waiting change."
         (if review
             (mevedel-note-change--review note record)
           (mevedel-note-change--commit note record changes)
-          (message "mevedel: change applied; mark the note done when ready"))))))
+          (message "mevedel: change applied; conversation notes closed"))))))
 
 (defun mevedel-note-change--revert-plan (session turn entries)
   "Prepare SESSION's applied TURN ENTRIES for reversal, refusing all conflicts."
@@ -428,14 +430,23 @@ Confirming a partial selection drops the rest of this waiting change."
 ;;;###autoload
 (defun mevedel-note-revert-change (&optional note turn workspace)
   "Revert one applied TURN of NOTE without rewinding its conversation.
-NOTE is a live overlay, display number or UUID in WORKSPACE; default to the
-source or conversation note, or prompt.  When TURN is omitted, select from
+NOTE is an overlay, display number or UUID in WORKSPACE; default to the source
+or conversation note, or prompt.  When TURN is omitted, select from
 the recorded applied turns.  Refuse if affected lines changed.  Reopen a done
 note only after success; do not change the conversation or its history."
   (interactive)
-  (setq workspace (or workspace (mevedel--instruction-buffer-workspace
-                                 (if (and (overlayp note) (overlay-buffer note))
-                                     (overlay-buffer note) (current-buffer)))))
+  (setq workspace
+        (or workspace
+            (when (and (overlayp note) (not (overlay-buffer note)))
+              (when-let* ((id (or (overlay-get note 'mevedel-note-session-id)
+                                  (plist-get (car (overlay-get note 'mevedel-note-applied-changes))
+                                             :session-id)))
+                          (data (mevedel-session-control-transfer-root-buffer-for-id id))
+                          (session (buffer-local-value 'mevedel--session data)))
+                (mevedel-session-workspace session)))
+            (mevedel--instruction-buffer-workspace
+             (if (and (overlayp note) (overlay-buffer note))
+                 (overlay-buffer note) (current-buffer)))))
   (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope workspace)
     (setq note (or note (mevedel--highest-priority-instruction
                         (mevedel--instructions-at (point) 'note))))
