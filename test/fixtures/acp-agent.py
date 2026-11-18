@@ -123,13 +123,20 @@ for line in sys.stdin:
         if trace := os.getenv("MEVEDEL_ACP_TEST_TRACE"):
             with open(trace, "a", encoding="utf-8") as log:
                 log.write(json.dumps(message) + "\n")
+        auth_failure = os.getenv("MEVEDEL_ACP_TEST_AUTH_FAILURE")
+        if method == auth_failure:
+            print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                              "error": {"code": -32000, "message": "Fixture auth required"}}), flush=True)
+            continue
         if method == "initialize":
             client_compaction = isinstance(params.get("clientCapabilities", {}).get("session", {}).get("compaction"), dict)
             capabilities = {"resume": {}}
             if history_root:
                 capabilities.update({"fork": {}, "delete": {}})
                 capabilities.pop(os.getenv("MEVEDEL_ACP_TEST_MISSING_CAP"), None)
-            reply(request_id, {"protocolVersion": 1, "agentCapabilities": {
+            reply(request_id, {"protocolVersion": 1, "agentInfo": {"name": "fixture-agent"},
+                "authMethods": [{"id": "sso", "name": "Browser sign-in"}, {"id": "backup"}],
+                "agentCapabilities": {
                 "loadSession": True, "promptCapabilities": {"image": not os.getenv("MEVEDEL_ACP_TEST_NO_IMAGES")},
                 "sessionCapabilities": capabilities}})
         elif method == "session/fork":
@@ -142,7 +149,7 @@ for line in sys.stdin:
         elif method == "session/delete":
             if Path(history_root, "delete-fails").exists():
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
-                                  "error": {"code": -32000, "message": "Fixture deletion failed"}}), flush=True)
+                                  "error": {"code": -32603, "message": "Fixture deletion failed"}}), flush=True)
                 continue
             Path(history_root, params["sessionId"] + ".json").unlink(missing_ok=True)
             reply(request_id, {})
@@ -152,7 +159,7 @@ for line in sys.stdin:
                 session_id = params["sessionId"]
             if params.get("sessionId", session_id) != session_id:
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
-                                  "error": {"code": -32000, "message": "Missing history"}}), flush=True)
+                                  "error": {"code": -32603, "message": "Missing history"}}), flush=True)
             else:
                 # Real adapters log routine startup progress on stderr.
                 print("[session/create] sessionId=%s phase=register" % session_id, file=sys.stderr, flush=True)
@@ -190,7 +197,7 @@ for line in sys.stdin:
                 late_announcement = params.get("_meta", {}).get("lateAnnouncement", False)
                 if compaction_events and not client_compaction:
                     print(json.dumps({"jsonrpc": "2.0", "id": request_id,
-                                      "error": {"code": -32000, "message": "Compaction capability was not advertised"}}), flush=True)
+                                      "error": {"code": -32603, "message": "Compaction capability was not advertised"}}), flush=True)
                     continue
                 session_info = params.get("_meta", {}).get("sessionInfo", {})
                 config_behavior = params.get("_meta", {}).get("configBehavior")
@@ -233,7 +240,7 @@ for line in sys.stdin:
                     os._exit(7)
                 if prompt == "fail":
                     print(json.dumps({"jsonrpc": "2.0", "id": request_id,
-                                      "error": {"code": -32000, "message": "Fixture prompt failed"}}), flush=True)
+                                      "error": {"code": -32603, "message": "Fixture prompt failed"}}), flush=True)
                     continue
                 if not tool_batches and not compaction_events and response_text is None:
                     chunk("History: " + " | ".join(history))

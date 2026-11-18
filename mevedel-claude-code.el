@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 ;; Owns Claude-specific login checks, local launch isolation, and ACP metadata.
-;; Subscription credentials remain entirely inside the installed Claude CLI.
-;; Credentials stay in the native CLI; shared policy owns explicit fallbacks.
+;; Subscription tokens stay with the CLI; only hard-expiry metadata is sampled.
+;; Shared policy owns explicit fallbacks.
 
 ;;; Code:
 
@@ -233,6 +233,39 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
     "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
     "CLAUDE_CODE_USE_VERTEX" "CLAUDE_CODE_USE_FOUNDRY")
   "Inherited authentication routes excluded by explicit subscription selection.")
+
+(defvar mevedel-claude-code--login-expiry-cache (make-hash-table :test #'equal)
+  "Hard login expiry and modification time indexed by credentials file.")
+
+(defun mevedel-claude-code--read-login-expiry (file)
+  "Return only the Unix expiry time in seconds from credentials FILE."
+  (with-temp-buffer
+    (insert-file-contents file)
+    ;; No other credential field is kept, logged, or returned.
+    (let* ((credentials (json-parse-buffer))
+           (login (and (hash-table-p credentials) (gethash "claudeAiOauth" credentials)))
+           (expiry (and (hash-table-p login) (gethash "refreshTokenExpiresAt" login))))
+      (skip-chars-forward " \t\r\n")
+      (when (and (eobp) (integerp expiry) (< 0 expiry 1000000000000000))
+        (/ expiry 1000.0)))))
+
+(defun mevedel-claude-code--login-expiry ()
+  "Return the local Claude login's hard expiry in Unix seconds, if exposed."
+  (let* ((file (expand-file-name ".credentials.json"
+                                 (or (getenv "CLAUDE_CONFIG_DIR") "~/.claude")))
+         (mtime (and (not (file-remote-p file))
+                     (ignore-errors
+                       (when (file-regular-p file)
+                         (file-attribute-modification-time
+                          (file-attributes (file-truename file)))))))
+         (cached (gethash file mevedel-claude-code--login-expiry-cache)))
+    (cond
+     ((not mtime) (remhash file mevedel-claude-code--login-expiry-cache) nil)
+     ((equal mtime (car cached)) (cdr cached))
+     (t
+      (let ((expiry (ignore-errors (mevedel-claude-code--read-login-expiry file))))
+        (puthash file (cons mtime expiry) mevedel-claude-code--login-expiry-cache)
+        expiry)))))
 
 (defvar mevedel-claude-code--version-cache (make-hash-table :test #'equal)
   "Successful executable versions indexed by their resolved file identity.")
@@ -631,6 +664,10 @@ Return the generic ACP launch plist; no model request is made here."
       (set-file-modes cwd #o700)
       (list :command adapter :cwd cwd :environment process-environment
             :mcp mcp :session-id session-id
+            :agent-name "Claude Code"
+            :auth-hint "Run `claude auth login' in a terminal."
+            :auth-expiry #'mevedel-claude-code--login-expiry
+            :auth-warn-days mevedel-claude-code-login-warning-days
             :prepare-launch
             (lambda (ready failure)
               (mevedel-claude-code--prepare-launch checks cli environment ready failure))

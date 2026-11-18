@@ -21,7 +21,14 @@
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
   client launch session-id capabilities commands prepared checked diagnostic-scope
+  agent-name auth-methods
   (state 'starting) active timer prepare-cancel ready failure stderr)
+
+(defconst mevedel-acp--auth-required -32000
+  "ACP v1 JSON-RPC code for auth_required.")
+
+(defvar mevedel-acp--auth-expiry-warned (make-hash-table :test #'equal)
+  "Pairs of expiry reader and timestamp already warned about this Emacs session.")
 
 (defconst mevedel-acp--control-timeout 30
   "Seconds allowed for startup and cancellation acknowledgement.")
@@ -189,6 +196,49 @@ the log file, or nil when it cannot be written."
        ((mevedel-acp-active connection)
         (mevedel-acp--finish connection (mevedel-acp-active connection) outcome))))))
 
+(defun mevedel-acp--agent-label (connection)
+  "Return CONNECTION's display name or executable name."
+  (let ((launch (mevedel-acp-launch connection)))
+    (or (plist-get launch :agent-name) (mevedel-acp-agent-name connection)
+        (when-let* ((command (plist-get launch :command)))
+          (file-name-nondirectory command))
+        "ACP agent")))
+
+(defun mevedel-acp--auth-message (connection expired)
+  "Describe CONNECTION's authentication failure, noting EXPIRED when known."
+  (let* ((launch (mevedel-acp-launch connection))
+         (methods (mevedel-acp-auth-methods connection))
+         (hint (plist-get launch :auth-hint)))
+    (concat (format "Authentication required for %s%s."
+                    (mevedel-acp--agent-label connection) (if expired ": login expired" ""))
+            (when methods (format " Advertised sign-in methods: %s." (string-join methods ", ")))
+            (when hint (concat " " hint)))))
+
+(defun mevedel-acp--check-auth-expiry (connection)
+  "Warn about CONNECTION's upcoming login expiry, or fail and return nil."
+  (let* ((launch (mevedel-acp-launch connection))
+         (reader (plist-get launch :auth-expiry))
+         (process-environment (or (plist-get launch :environment) process-environment))
+         (expiry (and reader (funcall reader)))
+         (remaining (and expiry (- expiry (float-time))))
+         (days (plist-get launch :auth-warn-days)))
+    (cond
+     ((and remaining (<= remaining 0))
+      (mevedel-acp--fail connection `((code . ,mevedel-acp--auth-required) (expired . t)))
+      nil)
+     (t
+      (when (and remaining days (<= remaining (* days 86400)))
+        (let ((key (cons reader expiry)))
+          (unless (gethash key mevedel-acp--auth-expiry-warned)
+            (puthash key t mevedel-acp--auth-expiry-warned)
+            (mevedel-diagnostic-warning
+             'global 'mevedel
+             (format "%s login expires on %s. %s"
+                     (mevedel-acp--agent-label connection)
+                     (format-time-string "%Y-%m-%d %H:%M %Z" expiry)
+                     (or (plist-get launch :auth-hint) "Sign in again before then."))))))
+      t))))
+
 (defun mevedel-acp--fail (connection error)
   "Close CONNECTION after protocol or process ERROR.
 A process exit warns the host with the agent's last stderr output, its only
@@ -198,10 +248,13 @@ message is classified, shown to collaboration guests and returned to models,
 and stderr holds host logs.
 A closed CONNECTION is ignored: `delete-process' runs the sentinel during an
 orderly close, and that exit is no failure."
-  (let ((message (if (stringp error) error
-                   (or (alist-get 'message error) (format "%S" error))))
-        (process (alist-get :process (mevedel-acp-client connection)))
-        (stderr (string-trim (or (mevedel-acp-stderr connection) ""))))
+  (let* ((code (and (listp error) (alist-get 'code error)))
+         (message (cond ((eql code mevedel-acp--auth-required)
+                         (mevedel-acp--auth-message connection (alist-get 'expired error)))
+                        ((stringp error) error)
+                        (t (or (alist-get 'message error) (format "%S" error)))))
+         (process (alist-get :process (mevedel-acp-client connection)))
+         (stderr (string-trim (or (mevedel-acp-stderr connection) ""))))
     (when (and (not (eq (mevedel-acp-state connection) 'closed))
                process (not (process-live-p process)) (not (string-empty-p stderr)))
       (let* ((file (mevedel-acp--log-stderr connection message stderr))
@@ -213,7 +266,7 @@ orderly close, and that exit is no failure."
         (setq message (format "%s; agent stderr is in %s" message where))))
     (mevedel-acp--shutdown
      connection (list :status 'error
-                      :code (and (listp error) (alist-get 'code error))
+                      :code code
                       :message message))))
 
 (defun mevedel-acp--live-p (connection)
@@ -274,6 +327,18 @@ prompt starts, otherwise through the prompt's completion."
         (mevedel-acp--fail connection "Unsupported ACP protocol version")
       (setf (mevedel-acp-capabilities connection)
             (alist-get 'agentCapabilities response))
+      (let ((info (alist-get 'agentInfo response))
+            (methods (alist-get 'authMethods response)))
+        (setf (mevedel-acp-agent-name connection)
+              (when (listp info)
+                (cl-find-if #'stringp (list (alist-get 'title info) (alist-get 'name info))))
+              (mevedel-acp-auth-methods connection)
+              (when (or (vectorp methods) (listp methods))
+                (cl-loop for method across (vconcat methods)
+                         for name = (when (listp method)
+                                      (cl-find-if #'stringp (list (alist-get 'name method)
+                                                                 (alist-get 'id method))))
+                         when name collect name))))
       (when (plist-get (mevedel-acp-launch connection) :initialize-only)
         (setf (mevedel-acp-prepared connection) t)
         (mevedel-acp--ready connection)
@@ -330,6 +395,9 @@ Optional :initialize-only checks the protocol without creating a conversation.
 Optional :diagnostic-scope overrides the root captured from the invoking buffer
 for local warnings; machine-wide validation supplies `global'.
 Optional :compaction advertises support for retained session summaries.
+Optional :agent-name and :auth-hint give the agent's display name and sign-in
+instructions.  An optional :auth-expiry function returns the login's hard
+expiry (Unix seconds) or nil.  :auth-warn-days sets its warning lead time.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
 Optional :prompt-retry-delay receives a prompt's JSON-RPC error and returns
@@ -441,9 +509,10 @@ immediately."
         ;; Start at once: preparation (version and login checks) overlaps the
         ;; agent's own startup, and admission waits for both.
         (condition-case err
-            (start)
+            (when (mevedel-acp--check-auth-expiry connection) (start))
           (error (mevedel-acp--fail connection (error-message-string err))))
-        (if-let* ((prepare (plist-get launch :prepare-launch)))
+        (if-let* (((eq (mevedel-acp-state connection) 'starting))
+                  (prepare (plist-get launch :prepare-launch)))
             (let (cancel pending-cancel done)
               (setf (mevedel-acp-prepare-cancel connection)
                     (lambda ()
@@ -554,9 +623,10 @@ failure (see `mevedel-acp-open')."
              (plist-put turn :acted t))
            (funcall event notification))
          (send ()
-           (when-let* ((observer (plist-get (mevedel-acp-launch connection) :send-observer)))
-             (ignore-errors (funcall observer (plist-get turn :retried))))
-           (mevedel-acp--send connection request #'settle #'failed))
+           (when (mevedel-acp--check-auth-expiry connection)
+             (when-let* ((observer (plist-get (mevedel-acp-launch connection) :send-observer)))
+               (ignore-errors (funcall observer (plist-get turn :retried))))
+             (mevedel-acp--send connection request #'settle #'failed)))
          (settle (response)
            (let ((reason (alist-get 'stopReason response)))
              (mevedel-acp--finish
