@@ -1384,5 +1384,32 @@
         (mevedel-test--with-captured-messages messages (mevedel-notes--entry-hint))
         (should (string-match-p "Note 1 · You.*Child.*Note 2 · AI.*Parent.*choose note" messages))))))
 
+(mevedel-deftest mevedel-notes--stacked-newline-face
+  (:quiet t :doc "only the first after-string tints the source newline in either priority order")
+  (with-temp-buffer
+    (insert "outer\ninner\n")
+    (let* ((outer (mevedel-note-make (current-buffer) 1 (point-max)
+                                    :span 'line :text "Outer"))
+           (inner (mevedel-note-make (current-buffer) 7 (point-max)
+                                    :span 'line :author 'buddy :text "Inner"))
+           (outer-label (overlay-get outer 'mevedel-label-overlay))
+           (inner-label (overlay-get inner 'mevedel-label-overlay)))
+      (should (= (overlay-end outer-label) (overlay-end inner-label)))
+      (should (> (overlay-get inner-label 'priority) (overlay-get outer-label 'priority)))
+      (should (eq 'mevedel-note-buddy
+                  (get-text-property 0 'face (overlay-get inner-label 'after-string))))
+      (should (eq 'default
+                  (get-text-property 0 'face (overlay-get outer-label 'after-string))))
+      (overlay-put outer 'priority (1+ (overlay-get inner 'priority)))
+      (mevedel-notes--render outer)
+      (should (> (overlay-get outer-label 'priority) (overlay-get inner-label 'priority)))
+      (should (eq 'mevedel-note-you
+                  (get-text-property 0 'face (overlay-get outer-label 'after-string))))
+      (should (eq 'default
+                  (get-text-property 0 'face (overlay-get inner-label 'after-string))))
+      (mevedel--delete-instruction-overlay outer)
+      (should (eq 'mevedel-note-buddy
+                  (get-text-property 0 'face (overlay-get inner-label 'after-string)))))))
+
 (provide 'test-mevedel-notes)
 ;;; test-mevedel-notes.el ends here

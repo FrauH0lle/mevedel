@@ -356,7 +356,7 @@
                       (get-text-property 0 'face
                                          (overlay-get (overlay-get note 'mevedel-label-overlay)
                                                       'after-string))))
-          (undo-only 1)
+          (let (last-command this-command) (undo-only 1))
           (should (equal "before\nold\nafter\n" (buffer-string)))
           (should (= 11 (overlay-end note)))
           (should (= 11 (overlay-end (overlay-get note 'mevedel-label-overlay))))
