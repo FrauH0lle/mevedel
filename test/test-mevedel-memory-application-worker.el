@@ -2139,5 +2139,28 @@ the public verb, not this helper, constructs and drives the operation."
                 (should-not (mevedel-memory-decision--recovery-successor-p job predecessor)))))
         (mevedel-journal-claim-settle claim 'cancelled "")))))
 
+(mevedel-deftest mevedel-memory-decision-recover-child ()
+  ,test
+  (test)
+  :doc "successor discovery reads the private slot, not the public journal"
+  (mevedel-test-application-fixture
+    (let* ((decision (mevedel-test-application-reject workspace accepted proposal))
+           (prior (mevedel-journal-claim-acquire key 180))
+           (outcome (mevedel-journal-claim-settle prior 'cancelled ""))
+           (claim (mevedel-journal-claim-acquire key 180))
+           (payload (list :claim claim :operation-id (plist-get claim :owner)
+                          :recovery-predecessor (list :claim prior :outcome outcome)
+                          :application t :pass-id (plist-get decision :pass-id)
+                          :proposal-id (plist-get proposal :id))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-journal-store-entries)
+                     (lambda (&rest _) (error "Unexpected public journal scan"))))
+            (should (eq 'rejected (plist-get (plist-get (mevedel-memory-decision-recover-child workspace payload) :previous) :status)))
+            (write-region "\n" nil (file-name-concat (mevedel-memory-decision--directory workspace)
+                                                     (concat (plist-get decision :decision-id) ".el")) t 'silent)
+            (should (equal "Accepted memory decision changed"
+                           (error-message-string (should-error (mevedel-memory-decision-recover-child workspace payload))))))
+        (mevedel-journal-claim-settle claim 'cancelled "")))))
+
 (provide 'test-mevedel-memory-application-worker)
 ;;; test-mevedel-memory-application-worker.el ends here

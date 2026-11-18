@@ -21,6 +21,8 @@
 (declare-function mevedel-journal-cleanup-active-p "mevedel-journal-cleanup" (workspace))
 
 ;; `mevedel-memory-notes'
+(autoload 'mevedel-memory-notes-commit "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-observe "mevedel-memory-notes")
 (declare-function mevedel-memory-notes-in-use-p "mevedel-memory-notes" (workspace relative))
 (declare-function mevedel-memory-notes-mutation-hold "mevedel-memory-notes" (workspace root relative &optional captured-scope))
 (declare-function mevedel-memory-notes-passes "mevedel-memory-notes" (workspace entries))
@@ -1848,12 +1850,11 @@ Never return reusable acceptance proofs."
           (let* ((accepted (mevedel-memory-store-accepted workspace (plist-get payload :pass-id) t))
                  (proposal (seq-find (lambda (item) (equal (plist-get item :id) (plist-get payload :proposal-id)))
                                      (plist-get accepted :proposals)))
-                 (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
                  (passes (make-hash-table :test #'equal)))
             (unless proposal (error "Unknown accepted application proposal"))
             (puthash (plist-get payload :pass-id) accepted passes)
             (cl-labels ((selected (id)
-                          (when-let* ((entry (mevedel-memory-decision-status workspace id entries passes)))
+                          (when-let* ((entry (mevedel-memory-decision-status workspace id nil passes)))
                             (cl-loop for field in mevedel-journal-store--decision-fields
                                      append (list (cdr field) (plist-get entry (cdr field)))))))
               (list :ok t :operation-id (plist-get payload :operation-id)
