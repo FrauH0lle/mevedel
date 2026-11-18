@@ -52,21 +52,24 @@ iteratively."
 (defun mevedel-memory-library--metadata (text)
   "Read inert YAML metadata from bounded topic TEXT.
 Frontmatter exactly as `mevedel-memory-apply' writes it -- one-line JSON
-name and description strings, then a plain memory type word -- is read
-without a YAML parse, which dominates listing cost.  Its strings may only use
-escapes that YAML decodes as JSON does, so the result equals the YAML parse.
+name and description strings, a plain memory type word, then an optional
+plain `modified' date -- is read without a YAML parse, which dominates
+listing cost.  Its strings may only use escapes that YAML decodes as JSON
+does, so the result equals the YAML parse.
 Any other frontmatter is parsed as YAML."
   (when (string-match "\\`---[ \t]*\n\\(\\(?:.\\|\n\\)*?\\)\n---[ \t]*\\(?:\n\\|\\'\\)" text)
     (let ((yaml (match-string 1 text))
           (string "\\(\"\\(?:[^\"\\\\\n[:cntrl:]]\\|\\\\[\"\\\\/nt]\\)*\"\\)"))
       (or (and (string-match (concat "\\`name: " string "\ndescription: " string
-                                     "\ntype: \\(user\\|feedback\\|project\\|reference\\)\\'")
+                                     "\ntype: \\(user\\|feedback\\|project\\|reference\\)"
+                                     "\\(?:\nmodified: \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)\\)?\\'")
                              yaml)
                (let ((name (match-string 1 yaml)) (description (match-string 2 yaml))
-                     (type (match-string 3 yaml)))
+                     (type (match-string 3 yaml)) (modified (match-string 4 yaml)))
                  (condition-case nil
-                     (list :name (json-parse-string name) :description (json-parse-string description)
-                           :type type)
+                     (append (list :name (json-parse-string name) :description (json-parse-string description)
+                                   :type type)
+                             (and modified (list :modified modified)))
                    (json-error nil))))
           (yaml-parse-string yaml :object-type 'plist :object-key-type 'keyword)))))
 

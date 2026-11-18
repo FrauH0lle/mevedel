@@ -77,9 +77,20 @@
   (let ((changes (mevedel-memory-apply-changes scope (proposal 'promote "new topic.md" "New lesson."))))
     (should-not (file-exists-p (file-name-concat memory "new topic.md")))
     (mevedel-tool-patch-commit changes)
-    (should (equal "---\nname: \"Current [context]\"\ndescription: \"When this matters\"\ntype: project\n---\n\nNew lesson.\n"
+    (should (equal (format "---\nname: \"Current [context]\"\ndescription: \"When this matters\"\ntype: project\nmodified: %s\n---\n\nNew lesson.\n"
+                           (format-time-string "%Y-%m-%d"))
                    (read-file "new topic.md")))
     (should (string-search "- [Current \\[context\\]](new%20topic.md) - When this matters\n" (read-file "MEMORY.md"))))
+  :doc "an unchanged topic keeps its recorded date and yields no write; a changed one is redated"
+  (progn
+    (write-region "---\nname: \"Current [context]\"\ndescription: \"When this matters\"\ntype: project\nmodified: 2020-01-02\n---\n\nSame.\n"
+                  nil (file-name-concat memory "a.md") nil 'silent)
+    (write-region "# Memory\n- [Current \\[context\\]](a.md) - When this matters\n- [Beta](b.md) - second\n"
+                  nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (setq scope (mevedel-memory-scope-capture workspace))
+    (should-not (mevedel-memory-apply-changes scope (proposal 'update "a.md" "Same.")))
+    (let ((topic (car (mevedel-memory-apply-changes scope (proposal 'update "a.md" "Changed.")))))
+      (should (string-search (format "modified: %s\n" (format-time-string "%Y-%m-%d")) (plist-get topic :content)))))
   :doc "an absent topic keeps its captured mode in another editor; writing wider permissions is refused"
   (dolist (pair '((#o600 . #o644) (#o644 . #o600)))
     (cl-letf (((symbol-function 'default-file-modes) (lambda () (car pair))))

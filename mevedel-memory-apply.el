@@ -134,10 +134,19 @@ ownership. The patch transaction rechecks each change's expected snapshot."
           (if (eq action 'remove) (emit file nil nil)
             (unless (member (plist-get proposal :type) '("user" "feedback" "project" "reference"))
               (error "Invalid accepted memory type"))
-            (emit file (format "---\nname: %s\ndescription: %s\ntype: %s\n---\n\n%s\n"
-                               (decode-coding-string (json-serialize (plist-get proposal :title)) 'utf-8-unix)
-                               (decode-coding-string (json-serialize (plist-get proposal :hook)) 'utf-8-unix)
-                               (plist-get proposal :type) (string-trim-right body "\n")) t))
+            (let* ((head (format "---\nname: %s\ndescription: %s\ntype: %s\n"
+                                 (decode-coding-string (json-serialize (plist-get proposal :title)) 'utf-8-unix)
+                                 (decode-coding-string (json-serialize (plist-get proposal :hook)) 'utf-8-unix)
+                                 (plist-get proposal :type)))
+                   (tail (format "---\n\n%s\n" (string-trim-right body "\n")))
+                   (old (decode-coding-string (or (plist-get (snapshot file) :bytes) "") 'utf-8-unix))
+                   ;; An otherwise unchanged topic keeps its date, so re-accepting it stays a no-op.
+                   (date (if (string-match (concat "\\`" (regexp-quote head) "modified: \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)\n"
+                                                   (regexp-quote tail) "\\'")
+                                           old)
+                             (match-string 1 old)
+                           (format-time-string "%Y-%m-%d"))))
+              (emit file (concat head "modified: " date "\n" tail) t)))
           (dolist (source (plist-get proposal :merged-files))
             (unless (equal file source) (emit source nil nil)))
           (emit "MEMORY.md" index (or (plist-get index-before :exists) (not (string-empty-p index))))))

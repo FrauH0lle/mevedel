@@ -25,18 +25,21 @@
   (test)
   :doc "frontmatter exactly as the writer emits it reads without YAML and equals the YAML parse"
   (dolist (title '("Plain title" "Quote \" back\\slash/ new\nline\ttab é 😀"))
-    (let* ((yaml (format "name: %s\ndescription: %s\ntype: feedback"
-                         (decode-coding-string (json-serialize title) 'utf-8-unix)
-                         (decode-coding-string (json-serialize "Hook \"text\"") 'utf-8-unix)))
-           (expected (yaml-parse-string yaml :object-type 'plist :object-key-type 'keyword)))
-      (should (equal title (plist-get expected :name)))
-      (cl-letf (((symbol-function 'yaml-parse-string) (lambda (&rest _) (error "Unexpected YAML parse"))))
-        (should (equal expected (mevedel-memory-library--metadata (concat "---\n" yaml "\n---\n\nBody\n")))))))
+    (dolist (modified '("" "\nmodified: 2026-11-18"))
+      (let* ((yaml (format "name: %s\ndescription: %s\ntype: feedback%s"
+                           (decode-coding-string (json-serialize title) 'utf-8-unix)
+                           (decode-coding-string (json-serialize "Hook \"text\"") 'utf-8-unix)
+                           modified))
+             (expected (yaml-parse-string yaml :object-type 'plist :object-key-type 'keyword)))
+        (should (equal title (plist-get expected :name)))
+        (cl-letf (((symbol-function 'yaml-parse-string) (lambda (&rest _) (error "Unexpected YAML parse"))))
+          (should (equal expected (mevedel-memory-library--metadata (concat "---\n" yaml "\n---\n\nBody\n"))))))))
   :doc "every other frontmatter form keeps YAML's exact result, including its escape handling"
   (dolist (yaml '("name: Manual lesson\ntype: feedback" "name: \"\\x41\"" "name: \"First\"\nname: \"Second\""
                   "type: true" "type: \"user\" # comment" "name: \"Open\n  continued\"" "name: [unclosed"
                   "\"name\": \"Quoted key\"\ntype: feedback" "{name: Flow, type: feedback}"
                   "name: \"A\"\ndescription: \"B\"\ntype: other"
+                  "name: \"A\"\ndescription: \"B\"\ntype: user\nmodified: 2026-11-18T10:00:00Z"
                   "name: \"\\u00e9\"\ndescription: \"x\"\ntype: user"
                   "name: \"\\b\\f\\r\"\ndescription: \"x\"\ntype: user"
                   "name: \"A\"\ndescription: \"line\nname: \\\"Injected\\\"\"\ntype: user"

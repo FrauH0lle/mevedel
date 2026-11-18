@@ -54,6 +54,7 @@ Each topic file uses YAML frontmatter:
 name: User style
 description: Communication and review preferences for this user
 type: feedback
+modified: 2026-05-08
 ---
 
 Prefer terse completion responses after code edits.
@@ -73,6 +74,12 @@ Supported `type` values:
   code, Git history, project instructions, or maintained documentation.
 - `reference`: otherwise undiscoverable pointers to authoritative information
   in trackers, documentation, or external systems, with their purpose.
+
+`modified` is the local date of the last content change, as `YYYY-MM-DD`.
+Accepted review proposals stamp it and keep it when nothing else changes;
+manual edits should update it. It records age in the file itself because
+checkouts and copies reset file modification times. Topics without it
+remain valid.
 
 Feedback and project memories should preserve enough context to be
 actionable later. Prefer a direct rule or fact followed by `**Why:**`
