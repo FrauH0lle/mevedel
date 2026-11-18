@@ -108,31 +108,6 @@ occurrence, compare its `:rss-kb` growth with `:buffer-chars-total`,
 points to C-side allocations or huge strings).
 During that sweep's own orchestration, sampled RSS stayed near 930 MB.
 
-### Cargo command duration and editor stalls
-
-Reported command, run from the SNT-webapp root:
-
-```bash
-cd backend && cargo fmt && cargo clippy --locked --offline --all-targets -- -D warnings 2>&1 | grep -v 'hard linking' | grep -E -A10 '^(error|warning)' | head -30; echo "clippy ${PIPESTATUS[0]}"; cargo test --locked --offline 2>&1 | grep -E "FAILED|test result|panicked" | head -3
-```
-
-Open after investigation on 2026-11-04. The original unrestricted run took
-294.1 seconds, but printed `clippy 0` within 0.6 seconds; the long phase was
-the test pipeline. Its session recorded 99 delayed editor heartbeats, with a
-5.635-second maximum and little editor CPU time. Slow synchronous session-control
-file programs overlapped those stalls; an expensive progress redraw is not
-established. A copied backend/cache replay reproduced a five-minute executable
-build without running tests; the tests afterward took 0.36 seconds. A controlled
-750-ms child delay blocked the synchronous control-file API's heartbeat for about
-755 ms, while the existing async carrier kept gaps near 10 ms. Natural sampled
-control calls during the rebuild stayed fast, so incident attribution remains
-open. Timer-only lease renewal now uses a single-flight asynchronous heartbeat,
-serialized with mutation/publication and protected against stale callbacks;
-own-expiry reclaim remains asynchronous too. This removes that synchronous timer
-wait, not the unexplained Cargo build duration or every source of editor lag.
-The original filters hide build/lock messages and do not preserve the test
-command's exit code. Use raw output for further reproductions.
-
 ### Journal worker cancellation through a launcher script
 
 When `invocation-name` names a shell launcher rather than the Emacs binary,
