@@ -1518,7 +1518,8 @@ The native module must also build here."
   "Run FIXTURE, a file under test/fixtures, in a PGTK daemon on a nested KWin.
 The daemon gets the display name in MEVEDEL_NATIVE_DISPLAY and writes its
 observations to the file named by MEVEDEL_NATIVE_RESULT before exiting.
-A daemon running longer than TIMEOUT seconds, 90 by default, fails the test.
+A daemon running longer than TIMEOUT seconds, 90 by default, fails the test
+with its last MEVEDEL-CHECKPOINT trace line if one was emitted.
 Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
 WAYLAND_DEBUG client log."
   (let* ((directory (make-temp-file "mevedel-wayland-" t))
@@ -1560,7 +1561,17 @@ WAYLAND_DEBUG client log."
                                    `(setq load-path (cons ,mevedel-test--root load-path)
                                           mevedel-user-dir ,(file-name-as-directory directory)))
                          "-l" (file-name-concat mevedel-test--root "test/fixtures" fixture)))))
-          (with-timeout ((or timeout 90) (ert-fail "Wayland scenario timed out"))
+          (with-timeout
+              ((or timeout 90)
+               (ert-fail
+                (with-current-buffer trace
+                  (save-excursion
+                    (goto-char (point-max))
+                    (format "Wayland scenario %s timed out; last observed state: %s"
+                            fixture
+                            (if (re-search-backward "^MEVEDEL-CHECKPOINT \\(.+\\)\n" nil t)
+                                (match-string-no-properties 1)
+                              "no checkpoint received; worker state unavailable"))))))
             (while (process-live-p daemon) (accept-process-output nil 0.05)))
           (cl-list* (with-temp-buffer
                       (insert-file-contents result)
