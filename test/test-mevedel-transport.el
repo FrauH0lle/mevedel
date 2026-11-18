@@ -36,7 +36,11 @@
              'reload-test "/ssh:user@host:/srv/x" #'ignore))
           (setq timer (car (gethash 'reload-test mevedel-transport--pending)))
           (should (timerp timer))
+          (advice-add 'timer-event-handler :around
+                      #'mevedel-transport--guard-deadline-timer)
           (unload-feature 'tramp 'force)
+          (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                       'timer-event-handler))
           (should-not (gethash 'reload-test mevedel-transport--pending))
           (should-not (memq timer timer-list))
           (require 'tramp)
@@ -44,6 +48,7 @@
                                    'tramp-file-name-handler))
           (should (memq #'mevedel-transport--detach tramp-unload-hook)))
       (mevedel-transport-cancel-pending)
+      (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
       (unless (featurep 'tramp)
         (require 'tramp))
       (dolist (feature (reverse tramp-features))
@@ -459,9 +464,27 @@
                     (throw 'done 'thrown)))))
     (should (eq before timer-list))))
 
-(mevedel-deftest mevedel-transport-call-with-deadline (:quiet t)
+(mevedel-deftest mevedel-transport-call-with-deadline
+  (:quiet t :after-each ((advice-remove 'timer-event-handler
+                                       #'mevedel-transport--guard-deadline-timer)))
   ,test
   (test)
+  :doc "restores dispatch after a successful bounded call"
+  (let ((handler (symbol-function 'timer-event-handler)))
+    (should (eq :done (mevedel-transport-call-with-deadline
+                       10 (lambda () :done) #'ignore)))
+    (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                 'timer-event-handler))
+    (should (eq handler (symbol-function 'timer-event-handler))))
+
+  :doc "removes the timer guard when the bounded call signals an error"
+  (progn
+    (should-error (mevedel-transport-call-with-deadline
+                   10 (lambda () (user-error "Probe failed")) #'ignore)
+                  :type 'user-error)
+    (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                 'timer-event-handler)))
+
   :doc "interrupts real TRAMP I/O without dispatching old or newly armed timers"
   (let* ((root (make-temp-file "transport-deadline-" t))
          (remote (concat "/mevedelmock:" (system-name) ":" root))
@@ -484,6 +507,8 @@
                     (should (zerop fired))
                     :expired))))
             (should-not returned)
+            (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                         'timer-event-handler))
             (let ((end (+ (float-time) 2)))
               (while (and (< fired 2) (< (float-time) end))
                 (accept-process-output nil 0.02)))
@@ -785,12 +810,17 @@
              'teardown "/srv/project" (lambda () (cl-incf runs))
              (lambda () (cl-incf cancels)))
             (setq timer (car (gethash 'teardown mevedel-transport--pending))))
+          (advice-add 'timer-event-handler :around
+                      #'mevedel-transport--guard-deadline-timer)
           (mevedel-transport-uninstall)
+          (should-not (advice-member-p #'mevedel-transport--guard-deadline-timer
+                                       'timer-event-handler))
           (mevedel-transport-install)
           (apply (timer--function timer) (timer--args timer))
           (should (= 0 runs))
           (should (= 1 cancels)))
       (when (timerp timer) (cancel-timer timer))
+      (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
       (mevedel-transport-install)
       (mevedel-transport-cancel-pending))))
 

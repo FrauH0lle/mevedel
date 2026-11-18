@@ -134,6 +134,7 @@ is the default."
 (defun mevedel-transport--detach ()
   "Detach transport integration and cancel work that cannot safely run."
   (mevedel-transport-cancel-pending)
+  (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer)
   (advice-remove 'tramp-file-name-handler
                  #'mevedel-transport--handler-advice)
   (setq mevedel-transport--depth 0))
@@ -149,6 +150,11 @@ Paced processes continue."
   (mevedel-transport--detach)
   (when (boundp 'tramp-unload-hook)
     (remove-hook 'tramp-unload-hook #'mevedel-transport--detach)))
+
+(defun mevedel-transport-unload-function ()
+  "Remove transport integration before unloading the feature."
+  (mevedel-transport-uninstall)
+  nil)
 
 (defun mevedel-transport-nested-p ()
   "Return non-nil when a TRAMP file operation is already on the stack."
@@ -317,12 +323,9 @@ Call ON-TIMEOUT after aborting a synchronous wait, or instead of returning
 an overdue result.  Hold both pre-existing timers and timers armed by
 process filters during the wait; only the private deadline can fire.
 Use one deadline around the whole operation, rather than nesting deadlines."
-  (unless (advice-member-p #'mevedel-transport--guard-deadline-timer
-                           'timer-event-handler)
-    (advice-add 'timer-event-handler :around
-                #'mevedel-transport--guard-deadline-timer '((depth . -90))))
   (mevedel-transport-with-exclusive-connection
-    (let* ((tag (make-symbol "transport-deadline"))
+    (let* ((outermost (not mevedel-transport--deadline-timer))
+           (tag (make-symbol "transport-deadline"))
            (deadline (+ (float-time) seconds))
            (tramp-dont-suspend-timers t)
            (connection (bound-and-true-p tramp-current-connection))
@@ -336,12 +339,18 @@ Use one deadline around the whole operation, rather than nesting deadlines."
                               (tramp-get-connection-process (car current))))))))
            completed result)
       (unwind-protect
-          (let ((interrupted (catch tag (setq result (funcall thunk) completed t))))
-            (if (and completed (< (float-time) deadline))
-                result
-              ;; The aborted request's reply must not reach the next command.
-              (when (processp interrupted) (delete-process interrupted))
-              (funcall on-timeout)))
+          (progn
+            (when outermost
+              (advice-add 'timer-event-handler :around
+                          #'mevedel-transport--guard-deadline-timer '((depth . -90))))
+            (let ((interrupted (catch tag (setq result (funcall thunk) completed t))))
+              (if (and completed (< (float-time) deadline))
+                  result
+                ;; The aborted request's reply must not reach the next command.
+                (when (processp interrupted) (delete-process interrupted))
+                (funcall on-timeout))))
+        (when outermost
+          (advice-remove 'timer-event-handler #'mevedel-transport--guard-deadline-timer))
         (cancel-timer mevedel-transport--deadline-timer)
         (dolist (timer mevedel-transport--deadline-held)
           (setf (timer--triggered timer) nil))))))
