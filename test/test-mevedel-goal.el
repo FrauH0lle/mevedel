@@ -994,8 +994,10 @@
           (should (equal policy (mevedel-goal-implementation-policy goal)))
           (should-error (mevedel-goal-resume) :type 'user-error)
           (should (cl-every (lambda (saved) (equal policy saved)) saved-policies))
+          (setq mevedel-goal--rejected-completions 2)
           (mevedel-goal-clear)
           (should-not (mevedel-session-goal session))
+          (should (= 0 mevedel-goal--rejected-completions))
           (should-not (car saved-policies))
           (mevedel-goal-start "Ordinary replacement")
           (let ((replacement (mevedel-session-goal session)))
@@ -1003,6 +1005,19 @@
             (should-not (mevedel-goal-implementation-policy replacement))
             (should (= 90 (mevedel-goal-token-budget replacement))))))
       (should (= 90 mevedel-goal-token-budget)))))
+
+(mevedel-deftest mevedel-goal-record-rejected-completion
+  (:doc "counts rejected claims per root buffer and returns the running total")
+  (let ((root (generate-new-buffer " *goal-root*"))
+        (other (generate-new-buffer " *goal-other*")))
+    (unwind-protect
+        (progn
+          (should (= 1 (mevedel-goal-record-rejected-completion root)))
+          (should (= 2 (mevedel-goal-record-rejected-completion root)))
+          (should (= 1 (mevedel-goal-record-rejected-completion other)))
+          (should (= 2 (buffer-local-value 'mevedel-goal--rejected-completions root))))
+      (kill-buffer root)
+      (kill-buffer other))))
 
 (mevedel-deftest mevedel-goal-resume
   ()
@@ -1013,7 +1028,8 @@
     (let* ((goal (mevedel-goal--create :id "g" :status 'paused
                                        :token-budget 10 :tokens-used 10))
            (session (mevedel-session--create :name "main" :goal goal)))
-      (setq-local mevedel--session session mevedel-goal--transient-retries 1)
+      (setq-local mevedel--session session mevedel-goal--transient-retries 1
+                  mevedel-goal--rejected-completions 2)
       (dolist (status '(paused blocked))
         (setf (mevedel-goal-status goal) status)
         (should-error (mevedel-goal-resume) :type 'user-error)
@@ -1023,6 +1039,7 @@
                 ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore))
         (mevedel-goal-resume))
       (should (= 0 mevedel-goal--transient-retries))
+      (should (= 0 mevedel-goal--rejected-completions))
       (should (eq 'active (mevedel-goal-status goal)))))
 
   :doc "queues optional steering before rearming continuation"

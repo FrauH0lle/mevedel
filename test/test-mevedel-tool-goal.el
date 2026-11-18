@@ -257,14 +257,13 @@ and `verify-callback' delivers the verifier outcome."
       (should (= 25 (mevedel-goal-tokens-used goal)))
       (should (eq 'inactive (mevedel-goal-continue-if-idle session (current-buffer))))))
 
-  :doc "returns every non-passing verdict as findings, keeps the Goal active, and ends the turn"
+  :doc "returns every rejection as findings, keeps the Goal active, and ends the turn"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship"))
-    (let ((goal (mevedel-session-goal session)))
+    (let ((goal (mevedel-session-goal session))
+          (mevedel-goal-max-rejected-completions 10))
       (dolist (case '(((:status ok :kind fork :verdict fail :result "Parser crashes" :usage 5)
                        "returned FAIL" "Parser crashes")
-                      ((:status ok :kind fork :verdict partial :result "No network" :usage 5)
-                       "returned PARTIAL" "No network")
                       ((:status ok :kind fork :verification-rejected t :result "rambling" :usage 5)
                        "no valid verdict" "rambling")
                       ((:status error :reason agent-errored :message "Provider failed" :usage 5)
@@ -282,6 +281,50 @@ and `verify-callback' delivers the verifier outcome."
           (should (eq 'goal-verification-failed
                       (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))))
       (should (= 0 (mevedel-goal-tokens-used goal)))))
+
+  :doc "PARTIAL completes the Goal and records that some requirements went unverified"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let ((goal (mevedel-session-goal session))
+          outcome)
+      (mevedel-pipeline-run-tool-outcome
+       (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+       '(:status "complete"))
+      (funcall verify-callback
+               '(:status ok :kind fork :verdict partial :result "No network for the API check"))
+      (should (eq 'success (plist-get outcome :status)))
+      (should (string-search "No network for the API check" (plist-get outcome :result)))
+      (should (eq 'complete (mevedel-goal-status goal)))
+      (should (string-search "PARTIAL" (mevedel-goal-reason goal)))
+      (should-not (mevedel-turn-end-requested-p (gptel-fsm-info fsm)))))
+
+  :doc "consecutive rejected claims up to the limit block the Goal; resume restarts the count"
+  (mevedel-tool-goal-test--with-request
+    (mevedel-tool-goal--handle-create '(:objective "Ship"))
+    (let ((goal (mevedel-session-goal session))
+          (mevedel-goal-max-rejected-completions 2)
+          outcome)
+      (cl-flet ((reject (report)
+                  (setq outcome nil)
+                  (mevedel-pipeline-run-tool-outcome
+                   (mevedel-tool-get "UpdateGoal") (lambda (value) (setq outcome value))
+                   '(:status "complete"))
+                  (funcall verify-callback
+                           (list :status 'ok :kind 'fork :verdict 'fail :result report))))
+        (reject "First miss")
+        (should (eq 'active (mevedel-goal-status goal)))
+        (reject "Second miss")
+        (should (eq 'blocked (mevedel-goal-status goal)))
+        (should (string-search "2 consecutive" (mevedel-goal-reason goal)))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (string-search "Goal blocked" (plist-get outcome :result)))
+        (should (string-search "Second miss" (plist-get outcome :result)))
+        (should (eq 'goal-verification-failed
+                    (mevedel-turn-end-requested-p (gptel-fsm-info fsm))))
+        (mevedel-goal-resume)
+        (should (eq 'active (mevedel-goal-status goal)))
+        (reject "Third miss")
+        (should (eq 'active (mevedel-goal-status goal))))))
 
   :doc "blocks immediately without verification"
   (mevedel-tool-goal-test--with-request
@@ -388,9 +431,8 @@ and `verify-callback' delivers the verifier outcome."
                 (should-error (mevedel-tool-goal--verification-prompt session goal))))))))
 
 (mevedel-deftest mevedel-tool-goal--verification-failure
-  (:doc "names each non-passing outcome and carries its report")
+  (:doc "names each rejected outcome and carries its report")
   (dolist (case '(((:verdict fail :result "r") "returned FAIL")
-                  ((:verdict partial :result "r") "returned PARTIAL")
                   ((:verification-rejected t :result "r") "no valid verdict")
                   ((:status error :message "r") "did not finish")))
     (let ((reply (mevedel-tool-goal--verification-failure (car case))))

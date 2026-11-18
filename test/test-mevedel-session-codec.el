@@ -287,6 +287,23 @@
     (should (= 110 (mevedel-goal-tokens-used goal)))
     (should (equal "Token budget reached: 110/100 tokens used"
                    (mevedel-goal-reason goal))))
+  :doc "round-trips an optional completion note and rejects a blank one or an active reason"
+  (let ((complete '(:id "g3" :objective "Ship" :status complete
+                    :reason "Completed with PARTIAL verification"
+                    :implementation-policy nil
+                    :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
+                    :time-used-seconds 0 :turns-run 1 :plan-reference nil
+                    :created-at "created" :updated-at "updated")))
+    (should (equal "Completed with PARTIAL verification"
+                   (mevedel-goal-reason
+                    (mevedel-session-codec--goal-from-plist complete))))
+    (should-not (mevedel-goal-reason
+                 (mevedel-session-codec--goal-from-plist
+                  (plist-put (copy-sequence complete) :reason nil))))
+    (should-error (mevedel-session-codec--goal-from-plist
+                   (plist-put (copy-sequence complete) :reason " ")))
+    (should-error (mevedel-session-codec--goal-from-plist
+                   (plist-put (copy-sequence complete) :status 'active))))
   :doc "retains incomplete usage across a sidecar round trip"
   (let* ((goal (mevedel-goal--create
                 :id "incomplete" :objective "Ship" :status 'budget-limited

@@ -149,6 +149,13 @@
 
 (make-variable-buffer-local 'mevedel-goal-token-budget)
 
+(defcustom mevedel-goal-max-rejected-completions 3
+  "Consecutive rejected completion claims after which a Goal becomes blocked.
+A claim is rejected when its independent verification returns FAIL, no
+valid verdict, or does not finish.  Resuming the Goal restarts the count."
+  :type 'natnum
+  :group 'mevedel)
+
 (defconst mevedel-goal--continuation-trigger
   "Continue working toward the active Goal."
   "Ordinary user-role trigger used for initial and automatic Goal turns.")
@@ -162,6 +169,15 @@ Their sum outlasts a short network outage such as a dropped Wi-Fi link.")
 
 (defvar-local mevedel-goal--transient-retries 0
   "Transient Goal failures retried since the last successful turn.")
+
+(defvar-local mevedel-goal--rejected-completions 0
+  "Consecutive rejected completion claims since the Goal started or resumed.")
+
+(defun mevedel-goal-record-rejected-completion (buffer)
+  "Count one rejected completion claim of BUFFER's Goal; return the total."
+  (with-current-buffer buffer
+    (setq mevedel-goal--rejected-completions
+          (1+ mevedel-goal--rejected-completions))))
 
 
 ;;
@@ -249,7 +265,8 @@ means unlimited.  Neither choice changes that default."
                   (equal goal provisional-state))
          (setf (mevedel-session-goal session) previous))
        (signal (car err) (cdr err))))
-    (setq mevedel-goal--transient-retries 0)
+    (setq mevedel-goal--transient-retries 0
+          mevedel-goal--rejected-completions 0)
     (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal))
     goal))
 
@@ -585,7 +602,8 @@ Running tools finish and the turn settles; it is not aborted."
       (user-error "%s" (if (mevedel-goal-tokens-incomplete-p goal)
                             "Native usage is incomplete; remove the budget or start a new Goal"
                           "Raise or remove the Goal budget before resuming")))
-    (setq mevedel-goal--transient-retries 0)
+    (setq mevedel-goal--transient-retries 0
+          mevedel-goal--rejected-completions 0)
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-reason goal) nil
           (mevedel-goal-reason-diagnostic goal) nil)
@@ -661,7 +679,8 @@ The string `none' removes the limit."
   (mevedel-goal--current)
   (mevedel-goal--assert-mutation-authority mevedel--session)
   (setf (mevedel-session-goal mevedel--session) nil)
-  (setq mevedel-goal--transient-retries 0)
+  (setq mevedel-goal--transient-retries 0
+        mevedel-goal--rejected-completions 0)
   (mevedel-goal--persist mevedel--session (current-buffer))
   nil)
 
