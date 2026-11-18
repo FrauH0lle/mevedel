@@ -1739,14 +1739,17 @@
       (should (= 2 (length tree)))
       (should (plist-get (cadr tree) :excluded)))))
 
-(mevedel-deftest mevedel-note-conversation--roots
+(mevedel-deftest mevedel-note-conversation--batch-tree
   (:quiet t :doc "batch roots dedupe descendants regardless of selection order")
   (mevedel-note-conversation-test--with-tree
-    (should (equal (list parent)
-                   (mevedel-note-conversation--roots (list grandchild child parent child))))
+    (should (equal (mevedel-note-conversation--tree parent)
+                   (mevedel-note-conversation--batch-tree
+                    (list grandchild child parent child))))
     (overlay-put child 'mevedel-note-session-id "independent")
-    (should (equal (list parent child)
-                   (mevedel-note-conversation--roots (list parent child grandchild))))))
+    (should (equal (append (mevedel-note-conversation--tree parent)
+                           (mevedel-note-conversation--tree child))
+                   (mevedel-note-conversation--batch-tree
+                    (list parent child grandchild))))))
 
 (mevedel-deftest mevedel-note-conversation--prompt
   (:quiet t)
@@ -1821,7 +1824,24 @@
   (mevedel-note-conversation-test--with-tree
     (should-error (mevedel-note-send-batch (list parent 'invalid) :no-display t) :type 'user-error)
     (should-error (mevedel-note-send-batch (list 'invalid parent) :no-display t) :type 'user-error)
-    (should-not sent)))
+    (should-not sent))
+  :doc "batch send builds each selected note's tree only once"
+  (mevedel-note-conversation-test--with-source
+    (erase-buffer)
+    (dotimes (_ 50) (insert "code\n"))
+    (save-buffer)
+    (let* ((notes (cl-loop for start from 1 below (point-max) by 5
+                           collect (mevedel-note-make source start (+ start 4)
+                                                     :text "Review this line")))
+           (build-tree (symbol-function 'mevedel-note-conversation--tree))
+           (builds 0))
+      (cl-letf (((symbol-function 'mevedel-note-conversation--tree)
+                 (lambda (item)
+                   (cl-incf builds)
+                   (funcall build-tree item))))
+        (mevedel-note-send-batch notes :no-display t))
+      (should (= (length notes) builds))
+      (should (= 1 (length sent))))))
 
 (provide 'test-mevedel-note-conversation)
 ;;; test-mevedel-note-conversation.el ends here
