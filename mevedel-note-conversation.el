@@ -206,18 +206,23 @@ Without NOTE, restore this session's hint during note conversation setup."
                                     (sort (gethash item children) :key #'overlay-start)))))))
       (walk note nil))))
 
-(defun mevedel-note-conversation--roots (notes)
-  "Return NOTES without duplicates or descendants covered by another selection."
-  (cl-remove-if
-   (lambda (note)
-     (cl-some (lambda (parent)
-                (and (not (eq parent note))
-                     (cl-find note
-                              (mevedel-note-conversation--tree parent)
-                              :key (lambda (entry)
-                                     (unless (plist-get entry :excluded) (plist-get entry :note))))))
-              notes))
-   (delete-dups (copy-sequence notes))))
+(defun mevedel-note-conversation--batch-tree (notes)
+  "Combine NOTES' request trees without resending covered descendants."
+  (let ((trees (mapcar #'mevedel-note-conversation--tree
+                       (delete-dups (copy-sequence notes))))
+        (covered (make-hash-table :test #'eq))
+        (included (make-hash-table :test #'eq)))
+    (dolist (tree trees)
+      (dolist (entry (cdr tree))
+        (unless (plist-get entry :excluded)
+          (puthash (plist-get entry :note) t covered))))
+    (cl-loop for tree in trees
+             unless (gethash (plist-get (car tree) :note) covered)
+             nconc (cl-loop for entry in tree
+                            for note = (unless (plist-get entry :excluded)
+                                         (plist-get entry :note))
+                            unless (and note (gethash note included))
+                            collect entry and do (when note (puthash note t included))))))
 
 (defun mevedel-note-conversation--block (note session &optional parent)
   "Capture NOTE's authored text, code and explicit attachments for SESSION.
@@ -328,13 +333,7 @@ sync to the caller's batch."
                                (cl-some (lambda (item)
                                           (eq 'unsent (overlay-get item 'mevedel-note-state)))
                                         notes))))
-             (tree (and initial
-                        (cl-delete-duplicates
-                         (mapcan #'mevedel-note-conversation--tree
-                                 (mevedel-note-conversation--roots notes))
-                         :key (lambda (entry)
-                                (unless (plist-get entry :excluded) (plist-get entry :note)))
-                         :test (lambda (a b) (and a (eq a b))) :from-end t)))
+             (tree (and initial (mevedel-note-conversation--batch-tree notes)))
              (members (if initial
                           (cl-loop for entry in tree unless (plist-get entry :excluded)
                                    collect (plist-get entry :note))
