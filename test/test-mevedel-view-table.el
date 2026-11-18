@@ -454,7 +454,7 @@
       (should (= 22 (funcall answer 400)))
       (put-text-property 16 22 'mevedel-view-table-streaming t)
       (should (= 12 (funcall answer 400)))
-      (put-text-property 6 12 'mevedel-view-table-width 400)
+      (put-text-property 6 12 'mevedel-view-table-layout 400)
       (should-not (funcall answer 400))
       (should (= 12 (funcall answer 500)))))
   :doc "survives fontification and recomputes after a text change"
@@ -497,12 +497,11 @@
       (put-text-property (point-min)
                          (next-single-property-change
                           (point-min) 'mevedel-view-table-source nil (point-max))
-                         'mevedel-view-table-width nil))
-    (let ((width (window-body-width (selected-window) t)))
-      (should (mevedel-view-table--last-stale-end (point-min) width))
+                         'mevedel-view-table-layout nil))
+    (let ((layout (mevedel-view-table--window-layout (selected-window))))
+      (should (mevedel-view-table--last-stale-end (point-min) layout))
       (mevedel-view-table-rerender)
-      (should (eql width (get-text-property (point-min) 'mevedel-view-table-width)))
-      (should-not (mevedel-view-table--last-stale-end (point-min) width)))))
+      (should-not (mevedel-view-table--last-stale-end (point-min) layout)))))
 
 (mevedel-deftest mevedel-view-table-rerender ()
   ,test
@@ -526,7 +525,7 @@
                            (next-single-property-change
                             (point-min) 'mevedel-view-table-source
                             nil (point-max))
-                           'mevedel-view-table-width nil))
+                           'mevedel-view-table-layout nil))
       (mevedel-view-table-rerender)
       (let ((width (window-body-width (selected-window) t)))
         (should (eql width (get-text-property (point-min)
@@ -548,7 +547,7 @@
             "| x | y |\n|---|---|\n| 9 | 8 |\n")
     (mevedel-view-table-decorate (point-min) (point-max) nil)
     (put-text-property (point-min) (point-max)
-                       'mevedel-view-table-width nil)
+                       'mevedel-view-table-layout nil)
     (mevedel-view-table-rerender)
     (should (mevedel-view-table-rerender))
     (should-not (mevedel-view-table-rerender))
@@ -588,7 +587,7 @@
             (setq pos next)))
         ;; Force a rerender as a window resize would.
         (put-text-property (point-min) table-end
-                           'mevedel-view-table-width nil))
+                           'mevedel-view-table-layout nil))
       (mevedel-view-table-rerender)
       (goto-char (point-min))
       (search-forward "lisp")

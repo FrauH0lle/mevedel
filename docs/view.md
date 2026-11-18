@@ -2426,7 +2426,11 @@ Markdown rendering adds small view-only affordances:
 - canonical pipe tables (two or more consecutive `|...|` rows outside
   fenced blocks and linkify-exempt text) are rendered by
   `mevedel-view-table.el` as aligned box-drawing rows after the link and
-  path passes, so buttons and faces inside cells survive. Columns wider
+  path passes, so buttons and faces inside cells survive. Each cell uses the
+  prose Markdown renderer for inline faces and markup visibility. Column
+  measurements and wrapping use the displayed text rather than hidden
+  delimiters. Inline styles use the border's font family and size so a
+  taller inline font does not break the vertical rules. Columns wider
   than 90% of the usable window width (window columns minus any
   `line-prefix` or `wrap-prefix` inset) shrink proportionally toward their
   longest-word minima and wrap their cells. If those words cannot fit, they
@@ -2442,14 +2446,12 @@ Markdown rendering adds small view-only affordances:
   The rendered region retains the canonical Markdown
   source and the layout's window pixel width as text properties and
   carries the view's own source/read-only/turn properties across the
-  rewrite. Each view keeps up to 64 completed layouts, keyed by source including
-  rendering properties (not projection source handles), window pixel width,
-  inset, frame identity/font, named-face
-  and fontset generation, and face remapping. Face/font setters invalidate
-  resolved layouts without resolving source faces on every redraw. A redraw
-  that reinserts a table laid out before applies its layout during the
-  write, so the table never shows raw; a new table still waits for its
-  deferred first layout;
+  rewrite. Each view retains the latest layout per completed table source.
+  Reuse requires the same source and rendering properties (not projection source
+  handles), window width, inset, fonts, and text scale. A color-only theme
+  change does not invalidate the layout. A redraw that reinserts a table laid
+  out before reapplies its rows and can reuse its source-position map. A new
+  table still waits for its deferred first layout;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
@@ -2476,7 +2478,7 @@ attribution.
 
 Normal views first show pipe tables with their canonical source retained as
 text properties. The existing Markdown realignment timer formats one visible
-pending or width-stale table after 250 ms idle. Off-screen and folded tables wait until
+pending or layout-stale table after 250 ms idle. Off-screen and folded tables wait until
 scrolling or unfolding makes them visible. A partially visible table is still rendered
 as a whole; one very large table can exceed the idle delay. There is no
 background queue sorted by cursor distance. Interactive visibility uses Emacs's
@@ -2485,8 +2487,8 @@ rows. Changed window contents or scroll positions request an updated boundary;
 batch rendering, which has no glyph matrices, uses its line-motion approximation.
 That boundary costs about a millisecond of display simulation, and scrolling
 asks on every step. The check therefore first compares the window start with the
-end of the last unformatted table, cached per text change and width (table
-rendering, which can update a width in place, resets it): when no such table
+end of the last unformatted or stale table, cached per text change and window
+layout (table rendering can update the layout in place and resets the cache): when no such table
 reaches the window, it answers without the window end.
 Tables in the live paragraph of an unfinished streamed response stay raw even
 if that timer runs: each chunk redraws that paragraph from source, so a
@@ -2521,9 +2523,8 @@ continuation lines that disappear during reflow. Identical text only refreshes
 display properties.
 
 A buffer shown simultaneously in windows of different widths holds one layout:
-the most recently realigned window wins. Staleness is keyed on window pixel
-width, so a glyph-width-only change such as `text-scale-adjust` does not trigger
-reflow until the window width changes.
+the most recently realigned window wins. Font or text-scale changes can trigger
+reflow even if the window pixel width stays the same.
 
 Copying from a view is contract-bound to canonical Markdown:
 `mevedel-view-mode` sets `filter-buffer-substring-function` so any

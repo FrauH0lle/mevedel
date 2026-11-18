@@ -1155,7 +1155,7 @@
            (point-min)
            (next-single-property-change
             (point-min) 'mevedel-view-table-source nil (point-max))
-           'mevedel-view-table-width nil)
+           'mevedel-view-table-layout nil)
           (mevedel-view-table-rerender)))))
 
   :doc "regions without tables copy verbatim and honor deletion"
