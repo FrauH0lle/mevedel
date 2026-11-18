@@ -56,7 +56,7 @@
                   (with-temp-file file
                     (insert (json-serialize
                              `((decoy . ((claudeAiOauth . ((refreshTokenExpiresAt . 1)))))
-                               (claudeAiOauth . ((refreshToken . "fixture \"escaped\" text")
+                               (claudeAiOauth . ((refreshToken . "fixture \"escaped\"\\path\nline")
                                                  (other . [((refreshTokenExpiresAt . 1))])
                                                  ,@(and seconds `((refreshTokenExpiresAt . ,(* seconds 1000))))))))))
                   (set-file-times file mtime)))
@@ -81,8 +81,13 @@
             (write-expiry nil (+ now 4))
             (should (mevedel-acp--check-auth-expiry connection))
             (should-not (mevedel-claude-code--login-expiry))
+            (with-temp-file file
+              (insert "{\"claudeAiOauth\":{"))
+            (set-file-times file (+ now 5))
+            (should (mevedel-acp--check-auth-expiry connection))
+            (should-not (mevedel-claude-code--login-expiry))
             (should (= 2 (length warnings)))))
-        (write-expiry (1- now) (+ now 5))
+        (write-expiry (1- now) (+ now 6))
         (mevedel-context-summary-generate
          "Conversation to compact" 'continuation (lambda (value) (setq result value))
          :policy (list :backend (mevedel-claude-code-register) :model 'sonnet))

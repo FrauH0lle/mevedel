@@ -237,54 +237,17 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
 (defvar mevedel-claude-code--login-expiry-cache (make-hash-table :test #'equal)
   "Hard login expiry and modification time indexed by credentials file.")
 
-(defconst mevedel-claude-code--credentials-syntax
-  (let ((table (make-syntax-table)))
-    (modify-syntax-entry ?{ "(}" table)
-    (modify-syntax-entry ?} "){ " table)
-    (modify-syntax-entry ?\[ "(]" table)
-    (modify-syntax-entry ?\] ")[" table)
-    (modify-syntax-entry ?\" "\"" table)
-    (modify-syntax-entry ?\\ "\\" table)
-    table)
-  "Syntax for skipping JSON values without decoding credentials.")
-
-(defun mevedel-claude-code--seek-credential-field (key)
-  "Move to KEY's value in the JSON object at point, returning t on a match."
-  (when (eq (char-after) ?{)
-    (let ((key (json-serialize key)))
-      (catch 'found
-        (forward-char)
-        (skip-chars-forward " \t\r\n")
-        (while (eq (char-after) ?\")
-          (let ((match (looking-at-p (regexp-quote key))))
-            (goto-char (scan-sexps (point) 1))
-            (skip-chars-forward " \t\r\n")
-            (unless (eq (char-after) ?:) (throw 'found nil))
-            (forward-char)
-            (skip-chars-forward " \t\r\n")
-            (when match (throw 'found t)))
-          (if (memq (char-after) '(?\" ?{ ?\[))
-              (goto-char (scan-sexps (point) 1))
-            (skip-chars-forward "^ ,]}\t\r\n"))
-          (skip-chars-forward " \t\r\n")
-          (unless (eq (char-after) ?,) (throw 'found nil))
-          (forward-char)
-          (skip-chars-forward " \t\r\n"))
-        nil))))
-
 (defun mevedel-claude-code--read-login-expiry (file)
-  "Extract only the hard expiry from FILE, skipping over credential values."
+  "Return only the Unix expiry time in seconds from credentials FILE."
   (with-temp-buffer
-    (insert-file-contents-literally file)
-    (with-syntax-table mevedel-claude-code--credentials-syntax
-      (let ((case-fold-search nil))
-        (goto-char (point-min))
-        (skip-chars-forward " \t\r\n")
-        (when (and (scan-sexps (point) 1)
-                   (mevedel-claude-code--seek-credential-field "claudeAiOauth")
-                   (mevedel-claude-code--seek-credential-field "refreshTokenExpiresAt")
-                   (looking-at "\\([1-9][0-9]\\{0,14\\}\\)[ \t\r\n]*[,}]"))
-          (/ (string-to-number (match-string-no-properties 1)) 1000.0))))))
+    (insert-file-contents file)
+    ;; No other credential field is kept, logged, or returned.
+    (let* ((credentials (json-parse-buffer))
+           (login (and (hash-table-p credentials) (gethash "claudeAiOauth" credentials)))
+           (expiry (and (hash-table-p login) (gethash "refreshTokenExpiresAt" login))))
+      (skip-chars-forward " \t\r\n")
+      (when (and (eobp) (integerp expiry) (< 0 expiry 1000000000000000))
+        (/ expiry 1000.0)))))
 
 (defun mevedel-claude-code--login-expiry ()
   "Return the local Claude login's hard expiry in Unix seconds, if exposed."
