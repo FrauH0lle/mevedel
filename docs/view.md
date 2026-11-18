@@ -1376,11 +1376,11 @@ expanding a folded turn or input when necessary. It is view-only:
 synthetic/model-only context is excluded, and archived segments use only their
 own visible turns.
 Finding the prompt above the top edge is a binary search over the view's prompt
-header runs, collected once per text change: a scroll step can evaluate the
-header line several times, and a backward property walk cost 0.1-0.3 ms each.
-The cache follows `buffer-chars-modified-tick`, not the modification tick:
-fontifying newly visible text while scrolling changes only properties and
-would otherwise rebuild it on almost every step.
+header runs. The renderer invalidates the index when it adds a prompt, and
+markers follow changes to the surrounding text. A character edit checks the
+indexed bounds for a deleted or replaced header, not the entire transcript.
+Fontification while scrolling changes only properties and does not trigger
+that check or rebuild the index.
 Agent transcript views use the same two rows: their agent header (parent link,
 path, state, model and session) is the status strip, and the header line below
 pins the agent's task or a later follow-up prompt the same way.
@@ -2133,6 +2133,10 @@ remain. Unavailable native history refuses with a named reason rather than
 guessing from transcript text.
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
+Before the first unit is retained, a send echo at the history boundary already
+identifies where to append the response. That update preserves reader anchors
+only over the tail it can rewrite; it does not scan old responses to recover
+the start of a response that has not been drawn yet.
 Standalone reasoning disclosures and grouped tool activity runs are separate
 units; substantive reasoning closes the preceding tool run. Response
 prose advances at the last blank-line boundary outside fenced code. Terminal
