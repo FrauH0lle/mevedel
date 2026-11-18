@@ -1229,12 +1229,15 @@ On terminals the same API uses character cells as pixels."
       (cons (nth 2 size) (max 0 (- (nth 1 size) y))))))
 
 (defun mevedel-view--set-viewport (window viewport)
-  "Set WINDOW to VIEWPORT's (START . VSCROLL), avoiding redundant setters."
-  (unless (= (window-start window) (car viewport))
-    (set-window-start window (car viewport) t))
-  ;; Setting the start can reset vertical scrolling, so check it afterwards.
-  (unless (= (window-vscroll window t) (cdr viewport))
-    (set-window-vscroll window (cdr viewport) t t)))
+  "Set WINDOW to VIEWPORT's (START . VSCROLL), avoiding redundant setters.
+A window excluded from `mevedel-view--windows' geometry keeps its own
+viewport."
+  (unless (window-parameter window 'mevedel-view-geometry-excluded)
+    (unless (= (window-start window) (car viewport))
+      (set-window-start window (car viewport) t))
+    ;; Setting the start can reset vertical scrolling, so check it afterwards.
+    (unless (= (window-vscroll window t) (cdr viewport))
+      (set-window-vscroll window (cdr viewport) t t))))
 
 (defun mevedel-view--keep-native-vscroll ()
   "Ask the next redisplay to keep each window's pixel scrolling.
@@ -1244,7 +1247,7 @@ that clears pixel scrolling unless preservation was requested since the
 previous redisplay, and then moves point off a bottom row the reset
 clips.  The request lasts for one redisplay, so renew it after every
 restoration, including numeric no-ops."
-  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+  (dolist (window (mevedel-view--windows 'geometry))
     (let ((vscroll (window-vscroll window t)))
       (unless (zerop vscroll)
         (set-window-vscroll window vscroll t t)))))
@@ -1257,7 +1260,7 @@ their own reading position, even when the composer is still visible."
   (let (anchors)
     (when (and (markerp mevedel-view--input-marker)
                (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
-      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (dolist (window (mevedel-view--windows 'geometry))
         (when-let* (((mevedel-view--position-in-input-region-p
                      (window-point window)))
                     (y (mevedel-view--position-screen-y
@@ -1273,7 +1276,7 @@ a history reader just because its fallback point lands in the transcript."
              (eq (marker-buffer mevedel-view--status-marker) (current-buffer)))
     (seq-filter
      (lambda (window) (< (window-point window) mevedel-view--status-marker))
-     (get-buffer-window-list (current-buffer) nil t))))
+     (mevedel-view--windows 'geometry))))
 
 (defun mevedel-view--restore-composer-anchors (anchors)
   "Put the composer back at its pixel Y in each window of ANCHORS.
@@ -1320,7 +1323,7 @@ grows above: free space below the composer is used before scrolling."
 LENGTH counts characters from the window start to `point-max'."
   (mapcar (lambda (window)
             (cons window (- (point-max) (window-start window))))
-          (get-buffer-window-list (current-buffer) nil t)))
+          (mevedel-view--windows 'geometry)))
 
 (defun mevedel-view--clamp-window-starts (tails &optional force)
   "Fill the last page when text below a restored start shrank.
@@ -1465,7 +1468,7 @@ the anonymous repeat-map commands used by `text-scale-adjust'."
       (apply function arguments)
     (let ((blanks (mapcar (lambda (window)
                             (cons window (or (mevedel-view--window-blank-pixels window) 0)))
-                          (get-buffer-window-list (current-buffer) nil t))))
+                          (mevedel-view--windows 'geometry))))
       (prog1 (apply function arguments)
         (pcase-dolist (`(,window . ,blank) blanks)
           (when (and (window-live-p window)
@@ -1595,7 +1598,7 @@ defeat the character-width bound."
                             (eql 100 (font-get (face-attribute
                                                'default :font (window-frame window))
                                               :spacing)))))
-                 (get-buffer-window-list (current-buffer) nil t)))))))
+                 (mevedel-view--windows 'geometry)))))))
 
 (defun mevedel-view--capture-draft-window-state (beg end)
   "Capture blank pixels before the first composer mutation at BEG.
@@ -1617,7 +1620,7 @@ also skip capture when they cannot change display height."
       (setq mevedel-view--draft-window-state
             (mapcar (lambda (window)
                       (cons window (or (mevedel-view--window-blank-pixels window) 0)))
-                    (get-buffer-window-list (current-buffer) nil t))))))
+                    (mevedel-view--windows 'geometry))))))
 
 (defun mevedel-view--restore-draft-window-state (&rest changes)
   "Repair net draft shrink, preserving history readers and existing blanks.
@@ -1719,7 +1722,7 @@ found without scanning the rest of the buffer."
                                    (list visit visit-y
                                          (and (eq (car visit) 'interaction)
                                               (or (mevedel-view--window-blank-pixels w) 0))))))))
-                  (get-buffer-window-list (current-buffer) nil t))))
+                  (mevedel-view--windows 'geometry))))
     (cl-flet ((resolve-position (position input-offset anchor)
                 (cond
                  ((and input-offset

@@ -414,7 +414,7 @@ so it cannot hide a mouse exit or renew an expired visit."
                         (and (<= start (window-point window))
                              (< (window-point window) end)
                              (mevedel-view-execution--frame-focused-p (window-frame window))))
-                      (get-buffer-window-list (current-buffer) nil t)))
+                      (mevedel-view--windows 'visibility)))
         (and mouse (< (float-time) mevedel-view-execution--hover-deadline)))))
 
 (defun mevedel-view-execution--cancel-release ()

@@ -16,6 +16,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-tool-ui)
+(require 'mevedel-utilities)
 (require 'mevedel-view)
 
 
@@ -85,7 +86,7 @@
 
   :doc "multiple displayed windows use the narrowest window's rule width, so no window wraps it"
   (with-temp-buffer
-    (cl-letf (((symbol-function 'get-buffer-window-list)
+    (cl-letf (((symbol-function 'mevedel-view--windows)
                (lambda (&rest _) '(narrow wide)))
               ((symbol-function 'window-body-width)
                (lambda (&optional window &rest _) (if (eq window 'wide) 120 40))))

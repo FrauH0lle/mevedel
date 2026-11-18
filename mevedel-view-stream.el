@@ -22,6 +22,7 @@
 (require 'mevedel-view-execution)
 (require 'mevedel-ptc-interpreter)
 (require 'mevedel-tool-registry)
+(require 'mevedel-utilities)
 (require 'mevedel-view-render)
 (require 'mevedel-view-zone)
 
@@ -479,7 +480,7 @@ Elsewhere, reconciliation's semantic restoration is authoritative."
                         mevedel-view--spinner-status)))
                  (badge (mevedel-view--composer-mode-badge))
                  (attention (mevedel-view--interaction-count-label t))
-                 (windows (get-buffer-window-list (current-buffer) nil t))
+                 (windows (mevedel-view--windows 'geometry))
                  (width (max 1 (1- (if windows
                                        (apply #'min (mapcar #'window-body-width windows))
                                      (window-body-width)))))
@@ -828,16 +829,28 @@ Newly inserted tool rows begin at phase zero."
               (mevedel-view--record-tool-sample start (caddr entry)))))
       (set-buffer-modified-p modified))))
 
+(defun mevedel-view--animation-window-frame (window)
+  "Return the frame whose palette animates WINDOW.
+A child frame whose `mevedel-view-animate-as-parent' parameter is non-nil
+counts as its parent: both show one palette, so the pair is no multi-frame
+display needing the glyph fallback."
+  (let* ((frame (window-frame window))
+         (parent (frame-parent frame)))
+    (if (and parent (frame-parameter frame 'mevedel-view-animate-as-parent))
+        parent
+      frame)))
+
 (defun mevedel-view--animation-buffer-frame ()
   "Return a visible display frame for this buffer, or `:multiple'.
 Before a span has been inserted, use portable glyphs when no frame or
 more than one distinct frame can display the buffer."
   (let (found)
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (dolist (window (mevedel-view--windows 'visibility))
       (when (eq (frame-visible-p (window-frame window)) t)
-        (if (and found (not (eq found (window-frame window))))
-            (setq found :multiple)
-          (unless found (setq found (window-frame window))))))
+        (let ((frame (mevedel-view--animation-window-frame window)))
+          (if (and found (not (eq found frame)))
+              (setq found :multiple)
+            (unless found (setq found frame))))))
     (or found :multiple)))
 
 (defun mevedel-view--animation-span-in-window-p (start end window)
@@ -862,7 +875,7 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
                (and (mevedel-view--window-attended-p window)
                     (mevedel-view--animation-span-in-window-p
                      pos (marker-position (cdr target)) window)))
-             (get-buffer-window-list (current-buffer) nil t))))
+             (mevedel-view--windows 'visibility))))
 
 (defun mevedel-view--spinner-metadata-visible-p ()
   "Return non-nil when the request's elapsed suffix is on screen."
@@ -887,14 +900,15 @@ windows."
   (let ((position (marker-position (car target)))
         (end (marker-position (cdr target)))
         found frames)
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (dolist (window (mevedel-view--windows 'visibility))
       (when (and (eq (frame-visible-p (window-frame window)) t)
                  (mevedel-view--animation-span-in-window-p
                   position end window))
-        (when all (cl-pushnew (window-frame window) frames))
-        (if (and found (not (eq found (window-frame window))))
-            (setq found :multiple)
-          (unless found (setq found (window-frame window))))))
+        (let ((frame (mevedel-view--animation-window-frame window)))
+          (when all (cl-pushnew frame frames))
+          (if (and found (not (eq found frame)))
+              (setq found :multiple)
+            (unless found (setq found frame))))))
     (if all (nreverse frames) found)))
 
 (defun mevedel-view--animation-visible-p ()
@@ -1073,7 +1087,7 @@ a window resize."
                (cl-some #'car-safe targets)
                (not (equal targets mevedel-view--spinner-probed-targets))
                (cl-some #'mevedel-view--window-attended-p
-                        (get-buffer-window-list (current-buffer) nil t)))
+                        (mevedel-view--windows 'visibility)))
       (setq mevedel-view--spinner-probed-targets targets)
       (mevedel-view--recheck-spinner-after-redisplay))))
 
