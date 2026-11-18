@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 ;; Owns Claude-specific login checks, local launch isolation, and ACP metadata.
-;; Subscription credentials remain entirely inside the installed Claude CLI.
-;; Credentials stay in the native CLI; shared policy owns explicit fallbacks.
+;; Subscription tokens stay with the CLI; only hard-expiry metadata is sampled.
+;; Shared policy owns explicit fallbacks.
 
 ;;; Code:
 
@@ -233,6 +233,76 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
     "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
     "CLAUDE_CODE_USE_VERTEX" "CLAUDE_CODE_USE_FOUNDRY")
   "Inherited authentication routes excluded by explicit subscription selection.")
+
+(defvar mevedel-claude-code--login-expiry-cache (make-hash-table :test #'equal)
+  "Hard login expiry and modification time indexed by credentials file.")
+
+(defconst mevedel-claude-code--credentials-syntax
+  (let ((table (make-syntax-table)))
+    (modify-syntax-entry ?{ "(}" table)
+    (modify-syntax-entry ?} "){ " table)
+    (modify-syntax-entry ?\[ "(]" table)
+    (modify-syntax-entry ?\] ")[" table)
+    (modify-syntax-entry ?\" "\"" table)
+    (modify-syntax-entry ?\\ "\\" table)
+    table)
+  "Syntax for skipping JSON values without decoding credentials.")
+
+(defun mevedel-claude-code--seek-credential-field (key)
+  "Move to KEY's value in the JSON object at point, returning t on a match."
+  (when (eq (char-after) ?{)
+    (let ((key (json-serialize key)))
+      (catch 'found
+        (forward-char)
+        (skip-chars-forward " \t\r\n")
+        (while (eq (char-after) ?\")
+          (let ((match (looking-at-p (regexp-quote key))))
+            (goto-char (scan-sexps (point) 1))
+            (skip-chars-forward " \t\r\n")
+            (unless (eq (char-after) ?:) (throw 'found nil))
+            (forward-char)
+            (skip-chars-forward " \t\r\n")
+            (when match (throw 'found t)))
+          (if (memq (char-after) '(?\" ?{ ?\[))
+              (goto-char (scan-sexps (point) 1))
+            (skip-chars-forward "^ ,]}\t\r\n"))
+          (skip-chars-forward " \t\r\n")
+          (unless (eq (char-after) ?,) (throw 'found nil))
+          (forward-char)
+          (skip-chars-forward " \t\r\n"))
+        nil))))
+
+(defun mevedel-claude-code--read-login-expiry (file)
+  "Extract only the hard expiry from FILE, skipping over credential values."
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+    (with-syntax-table mevedel-claude-code--credentials-syntax
+      (let ((case-fold-search nil))
+        (goto-char (point-min))
+        (skip-chars-forward " \t\r\n")
+        (when (and (scan-sexps (point) 1)
+                   (mevedel-claude-code--seek-credential-field "claudeAiOauth")
+                   (mevedel-claude-code--seek-credential-field "refreshTokenExpiresAt")
+                   (looking-at "\\([1-9][0-9]\\{0,14\\}\\)[ \t\r\n]*[,}]"))
+          (/ (string-to-number (match-string-no-properties 1)) 1000.0))))))
+
+(defun mevedel-claude-code--login-expiry ()
+  "Return the local Claude login's hard expiry in Unix seconds, if exposed."
+  (let* ((file (expand-file-name ".credentials.json"
+                                 (or (getenv "CLAUDE_CONFIG_DIR") "~/.claude")))
+         (mtime (and (not (file-remote-p file))
+                     (ignore-errors
+                       (when (file-regular-p file)
+                         (file-attribute-modification-time
+                          (file-attributes (file-truename file)))))))
+         (cached (gethash file mevedel-claude-code--login-expiry-cache)))
+    (cond
+     ((not mtime) (remhash file mevedel-claude-code--login-expiry-cache) nil)
+     ((equal mtime (car cached)) (cdr cached))
+     (t
+      (let ((expiry (ignore-errors (mevedel-claude-code--read-login-expiry file))))
+        (puthash file (cons mtime expiry) mevedel-claude-code--login-expiry-cache)
+        expiry)))))
 
 (defvar mevedel-claude-code--version-cache (make-hash-table :test #'equal)
   "Successful executable versions indexed by their resolved file identity.")
@@ -631,6 +701,10 @@ Return the generic ACP launch plist; no model request is made here."
       (set-file-modes cwd #o700)
       (list :command adapter :cwd cwd :environment process-environment
             :mcp mcp :session-id session-id
+            :agent-name "Claude Code"
+            :auth-hint "Run `claude auth login' in a terminal."
+            :auth-expiry #'mevedel-claude-code--login-expiry
+            :auth-warn-days mevedel-claude-code-login-warning-days
             :prepare-launch
             (lambda (ready failure)
               (mevedel-claude-code--prepare-launch checks cli environment ready failure))

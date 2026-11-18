@@ -166,6 +166,14 @@ checks Claude Code 2.1.293+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
 subscription login without starting a model request. Subscription selection
 rejects API authentication and does not enable paid overflow.
 
+When Claude Code exposes the subscription login's hard expiry in its local
+credentials file, Mevedel warns once per expiry at session or turn startup.
+Set `mevedel-claude-code-login-warning-days` to change Mevedel's three-day
+lead time, or to nil to disable advance warnings. After expiry, sign in again
+with `claude auth login` before retrying, including when a context summary fails.
+Mevedel does not extract or cache tokens, and does not warn if expiry metadata
+is unavailable.
+
 Mevedel keeps the native CLI on its own configured release channel
 (`autoUpdatesChannel`, `latest` by default) and the managed ACP adapter on its
 latest release.

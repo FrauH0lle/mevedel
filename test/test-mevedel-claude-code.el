@@ -1,7 +1,7 @@
 ;;; test-mevedel-claude-code.el --- Claude subscription launch contracts -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Authentication checks use the supported CLI status surface, never credentials.
+;; Authentication uses CLI status and fixture-only expiry metadata.
 
 ;;; Code:
 
@@ -10,6 +10,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-models)
 (require 'mevedel-compact-estimation)
+(require 'mevedel-context-summary)
 (require 'helpers
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
@@ -31,11 +32,63 @@
           (process-environment (copy-sequence process-environment)))
      (unwind-protect
          (progn
+           (setenv "CLAUDE_CONFIG_DIR" directory)
            (copy-file mevedel-claude-code-test--cli mevedel-claude-code-executable)
            (set-file-modes mevedel-claude-code-executable #o700)
            (copy-file mevedel-claude-code-executable (file-name-concat directory "node"))
            ,@body)
        (delete-directory directory t))))
+
+(mevedel-deftest mevedel-claude-code-login-expiry ()
+  ,test
+  (test)
+  :doc "warns once per real expiry, caches by mtime, and refuses expired text requests"
+  (mevedel-claude-code-test--with-cli
+    (let* ((file (file-name-concat directory ".credentials.json"))
+           (now (floor (float-time)))
+           (soon (+ now (* 2 86400)))
+           (later (+ now (* 4 86400)))
+           (mevedel-claude-code-login-warning-days 3)
+           (mevedel-claude-code--login-expiry-cache (make-hash-table :test #'equal))
+           (mevedel-acp--auth-expiry-warned (make-hash-table :test #'equal))
+           warnings result)
+      (cl-flet ((write-expiry (seconds mtime)
+                  (with-temp-file file
+                    (insert (json-serialize
+                             `((decoy . ((claudeAiOauth . ((refreshTokenExpiresAt . 1)))))
+                               (claudeAiOauth . ((refreshToken . "fixture \"escaped\" text")
+                                                 (other . [((refreshTokenExpiresAt . 1))])
+                                                 ,@(and seconds `((refreshTokenExpiresAt . ,(* seconds 1000))))))))))
+                  (set-file-times file mtime)))
+        (let ((connection (mevedel-acp--create :launch (mevedel-claude-code-launch "system" [] "sonnet" nil))))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type message &rest _) (push message warnings))))
+            (should (mevedel-acp--check-auth-expiry connection))
+            (write-expiry later now)
+            (should (mevedel-acp--check-auth-expiry connection))
+            (should-not warnings)
+            (write-expiry soon now)
+            (should (= later (mevedel-claude-code--login-expiry)))
+            (set-file-times file (+ now 1))
+            (dotimes (_ 2) (should (mevedel-acp--check-auth-expiry connection)))
+            (should (= 1 (length warnings)))
+            (should (string-search (format-time-string "%Y-%m-%d" soon) (car warnings)))
+            (should (string-search "claude auth login" (car warnings)))
+            (write-expiry (1+ soon) (+ now 2))
+            (should (mevedel-acp--check-auth-expiry connection))
+            (write-expiry soon (+ now 3))
+            (should (mevedel-acp--check-auth-expiry connection))
+            (write-expiry nil (+ now 4))
+            (should (mevedel-acp--check-auth-expiry connection))
+            (should-not (mevedel-claude-code--login-expiry))
+            (should (= 2 (length warnings)))))
+        (write-expiry (1- now) (+ now 5))
+        (mevedel-context-summary-generate
+         "Conversation to compact" 'continuation (lambda (value) (setq result value))
+         :policy (list :backend (mevedel-claude-code-register) :model 'sonnet))
+        (mevedel-test--await 5 "Expired login did not settle the summary" result)
+        (should (eq 'error (plist-get result :outcome)))
+        (should (string-match-p "login expired.*claude auth login" (plist-get result :error)))))))
 
 (defun mevedel-claude-code-test--launch-failure (model)
   "Run MODEL's launch preparation and return its (MESSAGE CODE) failure, or nil."

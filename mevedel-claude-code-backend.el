@@ -28,6 +28,12 @@ See https://code.claude.com/docs/en/model-config.")
   "Installed, unmodified Claude Code executable."
   :type 'string :group 'mevedel)
 
+(defcustom mevedel-claude-code-login-warning-days 3
+  "Days before a Claude Code subscription login expires to warn once.
+Nil disables advance warnings, not expired-login diagnostics."
+  :type '(choice (const :tag "No advance warning" nil) number)
+  :group 'mevedel)
+
 (defconst mevedel-claude-code--context-windows
   '(("claude-sonnet-5-5" . 1000) ("claude-sonnet-5" . 1000)
     ("claude-opus-5-5" . 1000) ("claude-opus-5" . 1000)
