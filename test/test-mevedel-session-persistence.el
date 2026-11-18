@@ -3875,7 +3875,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               (should (= 34 (length candidates)))
               (should (= 32 (cl-count-if (lambda (row) (string-prefix-p "Resume" row)) candidates)))
               (should (cl-find-if (lambda (row) (string-match-p "\\`Join +.*session-00" row)) candidates))
-              (should (<= programs 13)))))
+              (should (<= programs 8)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
@@ -4733,7 +4733,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
 
-  :doc "deletes sessions older than the cap"
+  :doc "deletes sessions older than the cap and removes them from the picker scan"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4770,14 +4770,22 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 ;; Close both so cleanup may delete the expired one.
                 (test-mevedel-session-persistence--release-and-kill b1 s1)
                 (test-mevedel-session-persistence--release-and-kill b2 s2)
-                (let ((deleted
-                       (test-mevedel-session-persistence--cleanup-later
-                        workspace)))
+                (let* ((scan (mevedel-session-persistence--scan workspace "\\`[^.]"))
+                       (deleted
+                        (test-mevedel-session-persistence--call-later
+                         (lambda ()
+                           (mevedel-session-persistence-cleanup-expired workspace t scan)))))
                   (should (= 1 deleted))
                   (should-not (file-directory-p
                                (mevedel-session-save-path s1)))
                   (should (file-directory-p
-                           (mevedel-session-save-path s2)))))
+                           (mevedel-session-save-path s2)))
+                  (let ((rows (mevedel-session-persistence--enumerate-sessions
+                               workspace nil scan)))
+                    (should-not (plist-get rows :incompatible))
+                    (should (equal (mapcar (lambda (row) (plist-get row :save-path))
+                                           (plist-get rows :sessions))
+                                   (list (mevedel-session-save-path s2)))))))
             (when (buffer-live-p b1)
               (with-current-buffer b1 (set-buffer-modified-p nil))
               (kill-buffer b1))

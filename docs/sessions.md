@@ -1197,9 +1197,10 @@ handed to the publication read in place of its own listing round trip.
 Lease records, manifests, and sidecars are then read in batches rather than
 separate programs for each session. Over TRAMP, each read stage uses one
 program even when its request needs the input-file or direct-pipe carrier.
-The automatic age sweep uses the same batched discovery for retention
-candidates, and the picker batches the lease, pin, and release-fence probes
-needed to label its rows. These observations do not authorize an action:
+An opening remote picker shares one directory and publication scan with its
+automatic age sweep and omits any sessions the sweep actually deletes. The
+picker separately batches the lease, pin, and release-fence probes needed to
+label its rows. These observations do not authorize an action:
 restore, takeover, and deletion still check current authority for the
 selected or expired session.
 Capturing a manifest canonicalizes its session root once and qualifies each
