@@ -11,21 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Claude Code adapter exits silently (code 1) when mevedel sends the next
-  prompt 0–330 ms after the previous `end_turn` (five times on 2026-11-07,
-  mostly a queued message handed over by the PostToolBatch hook, while the
-  CLI was winding down). `--trace-exit --trace-uncaught` print nothing, so
-  likely an exit code set before a natural exit. mevedel now sets
-  `CLAUDE_AGENT_LOGS` (`mevedel-claude-code-agent-log-directory`); read
-  `~/.mevedel/claude-agent-logs/agent.log` after the next crash (not
-  rotated; prune it occasionally). First experiment: delay a queued
-  follow-up prompt ~1 s after `end_turn`. Offline review (2026-11-13) found
-  no exit in `agent.log` (it logs none) and no telemetry for the moments, so
-  the race is unproven. Telemetry now records `acp-prompt-send` (continuation,
-  queued handover, ms since `end_turn`) and `acp-process-exit` (exit code or
-  signal, ms since `end_turn` and last send); after the next crash read
-  those before delaying anything. Node fatal reports were skipped: they embed
-  the whole environment and a plain code-1 exit is not a fatal error.
 - Typing lag (live probe 2026-11-07):
   the stale-table scan and the stream-update anchor capture were fixed in the
   2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
@@ -62,33 +47,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   `prompt_cache_key` is placed per request at three sites; collaboration
   connection binding uses an untyped positional list and JSON string surgery;
   optional and mixed-type values added by performance fixes.
-
-## Execution
-
-### Cargo command duration and editor stalls
-
-Reported command, run from the SNT-webapp root:
-
-```bash
-cd backend && cargo fmt && cargo clippy --locked --offline --all-targets -- -D warnings 2>&1 | grep -v 'hard linking' | grep -E -A10 '^(error|warning)' | head -30; echo "clippy ${PIPESTATUS[0]}"; cargo test --locked --offline 2>&1 | grep -E "FAILED|test result|panicked" | head -3
-```
-
-Open after investigation on 2026-11-04. The original unrestricted run took
-294.1 seconds, but printed `clippy 0` within 0.6 seconds; the long phase was
-the test pipeline. Its session recorded 99 delayed editor heartbeats, with a
-5.635-second maximum and little editor CPU time. Slow synchronous session-control
-file programs overlapped those stalls; an expensive progress redraw is not
-established. A copied backend/cache replay reproduced a five-minute executable
-build without running tests; the tests afterward took 0.36 seconds. A controlled
-750-ms child delay blocked the synchronous control-file API's heartbeat for about
-755 ms, while the existing async carrier kept gaps near 10 ms. Natural sampled
-control calls during the rebuild stayed fast, so incident attribution remains
-open. Timer-only lease renewal now uses a single-flight asynchronous heartbeat,
-serialized with mutation/publication and protected against stale callbacks;
-own-expiry reclaim remains asynchronous too. This removes that synchronous timer
-wait, not the unexplained Cargo build duration or every source of editor lag.
-The original filters hide build/lock messages and do not preserve the test
-command's exit code. Use raw output for further reproductions.
 
 ## Proactive sessions
 
