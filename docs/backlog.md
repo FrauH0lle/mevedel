@@ -11,12 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Typing lag (live probe 2026-11-07):
-  the stale-table scan and the stream-update anchor capture were fixed in the
-  2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
-  at 1000 turns ≈21 → 0.69 ms). Not rechecked live yet: the pinned-prompt
-  header runs (about 13%) and full rerenders (about 14%). Re-profile the live
-  editor before further work.
 - Verify forced session takeover on the real desktop and laptop over TRAMP
   using a disposable session, including old-holder cancellation and taking
   control back ([ADR 0100](adr/0100-portable-project-session-authority.md)).

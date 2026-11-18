@@ -1285,24 +1285,29 @@ Resolve archives only on source projection, never during header redisplay."
     (nth 4 mevedel-view--continuation-prompt-cache)))
 
 (defvar-local mevedel-view--prompt-headers nil
-  "(CHARS-TICK . RUNS) for `mevedel-view--prompt-header-runs'.")
+  "(CHARS-TICK . RUNS) of validated prompt header marker pairs.")
 
 (defun mevedel-view--prompt-header-runs ()
-  "Return a vector of (START END PREVIEW) prompt header runs in buffer order.
-The header line asks for the pinned prompt on every redisplay; the few
-header runs change only with the text, so collect them once per text change.
-Every header is written together with its inserted text.  Fontification
-while scrolling changes properties only, so it must not invalidate them."
+  "Return a vector of (START END PREVIEW) prompt runs with marker bounds.
+The renderer clears the cache before inserting a new prompt header.
+Markers follow text edits; when text changes, check just the known
+headers for deletion or replacement.  Scroll-time fontification only
+changes properties and does not invalidate the cache."
   (let ((tick (buffer-chars-modified-tick)))
-    (if (eql tick (car mevedel-view--prompt-headers))
-        (cdr mevedel-view--prompt-headers)
+    (if (and mevedel-view--prompt-headers
+             (or (eql tick (car mevedel-view--prompt-headers))
+                 (cl-every (lambda (run) (< (car run) (cadr run)))
+                           (cdr mevedel-view--prompt-headers))))
+        (progn
+          (setcar mevedel-view--prompt-headers tick)
+          (cdr mevedel-view--prompt-headers))
       (let ((pos (point-min)) runs)
         (while (< pos (point-max))
           (let ((next (next-single-property-change
                        pos 'mevedel-view-prompt-preview nil (point-max)))
                 (preview (get-text-property pos 'mevedel-view-prompt-preview)))
             (when preview
-              (push (list pos next preview) runs))
+              (push (list (copy-marker pos t) (copy-marker next) preview) runs))
             (setq pos next)))
         (setq runs (vconcat (nreverse runs))
               mevedel-view--prompt-headers (cons tick runs))
@@ -1342,7 +1347,7 @@ Hidden headers are never selected."
         (setq lo (1- lo)))
       (when (> lo 0)
         (let ((run (aref runs (1- lo))))
-          (cons (nth 0 run) (nth 2 run)))))))
+          (cons (marker-position (nth 0 run)) (nth 2 run)))))))
 
 (defun mevedel-view--jump-to-pinned-prompt (position &optional event)
   "Reveal the pinned prompt at POSITION in the clicked window from EVENT."

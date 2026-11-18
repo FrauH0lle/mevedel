@@ -1020,23 +1020,28 @@
 (mevedel-deftest mevedel-view--prompt-header-runs ()
   ,test
   (test)
-  :doc "collects prompt header runs once per text change, not per fontification"
-  (with-temp-buffer
-    (insert "a" (propertize "Prompt one" 'mevedel-view-prompt-preview "one")
-            "body" (propertize "Prompt two" 'mevedel-view-prompt-preview "two"))
-    (should (equal [(2 12 "one") (16 26 "two")] (mevedel-view--prompt-header-runs)))
-    (let ((calls 0)
-          (real (symbol-function 'next-single-property-change)))
-      (cl-letf (((symbol-function 'next-single-property-change)
-                 (lambda (&rest args) (cl-incf calls) (apply real args))))
-        (put-text-property 1 (point-max) 'face 'bold)
-        (mevedel-view--prompt-header-runs)
-        (should (= 0 calls))
-        (goto-char (point-max))
-        (insert (propertize "Three" 'mevedel-view-prompt-preview "three"))
-        (should (equal [(2 12 "one") (16 26 "two") (26 31 "three")]
-                       (mevedel-view--prompt-header-runs)))
-        (should (< 0 calls))))))
+  :doc "indexes header edits without rescanning body edits or fontification"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (mevedel-view--insert-user-message "First question")
+        (let* ((runs (mevedel-view--prompt-header-runs))
+               (header (aref runs 0))
+               (start (marker-position (car header))))
+          (goto-char (point-min))
+          (insert "Prefix\n")
+          (goto-char (point-max))
+          (insert "Draft")
+          (should (eq runs (mevedel-view--prompt-header-runs)))
+          (should (= (+ start (length "Prefix\n")) (car header)))
+          (put-text-property (1- (point-max)) (point-max) 'face 'bold)
+          (should (eq runs (mevedel-view--prompt-header-runs)))
+          (mevedel-view--insert-user-message "Second question")
+          (should (= 2 (length (mevedel-view--prompt-header-runs))))
+          (delete-region (car header) (cadr header))
+          (let ((remaining (mevedel-view--prompt-header-runs)))
+            (should (= 1 (length remaining)))
+            (should (equal "Second question" (nth 2 (aref remaining 0))))))))))
 
 (mevedel-deftest mevedel-view--pinned-prompt-button ()
   ,test

@@ -215,6 +215,27 @@
       (should (= 5 (mevedel-view--recover-in-flight-turn-start
                     10 (point-min) (point-max)))))))
 
+(mevedel-deftest mevedel-view--first-live-update
+  (:doc "The ordinary send echo bounds first-stream recovery.")
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Old prompt\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "Old answer\n\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-data data-buf "New prompt\n\n" nil)
+      (mevedel-view-stream-begin-turn
+       (mevedel-view--insert-user-message "New prompt")
+       (with-current-buffer data-buf (copy-marker (point-max))))
+      (mevedel-view-test--insert-composer-draft "Next draft" 4)
+      (mevedel-view-test--insert-data data-buf "First words\n\n" 'response)
+      (cl-letf (((symbol-function 'mevedel-view--recover-in-flight-turn-start)
+                 (lambda (&rest _) (ert-fail "Scanned old history"))))
+        (mevedel-view-render-live-update data-buf))
+      (should (string-search "Old answer" (buffer-string)))
+      (should (string-search "First words" (buffer-string)))
+      (should (equal "Next draft" (mevedel-view--input-text)))
+      (should (= 4 (- (point) (mevedel-view--input-start)))))))
+
 (mevedel-deftest mevedel-view--retain-last-live-render-unit
   (:doc "Only the final unit, across its property runs, is retained.")
   (mevedel-view-test--with-buffers
