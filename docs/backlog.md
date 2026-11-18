@@ -16,21 +16,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   both. Try it in practice and fix what looks wrong; NoteWrite can also
   create nested whole-line notes.
 - Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
-- Claude Code adapter exits silently (code 1) when mevedel sends the next
-  prompt 0–330 ms after the previous `end_turn` (five times on 2026-11-07,
-  mostly a queued message handed over by the PostToolBatch hook, while the
-  CLI was winding down). `--trace-exit --trace-uncaught` print nothing, so
-  likely an exit code set before a natural exit. mevedel now sets
-  `CLAUDE_AGENT_LOGS` (`mevedel-claude-code-agent-log-directory`); read
-  `~/.mevedel/claude-agent-logs/agent.log` after the next crash (not
-  rotated; prune it occasionally). First experiment: delay a queued
-  follow-up prompt ~1 s after `end_turn`. Offline review (2026-11-13) found
-  no exit in `agent.log` (it logs none) and no telemetry for the moments, so
-  the race is unproven. Telemetry now records `acp-prompt-send` (continuation,
-  queued handover, ms since `end_turn`) and `acp-process-exit` (exit code or
-  signal, ms since `end_turn` and last send); after the next crash read
-  those before delaying anything. Node fatal reports were skipped: they embed
-  the whole environment and a plain code-1 exit is not a fatal error.
 - Typing lag (live probe 2026-11-07):
   the stale-table scan and the stream-update anchor capture were fixed in the
   2026-11-13 sweep (window change after an edit 2.75 → 0.012 ms; stream update
