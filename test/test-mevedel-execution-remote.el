@@ -3020,6 +3020,40 @@ work in flight genuinely unprovable rather than merely finished."
   (test-mevedel-execution-remote--exercise-transport
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
+(mevedel-deftest mevedel-real-remote-group-status/deadline
+  (:quiet t :tags (external remote connection-loss)
+          :after-each ((tramp-cleanup-all-connections)))
+  ,test
+  (test)
+  :doc "a warm Podman group-status probe refuses before a paused target resumes"
+  (let ((root (getenv "MEVEDEL_TEST_PODMAN_ROOT")))
+    (skip-unless root)
+    (let* ((container (tramp-file-name-host (tramp-dissect-file-name root)))
+           (default-directory temporary-file-directory)
+           (group-id 9876543)
+           paused release)
+      (should (eq 'dead (mevedel-execution-process-remote-group-status group-id "1" root)))
+      (unwind-protect
+          (progn
+            (should (= 0 (call-process "podman" nil nil nil "pause" container)))
+            (setq paused t)
+            (setq release
+                  (make-process :name "mevedel-test-podman-unpause" :noquery t
+                                :command (list "sh" "-c" "sleep 3; exec podman unpause \"$1\""
+                                               "sh" container)
+                                :sentinel #'ignore))
+            (let* ((mevedel-execution-process--remote-control-timeout 0.5)
+                   (started (float-time))
+                   (failure (should-error
+                             (mevedel-execution-process-remote-group-status group-id "1" root))))
+              (should (equal "Target process status probe timed out"
+                             (error-message-string failure)))
+              (should (< (- (float-time) started) 1.5))
+              (should (process-live-p release))))
+        (when (and release (process-live-p release)) (delete-process release))
+        (when paused (call-process "podman" nil nil nil "unpause" container)))
+      (should (eq 'dead (mevedel-execution-process-remote-group-status group-id "1" root))))))
+
 (mevedel-deftest mevedel-real-remote-loss
   (:quiet t :tags (external remote connection-loss)
           :after-each ((tramp-cleanup-all-connections)))
