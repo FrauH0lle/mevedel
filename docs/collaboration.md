@@ -1455,6 +1455,9 @@ publish. Streamed updates therefore coalesce for at least
 0.1 s and four times the previous publish's cost, up to one second, keeping a
 streaming room to about a fifth of the Emacs thread that every room shares
 without letting one slow publish stall the stream.
+Browser-wide layout depends on the actual sidebar, dock and empty-transcript
+states, not on descendant selectors that recheck the page on each streamed
+record change.
 Nested tool events update invocation facts synchronously and share that same
 publication timer, rather than rebuilding the entire pending tree for each
 child event. Projection refreshes dirty trees before returning records, including

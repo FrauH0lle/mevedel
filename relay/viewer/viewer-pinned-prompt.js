@@ -10,9 +10,8 @@
  * first prompt continues the last prompt of the loaded segment it was
  * compacted from; a /clear starts a new chat and carries nothing over.
  *
- * Updates touch only the row's attributes and inline style. Changing its
- * text or hidden attribute would invalidate the viewer's body:has(...)
- * rules, which costs a long transcript far more than an attribute change.
+ * Updates touch only the row's attributes and inline style, keeping
+ * scroll writes local to the pinned row.
  */
 'use strict';
 window.mevedelPinnedPrompt = Object.freeze({

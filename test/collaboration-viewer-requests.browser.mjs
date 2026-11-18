@@ -554,6 +554,7 @@ async function wideRoom(browser, width) {
     turn.append(rail, content);
     document.getElementById('transcript').replaceChildren(turn);
   });
+  await header(page);
   return page;
 }
 const box = (page, selector) => page.locator(selector).evaluate(node => {
@@ -588,7 +589,6 @@ test('a docked item leaves the chat, its decisions and a room drawer reachable',
   const browser = await chromium.launch();
   try {
     const page = await wideRoom(browser, 2560);
-    await header(page);
     await page.evaluate(() => {
       document.getElementById('room-button').hidden = false;
       const panel = document.getElementById('editing-panel');

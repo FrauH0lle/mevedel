@@ -1778,10 +1778,10 @@ redisplay hooks reschedule it once someone can see the result."
         (if mevedel-view--pending-render-kind
             (when (and (buffer-live-p mevedel-view--pending-render-data-buffer)
                        (not (mevedel--timer-pending-p mevedel-view--render-timer)))
-              (mevedel-view--schedule-render
-               mevedel-view--pending-render-kind
-               mevedel-view--pending-render-data-buffer
-               mevedel-view-rerender-debounce))
+              ;; Already coalesced while hidden; leave redisplay before writing.
+              (setq mevedel-view--render-timer
+                    (run-at-time 0 nil #'mevedel-view--flush-scheduled-render
+                                 view-buffer)))
           (mevedel-view-render-resume-batch))
         (mevedel-view-prepare-resume)))))
 

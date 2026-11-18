@@ -63,7 +63,7 @@
     let label = 'Copied';
     try { await copyText(source.text ?? source.rendered.innerText); }
     catch (_) { label = 'Copy failed'; }
-    // Attribute-only feedback avoids invalidating the page's body:has rules.
+    // Keep copy feedback local to the button's attributes.
     button.dataset.label = label;
     button.setAttribute('aria-label', label);
     setTimeout(() => {
