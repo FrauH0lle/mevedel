@@ -110,6 +110,11 @@ TRAMP command traffic and local processing, not network latency.
 Doubling the fixture to 204 sessions kept the first opening at 560 TRAMP
 commands and 13 control programs in one sample, the same as the first
 102-session opening. The target still does more work as the list grows.
+Sharing one opening's publication scan between the remote picker and the age
+sweep then brought the 102-session medians to 303 shell commands, 8 control
+programs, and 3.87 seconds (three samples). The sweep removes successfully
+deleted sessions from that observation before the picker uses it; it does not
+use the observation as authority to delete.
 
 The chooser exposes recovery-blocked, unowned sessions with Recover, Discard,
 and Cancel. Discard revalidates session/publication, workspace, and target
