@@ -504,16 +504,10 @@ supplies them itself."
         (if (mevedel-telemetry--remote-p session)
             (mevedel-session-publication-append-diagnostic
              session file content)
-          ;; Appends run for every event on the hot path.  The directory
-          ;; normally exists, and a pinned coding system avoids asking the
-          ;; ambient buffer how to encode each line; together they were
-          ;; nine tenths of an append.
+          ;; Session persistence owns the directory; a late event must not
+          ;; undo deletion.  Pin the coding system on the hot path.
           (let ((coding-system-for-write 'utf-8-unix))
-            (condition-case nil
-                (write-region content nil file t 'silent)
-              (file-missing
-               (make-directory (file-name-directory file) t)
-               (write-region content nil file t 'silent))))
+            (write-region content nil file t 'silent))
           t)
       (error
        (mevedel-diagnostic-message (mevedel-diagnostic-scope session) "Telemetry persistence failed: %s"

@@ -79,6 +79,7 @@
                     :session-id "session-1" :save-path (file-name-directory file)
                     :turn-count 1))
           (mevedel-telemetry-enabled t))
+      (make-directory (file-name-directory file))
       (mevedel-telemetry-record
        session 'provider-call :call-id "real" :stage 'start :request-id "request")
       (mevedel-telemetry-record

@@ -22,6 +22,7 @@
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-fork)
 (require 'mevedel-session-rewind)
+(require 'mevedel-telemetry)
 (require 'mevedel-transport)
 (require 'mevedel-journal-process)
 (require 'gptel-openai)
@@ -1040,8 +1041,12 @@
       (let ((mevedel-notes-closed-max-count 0))
         (should-not (mevedel-notes-closed workspace)))
       (mevedel-instruction-store-flush t)
-      (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
-      (should-not (file-directory-p path)))))
+      ;; A recently settled session can still receive control-program telemetry.
+      (let ((mevedel-telemetry-enabled t)
+            (mevedel-telemetry--lag-windows (list (list session)))
+            (mevedel-session-control-fs--measure-min-ms 0))
+        (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
+        (should-not (file-directory-p path))))))
 
 (mevedel-deftest mevedel-session-persistence-cleanup-expired/ordinary-no-note-read
   (:quiet t)
