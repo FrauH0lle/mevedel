@@ -191,13 +191,14 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
        (puthash 1 guest (plist-get room :guests))
        (setf (mevedel-session-save-path session) (file-name-concat directory "session")
              (mevedel-session-authority-mode session) 'portable)
+       (make-directory (mevedel-session-save-path session))
        (with-current-buffer data-buf
          (setq-local mevedel--session session mevedel--workspace workspace))
        (mevedel-session-set-pending-input-paused session t)
        (unwind-protect
            (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                       (lambda (_transport peer frame) (push (cons peer frame) sent) t))
-                     ;; The fake save path has no committed sidecar to update.
+                     ;; The fixture has no committed sidecar to update.
                      ((symbol-function 'mevedel-recovery-save-now) #'ignore))
              (mevedel-test--raw-segments ,@body))
          (delete-directory directory t)))))
@@ -574,7 +575,6 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
     ;; compaction into segment one.  Segment two is missing.
     (mevedel-test--discussion-act room guest (mevedel-test--discussion-post :toAssistant nil))
     (let ((save-path (mevedel-session-save-path session)))
-      (make-directory save-path t)
       (setf (mevedel-session-current-segment session) 3)
       (with-temp-buffer
         (org-mode)
@@ -707,6 +707,7 @@ answers in DATA-BUF."
        (puthash 1 guest (plist-get room :guests))
        (setf (mevedel-session-save-path session) (file-name-concat directory "session")
              (mevedel-session-authority-mode session) 'portable)
+       (make-directory (mevedel-session-save-path session))
        (with-current-buffer data-buf
          (setq-local mevedel--session session mevedel--workspace workspace
                      mevedel--view-buffer view-buf))

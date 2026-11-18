@@ -335,7 +335,8 @@ reached TOOL and could dispatch the next call from inside the cleanup."
   :doc "finish retains a failed append for ordinary retry without duplicate completion"
   (test-mevedel-usage--with-session
     (let ((call (test-mevedel-usage--call session))
-          (blocked (file-name-concat root "blocked")) diagnostics)
+          (blocked (file-name-concat root "blocked"))
+          (saved (file-name-concat root "saved")) diagnostics)
       (write-region "not a directory" nil blocked nil 'silent)
       (setf (mevedel-session-save-path session) blocked)
       (mevedel-test--with-captured-diagnostics diagnostics
@@ -344,12 +345,13 @@ reached TOOL and could dispatch the next call from inside the cleanup."
       (should (plist-get call :finished))
       (mevedel-telemetry-usage--finish call nil 'error)
       (should (= 1 (length (test-mevedel-usage--events session))))
-      (setf (mevedel-session-save-path session) (file-name-concat root "saved"))
+      (make-directory saved)
+      (setf (mevedel-session-save-path session) saved)
       (mevedel-telemetry-flush session)
       (should-not (mevedel-session-telemetry-pending session))
       (with-temp-buffer
         (insert-file-contents
-         (file-name-concat root "saved" mevedel-telemetry-file-name))
+         (file-name-concat saved mevedel-telemetry-file-name))
         (should (= 1 (count-lines (point-min) (point-max))))))))
 
 (mevedel-deftest mevedel-telemetry-usage--callback ()
