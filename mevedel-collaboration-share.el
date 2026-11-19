@@ -178,6 +178,13 @@ occupies."
      (max 0 (/ (- (frame-pixel-width parent) width) 2))
      (max 0 (/ (- (frame-pixel-height parent) height) 2)))))
 
+(defun mevedel-collaboration--paint-share-border (frame)
+  "Paint FRAME's border from `mevedel-collaboration-share-border'."
+  (let ((color (face-attribute 'mevedel-collaboration-share-border
+                               :background nil t)))
+    (set-face-background 'internal-border color frame)
+    (set-face-background 'child-frame-border color frame)))
+
 (defun mevedel-collaboration--show-share-frame (room)
   "Present ROOM\='s bearer links and QR code on a dedicated surface.
 A centred child frame on a graphical display, an ordinary window
@@ -222,10 +229,7 @@ otherwise."
                 (set-window-parameter window 'mode-line-format 'none)
                 (set-window-fringes window 0 0))
               ;; The border only draws once the faces carry a colour.
-              (let ((color (face-attribute 'mevedel-collaboration-share-border
-                                           :background nil t)))
-                (set-face-background 'internal-border color frame)
-                (set-face-background 'child-frame-border color frame))
+              (mevedel-collaboration--paint-share-border frame)
               (mevedel-collaboration--fit-share-frame frame parent)
               (mevedel-collaboration--center-frame frame parent)
               (make-frame-visible frame)

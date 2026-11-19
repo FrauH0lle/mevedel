@@ -16,6 +16,7 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-chat)
+(require 'mevedel-collaboration-share)
 (require 'mevedel-note-frame)
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
@@ -28,6 +29,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
+(require 'mevedel-theme-faces)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-registry)
@@ -47,6 +49,7 @@
 
 ;; Bound by the session layer at runtime; the view fixture renders without it.
 (defvar mevedel-session--read-only-mode nil)
+(defvar mevedel-collaboration--share-frame nil)
 
 (defun mevedel-note-frame-test--reset ()
   "Clear module state so no test leaks a frame."
@@ -500,17 +503,64 @@ them while the frame is still alive"
 
 
 (ert-deftest mevedel-note-frame-border-is-prominent ()
-  "The border defaults to 3 px; active and inactive faces stay distinct."
+  "The border defaults to 3 px."
   (should (= 3 (eval (car (get 'mevedel-note-frame-border-width
-                               'standard-value)))))
-  (dolist (bg '(dark light))
-    (let (colors)
-      (dolist (face '(mevedel-note-frame-border
-                      mevedel-note-frame-border-inactive))
-        (let ((spec (cdr (assq bg (mapcar (lambda (e) (cons (cadr (caar e)) (cdr e)))
-                                          (get face 'face-defface-spec))))))
-          (push (plist-get spec :background) colors)))
-      (should (cl-every #'stringp colors))
-      (should-not (equal (car colors) (cadr colors))))))
+                               'standard-value))))))
+
+(defun mevedel-note-frame-test--rgb (name &optional _frame)
+  "Resolve hex NAME as a graphic frame would; batch maps it to white."
+  (mapcar (lambda (i) (/ (string-to-number (substring name i (+ i 2)) 16) 255.0))
+          '(1 3 5)))
+
+(defun mevedel-note-frame-test--derive (foreground background)
+  "Return (ACTIVE . INACTIVE) border colours derived from FOREGROUND on BACKGROUND."
+  (let ((mevedel--theme-derived-faces nil))
+    (cl-letf (((symbol-function 'mevedel--color-frame) #'selected-frame)
+              ((symbol-function 'face-attribute)
+               (lambda (_face attr &rest _)
+                 (if (eq attr :foreground) foreground background))))
+      (let (applied)
+        (cl-letf (((symbol-function 'set-face-attribute)
+                   (lambda (face _frame &rest attrs)
+                     (push (cons face (plist-get attrs :background)) applied))))
+          (mevedel-note-frame--register-border-faces)
+          (mevedel--derive-theme-faces))
+        (cons (alist-get 'mevedel-note-frame-border applied)
+              (alist-get 'mevedel-note-frame-border-inactive applied))))))
+
+(ert-deftest mevedel-note-frame-border-derives-from-theme ()
+  "Active contrasts with the background more than inactive, light and dark."
+  (dolist (pair '(("#bbc2cf" . "#282c34") ("#24292e" . "#ffffff")))
+   (cl-letf (((symbol-function 'color-name-to-rgb)
+              #'mevedel-note-frame-test--rgb))
+    (pcase-let* ((`(,active . ,inactive)
+                  (mevedel-note-frame-test--derive (car pair) (cdr pair)))
+                 (bg (cdr pair)))
+      (should (stringp active))
+      (should-not (equal active inactive))
+      (should (> (mevedel--contrast active bg)
+                 (+ 0.5 (mevedel--contrast inactive bg))))
+      (should (> (mevedel--contrast inactive bg) 1.1))))))
+
+(ert-deftest mevedel-note-frame-border-leaves-customised-face-alone ()
+  (put 'mevedel-note-frame-border 'customized-face '((t :background "red")))
+  (unwind-protect
+      (cl-letf (((symbol-function 'color-name-to-rgb)
+                 #'mevedel-note-frame-test--rgb))
+        (should-not (car (mevedel-note-frame-test--derive "#ffffff" "#000000"))))
+    (put 'mevedel-note-frame-border 'customized-face nil)))
+
+(ert-deftest mevedel-note-frame-border-repaints-on-theme-change ()
+  "A shown frame is repainted when the theme changes."
+  (let ((painted nil))
+    (cl-letf (((symbol-function 'mevedel-note-frame--paint-border)
+               (lambda (&optional frame &rest _) (push (list 'note frame) painted)))
+              ((symbol-function 'mevedel-collaboration--paint-share-border)
+               (lambda (frame) (push (list 'share frame) painted))))
+      (let ((mevedel-note-frame--frame (selected-frame))
+            (mevedel-collaboration--share-frame (selected-frame)))
+        (mevedel-note-frame--repaint-borders 'some-theme)))
+    (should (member (list 'note (selected-frame)) painted))
+    (should (member (list 'share (selected-frame)) painted))))
 
 ;;; test-mevedel-note-frame.el ends here
