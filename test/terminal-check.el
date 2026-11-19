@@ -35,6 +35,7 @@
          (bootstrap (file-name-concat temporary "bootstrap.el"))
          (log (file-name-concat temporary "ert.log"))
          (deadline (+ (float-time) 300))
+         (screen (generate-new-buffer " *terminal-check-screen*"))
          (process nil))
     (make-directory home)
     (add-hook 'kill-emacs-hook
@@ -67,8 +68,11 @@
              :command (list "sh" "-c" "stty rows 40 cols 110 && exec \"$0\" \"$@\""
                             (expand-file-name invocation-name invocation-directory)
                             "-Q" "-nw" "--load" bootstrap)
-             ;; Drain the screen output, which would otherwise block the child.
-             :filter #'ignore))
+             ;; Keep what the child draws: the floating composer's top line
+             ;; must reach the terminal.  Draining also keeps it from blocking.
+             :coding 'utf-8
+             :filter (lambda (_process output)
+                       (with-current-buffer screen (insert output)))))
       ;; A real terminal focus-in report, once the child has enabled them.
       (run-at-time 1 nil (lambda () (when (process-live-p process)
                                       (process-send-string process "\e[I"))))
@@ -82,6 +86,12 @@
       (unless (eq status 0)
         (princ (format "Terminal check FAILED (%s)\n" status))
         (kill-emacs 1))
+      (with-current-buffer screen
+        (dolist (drawn '("───" "↓ Back to bottom"))
+          (goto-char (point-min))
+          (unless (search-forward drawn nil t)
+            (princ (format "Terminal check FAILED: %S never drawn\n" drawn))
+            (kill-emacs 1))))
       (princ "Terminal check passed\n"))))
 
 (defun mevedel-terminal-check--child (log &optional deadline)

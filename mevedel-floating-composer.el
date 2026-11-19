@@ -35,13 +35,16 @@
 ;; `C-x 2'/`C-x 3' split it.  `C-c C-SPC' toggles the cursor between the
 ;; composer and the transcript.
 ;;
-;; On a terminal it is a terminal child frame: its geometry is in cells and
-;; Emacs draws its border as box characters one cell outside the frame,
-;; only while the frame is decorated, in the frame's own `border' face;
-;; `mevedel-note-frame--paint-border' sets that face's foreground to show
-;; focus.  A terminal sends keystrokes to the selected child frame itself,
-;; and `select-frame' does not move a redirect there, so a terminal parent
-;; is never redirected.
+;; It spans the host's full width, fringes included, and sits on its
+;; bottom edge, without a border.  Its top line is a rule (the header
+;; face's overline; `─' characters on a terminal) carrying `↑ N more'
+;; while draft lines are scrolled out above and a "Back to bottom" button
+;; that returns the cursor inline.
+;;
+;; On a terminal it is a terminal child frame with its geometry in cells.
+;; A terminal sends keystrokes to the selected child frame itself, and
+;; `select-frame' does not move a redirect there, so a terminal parent is
+;; never redirected.
 
 ;;; Code:
 
@@ -63,6 +66,7 @@
 (declare-function mevedel-view--set-viewport "mevedel-view-composer" (window viewport))
 (declare-function mevedel-view--viewport-at-y "mevedel-view-composer"
                   (window position y))
+(declare-function mevedel-view--window-body-geometry "mevedel-view-composer" (window))
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
@@ -118,24 +122,22 @@ clears it whatever it points at now.")
 ;;
 ;;; Placement
 
-(defun mevedel-floating-composer--place (edges char-width char-height natural border)
+(defun mevedel-floating-composer--place (edges fringes char-height natural header)
   "Return (WIDTH HEIGHT X Y) in pixels for the floating composer.
 EDGES are the host's text-area (LEFT TOP RIGHT BOTTOM) relative to its
-frame.  CHAR-WIDTH and CHAR-HEIGHT are the parent's character size,
-NATURAL the composer's displayed height and BORDER the frame's border
-width.  WIDTH and HEIGHT are the frame's text size: the host's text width
-less a two-column inset per side, shrunk so a narrow host still contains
-the frame, and NATURAL capped at half the host's text height but at least
-one line.  The frame floats half a line above the host's bottom edge."
+frame and FRINGES its (LEFT RIGHT ...) fringe widths.  CHAR-HEIGHT is the
+parent's line height, NATURAL the composer's displayed height and HEADER
+the top line's height.  The frame covers the host's text area and both
+fringes and sits on its bottom edge, so no strip of transcript shows
+beside or below it.  Its height is the top line plus NATURAL, capped at
+half the host's text height but at least one line."
   (pcase-let* ((`(,left ,top ,right ,bottom) edges)
-               (body-width (- right left))
-               (inset (max 0 (min (* 2 char-width)
-                                  (/ (- body-width (* 2 border) char-width) 2))))
-               (height (max char-height (min (/ (- bottom top) 2) natural))))
-    (list (max 1 (- body-width (* 2 inset) (* 2 border)))
+               (`(,left-fringe ,right-fringe . ,_) fringes)
+               (height (+ header (max char-height (min (/ (- bottom top) 2) natural)))))
+    (list (+ left-fringe (- right left) right-fringe)
           height
-          (+ left inset)
-          (- bottom (/ char-height 2) height (* 2 border)))))
+          (- left left-fringe)
+          (- bottom height))))
 
 (defun mevedel-floating-composer--start ()
   "Return where the floating composer starts: the rail, else the prompt."
@@ -149,13 +151,14 @@ one line.  The frame floats half a line above the host's bottom edge."
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
 Cached until the buffer, WINDOW's width or the face remapping (text
-scale) changes, so scrolling the host measures nothing.  LIMIT holds the
-parent's line height, so global text scaling also misses the cache.
+scale) changes, so scrolling the host measures nothing.  The default
+face's height on WINDOW's frame keys global text scaling.
 Measuring fontifies the draft, which modifies the buffer, so the cache
 records the buffer's state after measuring: otherwise every key measured
 twice."
   (let ((key (lambda () (list (buffer-modified-tick) (window-body-width window t)
-                              face-remapping-alist start limit)))
+                              face-remapping-alist start limit
+                              (face-attribute 'default :height (window-frame window)))))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
     (if (equal (funcall key) (car cache))
         (cdr cache)
@@ -196,8 +199,7 @@ the rail: redisplay alone would recenter it onto transcript rows."
 
 (defun mevedel-floating-composer--make (parent)
   "Return this view's floating-composer frame, a hidden child of PARENT."
-  (let ((frame mevedel-floating-composer--frame)
-        (border mevedel-note-frame-border-width))
+  (let ((frame mevedel-floating-composer--frame))
     (unless (and (frame-live-p frame) (eq (frame-parent frame) parent))
       ;; Another frame's window hosts it now: tear the old frame down as
       ;; removing does, so deletion's hooks never see it as this view's.
@@ -213,58 +215,130 @@ the rail: redisplay alone would recenter it onto transcript rows."
                        (width . 0) (height . 0) (visibility . nil)
                        ;; It never takes compositor focus; see the Commentary.
                        (no-focus-on-map . t) (no-accept-focus . t)
-                       (internal-border-width . ,border)
-                       (child-frame-border-width . ,border)
-                       ;; Frame fringes count in its native width even when the
-                       ;; window hides them, widening it past the inset.
+                       (internal-border-width . 0) (child-frame-border-width . 0)
+                       ;; Frame fringes would count in its native width; the
+                       ;; window carries the host's fringes instead.
                        (left-fringe . 0) (right-fringe . 0)
                        (mevedel-view-animate-as-parent . t)
-                       ;; A terminal draws its border only around a decorated frame.
-                       ,@(unless (display-graphic-p parent) '((undecorated . nil)))
                        ,@mevedel--child-frame-parameters))))
       (let ((window (frame-root-window frame)))
         (set-window-buffer window (current-buffer))
         (set-window-dedicated-p window t)
-        (dolist (parameter '(mode-line-format header-line-format tab-line-format))
+        (dolist (parameter '(mode-line-format tab-line-format))
           (set-window-parameter window parameter 'none))
+        (set-window-parameter window 'header-line-format
+                              '(:eval (mevedel-floating-composer--top-line)))
         (set-window-parameter window 'mevedel-view-geometry-excluded t)
         (set-window-parameter window 'mevedel-floating-composer t)
         (set-window-parameter window 'no-other-window t)
         (set-window-parameter window 'split-window #'mevedel-floating-composer--split-host)
         (set-window-point window (point-max)))
-      (mevedel-note-frame--paint-border frame)
       (add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
       (setq mevedel-floating-composer--frame frame))
     frame))
 
+(defface mevedel-floating-composer-button '((t :inherit shadow))
+  "The floating composer's \"Back to bottom\" button.
+Its background is a tint of the theme's, set on each floating composer."
+  :group 'mevedel)
+
+(defconst mevedel-floating-composer--button
+  (propertize " ↓ Back to bottom "
+              'face 'mevedel-floating-composer-button
+              'mouse-face 'highlight
+              'help-echo "mouse-1: back to the composer at the bottom"
+              'local-map (define-keymap "<header-line> <mouse-1>"
+                           #'mevedel-floating-composer-back-to-bottom))
+  "The clickable button at the right of the floating composer's top line.")
+
+(defun mevedel-floating-composer--style (frame)
+  "Draw FRAME's top line as a rule over the theme's default background.
+The rule is the header face's overline, which spans the whole header
+line, fringes included.  Faces are set again only after a theme reset
+them or changed its colors: setting them refreshes FRAME's faces."
+  (let ((background (face-background 'default frame t))
+        (rule (face-foreground 'shadow frame t)))
+    (unless (and (equal rule (face-attribute 'header-line :overline frame))
+                 (equal background (face-attribute 'header-line :background frame)))
+      (set-face-attribute 'header-line frame :inherit 'default :box nil :underline nil
+                          :overline rule :background background)
+      (set-face-attribute 'mevedel-floating-composer-button frame :background
+                          (mevedel--tint background (face-foreground 'default frame t)
+                                         0.10)))))
+
+(defun mevedel-floating-composer--top-line ()
+  "Return the top line of the floating composer in the selected window.
+On the left `↑ N more' when N draft lines are scrolled out above, on the
+right `mevedel-floating-composer--button'.  A terminal cannot draw the
+overline, so there `─' characters fill the space between them.  Counting
+costs nothing while no draft line is hidden."
+  (let* ((window (selected-window))
+         (start (mevedel-floating-composer--start))
+         (hidden (if (and start (> (window-start window) start))
+                     (count-screen-lines start (window-start window) nil window)
+                   0))
+         (more (if (> hidden 0) (propertize (format " ↑ %d more " hidden) 'face 'shadow) ""))
+         (button mevedel-floating-composer--button)
+         (gap (- (window-total-width window) (string-width more) (string-width button))))
+    (concat more
+            (if (display-graphic-p)
+                (propertize " " 'display `(space :align-to (- right ,(string-width button))))
+              (propertize (make-string (max 0 gap) ?─) 'face 'shadow))
+            button)))
+
+(defun mevedel-floating-composer-back-to-bottom (event)
+  "Return the cursor inline at the draft position of EVENT's floating composer.
+Its host scrolls to show the composer at the bottom, so the floating
+composer hides after this command."
+  (interactive "e")
+  (with-current-buffer (window-buffer (posn-window (event-start event)))
+    (when-let* ((window (mevedel-floating-composer--window))
+                (host mevedel-floating-composer--host)
+                ((window-live-p host)))
+      (mevedel-floating-composer--select host (window-point window))
+      (cl-flet ((to-bottom (position)
+                  (mevedel-view--set-viewport
+                   host (mevedel-view--viewport-at-y
+                         host position
+                         (- (cdr (mevedel-view--window-body-geometry host))
+                            (save-excursion (goto-char position) (line-pixel-height)))))))
+        (to-bottom (point-max))
+        ;; A draft taller than the window shows the cursor's line instead.
+        (unless (mevedel-view--position-screen-y (point) host t)
+          (to-bottom (point)))))))
+
 (defun mevedel-floating-composer--show (host)
   "Show the floating composer over HOST, refitting it to the draft."
   (let* ((parent (window-frame host))
-         (graphic (display-graphic-p parent))
          (frame (mevedel-floating-composer--make parent))
          (window (frame-root-window frame))
          (edges (window-inside-pixel-edges host))
-         (char-width (frame-char-width parent))
+         (fringes (window-fringes host))
          (char-height (frame-char-height parent))
-         (border (if graphic mevedel-note-frame-border-width 1))
+         ;; Until drawn, Emacs estimates the top line from its font alone,
+         ;; without the overline's margin, and keeps a stale height after a
+         ;; font change: a frame too short scrolls its draft.
+         (header (max (window-header-line-height window)
+                      (+ char-height (if (display-graphic-p parent) overline-margin 0))))
          (start (mevedel-floating-composer--start))
          (cap (/ (- (nth 3 edges) (nth 1 edges)) 2))
          (width (car (mevedel-floating-composer--place
-                      edges char-width char-height 0 border)))
+                      edges fringes char-height 0 header)))
          (frame-resize-pixelwise t)
          (window-min-height 1))
     (setq mevedel-floating-composer--host host)
+    (mevedel-floating-composer--style frame)
+    ;; The host's fringes keep the draft aligned with the transcript text.
+    (unless (equal (take 2 fringes) (take 2 (window-fringes window)))
+      (set-window-fringes window (car fringes) (cadr fringes)))
     ;; The draft wraps at the final width, so measure only after taking it.
     (unless (= width (frame-text-width frame))
       (set-frame-size frame width (max char-height (frame-text-height frame)) t))
     (let* ((natural (mevedel-floating-composer--natural-height
-                     window start (+ cap char-height)))
+                     ;; The limit counts from the window's top, header included.
+                     window start (+ header cap char-height)))
            (geometry (mevedel-floating-composer--place
-                      edges char-width char-height natural border)))
-      ;; A terminal places the frame inside its border cell.
-      (unless graphic
-        (cl-incf (nth 2 geometry))
-        (cl-incf (nth 3 geometry)))
+                      edges fringes char-height natural header)))
       (set-window-parameter window 'mevedel-floating-composer-pinned (<= natural cap))
       ;; One compound call: a separate resize would first hang the growing
       ;; frame below its old top, and on PGTK that geometry can stick.  It is
@@ -303,8 +377,7 @@ composer, its parent's keystrokes are redirected to it."
       ;; Several views can float over one frame; the last to redirect owns it.
       (set-frame-parameter parent 'mevedel-floating-composer-owner (current-buffer))
       (setq mevedel-floating-composer--redirected parent))
-    (goto-char position)
-    (mevedel-floating-composer--paint-borders)))
+    (goto-char position)))
 
 (defun mevedel-floating-composer--release ()
   "Clear the keystroke redirect this view established, wherever it points.
@@ -389,21 +462,6 @@ draft.  Inline, each toggle returns to where the previous one left."
                           back)
                          (draft (window-start))
                          (t (point-max)))))))))
-
-(defun mevedel-floating-composer--active-p (frame)
-  "Return non-nil when floating-composer FRAME receives the keystrokes."
-  (and (eq frame (selected-frame))
-       (frame-focus-state (frame-parent frame))))
-
-(defun mevedel-floating-composer--paint-borders ()
-  "Repaint every floating composer's border to show its focus."
-  (dolist (frame (frame-list))
-    (when (frame-parameter frame 'mevedel-view-animate-as-parent)
-      (mevedel-note-frame--paint-border frame #'mevedel-floating-composer--active-p))))
-
-(add-function :after after-focus-change-function
-              #'mevedel-floating-composer--paint-borders)
-
 
 ;;
 ;;; Update
@@ -513,18 +571,20 @@ has its cursor in this view's draft or shows another buffer."
 (defun mevedel-floating-composer--on-window (window)
   "Respond to a size, buffer or selection change of WINDOW.
 These run inside redisplay, so they reschedule rather than make frames;
-the floating composer's own changes restore its pin and repaint its
-border, which shows whether it is selected."
-  (if (window-parameter window 'mevedel-floating-composer)
-      (progn (mevedel-floating-composer--pin window)
-             (mevedel-floating-composer--paint-borders))
-    (mevedel-floating-composer-refresh)))
-
-(defun mevedel-floating-composer--on-scroll (window _start)
-  "Keep floating-composer WINDOW from scrolling above the rail.
-Touchpad momentum scrolls it tick by tick inside one command, redisplaying
-in between, so the clamp after the command would come too late."
+the floating composer's own changes restore its pin and refit it: its
+top line is only estimated until first drawn."
   (when (window-parameter window 'mevedel-floating-composer)
+    (mevedel-floating-composer--pin window))
+  (mevedel-floating-composer-refresh))
+
+(defun mevedel-floating-composer--on-scroll (window start)
+  "Keep floating-composer WINDOW from scrolling above the rail to START.
+Touchpad momentum scrolls it tick by tick inside one command, redisplaying
+in between, so the clamp after the command would come too late.  Scrolling
+down is redisplay showing point in a frame still too short; pinning that
+back would make redisplay scroll again, forever."
+  (when (and (window-parameter window 'mevedel-floating-composer)
+             (< start (or (mevedel-floating-composer--start) start)))
     (mevedel-floating-composer--pin window)))
 
 (defun mevedel-floating-composer--check-hosts (frame)
