@@ -75,6 +75,9 @@
 (declare-function mevedel-execution-target-native-root
                   "mevedel-execution-target" (cl-x) t)
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-toggle "mevedel-floating-composer" ())
+
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
                   (session buffer trigger &optional captures))
@@ -92,9 +95,6 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-clear
                   "mevedel-pending-inputs" ())
-
-;; `mevedel-floating-composer'
-(declare-function mevedel-floating-composer-toggle "mevedel-floating-composer" ())
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-abort-all

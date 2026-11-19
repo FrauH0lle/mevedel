@@ -1231,9 +1231,8 @@ On terminals the same API uses character cells as pixels."
 
 (defun mevedel-view--set-viewport (window viewport)
   "Set WINDOW to VIEWPORT's (START . VSCROLL), avoiding redundant setters.
-A window excluded from `mevedel-view--windows' geometry keeps its own
-viewport."
-  (unless (window-parameter window 'mevedel-view-geometry-excluded)
+A window `mevedel-view--geometry-excluded-p' accepts keeps its own viewport."
+  (unless (mevedel-view--geometry-excluded-p window)
     (unless (= (window-start window) (car viewport))
       (set-window-start window (car viewport) t))
     ;; Setting the start can reset vertical scrolling, so check it afterwards.

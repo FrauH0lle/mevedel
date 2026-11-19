@@ -680,6 +680,26 @@ WINDOW defaults to the selected window, but need not be selected."
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window))
 
+(mevedel-deftest mevedel-view--scroll-return ()
+  (with-temp-buffer
+    (save-window-excursion
+      (let ((window (selected-window)))
+        (set-window-buffer window (current-buffer))
+        (unwind-protect
+            ,test
+          (set-window-parameter window 'mevedel-view-scroll-return nil)))))
+  (test)
+  :doc "returns the offset recorded for the buffer the window shows"
+  (progn
+    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
+    (should (= 7 (mevedel-view--scroll-return window))))
+  :doc "ignores an offset recorded for a buffer the window showed earlier"
+  (with-temp-buffer
+    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
+    (should-not (mevedel-view--scroll-return window)))
+  :doc "returns nil without a pending return"
+  (should-not (mevedel-view--scroll-return window)))
+
 (mevedel-deftest mevedel-view--return-from-scroll ()
   (mevedel-view-user-state-test--with-view
     (mevedel-view-test--insert-composer-draft

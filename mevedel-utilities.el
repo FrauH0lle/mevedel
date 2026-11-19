@@ -475,25 +475,27 @@ because a missing tool is looked up just as often as a present one."
 ;;
 ;;; View windows
 
+(defun mevedel-view--geometry-excluded-p (window)
+  "Return non-nil when WINDOW keeps its own viewport outside view geometry.
+Its `mevedel-view-geometry-excluded' parameter says so."
+  (window-parameter window 'mevedel-view-geometry-excluded))
+
 (defun mevedel-view--windows (purpose &optional buffer)
   "Return the live windows on any frame showing BUFFER's view, for PURPOSE.
 BUFFER defaults to the current buffer.  PURPOSE `visibility' answers
 every such window: animation visibility, attention and frame choice.
-PURPOSE `geometry' omits windows whose `mevedel-view-geometry-excluded'
-parameter is non-nil: viewport capture and restoration, composer
-anchoring, blank-space and growth repair, and narrowest-window chrome
-fitting.  An excluded window keeps its own viewport."
+PURPOSE `geometry' omits windows `mevedel-view--geometry-excluded-p'
+accepts: viewport capture and restoration, composer anchoring,
+blank-space and growth repair, and narrowest-window chrome fitting."
   (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
     (cl-ecase purpose
       (visibility windows)
       (geometry
        ;; Hot paths call this per update; copy only when a window is excluded.
        (if (cl-loop for window in windows
-                    never (window-parameter window 'mevedel-view-geometry-excluded))
+                    never (mevedel-view--geometry-excluded-p window))
            windows
-         (cl-remove-if
-          (lambda (window) (window-parameter window 'mevedel-view-geometry-excluded))
-          windows))))))
+         (cl-remove-if #'mevedel-view--geometry-excluded-p windows))))))
 
 
 ;;

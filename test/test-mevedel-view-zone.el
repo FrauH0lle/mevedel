@@ -693,6 +693,14 @@
         (should (< (mevedel-view-zone-width)
                    (max (window-body-width) (window-body-width other))))))))
 
+(mevedel-deftest mevedel-view--geometry-excluded-p
+  (:doc "answers a window's geometry-exclusion parameter")
+  (save-window-excursion
+    (let ((window (split-window)))
+      (should-not (mevedel-view--geometry-excluded-p window))
+      (set-window-parameter window 'mevedel-view-geometry-excluded t)
+      (should (mevedel-view--geometry-excluded-p window)))))
+
 (mevedel-deftest mevedel-view--windows
   (:doc "omits a geometry-excluded window from geometry, chrome width and the viewport setter, never from visibility")
   (save-window-excursion
