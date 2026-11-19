@@ -21,8 +21,19 @@ cursor it held to the inline draft.
   bottom edge and is as tall as the composer from the rail down, capped at
   half the host's text height. The frame is created once per view, hidden
   between uses, and deleted with the view or when the option is turned off.
-  For now only graphical frames have one; note-frame windows, historical
-  segments and agent transcript views never do.
+  Note-frame windows, historical segments and agent transcript views never
+  have one.
+- **Terminal frames.** In terminal Emacs it is a terminal child frame with
+  the same behavior. Its geometry is in whole cells (a terminal's pixel is a
+  cell, so the half-line gap rounds to none). Emacs draws a terminal child
+  frame's border as box characters one cell outside the frame and only around
+  a decorated frame, so the floating composer overrides the shared
+  `undecorated` parameter there, uses a one-cell border in the placement and
+  places the frame inside it; the box, in the `border` face, stays inside the
+  host. A terminal sends keystrokes to the selected child frame itself and
+  `select-frame` never moves a redirect there, so a stale redirect would send
+  the host's later keystrokes back to the floating composer: on a terminal
+  hand-over selects the floating composer without redirecting its parent.
 - **When.** Only the selected window can be a host, and only while it shows
   neither its cursor's draft position nor the whole composer.
 - **Focus.** The floating composer never takes compositor focus

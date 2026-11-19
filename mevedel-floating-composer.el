@@ -27,6 +27,12 @@
 ;; frame's keystrokes to it with `redirect-frame-focus'; hand-back clears
 ;; the redirect and selects the host.  Selecting another window from the
 ;; floating composer moves the redirect along (`select-frame' does that).
+;;
+;; On a terminal it is a terminal child frame: its geometry is in cells and
+;; Emacs draws its border as box characters one cell outside the frame,
+;; only while the frame is decorated.  A terminal sends keystrokes to the
+;; selected child frame itself, and `select-frame' does not move a redirect
+;; there, so a terminal parent is never redirected.
 
 ;;; Code:
 
@@ -190,6 +196,8 @@ buffer's state after measuring: otherwise every key measured twice."
                        ;; window hides them, widening it past the inset.
                        (left-fringe . 0) (right-fringe . 0)
                        (mevedel-view-animate-as-parent . t)
+                       ;; A terminal draws its border only around a decorated frame.
+                       ,@(unless (display-graphic-p parent) '((undecorated . nil)))
                        ,@mevedel--child-frame-parameters))))
       (let ((window (frame-root-window frame)))
         (set-window-buffer window (current-buffer))
@@ -208,12 +216,13 @@ buffer's state after measuring: otherwise every key measured twice."
 (defun mevedel-floating-composer--show (host)
   "Show the floating composer over HOST, refitting it to the draft."
   (let* ((parent (window-frame host))
+         (graphic (display-graphic-p parent))
          (frame (mevedel-floating-composer--make parent))
          (window (frame-root-window frame))
          (edges (window-inside-pixel-edges host))
          (char-width (frame-char-width parent))
          (char-height (frame-char-height parent))
-         (border mevedel-note-frame-border-width)
+         (border (if graphic mevedel-note-frame-border-width 1))
          (start (mevedel-floating-composer--start))
          (cap (/ (- (nth 3 edges) (nth 1 edges)) 2))
          (width (car (mevedel-floating-composer--place
@@ -228,6 +237,10 @@ buffer's state after measuring: otherwise every key measured twice."
                      window start (+ cap char-height)))
            (geometry (mevedel-floating-composer--place
                       edges char-width char-height natural border)))
+      ;; A terminal places the frame inside its border cell.
+      (unless graphic
+        (cl-incf (nth 2 geometry))
+        (cl-incf (nth 3 geometry)))
       (set-window-parameter window 'mevedel-floating-composer-pinned (<= natural cap))
       ;; One compound call: a separate resize would first hang the growing
       ;; frame below its old top, and on PGTK that geometry can stick.
@@ -258,7 +271,8 @@ composer, its parent's keystrokes are redirected to it."
     (mevedel-floating-composer--release)
     (select-window window)
     (when parent
-      (redirect-frame-focus parent (window-frame window))
+      (when (display-graphic-p parent)
+        (redirect-frame-focus parent (window-frame window)))
       ;; Several views can float over one frame; the last to redirect owns it.
       (set-frame-parameter parent 'mevedel-floating-composer-owner (current-buffer))
       (setq mevedel-floating-composer--redirected parent))
@@ -314,12 +328,11 @@ Leave it when another view redirected the same frame since."
 
 (defun mevedel-floating-composer--host-p (window)
   "Return non-nil when WINDOW can host this view's floating composer.
-Note-frame windows, historical segments and terminals have none."
+Note-frame windows and historical segments have none."
   (and mevedel-floating-composer
        (not mevedel-view--agent-transcript-p)
        (eq (window-buffer window) (current-buffer))
        (not (frame-parent (window-frame window)))
-       (display-graphic-p (window-frame window))
        (not (mevedel-view-historical-segment-p))))
 
 (defun mevedel-floating-composer--needed-p (host)
