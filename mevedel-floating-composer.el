@@ -37,14 +37,19 @@
 ;;
 ;; On a terminal it is a terminal child frame: its geometry is in cells and
 ;; Emacs draws its border as box characters one cell outside the frame,
-;; only while the frame is decorated.  A terminal sends keystrokes to the
-;; selected child frame itself, and `select-frame' does not move a redirect
-;; there, so a terminal parent is never redirected.
+;; only while the frame is decorated, in the frame's own `border' face;
+;; `mevedel-note-frame--paint-border' sets that face's foreground to show
+;; focus.  A terminal sends keystrokes to the selected child frame itself,
+;; and `select-frame' does not move a redirect there, so a terminal parent
+;; is never redirected.
 
 ;;; Code:
 
 (require 'mevedel-note-frame)
 (require 'mevedel-utilities)
+
+;; `mevedel-structs'
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
@@ -65,9 +70,6 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--request-progress-region-start "mevedel-view-stream" ())
 
-;; `mevedel-structs'
-(defvar mevedel-view--agent-transcript-p)
-
 ;; PGTK
 (defvar pgtk-wait-for-event-timeout)
 
@@ -79,11 +81,7 @@
   "Set SYMBOL to VALUE; turning it off removes every floating composer."
   (set-default-toplevel-value symbol value)
   (unless value
-    (remove-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
-    (dolist (buffer (buffer-list))
-      (when (buffer-local-value 'mevedel-floating-composer--frame buffer)
-        (with-current-buffer buffer
-          (mevedel-floating-composer--remove))))))
+    (mevedel-floating-composer--remove-all)))
 
 (defcustom mevedel-floating-composer t
   "Non-nil shows the composer over a view window scrolled away from it.
@@ -201,9 +199,10 @@ the rail: redisplay alone would recenter it onto transcript rows."
   (let ((frame mevedel-floating-composer--frame)
         (border mevedel-note-frame-border-width))
     (unless (and (frame-live-p frame) (eq (frame-parent frame) parent))
+      ;; Another frame's window hosts it now: tear the old frame down as
+      ;; removing does, so deletion's hooks never see it as this view's.
       (when (frame-live-p frame)
-        (mevedel-floating-composer--release)
-        (delete-frame frame))
+        (mevedel-floating-composer--remove))
       (setq frame (let ((pgtk-wait-for-event-timeout nil))
                     ;; Creating it hidden waits like `--hide' does.
                     (make-frame
@@ -321,6 +320,8 @@ Leave it when another view redirected the same frame since."
 
 (defun mevedel-floating-composer--remove ()
   "Delete the floating composer, returning a cursor it holds inline."
+  (when (timerp mevedel-floating-composer--timer)
+    (cancel-timer mevedel-floating-composer--timer))
   (when-let* ((window (mevedel-floating-composer--window)))
     (when (and (eq window (selected-window))
                (window-live-p mevedel-floating-composer--host)
@@ -328,13 +329,15 @@ Leave it when another view redirected the same frame since."
       (mevedel-floating-composer--select mevedel-floating-composer--host
                                          (window-point window)))
     ;; A redirect to a deleted frame would outlive it.
-    (mevedel-floating-composer--release)
-    (delete-frame (window-frame window)))
-  (when (timerp mevedel-floating-composer--timer)
-    (cancel-timer mevedel-floating-composer--timer))
-  (setq mevedel-floating-composer--frame nil
-        mevedel-floating-composer--host nil
-        mevedel-floating-composer--timer nil))
+    (mevedel-floating-composer--release))
+  (let ((frame mevedel-floating-composer--frame))
+    ;; Deleting a frame can run timers; an update there must not find this
+    ;; half-deleted frame and delete it again, which crashes Emacs.
+    (setq mevedel-floating-composer--frame nil
+          mevedel-floating-composer--host nil
+          mevedel-floating-composer--timer nil)
+    (when (frame-live-p frame)
+      (delete-frame frame))))
 
 (defun mevedel-floating-composer--split-host (window size side &optional pixelwise)
   "Split the host of floating-composer WINDOW instead of WINDOW.
@@ -343,6 +346,14 @@ SIZE, SIDE and PIXELWISE are as for `split-window'."
     (unless (window-live-p host)
       (user-error "No transcript window to split"))
     (split-window host size side pixelwise)))
+
+(defun mevedel-floating-composer--remove-all ()
+  "Remove every view's floating composer and the host check."
+  (remove-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'mevedel-floating-composer--frame buffer)
+      (with-current-buffer buffer
+        (mevedel-floating-composer--remove)))))
 
 (defun mevedel-floating-composer--scroll-target ()
   "Return the window `scroll-other-window' scrolls.
@@ -407,17 +418,33 @@ Note-frame windows and historical segments have none."
        (not (mevedel-view-historical-segment-p))))
 
 (defun mevedel-floating-composer--needed-p (host)
-  "Return non-nil when HOST shows neither its cursor's draft nor the composer."
+  "Return non-nil when HOST shows neither its cursor's draft nor the composer.
+The composer runs to the buffer end, so HOST shows a full row of it when
+its start is fully visible.  When the composer covers HOST's top, that is
+HOST's first displayed row, or, if only that row's top is clipped, the
+next one.  A cursor in the draft costs no visibility query; a HOST
+starting above the composer costs one."
   (and (not (mevedel-view--position-in-input-region-p (window-point host)))
-       (let ((start (mevedel-floating-composer--start)))
-         (and start
-              (not (and (mevedel-view--position-screen-y start host t)
-                        (mevedel-view--position-screen-y (point-max) host t)))))))
+       (when-let* ((start (mevedel-floating-composer--start)))
+         (let ((top (window-start host)))
+           (not (if (< top start)
+                    (mevedel-view--position-screen-y start host t)
+                  ;; (X Y) when fully visible, else (X Y RTOP RBOT ROWH VPOS).
+                  (let ((first (pos-visible-in-window-p top host t)))
+                    (or (and first (null (cddr first)))
+                        ;; A row clipped below as well leaves nothing under it.
+                        (and first (zerop (nth 3 first))
+                             (mevedel-view--position-screen-y
+                              (save-excursion (goto-char top)
+                                              (vertical-motion 1 host)
+                                              (point))
+                              host t))))))))))
 
 (defun mevedel-floating-composer--update (&optional command)
   "Show, place or hide this view's floating composer.
 COMMAND non-nil means the user's command just finished: only then may the
-cursor move between the host and the floating composer."
+cursor move between the host and the floating composer.  With the option
+off, remove every floating composer, however it was turned off."
   (unless mevedel-floating-composer--updating
     (let* ((mevedel-floating-composer--updating t)
            (selected (selected-window))
@@ -425,6 +452,8 @@ cursor move between the host and the floating composer."
            (scrolled (and command (mevedel-view--scroll-command-p this-command))))
       (cond
        ((window-minibuffer-p selected))
+       ((not mevedel-floating-composer)
+        (mevedel-floating-composer--remove-all))
        ((eq selected window)
         (let ((host mevedel-floating-composer--host))
           (cond
@@ -477,7 +506,8 @@ has its cursor in this view's draft or shows another buffer."
 
 (defun mevedel-floating-composer--post-command ()
   "Update after a command, which may move the cursor."
-  (when mevedel-floating-composer
+  ;; A floating composer left by turning the option off with `setq' goes now.
+  (when (or mevedel-floating-composer mevedel-floating-composer--frame)
     (mevedel-floating-composer--update t)))
 
 (defun mevedel-floating-composer--on-window (window)
@@ -489,6 +519,13 @@ border, which shows whether it is selected."
       (progn (mevedel-floating-composer--pin window)
              (mevedel-floating-composer--paint-borders))
     (mevedel-floating-composer-refresh)))
+
+(defun mevedel-floating-composer--on-scroll (window _start)
+  "Keep floating-composer WINDOW from scrolling above the rail.
+Touchpad momentum scrolls it tick by tick inside one command, redisplaying
+in between, so the clamp after the command would come too late."
+  (when (window-parameter window 'mevedel-floating-composer)
+    (mevedel-floating-composer--pin window)))
 
 (defun mevedel-floating-composer--check-hosts (frame)
   "Release floating composers over FRAME whose host is gone.
@@ -570,6 +607,7 @@ keeps its own point.  Return non-nil when the cursor moved."
                   window-buffer-change-functions
                   window-selection-change-functions))
     (add-hook hook #'mevedel-floating-composer--on-window nil t))
+  (add-hook 'window-scroll-functions #'mevedel-floating-composer--on-scroll nil t)
   (add-hook 'kill-buffer-hook #'mevedel-floating-composer--remove nil t))
 
 (provide 'mevedel-floating-composer)

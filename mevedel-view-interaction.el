@@ -23,18 +23,15 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-interaction-prompt'
-(defvar mevedel--prompt-overlays)
-
 ;; `mevedel-floating-composer'
 (declare-function mevedel-floating-composer-leave "mevedel-floating-composer" ())
 (declare-function mevedel-floating-composer-return "mevedel-floating-composer"
                   (window position))
 (declare-function mevedel-floating-composer-reveal "mevedel-floating-composer"
                   (window start position))
-(autoload 'mevedel-floating-composer-leave "mevedel-floating-composer")
-(autoload 'mevedel-floating-composer-return "mevedel-floating-composer")
-(autoload 'mevedel-floating-composer-reveal "mevedel-floating-composer")
+
+;; `mevedel-interaction-prompt'
+(defvar mevedel--prompt-overlays)
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-offer-idle-work

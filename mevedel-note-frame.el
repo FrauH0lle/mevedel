@@ -357,7 +357,11 @@ FOCUSED, a function of FRAME, decides that; it defaults to
 refresh FRAME's faces for nothing.
 The border width alone draws nothing: without an explicit background on
 `internal-border' and `child-frame-border' the border takes the default
-background and is invisible against the frame."
+background and is invisible against the frame.  A terminal draws a child
+frame's border as box characters in that frame's own `border' face, so
+there the color is its foreground.  A shown terminal child's box changes
+only when its parent is redrawn; that waits for a timer, outside
+redisplay, and happens only when the color changed."
   (let ((frame (or frame mevedel-note-frame--frame)))
     (when (frame-live-p frame)
       (let ((color (face-attribute
@@ -365,10 +369,18 @@ background and is invisible against the frame."
                         'mevedel-note-frame-border
                       'mevedel-note-frame-border-inactive)
                     :background nil 'default)))
-        (unless (and (equal color (face-background 'child-frame-border frame))
-                     (equal color (face-background 'internal-border frame)))
+        (cond
+         ((not (display-graphic-p frame))
+          (unless (equal color (face-foreground 'border frame))
+            (set-face-foreground 'border color frame)
+            (when-let* ((parent (frame-parent frame)))
+              (run-at-time 0 nil (lambda ()
+                                   (when (frame-live-p parent)
+                                     (redraw-frame parent)))))))
+         ((not (and (equal color (face-background 'child-frame-border frame))
+                    (equal color (face-background 'internal-border frame))))
           (set-face-background 'internal-border color frame)
-          (set-face-background 'child-frame-border color frame))))))
+          (set-face-background 'child-frame-border color frame)))))))
 
 (add-function :after after-focus-change-function
               #'mevedel-note-frame--paint-border)

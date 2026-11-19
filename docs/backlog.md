@@ -10,7 +10,11 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Move the composer into its own buffer, out of the view buffer. About half of [ADR 0126](adr/0126-keep-the-composer-still.md) exists only because the draft shares a buffer with streamed text (composer anchoring, draft blank-space repair, return-to-draft on scroll, draft guards), and typing would no longer flag the transcript window for redisplay. Large: the composer is built around `mevedel-view--input-marker` (composer-related symbols: about 270 source and 2,200 test text matches, unaudited; roughly 20 files and 2,500-4,000 lines estimated on 2026-11-18). Open: a new rule for which windows follow output, a home for the rail and mode badge (ADR 0126 requires real text), `C-c C-j` across buffers, and composer placement in the note frame, `/btw` and historical segments. Also the escalation path if the floating composer regresses typing, scrolling or streaming; [ADR 0134](adr/0134-float-the-composer.md) records its measurements.
+- Move the composer into its own buffer, out of the view buffer. Large; scope,
+  estimate and open problems are in
+  [ADR 0134's alternatives](adr/0134-float-the-composer.md#alternatives). Also
+  the escalation path if the floating composer regresses typing, scrolling or
+  streaming.
 
 ## Proactive sessions
 

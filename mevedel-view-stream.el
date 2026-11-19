@@ -352,11 +352,7 @@ Once a freeze has latched its resting phases, native samples are stale."
   "Return non-nil when motion is disabled or the request awaits input."
   (or (and-let* ((request (mevedel-view--spinner-request)))
         (mevedel-request-active-work-pause-started-at request))
-      (zerop (mevedel-view-power-framerate
-              mevedel-view-spinner-framerate
-              mevedel-view-spinner-battery-framerate
-              mevedel-view-spinner-power-policy
-              mevedel-view-spinner-animate))))
+      (zerop (mevedel-view--spinner-framerate))))
 
 (defun mevedel-view--animation-rest-seconds (style seconds target face)
   "Rest color STYLE at SECONDS for TARGET and FACE, preserving glyph fallbacks."
@@ -942,15 +938,20 @@ return `mevedel-view-spinner-power-policy'."
         'save
       mevedel-view-spinner-power-policy)))
 
+(defun mevedel-view--spinner-framerate (&optional policy)
+  "Return the spinner's effective frame rate under power POLICY.
+POLICY defaults to `mevedel-view-spinner-power-policy'."
+  (mevedel-view-power-framerate
+   mevedel-view-spinner-framerate
+   mevedel-view-spinner-battery-framerate
+   (or policy mevedel-view-spinner-power-policy)
+   mevedel-view-spinner-animate))
+
 (defun mevedel-view--spinner-visual-period (style &optional glyph-fallback policy)
   "Return effective time between visual frames for STYLE, or nil.
 GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback.  POLICY
 overrides `mevedel-view-spinner-power-policy'."
-  (let ((rate (mevedel-view-power-framerate
-               mevedel-view-spinner-framerate
-               mevedel-view-spinner-battery-framerate
-               (or policy mevedel-view-spinner-power-policy)
-               mevedel-view-spinner-animate)))
+  (let ((rate (mevedel-view--spinner-framerate policy)))
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
            (cond ((and glyph-fallback (memq style '(shimmer breathe bounce)))
@@ -1117,15 +1118,10 @@ a window resize."
 (defun mevedel-view--sync-native-animation (main tools)
   "Offload the visible MAIN label and TOOLS when native presentation is ready.
 The label animates under `mevedel-view--spinner-label-power-policy'."
-  (let* ((rate (mevedel-view-power-framerate
-                mevedel-view-spinner-framerate mevedel-view-spinner-battery-framerate
-                mevedel-view-spinner-power-policy mevedel-view-spinner-animate))
+  (let* ((rate (mevedel-view--spinner-framerate))
          (main-rate (if main
-                        (mevedel-view-power-framerate
-                         mevedel-view-spinner-framerate
-                         mevedel-view-spinner-battery-framerate
-                         (mevedel-view--spinner-label-power-policy)
-                         mevedel-view-spinner-animate)
+                        (mevedel-view--spinner-framerate
+                         (mevedel-view--spinner-label-power-policy))
                       rate))
          (seconds (mevedel-view--animation-seconds))
          specs)

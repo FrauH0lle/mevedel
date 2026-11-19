@@ -50,13 +50,12 @@
                   "mevedel-execution-transcript"
                   (data-buffer tool-use-id))
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-refresh "mevedel-floating-composer" ())
+
 ;; `mevedel-note-frame'
 (declare-function mevedel-note-frame-refresh
                   "mevedel-note-frame" ())
-
-;; `mevedel-floating-composer'
-(declare-function mevedel-floating-composer-refresh "mevedel-floating-composer" ())
-(autoload 'mevedel-floating-composer-refresh "mevedel-floating-composer")
 
 ;; `mevedel-gptel-retry'
 (declare-function mevedel-gptel-retry-available-p "mevedel-gptel-retry" (buffer &optional failure-id))
