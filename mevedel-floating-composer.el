@@ -20,6 +20,8 @@
 ;; floating composer at the same draft offset, and a scroll that brings
 ;; that offset fully back into the host returns it inline.  Timers and
 ;; window hooks only place, show or hide an unselected floating composer.
+;; Settling a card visited with `C-c C-j' returns the cursor to the floating
+;; composer when the host does not show the draft position.
 ;;
 ;; The floating composer never takes compositor focus: under PGTK a child
 ;; frame that once held it never returns it to its parent, which left the
@@ -47,6 +49,9 @@
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--scroll-command-p "mevedel-view-composer" (command))
+(declare-function mevedel-view--set-viewport "mevedel-view-composer" (window viewport))
+(declare-function mevedel-view--viewport-at-y "mevedel-view-composer"
+                  (window position y))
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
@@ -444,6 +449,52 @@ option goes off, so views without one pay nothing."
       (let ((host mevedel-floating-composer--host))
         (unless (and (window-live-p host) (eq (window-buffer host) buffer))
           (mevedel-floating-composer--remove))))))
+
+
+;;
+;;; Cards
+
+(defun mevedel-floating-composer-leave ()
+  "Move a cursor the floating composer holds to its host, at the same position.
+A command that visits the transcript then acts in the host, so what it
+remembers belongs to the host."
+  (when-let* ((window (mevedel-floating-composer--window))
+              ((eq window (selected-window)))
+              (host mevedel-floating-composer--host)
+              ((window-live-p host)))
+    (mevedel-floating-composer--select host (window-point window))))
+
+(defun mevedel-floating-composer-reveal (window start position)
+  "Scroll WINDOW so POSITION shows above its floating composer.
+Show the card starting at START at WINDOW's top, else POSITION's line just
+above the floating composer.  Do nothing while none floats over WINDOW."
+  (when-let* (((eq window mevedel-floating-composer--host))
+              (frame mevedel-floating-composer--frame)
+              ((frame-live-p frame))
+              ((frame-visible-p frame))
+              (top (- (nth 3 (frame-parameter frame 'mevedel-floating-composer-geometry))
+                      (nth 1 (window-inside-pixel-edges window))))
+              (height (save-excursion (goto-char position) (line-pixel-height)))
+              (above-p (lambda ()
+                         (when-let* ((y (mevedel-view--position-screen-y position window t)))
+                           (<= (+ y height) top)))))
+    (unless (funcall above-p)
+      (mevedel-view--set-viewport window (mevedel-view--viewport-at-y window start 0))
+      (unless (funcall above-p)
+        (mevedel-view--set-viewport
+         window (mevedel-view--viewport-at-y window position (max 0 (- top height))))))))
+
+(defun mevedel-floating-composer-return (window position)
+  "Return the cursor to POSITION in the floating composer over WINDOW.
+Only when WINDOW is selected and does not fully show POSITION; the host
+keeps its own point.  Return non-nil when the cursor moved."
+  (when-let* (((eq window (selected-window)))
+              ((eq window mevedel-floating-composer--host))
+              (composer (mevedel-floating-composer--window))
+              ((frame-visible-p (window-frame composer)))
+              ((not (mevedel-view--position-screen-y position window t))))
+    (mevedel-floating-composer--select composer position)
+    t))
 
 (defun mevedel-floating-composer-setup ()
   "Enable the floating composer in the current interactive view."

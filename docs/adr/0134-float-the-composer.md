@@ -114,7 +114,22 @@ cursor it held to the inline draft.
   cursor there, so a draft taller than the window can return too.
 - Only `post-command-hook` moves the cursor. Timers, window hooks, streaming
   and other background updates only place, show or hide a floating composer
-  that is not selected.
+  that is not selected. Settling a card visited with `C-c C-j` is the one
+  exception, described below.
+- `C-c C-j` from the floating composer moves the cursor to the host first, so
+  the visit and the draft offset it remembers belong to the host, and selects
+  the card there. While a floating composer is shown over the window, a card
+  whose cursor line would be hidden behind it is scrolled to the window's
+  top, or, if the card is too tall for that, its cursor line just above the
+  floating composer. Arriving cards move nothing.
+- Settling the visited card, while the host still visits it, returns the
+  cursor to the remembered draft offset: inline when the host fully shows
+  that position, otherwise in the shown floating composer, leaving the host's
+  point in the transcript.
+- Sending with `C-c RET` from the floating composer needs no rule of its own:
+  the host's point is in the transcript, so ADR 0126 keeps its viewport as a
+  history reader, and the cursor stays in the emptied floating composer.
+  Input typed while the submission is prepared is kept as inline.
 - With the option off ADR 0126's per-window return-to-draft is unchanged.
 
 ## Rationale and consequences
