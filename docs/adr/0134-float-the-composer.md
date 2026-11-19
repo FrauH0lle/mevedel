@@ -24,7 +24,10 @@ cursor it held to the inline draft.
   For now only graphical frames have one; note-frame windows, historical
   segments and agent transcript views never do.
 - **When.** Only the selected window can be a host, and only while it shows
-  neither its cursor's draft position nor the whole composer.
+  neither its cursor's draft position nor the whole composer. So it follows
+  the selected window across splits, window selection and frame resizes, and
+  hides while another frame, tab or buffer is selected; closing its parent
+  frame deletes it.
 - **Focus.** The floating composer never takes compositor focus
   (`no-accept-focus`). Under PGTK a child frame that once held compositor
   focus never returns it to its parent (`select-frame-set-input-focus` on the
@@ -80,7 +83,9 @@ cursor it held to the inline draft.
   redisplay: a PGTK child frame's resize takes effect before the next
   redisplay, so measuring later would show the grown draft scrolled in the
   old height for a frame. Resize and move are one compound call, issued only
-  when the requested geometry changed. Creating the hidden frame and hiding
+  when the requested geometry differs from the frame's own: restoring a
+  window configuration, as leaving the minibuffer does, rounds the frame to
+  whole lines. Creating the hidden frame and hiding
   it bind `pgtk-wait-for-event-timeout` to nil: PGTK otherwise runs its event
   loop for that whole timeout (0.1 s) on every hide. Updates run after the user's commands in
   the view and, coalesced into one timer, on the view's render cadence and

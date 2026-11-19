@@ -230,9 +230,12 @@ buffer's state after measuring: otherwise every key measured twice."
                       edges char-width char-height natural border)))
       (set-window-parameter window 'mevedel-floating-composer-pinned (<= natural cap))
       ;; One compound call: a separate resize would first hang the growing
-      ;; frame below its old top, and on PGTK that geometry can stick.
-      (unless (equal geometry (frame-parameter frame 'mevedel-floating-composer-geometry))
-        (set-frame-parameter frame 'mevedel-floating-composer-geometry geometry)
+      ;; frame below its old top, and on PGTK that geometry can stick.  It is
+      ;; compared with the frame itself: restoring a window configuration, as
+      ;; leaving the minibuffer does, rounds the frame to whole lines.
+      (unless (equal geometry (list (frame-text-width frame) (frame-text-height frame)
+                                    (car (frame-position frame))
+                                    (cdr (frame-position frame))))
         (apply #'set-frame-size-and-position-pixelwise frame geometry)))
     (mevedel-floating-composer--pin window)
     (when (< (window-point window) start)
