@@ -354,6 +354,7 @@ From the floating composer that is its host."
     (let ((other-window-scroll-default (default-value 'other-window-scroll-default)))
       (other-window-for-scrolling))))
 
+;;;###autoload
 (defun mevedel-floating-composer-toggle ()
   "Move the cursor between the composer and the transcript.
 The composer is the floating composer while it is shown, else the inline
