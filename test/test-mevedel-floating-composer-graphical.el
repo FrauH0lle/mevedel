@@ -210,6 +210,12 @@ placement gives now, with its cursor visible.  Return its window if shown."
           (should (pos-visible-in-window-p (window-point window) window))
           window)))))
 
+(defun mevedel-floating-composer-test--grow-draft (lines)
+  "Prepend LINES lines to the draft, leaving point at offset 4."
+  (mevedel-view-test--insert-composer-draft
+   (mapconcat (lambda (i) (format "> long draft line %d\n" i)) (number-sequence 1 lines))
+   4))
+
 
 ;;
 ;;; Cursor hand-over
@@ -927,5 +933,69 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (mevedel-floating-composer-test--scroll-away t)
     (should (eq host (selected-window)))
     (should-not (mevedel-floating-composer--window))))
+
+
+;;
+;;; Long drafts
+
+(mevedel-deftest mevedel-floating-composer/long-draft ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window)))
+      ,test))
+  (test)
+  :doc "moving the cursor through a capped draft keeps it visible at the cap"
+  (progn
+    (mevedel-floating-composer-test--grow-draft (+ 4 (/ (window-body-height host) 2)))
+    (mevedel-floating-composer-test--to-bottom)
+    (mevedel-floating-composer-test--scroll-away t)
+    (let* ((window (mevedel-floating-composer-test--window))
+           (frame (window-frame window))
+           (cap (/ (window-body-height host t) 2))
+           (rail (mevedel-floating-composer--start))
+           (moves 0))
+      (should (eq window (selected-window)))
+      (should (= 4 (mevedel-floating-composer-test--offset)))
+      (cl-flet ((check ()
+                  (should (eq window (selected-window)))
+                  (should (mevedel-view--position-screen-y (point) window t))
+                  (should (>= (window-start window) rail))
+                  (should (= cap (frame-text-height frame)))))
+        (check)
+        (while (and (< moves 100) (< (line-end-position) (point-max)))
+          (mevedel-floating-composer-test--keys "C-n" 'next-line)
+          (cl-incf moves)
+          (check))
+        (should (= (line-end-position) (point-max)))
+        (while (and (> moves 0) (> (line-beginning-position) (mevedel-view--input-start)))
+          (mevedel-floating-composer-test--keys "C-p" 'previous-line)
+          (cl-decf moves)
+          (check))
+        (should (= 4 (mevedel-floating-composer-test--offset))))))
+  :doc "a draft taller than the window returns inline at the cursor's edited offset"
+  (progn
+    (mevedel-floating-composer-test--grow-draft (* 2 (window-body-height host)))
+    ;; The cursor's line sits on the host's last row.
+    (mevedel-view--set-viewport
+     host (mevedel-view--viewport-at-y
+           host (point) (- (cdr (mevedel-view--window-body-geometry host))
+                           (line-pixel-height))))
+    (redisplay t)
+    (should (mevedel-view--position-screen-y (point) host t))
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window))
+          (notches 0))
+      (should (eq window (mevedel-floating-composer-test--window)))
+      (should (= 4 (mevedel-floating-composer-test--offset)))
+      ;; An inline return still pending at offset 4 would drop this edit's move.
+      (mevedel-floating-composer-test--keys "x" 'self-insert-command)
+      (while (and (< notches 60) (eq window (selected-window)))
+        (mevedel-floating-composer-test--wheel 'wheel-down host)
+        (cl-incf notches))
+      (should (eq host (selected-window)))
+      (should (= 5 (mevedel-floating-composer-test--offset)))
+      (should (mevedel-view--position-screen-y (point) host t))
+      (should-not (mevedel-view--position-screen-y (point-max) host))
+      (should-not (mevedel-floating-composer-test--window))
+      (should (string-prefix-p "> loxng draft line 1\n" (mevedel-view--input-text))))))
 
 ;;; test-mevedel-floating-composer-graphical.el ends here
