@@ -661,6 +661,26 @@ stand-ins that leave stray (including `setsid`-detached) processes, then check
 argument forwarding, the private environment and cleanup after success, a
 client killed before reporting, the session deadline and SIGTERM.
 
+### Terminal floating-composer check
+
+The floating composer's main native cases (scroll-away and return, the focus
+cases and geometry exclusion) also run in terminal Emacs:
+
+```bash
+npx @emacs-eask/cli run script terminal-check
+```
+
+The batch parent starts a **separate `emacs -Q -nw`** on a pseudo-terminal of
+110×40 cells with `TERM=xterm-256color`, private HOME and XDG roots, and a
+300-second deadline; it never loads checkout code into the running editor.
+It sends the child a real terminal focus-in report rather than stubbing
+`frame-focus-state`, and the child keeps its echo area at one line and
+warnings out of windows, so neither resizes the host between cases. The child
+selects the cases by ERT tag (`test/terminal-check.el`) from
+`test/test-mevedel-floating-composer-graphical.el`. Unexpected results **or
+skipped tests** fail the command. It needs no display, compositor or
+tree-sitter grammar; `ert.log` is printed rather than kept.
+
 ### Instruction edit benchmark
 
 ```bash
