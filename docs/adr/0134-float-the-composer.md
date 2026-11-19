@@ -52,7 +52,7 @@ cursor it held to the inline draft.
   anchoring, blank-space repair and narrowest-window chrome fitting (rail,
   panel rows, mail notices) ignore it, and its own resizes do not refit the
   host's rail. It starts at the rail instead of being anchored; a draft
-  taller than the cap scrolls with its cursor.
+  taller than the cap scrolls with its cursor, never above the rail.
 - **Still counted for visibility.** The rail is on screen in the floating
   composer, so animation visibility keeps counting its window, and its frame
   carries `mevedel-view-animate-as-parent` so animation's frame choice treats
