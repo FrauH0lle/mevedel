@@ -323,6 +323,56 @@ No regression measured:
 - **Child-frame move/resize** calls were 0 in every paired workload (the
   draft height did not change); show/hide were 1 per crossing direction.
 
+### Rerun with the full-width frame and top line
+
+Run on the tree at `ecef42ff` (2026-11-19), after the full-width frame and
+top line replaced the inset, bordered one: Emacs 31.1 pgtk, byte-compiled,
+private presenting KWin; presentation probes before and after with 68 and
+66 completed frame callbacks; one warm-up round and 6 alternating rounds;
+power policy pinned to `full`. Values and statistics as above (scenario vs
+baseline; paired median [min, max] over 6 rounds); the earlier run's value
+follows in parentheses.
+
+- **Typing in the visible floating composer** (`on-visible` vs
+  `off-inline`, 40 keys per run): latency 2.50 vs 1.72 ms median (n 240
+  each), per-round ratio 1.51 [1.41, 1.67] (1.62 [1.42, 1.74]); Emacs CPU
+  +56 [+38, +64] ms per run (+65 [+39, +86]).
+- **Wrapped-draft deletion, visible** (30 keys per run): Emacs CPU
+  +46 [+36, +50] ms (+46 [+34, +55]); latency 3.76 vs 4.26 ms median,
+  ratio 0.88 [0.82, 0.89] (0.87 [0.83, 0.98]).
+- **One child-frame refit per visible session:** typing and wrapped
+  deletion each count one move/resize call per run (the earlier run: 0),
+  not one per key. The cause is unverified; a likely one is that the top
+  line's `↑`/`↓` come from a fallback font a pixel taller than the default,
+  so the drawn top line is taller than the height computed before drawing
+  and the size change refits the frame once.
+- **Scroll back** (`on-never` vs `off-inline`, 12 crossings per run, n 72
+  each): 2.83 vs 6.12 ms median, ratio 0.47 [0.43, 0.49] (0.56
+  [0.52, 0.58]); Emacs CPU +74 [+36, +117] ms, redisplay cycles
+  +46 [+45, +47] per run.
+- **Scroll away is not comparable with earlier runs:** 8.74 vs 7.83 ms
+  median, ratio 1.12 [1.09, 1.16]; Emacs CPU +205 [+187, +220] ms, KWin CPU
+  +17 [+13, +27] ms, redisplay cycles +51 [+49, +51] per run. Since the
+  floating composer appears only once the host shows no composer line
+  (`19fbf2c8`), one wheel notch no longer always hands the cursor over and
+  the benchmark stopped at its first crossing; `ecef42ff` makes it scroll
+  away notch by notch, as scrolling back already did, and report the
+  crossing notch's latency. With the option on a crossing now takes an
+  extra notch whose CPU and redisplay cycles the run counts, while `off`
+  leaves the draft after one.
+- **Idle with a request, visible, against the hidden rail** (`off-away`,
+  4 s): Emacs CPU +87.7 [+80.5, +109.3] ms (+88.8 [+80.4, +95.3]), KWin CPU
+  +21.8 [+18.7, +29.2] ms, redisplay cycles +19 [+18, +20]. Against the
+  rail visible inline: Emacs CPU -54.2 [-57.8, -37.0] ms (-47.5).
+- **Quiet idle, visible:** Emacs CPU -0.39 [-0.86, +0.05] ms
+  (+0.3 [-1.2, +0.7]).
+- **Unfocused idle, visible** (vs `off-inline`): Emacs CPU
+  -2.5 [-10.2, +28.7] ms, inconclusive (+3.5 [-3.9, +16.7]).
+- **Stream, visible, against the hidden rail:** Emacs CPU
+  +188.5 [+171.6, +226.8] ms (+227.9 [+173.5, +273.1]), redisplay cycles
+  +40 [+37, +43].
+- **First show:** 55.81 ms median, p90 62.81 ms (n 36) (50.72, p90 61.85).
+
 ## Alternatives
 
 - **Docked window below the transcript.** Covers nothing, but shrinks the
