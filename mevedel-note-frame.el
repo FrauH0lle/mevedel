@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'mevedel-utilities)
+(require 'mevedel-theme-faces)
 
 (eval-when-compile (require 'cl-lib))
 
@@ -86,18 +87,51 @@ The frame fits itself to its content between this and
   :group 'mevedel)
 
 (defface mevedel-note-frame-border
-  '((((background dark)) :background "#2ec4b6")
-    (((background light)) :background "#0b8a8a"))
+  '((((background dark)) :background "#9a9a9a")
+    (((background light)) :background "#5a5a5a"))
   "Border of the note frame while it has focus.
-The background attribute is what paints; a face that inherits an unset
-background makes the border invisible against the frame."
+The background is blended from the active theme by
+`mevedel--derive-theme-faces'; the grey here is only the fallback for a
+display whose colors cannot be measured.  The background attribute is
+what paints; a face that inherits an unset background makes the border
+invisible against the frame."
   :group 'mevedel)
 
 (defface mevedel-note-frame-border-inactive
-  '((((background dark)) :background "#1c6f73")
-    (((background light)) :background "#6cb9bd"))
-  "Border of the note frame while another frame has focus."
+  '((((background dark)) :background "#555555")
+    (((background light)) :background "#c0c0c0"))
+  "Border of the note frame while another frame has focus.
+Derived from the theme like `mevedel-note-frame-border', but lighter."
   :group 'mevedel)
+
+(defun mevedel-note-frame--register-border-faces ()
+  "Derive both border faces from the active theme."
+  (pcase-dolist (`(,face . ,intensity)
+                 '((mevedel-note-frame-border . 0.65)
+                   (mevedel-note-frame-border-inactive . 0.25)))
+    (mevedel--derive-theme-face
+     face
+     (lambda (foreground background)
+       (list :background (mevedel--tint background foreground intensity))))))
+
+(mevedel-note-frame--register-border-faces)
+
+(defvar mevedel-collaboration--share-frame)
+(declare-function mevedel-collaboration--paint-share-border
+                  "mevedel-collaboration-share" (frame))
+
+(defun mevedel-note-frame--repaint-borders (&rest _)
+  "Repaint the shown note frame and share panel after a theme change."
+  (when (frame-live-p mevedel-note-frame--frame)
+    (mevedel-note-frame--paint-border mevedel-note-frame--frame))
+  (when (and (boundp 'mevedel-collaboration--share-frame)
+             (frame-live-p mevedel-collaboration--share-frame))
+    (mevedel-collaboration--paint-share-border
+     mevedel-collaboration--share-frame)))
+
+;; Appended after the derivation hooks, so the faces are current first.
+(add-hook 'enable-theme-functions #'mevedel-note-frame--repaint-borders)
+(add-hook 'disable-theme-functions #'mevedel-note-frame--repaint-borders)
 
 
 ;;

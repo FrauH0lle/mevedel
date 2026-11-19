@@ -24,6 +24,7 @@
 (require 'mevedel-report)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-structs)
+(require 'mevedel-theme-faces)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-window)
@@ -418,5 +419,40 @@ body height and composer draft."
         (mevedel-workspace-clear-registry)
         (delete-directory directory t)))))
 
+(defun mevedel-window-graphical-test--border-px (frame)
+  "Return FRAME's child border color as painted."
+  (list (face-background 'child-frame-border frame)
+        (face-background 'internal-border frame)))
+
+(ert-deftest mevedel-note-frame-border-follows-theme-graphical ()
+  "A shown note frame repaints its border when the theme changes."
+  (skip-unless (display-graphic-p))
+  (let* ((parent (selected-frame))
+         (saved (list (face-attribute 'default :foreground parent)
+                      (face-attribute 'default :background parent))))
+    (mevedel-window-graphical-test--with-frame '("Border prompt")
+      (unwind-protect
+          (dolist (theme '(("dark" "#bbc2cf" "#282c34" "#3b4252")
+                           ("light" "#24292e" "#ffffff" "#e6eef7")))
+            (pcase-let ((`(,name ,fg ,bg ,interior) theme))
+              (set-face-attribute 'default parent :foreground fg :background bg)
+              (set-face-background 'default interior frame)
+              (cl-letf (((symbol-function 'mevedel--color-frame) (lambda () parent)))
+                (run-hook-with-args 'enable-theme-functions 'border-test))
+              (let ((active (face-attribute 'mevedel-note-frame-border
+                                            :background nil 'default))
+                    (inactive (face-attribute 'mevedel-note-frame-border-inactive
+                                              :background nil 'default)))
+                (should (> (mevedel--contrast active bg)
+                           (+ 0.5 (mevedel--contrast inactive bg))))
+                (dolist (state `((focused ,active ,#'always)
+                                 (unfocused ,inactive ,#'ignore)))
+                  (mevedel-note-frame--paint-border frame (nth 2 state))
+                  (redisplay t)
+                  (should (equal (list (nth 1 state) (nth 1 state))
+                                 (mevedel-window-graphical-test--border-px frame)))))))
+        (set-face-attribute 'default parent :foreground (nth 0 saved)
+                            :background (nth 1 saved))
+        (run-hook-with-args 'enable-theme-functions 'border-test)))))
 (provide 'test-mevedel-window-graphical)
 ;;; test-mevedel-window-graphical.el ends here

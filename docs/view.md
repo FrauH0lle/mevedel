@@ -1305,7 +1305,10 @@ The border is painted by setting a background on `internal-border` and
 an explicit background the border takes the default background and is invisible.
 `mevedel-note-frame-border` and `mevedel-note-frame-border-inactive`
 distinguish whether the frame holds focus, which is how a dispatch-opened frame
-that deliberately did not take focus reads as unfocused.
+that deliberately did not take focus reads as unfocused. Both are derived from
+the active theme (the background tinted 65% and 25% toward the foreground) and
+shown frames, including the share panel, repaint on a theme change; a face the
+user or a theme styles is left alone.
 
 Frame height fits its content between `mevedel-note-frame-min-height` and
 `mevedel-note-frame-height`, refitted on the view's throttled render
