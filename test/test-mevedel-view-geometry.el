@@ -481,14 +481,26 @@
                     (should (> (mevedel-view--window-blank-pixels window) 80))
                     (cl-letf (((symbol-function 'mevedel-view--repair-window-growth)
                                (lambda (target)
-                                 (when (eq target window)
-                                   (push (list (window-old-body-pixel-height target)
-                                               (cdr (mevedel-view--window-body-geometry target)))
-                                         calls))
-                                 (funcall repair target))))
+                                 (let ((stale (and (eq change 'stale-chrome)
+                                                   (eq target window) (null calls))))
+                                   (when (eq target window)
+                                     (push (list (window-old-body-pixel-height target)
+                                                 (cdr (mevedel-view--window-body-geometry target)))
+                                           calls))
+                                   (if (not stale)
+                                       (funcall repair target)
+                                     ;; The incident's first shrink read the pre-shrink height.
+                                     (let ((geometry (symbol-function
+                                                      'mevedel-view--window-body-geometry)))
+                                       (cl-letf (((symbol-function
+                                                   'mevedel-view--window-body-geometry)
+                                                  (lambda (w)
+                                                    (cons (car (funcall geometry w))
+                                                          (window-old-body-pixel-height w)))))
+                                         (funcall repair target))))))))
                       (dotimes (_ 3)
                         (pcase change
-                          ('chrome
+                          ((or 'chrome 'stale-chrome)
                            (dolist (header (list (propertize "Header" 'face '(:height 1.8))
                                                 "Header"))
                              (setq header-line-format header)
@@ -526,6 +538,7 @@
             (setq unread-command-events nil))))))
   (change)
   :doc "Three native header shrink/grow cycles retain an inactive composer's viewport" 'chrome
+  :doc "A stale first shrink reading cannot turn the return into new growth" 'stale-chrome
   :doc "Three real popup open/close cycles retain deliberate composer blank space" 'popup
   :doc "Three native frame grow/shrink cycles retain an inactive composer's pixel viewport" 'frame-grow)
 

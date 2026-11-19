@@ -1403,9 +1403,11 @@ Only windows with point in the editable composer fill new space; transcript
 and status readers keep their native viewport.
 Pending input keeps the viewport, except when undoing a repair made within
 `mevedel-view--transient-repair-seconds'.
-Record geometry only on size changes, not on ordinary redisplays."
+Record geometry only on size changes, not on ordinary redisplays.
+Redisplay has settled both heights, so read them from the same native
+source: a fresh measurement that lags the old one fakes or hides a change."
   (let* ((old-height (window-old-body-pixel-height window))
-         (height (cdr (mevedel-view--window-body-geometry window)))
+         (height (window-body-height window t))
          (width (window-body-width window t))
          (viewport (cons (window-start window) (window-vscroll window t)))
          (composer (and (markerp mevedel-view--input-marker)
