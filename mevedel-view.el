@@ -93,6 +93,9 @@
 (declare-function mevedel-pending-inputs-clear
                   "mevedel-pending-inputs" ())
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-toggle "mevedel-floating-composer" ())
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
@@ -721,7 +724,8 @@ above `mevedel-view--input-marker'."
   "C-c C-k" #'mevedel-view-abort
   "C-c C-j" #'mevedel-view-jump-to-interaction
   "C-c C-o" #'mevedel-menu
-  "C-c C-q" #'mevedel-pending-inputs-clear)
+  "C-c C-q" #'mevedel-pending-inputs-clear
+  "C-c C-SPC" #'mevedel-floating-composer-toggle)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
   "Return a composed display-fragment keymap from MAPS.

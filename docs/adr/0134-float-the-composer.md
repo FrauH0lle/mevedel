@@ -132,6 +132,30 @@ cursor it held to the inline draft.
   Input typed while the submission is prepared is kept as inline.
 - With the option off ADR 0126's per-window return-to-draft is unchanged.
 
+### Keys and pointer
+
+Keys act on the selected window; with the cursor in the transcript they keep
+their transcript meaning (`n`, `p`, `t`, `TAB`, `RET`).
+
+- `C-c C-SPC` (`mevedel-floating-composer-toggle`) moves the cursor between
+  the composer and the transcript: between the floating composer and its
+  host while it is shown, else between the inline draft and the transcript,
+  each toggle returning to where the previous one left the window's cursor.
+  Clicking the floating composer selects it as the toggle does.
+- In the floating composer `C-v` and `M-v` page within a capped draft. After
+  every command its window start is clamped to the rail, so neither these
+  keys nor the wheel ever show transcript text in it; an uncapped draft
+  stays pinned at the rail. Scrolling below the draft's end shows blank
+  space, as in any window.
+- `C-M-v`/`C-M-S-v` there scroll the host: the view sets
+  `other-window-scroll-default` buffer-locally to return the host from the
+  floating composer and defer to the global default elsewhere.
+- The wheel scrolls the window under the pointer (`mouse-wheel-follow-mouse`)
+  and leaves the selection, and so any keystroke redirect, where it was.
+- `C-x 2`/`C-x 3` there split the host: the floating composer's window
+  carries a `split-window` parameter that splits the host instead. The
+  cursor stays in the floating composer.
+
 ## Rationale and consequences
 
 Problem: while writing a prompt the user often needs to look something up in
