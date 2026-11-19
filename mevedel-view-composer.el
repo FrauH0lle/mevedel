@@ -1536,6 +1536,14 @@ moved point deliberately."
        'nomini t)
     (set-window-parameter nil 'mevedel-view-scroll-return nil)))
 
+(defun mevedel-view--scroll-return (window)
+  "Return the draft offset pending for WINDOW's buffer, or nil.
+The return is recorded with its buffer: one left by a buffer WINDOW
+showed earlier does not apply."
+  (when-let* ((pending (window-parameter window 'mevedel-view-scroll-return))
+              ((eq (car pending) (window-buffer window))))
+    (cdr pending)))
+
 (defun mevedel-view--return-from-scroll ()
   "Return point to the draft once scrolling shows its position again.
 Emacs keeps point visible, so scrolling away moves it onto transcript or
@@ -1552,8 +1560,9 @@ their own buffer and window point, without changing the selected window."
           (when (and origin
                      (not (mevedel-view--position-in-input-region-p
                            (window-point window))))
-            (set-window-parameter window 'mevedel-view-scroll-return origin))
-          (when-let* ((offset (window-parameter window 'mevedel-view-scroll-return))
+            (set-window-parameter window 'mevedel-view-scroll-return
+                                  (cons buffer origin)))
+          (when-let* ((offset (mevedel-view--scroll-return window))
                       (target (min (point-max) (+ (mevedel-view--input-start) offset)))
                       ((mevedel-view--position-screen-y target window t)))
             (set-window-point window target)

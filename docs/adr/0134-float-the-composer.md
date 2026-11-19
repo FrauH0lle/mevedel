@@ -75,7 +75,9 @@ cursor it held to the inline draft.
   limit of the cap plus one line and cached until the buffer
   (`buffer-modified-tick`, so property changes such as a face height count),
   the window width or the face remapping (text scale) changes, so scrolling
-  the host measures nothing. Measuring fontifies the draft, which itself
+  the host measures nothing. The pixel limit holds the parent's line height,
+  so global text scaling also invalidates it. Measuring fontifies the draft,
+  which itself
   modifies the buffer, so the cache records the buffer's state after
   measuring; keyed before, every key measured twice. Overlay changes do not
   invalidate it. The key stores a copy of the face remapping, which

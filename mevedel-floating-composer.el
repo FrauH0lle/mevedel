@@ -41,6 +41,7 @@
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--scroll-command-p "mevedel-view-composer" (command))
+(declare-function mevedel-view--scroll-return "mevedel-view-composer" (window))
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
@@ -134,9 +135,11 @@ one line.  The frame floats half a line above the host's bottom edge."
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
 Cached until the buffer, WINDOW's width or the face remapping (text
-scale) changes, so scrolling the host measures nothing.  Measuring
-fontifies the draft, which modifies the buffer, so the cache records the
-buffer's state after measuring: otherwise every key measured twice."
+scale) changes, so scrolling the host measures nothing.  LIMIT holds the
+parent's line height, so global text scaling also misses the cache.
+Measuring fontifies the draft, which modifies the buffer, so the cache
+records the buffer's state after measuring: otherwise every key measured
+twice."
   (let ((key (lambda () (list (buffer-modified-tick) (window-body-width window t)
                               face-remapping-alist start limit)))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
@@ -361,7 +364,7 @@ cursor move between the host and the floating composer."
              (mevedel-floating-composer--needed-p selected))
         (mevedel-floating-composer--show selected)
         (when-let* ((scrolled)
-                    (offset (window-parameter selected 'mevedel-view-scroll-return)))
+                    (offset (mevedel-view--scroll-return selected)))
           ;; The floating composer now owns the draft cursor; a stale inline
           ;; return must not overwrite edits made there.
           (set-window-parameter selected 'mevedel-view-scroll-return nil)

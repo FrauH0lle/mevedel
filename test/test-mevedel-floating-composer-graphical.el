@@ -47,8 +47,6 @@ background panel reads; `data-buf' and `view-buf' are bound too."
            (mevedel-view-test--insert-data
             data-buf (format "Line %d of the earlier response.\n" i) 'response))
          (switch-to-buffer view-buf)
-         ;; Window parameters outlive the buffers of earlier cases.
-         (set-window-parameter nil 'mevedel-view-scroll-return nil)
          (let ((session (mevedel-session--create :name "floating"))
                (agents nil)
                (mevedel-view-spinner-animate nil)
@@ -752,6 +750,25 @@ placement gives now, with its cursor visible.  Return its window if shown."
           (mevedel-floating-composer-test--keys "C-x C-0" 'text-scale-adjust)
           (should (= height (frame-text-height (selected-frame))))))
     (with-current-buffer view-buf (text-scale-set 0)))
+  :doc "global text scaling refits it without editing the draft"
+  (unwind-protect
+      (progn
+        (mevedel-floating-composer-test--scroll-away t)
+        (let ((window (selected-window))
+              (height (frame-text-height (selected-frame))))
+          (dotimes (_ 2)
+            (mevedel-floating-composer-test--keys
+             "C-x C-M-+" 'global-text-scale-adjust))
+          (should (eq window (selected-window)))
+          (should (> (frame-text-height (selected-frame)) height))
+          (should (eq window (mevedel-floating-composer-test--sound view-buf)))
+          (mevedel-floating-composer-test--keys
+           "C-x C-M-0" 'global-text-scale-adjust)
+          (should (eq window (mevedel-floating-composer-test--sound view-buf)))
+          (should (= 4 (mevedel-floating-composer-test--offset)))
+          (should (equal mevedel-floating-composer-test--draft
+                         (mevedel-view--input-text)))))
+    (global-text-scale-adjust 0))
   :doc "a frame resize refits it to the host"
   (let ((width (frame-text-width parent))
         (height (frame-text-height parent)))

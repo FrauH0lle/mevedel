@@ -704,7 +704,7 @@ WINDOW defaults to the selected window, but need not be selected."
         ;; A scroll displaces point from the draft.
         (run 'scroll-down-command
              (lambda () (set-window-start nil away) (goto-char transcript)))
-        (should (= 4 (window-parameter nil 'mevedel-view-scroll-return)))
+        (should (= 4 (mevedel-view--scroll-return (selected-window))))
         ,action)))
   (action)
   :doc "a later scroll showing the draft returns point to its offset"
@@ -717,7 +717,25 @@ WINDOW defaults to the selected window, but need not be selected."
     (run 'forward-char #'ignore)
     (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
     (should (= transcript (point)))
-    (should-not (window-parameter nil 'mevedel-view-scroll-return))))
+    (should-not (window-parameter nil 'mevedel-view-scroll-return)))
+  :doc "a return pending for another view does not move this view's point"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 60)
+      (mevedel-view-test--insert-data
+       data-buf (format "Line %d of another response.\n" i) 'response))
+    (switch-to-buffer view-buf)
+    (mevedel-view--full-rerender)
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 2)
+    (goto-char (point-min))
+    (search-forward "Line 20 ")
+    (let ((point (point))
+          (bottom (save-excursion
+                    (goto-char (point-max))
+                    (forward-line (- 1 (window-body-height)))
+                    (point))))
+      (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
+      (should (= point (point))))))
 
 (mevedel-deftest mevedel-view-user-state/live-reader ()
   ;; The graphical runner repeats every transition after a real wheel event
