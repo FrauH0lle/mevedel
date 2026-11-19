@@ -318,8 +318,8 @@ No regression measured:
   preservation and panel stability remain. The composer is built around
   `mevedel-view--input-marker`; composer-related symbols have about 270
   source and 2,200 test text matches (unaudited, tests mostly through one
-  helper); the estimate was roughly 20 source files and 2,500-4,000 changed
-  lines plus an ADR 0126 rewrite. Open problems: a new rule for which windows
+  helper); the estimate (2026-11-18) was roughly 20 source files and
+  2,500-4,000 changed lines plus an ADR 0126 rewrite. Open problems: a new rule for which windows
   follow output (today "caret in the composer"), where the rail and mode
   badge live (ADR 0126 requires real text), `C-c C-j` across buffers, and
   composer placement in the note frame, `/btw` and historical segments.
