@@ -5,7 +5,8 @@
 ;; A real view in a graphical frame, driven through the command loop.  Each
 ;; case reads what the user sees: the selected window, the cursor's draft
 ;; offset, whether the floating composer is shown, and the host window's
-;; start, vertical scroll, point and rail width.  Batch runs skip them.
+;; start, vertical scroll, point and rail width.  The frame holds real
+;; compositor focus; nothing stubs `frame-focus-state'.  Batch runs skip them.
 
 ;;; Code:
 
@@ -18,10 +19,14 @@
 (require 'mevedel-floating-composer)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-animation)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-native)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
+
+(defvar pgtk-wait-for-event-timeout)
 
 (defconst mevedel-floating-composer-test--draft "> active draft\nsecond line"
   "Multiline draft whose first editable character is `>'.")
@@ -48,8 +53,8 @@ background panel reads; `data-buf' and `view-buf' are bound too."
                (mouse-wheel-progressive-speed nil))
            (setq-local mevedel--session session)
            (with-current-buffer data-buf (setq-local mevedel--session session))
-           (cl-letf (((symbol-function 'frame-focus-state) (lambda (&optional _) t))
-                     ((symbol-function 'mevedel-view--agent-status-collect)
+           (should (mevedel-floating-composer-test--focus (selected-frame)))
+           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                       (lambda () agents)))
              (mevedel-view--full-rerender)
              (mevedel-view-test--insert-composer-draft
@@ -67,10 +72,11 @@ background panel reads; `data-buf' and `view-buf' are bound too."
     (redisplay t)))
 
 (defun mevedel-floating-composer-test--deliver (events command)
-  "Deliver EVENTS through the command loop and wait for COMMAND."
+  "Deliver EVENTS through the command loop and wait for COMMAND.
+COMMAND nil waits for any command."
   (let* ((done nil)
          (hook (lambda ()
-                 (when (eq this-command command)
+                 (when (or (null command) (eq this-command command))
                    (setq done t)
                    (run-at-time 0 nil #'exit-recursive-edit))))
          (timer (run-at-time 30 nil #'exit-recursive-edit)))
@@ -100,6 +106,33 @@ background panel reads; `data-buf' and `view-buf' are bound too."
   (let ((unread-command-events nil))
     (sit-for 0.05)
     (redisplay t)))
+
+(defun mevedel-floating-composer-test--focus (frame)
+  "Give FRAME compositor focus and wait until it reports it."
+  (select-frame-set-input-focus frame)
+  (mevedel-floating-composer-test--focused-p frame))
+
+(defun mevedel-floating-composer-test--focused-p (frame)
+  "Return non-nil when FRAME reports compositor focus, after its events arrive.
+Focus changes arrive asynchronously, so wait up to half a second."
+  (let ((deadline (+ (float-time) 0.5)))
+    (while (and (not (eq t (frame-focus-state frame))) (< (float-time) deadline))
+      (mevedel-floating-composer-test--settle))
+    ;; A loss shows up after the events that follow it, so let them arrive.
+    (dotimes (_ 4) (mevedel-floating-composer-test--settle))
+    (eq t (frame-focus-state frame))))
+
+(defun mevedel-floating-composer-test--click (window)
+  "Click WINDOW's first character through the command loop."
+  (let ((posn (posn-at-point (window-start window) window)))
+    ;; Queued together, the press's drag tracking would consume the release.
+    (mevedel-floating-composer-test--deliver
+     (list (list 'down-mouse-1 posn)) 'mouse-drag-region)
+    (mevedel-floating-composer-test--deliver (list (list 'mouse-1 posn)) nil)))
+
+(defun mevedel-floating-composer-test--border-color (face)
+  "Return FACE's background, the floating composer's border color for it."
+  (face-attribute face :background nil 'default))
 
 (defun mevedel-floating-composer-test--window ()
   "Return the shown floating composer's window, or nil."
@@ -170,6 +203,106 @@ background panel reads; `data-buf' and `view-buf' are bound too."
       (should (= 5 (mevedel-floating-composer-test--offset)))
       (should-not (mevedel-floating-composer-test--window))
       (should (equal "> acxtive draft\nsecond line" (mevedel-view--input-text)))))
+  :doc "the host's frame keeps compositor focus through hand-over, typing and hand-back"
+  (let ((parent (window-frame host))
+        states)
+    (cl-flet ((note (step)
+                (push (list step (mevedel-floating-composer-test--focused-p parent)
+                            (not (mevedel-view--unattended-p)))
+                      states)))
+      (mevedel-floating-composer-test--scroll-away t)
+      (should (frame-parent (selected-frame)))
+      (note 'hand-over)
+      (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+      (note 'typing)
+      (let ((notches 0))
+        (while (and (< notches 60) (frame-parent (selected-frame)))
+          (mevedel-floating-composer-test--wheel 'wheel-down host)
+          (cl-incf notches)))
+      (should (eq host (selected-window)))
+      (should-not (mevedel-floating-composer-test--window))
+      (note 'hand-back)
+      (should-not (frame-focus parent)))
+    (should (equal '((hand-over t t) (typing t t) (hand-back t t)) (reverse states))))
+  :doc "clicking the host takes the cursor and its keystrokes back"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((frame (selected-frame)))
+      (should (eq frame (frame-focus (window-frame host))))
+      (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
+                     (face-background 'child-frame-border frame)))
+      (mevedel-floating-composer-test--click host)
+      (should (eq host (selected-window)))
+      (should (memq (frame-focus (window-frame host)) (list nil (window-frame host))))
+      (should (mevedel-floating-composer-test--focused-p (window-frame host)))
+      (should (equal (mevedel-floating-composer-test--border-color
+                      'mevedel-note-frame-border-inactive)
+                     (face-background 'child-frame-border frame)))))
+  :doc "removing it clears the redirect after another frame was selected"
+  (let ((parent (window-frame host))
+        (other (with-current-buffer (get-buffer-create "*scratch*")
+                 (make-frame '((width . 30) (height . 5))))))
+    (unwind-protect
+        (progn
+          ;; Mapping OTHER takes compositor focus; the parent must hold it.
+          (should (mevedel-floating-composer-test--focus parent))
+          (mevedel-floating-composer-test--scroll-away t)
+          ;; As `other-frame' does, `select-frame' retargets the redirect.
+          (select-frame other)
+          (should (eq other (frame-focus parent)))
+          (with-current-buffer view-buf (mevedel-floating-composer--remove))
+          (should-not (frame-focus parent)))
+      (select-frame parent)
+      (redirect-frame-focus parent nil)
+      (delete-frame other)))
+  :doc "deleting the host clears the redirect before the next command"
+  (let ((parent (window-frame host)))
+    (mevedel-floating-composer-test--scroll-away t)
+    (should (eq (selected-frame) (frame-focus parent)))
+    (set-window-buffer (split-window host nil 'right) (get-buffer-create "*scratch*"))
+    (delete-window host)
+    (mevedel-floating-composer-test--settle)
+    (should-not (frame-focus parent))
+    (mevedel-floating-composer-test--settle)
+    (should-not (with-current-buffer view-buf (mevedel-floating-composer--window))))
+  :doc "releasing one view leaves another view's later redirect alone"
+  (let* ((parent (window-frame host))
+         (other-buf (get-buffer-create " *floating-other*"))
+         (other (make-frame `((parent-frame . ,parent) (visibility . nil)
+                              (minibuffer . ,(minibuffer-window parent))))))
+    (unwind-protect
+        (progn
+          (mevedel-floating-composer-test--scroll-away t)
+          (set-window-buffer (frame-root-window other) other-buf)
+          ;; A second view takes input on the same parent frame.
+          (with-current-buffer other-buf
+            (mevedel-floating-composer--select (frame-root-window other) 1))
+          (should (eq other (frame-focus parent)))
+          (with-current-buffer view-buf (mevedel-floating-composer--release))
+          (should (eq other (frame-focus parent))))
+      (select-frame parent)
+      (redirect-frame-focus parent nil)
+      (delete-frame other)
+      (kill-buffer other-buf)))
+  :doc "the host check runs only while the option is on and a floating composer exists"
+  (unwind-protect
+      (progn
+        (customize-set-variable 'mevedel-floating-composer nil)
+        (should-not (memq #'mevedel-floating-composer--check-hosts
+                          (default-value 'window-buffer-change-functions)))
+        (customize-set-variable 'mevedel-floating-composer t)
+        (mevedel-floating-composer-test--scroll-away t)
+        (should (memq #'mevedel-floating-composer--check-hosts
+                      (default-value 'window-buffer-change-functions))))
+    (customize-set-variable 'mevedel-floating-composer t))
+  :doc "clicking the floating composer redirects the host frame's keystrokes to it"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((window (mevedel-floating-composer-test--window)))
+      (should (eq host (selected-window)))
+      (mevedel-floating-composer-test--click window)
+      (should (eq window (selected-window)))
+      (should (eq (window-frame window) (frame-focus (window-frame host))))))
   :doc "scrolling away with the cursor in the transcript keeps it there"
   (progn
     (mevedel-floating-composer-test--scroll-away nil)
@@ -290,15 +423,52 @@ background panel reads; `data-buf' and `view-buf' are bound too."
     (should (eq window (selected-window)))
     (should (= 0 measured))
     (should (= 0 placed)))
-  :doc "a draft edit measures once and keeps an unchanged geometry"
+  :doc "a draft edit and the refresh after it measure once and keep the geometry"
   (progn
     (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+    (mevedel-floating-composer--update)
     (should (= 1 measured))
     (should (= 0 placed)))
+  :doc "a property change that makes the draft taller grows the frame"
+  (let ((height (window-pixel-height window)))
+    (let ((inhibit-read-only t))
+      (put-text-property (1- (point-max)) (point-max) 'face '(:height 4.0)))
+    (mevedel-floating-composer--update)
+    (should (= 1 measured))
+    (mevedel-floating-composer-test--settle)
+    (should (> (window-pixel-height window) height)))
+  :doc "a second text-scale remapping of the same face measures again"
+  (let ((cookies nil))
+    (unwind-protect
+        (progn
+          (push (face-remap-add-relative 'default :height 1.2) cookies)
+          (mevedel-floating-composer--update)
+          (should (= 1 measured))
+          (push (face-remap-add-relative 'default :height 1.2) cookies)
+          (mevedel-floating-composer--update)
+          (should (= 2 measured)))
+      (mapc #'face-remap-remove-relative cookies)))
   :doc "a taller draft resizes and moves in one call"
   (progn
     (mevedel-floating-composer-test--keys "C-o" 'open-line)
     (should (= 1 placed))))
+
+
+(mevedel-deftest mevedel-floating-composer--hide ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window))
+          ;; PGTK's hide and hidden creation would each spin this long.
+          (pgtk-wait-for-event-timeout 2.0)
+          (start (float-time)))
+      (mevedel-floating-composer-test--scroll-away t)
+      (should (mevedel-floating-composer-test--window))
+      (while (and (< (- (float-time) start) 30) (frame-parent (selected-frame)))
+        (mevedel-floating-composer-test--wheel 'wheel-down host))
+      (should-not (mevedel-floating-composer-test--window))
+      ,test))
+  (test)
+  :doc "creating and hiding the frame do not wait for PGTK's event timeout"
+  (should (< (- (float-time) start) 2.0)))
 
 
 ;;
@@ -337,6 +507,51 @@ background panel reads; `data-buf' and `view-buf' are bound too."
       (dotimes (_ 3) (mevedel-floating-composer-test--settle))
       (should (equal rail (mevedel-floating-composer-test--rail)))
       (should (equal state mevedel-view--spinner-rendered-state))
-      (should (= (1- (window-body-width host)) (nth 3 state))))))
+      (should (= (1- (window-body-width host)) (nth 3 state)))))
+  :doc "the rail animates at the battery ceiling while only the floating composer shows it"
+  (let ((mevedel-view-spinner-animate t)
+        (mevedel-view-spinner-style 'shimmer)
+        (mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-battery-framerate 1)
+        (mevedel-view-spinner-power-policy 'full)
+        specs)
+    ;; Keep the label in the Lisp plan and record what native presentation gets.
+    (cl-letf (((symbol-function 'mevedel-view-native-sync)
+               (lambda (new &rest _) (setq specs new) nil)))
+      (cl-flet ((periods ()
+                  (setq specs nil)
+                  (mevedel-view--start-spinner-timer t)
+                  (list (cdr (cl-find 'metadata mevedel-view--spinner-timer-plan
+                                      :key #'car :test-not #'eq))
+                        (nth 4 (car specs)))))
+        (pcase-let ((`(,plan ,native) (periods)))
+          (should (< plan 0.5))
+          (should (< native 0.5)))
+        (mevedel-floating-composer-test--scroll-away nil)
+        (should (mevedel-floating-composer-test--window))
+        (should-not (mevedel-view--position-screen-y
+                     (mevedel-floating-composer--start) host))
+        (pcase-let ((`(,plan ,native) (periods)))
+          (should (>= plan 1.0))
+          (should (>= native 1.0))))))
+  :doc "a wake before the label's ceiling period does not repaint it"
+  (let ((mevedel-view-spinner-animate t)
+        (mevedel-view-spinner-style 'braille)
+        (mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-battery-framerate 1)
+        (mevedel-view-spinner-power-policy 'full)
+        (painted 0)
+        (frame-of (symbol-function 'mevedel-view-animation-frame)))
+    (cl-letf (((symbol-function 'mevedel-view-native-sync) (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-view-animation-frame)
+               (lambda (style label seconds face &rest rest)
+                 (when (eq face 'mevedel-view-spinner) (cl-incf painted))
+                 (apply frame-of style label seconds face rest))))
+      (mevedel-floating-composer-test--scroll-away nil)
+      (should (mevedel-floating-composer-test--window))
+      (mevedel-view--start-spinner-timer t)
+      ;; Shared wakes, as a pending tool row's faster cadence causes.
+      (dotimes (_ 3) (mevedel-view--spinner-tick))
+      (should (= 1 painted)))))
 
 ;;; test-mevedel-floating-composer-graphical.el ends here
