@@ -19,6 +19,7 @@
 (require 'mevedel-floating-composer)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-animation)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-native)
@@ -264,6 +265,36 @@ Focus changes arrive asynchronously, so wait up to half a second."
     (should-not (frame-focus parent))
     (mevedel-floating-composer-test--settle)
     (should-not (with-current-buffer view-buf (mevedel-floating-composer--window))))
+  :doc "releasing one view leaves another view's later redirect alone"
+  (let* ((parent (window-frame host))
+         (other-buf (get-buffer-create " *floating-other*"))
+         (other (make-frame `((parent-frame . ,parent) (visibility . nil)
+                              (minibuffer . ,(minibuffer-window parent))))))
+    (unwind-protect
+        (progn
+          (mevedel-floating-composer-test--scroll-away t)
+          (set-window-buffer (frame-root-window other) other-buf)
+          ;; A second view takes input on the same parent frame.
+          (with-current-buffer other-buf
+            (mevedel-floating-composer--select (frame-root-window other) 1))
+          (should (eq other (frame-focus parent)))
+          (with-current-buffer view-buf (mevedel-floating-composer--release))
+          (should (eq other (frame-focus parent))))
+      (select-frame parent)
+      (redirect-frame-focus parent nil)
+      (delete-frame other)
+      (kill-buffer other-buf)))
+  :doc "the host check runs only while the option is on and a floating composer exists"
+  (unwind-protect
+      (progn
+        (customize-set-variable 'mevedel-floating-composer nil)
+        (should-not (memq #'mevedel-floating-composer--check-hosts
+                          (default-value 'window-buffer-change-functions)))
+        (customize-set-variable 'mevedel-floating-composer t)
+        (mevedel-floating-composer-test--scroll-away t)
+        (should (memq #'mevedel-floating-composer--check-hosts
+                      (default-value 'window-buffer-change-functions))))
+    (customize-set-variable 'mevedel-floating-composer t))
   :doc "clicking the floating composer redirects the host frame's keystrokes to it"
   (progn
     (mevedel-floating-composer-test--scroll-away nil)
@@ -406,6 +437,17 @@ Focus changes arrive asynchronously, so wait up to half a second."
     (should (= 1 measured))
     (mevedel-floating-composer-test--settle)
     (should (> (window-pixel-height window) height)))
+  :doc "a second text-scale remapping of the same face measures again"
+  (let ((cookies nil))
+    (unwind-protect
+        (progn
+          (push (face-remap-add-relative 'default :height 1.2) cookies)
+          (mevedel-floating-composer--update)
+          (should (= 1 measured))
+          (push (face-remap-add-relative 'default :height 1.2) cookies)
+          (mevedel-floating-composer--update)
+          (should (= 2 measured)))
+      (mapc #'face-remap-remove-relative cookies)))
   :doc "a taller draft resizes and moves in one call"
   (progn
     (mevedel-floating-composer-test--keys "C-o" 'open-line)
@@ -491,6 +533,25 @@ Focus changes arrive asynchronously, so wait up to half a second."
                      (mevedel-floating-composer--start) host))
         (pcase-let ((`(,plan ,native) (periods)))
           (should (>= plan 1.0))
-          (should (>= native 1.0)))))))
+          (should (>= native 1.0))))))
+  :doc "a wake before the label's ceiling period does not repaint it"
+  (let ((mevedel-view-spinner-animate t)
+        (mevedel-view-spinner-style 'braille)
+        (mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-battery-framerate 1)
+        (mevedel-view-spinner-power-policy 'full)
+        (painted 0)
+        (frame-of (symbol-function 'mevedel-view-animation-frame)))
+    (cl-letf (((symbol-function 'mevedel-view-native-sync) (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-view-animation-frame)
+               (lambda (style label seconds face &rest rest)
+                 (when (eq face 'mevedel-view-spinner) (cl-incf painted))
+                 (apply frame-of style label seconds face rest))))
+      (mevedel-floating-composer-test--scroll-away nil)
+      (should (mevedel-floating-composer-test--window))
+      (mevedel-view--start-spinner-timer t)
+      ;; Shared wakes, as a pending tool row's faster cadence causes.
+      (dotimes (_ 3) (mevedel-view--spinner-tick))
+      (should (= 1 painted)))))
 
 ;;; test-mevedel-floating-composer-graphical.el ends here

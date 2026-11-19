@@ -37,9 +37,12 @@ cursor it held to the inline draft.
   newly selected frame (`select-frame` does this for the frame holding
   compositor focus); clicking into the floating composer sets it. Removing
   the floating composer (view killed, option off) clears the redirect it set,
-  wherever it points by then. When the host window is deleted or shows
-  another buffer, a window-buffer change hook clears the redirect in that
-  redisplay, before the next keystroke, and a timer then deletes the orphaned
+  wherever it points by then, unless another view floating over the same
+  frame redirected it since: the frame records the last view to redirect it
+  (`mevedel-floating-composer-owner`). When the host window is deleted or shows
+  another buffer, a window-buffer change hook, installed with the first
+  floating composer and removed when the option goes off, clears the
+  redirect in that redisplay, before the next keystroke, and a timer then deletes the orphaned
   floating composer. Its border shows the active face while it is the
   selected frame and its parent has compositor focus, repainted on
   compositor focus and window selection changes.
@@ -58,7 +61,9 @@ cursor it held to the inline draft.
   window showing the request label is a floating composer, the label
   animates at the battery frame-rate ceiling
   (`mevedel-view-spinner-battery-framerate`, the rate the `save` power policy
-  always applies), in the Lisp timer and in native presentation alike. When
+  always applies), in the Lisp timer and in native presentation alike. The
+  Lisp painter repaints the label only once its own period has passed, even
+  when a pending-tool row wakes the shared timer sooner. When
   the rail is also visible inline, it runs at the normal rate. Pending-tool
   rows keep their rate. No option controls this: the user accepted the
   floating composer's typing cost and chose to slow, not stop, its animation
@@ -70,7 +75,8 @@ cursor it held to the inline draft.
   the host measures nothing. Measuring fontifies the draft, which itself
   modifies the buffer, so the cache records the buffer's state after
   measuring; keyed before, every key measured twice. Overlay changes do not
-  invalidate it. A typed key still measures once before
+  invalidate it. The key stores a copy of the face remapping, which
+  `face-remap-add-relative` edits in place. A typed key still measures once before
   redisplay: a PGTK child frame's resize takes effect before the next
   redisplay, so measuring later would show the grown draft scrolled in the
   old height for a frame. Resize and move are one compound call, issued only

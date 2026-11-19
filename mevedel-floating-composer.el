@@ -62,6 +62,7 @@
   "Set SYMBOL to VALUE; turning it off removes every floating composer."
   (set-default-toplevel-value symbol value)
   (unless value
+    (remove-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
     (dolist (buffer (buffer-list))
       (when (buffer-local-value 'mevedel-floating-composer--frame buffer)
         (with-current-buffer buffer
@@ -142,8 +143,9 @@ buffer's state after measuring: otherwise every key measured twice."
     (if (equal (funcall key) (car cache))
         (cdr cache)
       (let ((height (cdr (window-text-pixel-size window start (point-max) nil limit))))
+        ;; Copied: `face-remap-add-relative' edits the remapping in place.
         (set-window-parameter window 'mevedel-floating-composer-height
-                              (cons (funcall key) height))
+                              (cons (copy-tree (funcall key)) height))
         height))))
 
 (defun mevedel-floating-composer--pin (window)
@@ -199,6 +201,7 @@ buffer's state after measuring: otherwise every key measured twice."
         (set-window-parameter window 'no-other-window t)
         (set-window-point window (point-max)))
       (mevedel-note-frame--paint-border frame)
+      (add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
       (setq mevedel-floating-composer--frame frame))
     frame))
 
@@ -256,16 +259,23 @@ composer, its parent's keystrokes are redirected to it."
     (select-window window)
     (when parent
       (redirect-frame-focus parent (window-frame window))
+      ;; Several views can float over one frame; the last to redirect owns it.
+      (set-frame-parameter parent 'mevedel-floating-composer-owner (current-buffer))
       (setq mevedel-floating-composer--redirected parent))
     (goto-char position)
     (mevedel-floating-composer--paint-borders)))
 
 (defun mevedel-floating-composer--release ()
-  "Clear the keystroke redirect this view established, wherever it points."
+  "Clear the keystroke redirect this view established, wherever it points.
+Leave it when another view redirected the same frame since."
   (when-let* ((parent mevedel-floating-composer--redirected))
     (setq mevedel-floating-composer--redirected nil)
-    (when (and (frame-live-p parent) (frame-focus parent))
-      (redirect-frame-focus parent nil))))
+    (when (and (frame-live-p parent)
+               (eq (frame-parameter parent 'mevedel-floating-composer-owner)
+                   (current-buffer)))
+      (set-frame-parameter parent 'mevedel-floating-composer-owner nil)
+      (when (frame-focus parent)
+        (redirect-frame-focus parent nil)))))
 
 (defun mevedel-floating-composer--remove ()
   "Delete the floating composer, returning a cursor it holds inline."
@@ -400,7 +410,9 @@ border, which shows whether it is selected."
   "Release floating composers over FRAME whose host is gone.
 Runs from `window-buffer-change-functions' when a window on FRAME was
 deleted or changed buffer, so a keystroke cannot reach an orphaned
-floating composer; deleting it waits for a timer, outside redisplay."
+floating composer; deleting it waits for a timer, outside redisplay.
+Installed when a floating composer is first made and removed when the
+option goes off, so views without one pay nothing."
   (dolist (child (frame-list))
     (when (and (eq (frame-parent child) frame)
                (frame-parameter child 'mevedel-view-animate-as-parent))
@@ -419,8 +431,6 @@ floating composer; deleting it waits for a timer, outside redisplay."
       (let ((host mevedel-floating-composer--host))
         (unless (and (window-live-p host) (eq (window-buffer host) buffer))
           (mevedel-floating-composer--remove))))))
-
-(add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
 
 (defun mevedel-floating-composer-setup ()
   "Enable the floating composer in the current interactive view."

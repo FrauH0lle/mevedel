@@ -1448,9 +1448,14 @@ animation or elapsed timer remains to notice the new colors."
           (when (and moving
                      (not (memq mevedel-view--spinner-label-target
                                 mevedel-view--native-animation-targets))
-                     (mevedel-view--spinner-visual-period
-                      mevedel-view-spinner-style
-                      (not mevedel-view--spinner-main-color-p))
+                     ;; Tool rows can wake the shared timer sooner than the
+                     ;; label's own period, such as its floating-composer ceiling.
+                     (when-let* ((period (mevedel-view--spinner-visual-period
+                                          mevedel-view-spinner-style
+                                          (not mevedel-view--spinner-main-color-p)
+                                          (mevedel-view--spinner-label-power-policy))))
+                       (let ((last mevedel-view--spinner-last-sample-seconds))
+                         (not (and last (< 0 (- seconds last) (* 0.9 period))))))
                      (mevedel-view--animation-target-visible-p
                       mevedel-view--spinner-label-target
                       'mevedel-view-spinner-frame))
