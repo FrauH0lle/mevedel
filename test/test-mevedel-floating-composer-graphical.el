@@ -323,7 +323,9 @@ placement gives now, with its cursor visible.  Return its window if shown."
                  (make-frame '((width . 30) (height . 5))))))
     (unwind-protect
         (progn
-          ;; Mapping OTHER takes compositor focus; the parent must hold it.
+          ;; Mapping OTHER takes compositor focus, asynchronously: let that
+          ;; land first, or it can override the parent's request below.
+          (mevedel-floating-composer-test--focused-p other)
           (should (mevedel-floating-composer-test--focus parent))
           (mevedel-floating-composer-test--scroll-away t)
           ;; As `other-frame' does, `select-frame' retargets the redirect.
@@ -1041,6 +1043,8 @@ placement gives now, with its cursor visible.  Return its window if shown."
   :doc "another frame hides it; returning neither selects it nor misroutes keys"
   (let ((other (with-current-buffer (get-buffer-create "*scratch*")
                  (make-frame '((width . 30) (height . 5))))))
+    ;; As above: OTHER's activation must not override the parent's.
+    (mevedel-floating-composer-test--focused-p other)
     (unwind-protect
         (dolist (in-draft '(nil t))
           (should (mevedel-floating-composer-test--focus parent))
