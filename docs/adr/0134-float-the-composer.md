@@ -35,7 +35,10 @@ cursor it held to the inline draft.
   the host's later keystrokes back to the floating composer: on a terminal
   hand-over selects the floating composer without redirecting its parent.
 - **When.** Only the selected window can be a host, and only while it shows
-  neither its cursor's draft position nor the whole composer.
+  neither its cursor's draft position nor the whole composer. So it follows
+  the selected window across splits, window selection and frame resizes, and
+  hides while another frame, tab or buffer is selected; closing its parent
+  frame deletes it.
 - **Focus.** The floating composer never takes compositor focus
   (`no-accept-focus`). Under PGTK a child frame that once held compositor
   focus never returns it to its parent (`select-frame-set-input-focus` on the
@@ -83,7 +86,9 @@ cursor it held to the inline draft.
   limit of the cap plus one line and cached until the buffer
   (`buffer-modified-tick`, so property changes such as a face height count),
   the window width or the face remapping (text scale) changes, so scrolling
-  the host measures nothing. Measuring fontifies the draft, which itself
+  the host measures nothing. The pixel limit holds the parent's line height,
+  so global text scaling also invalidates it. Measuring fontifies the draft,
+  which itself
   modifies the buffer, so the cache records the buffer's state after
   measuring; keyed before, every key measured twice. Overlay changes do not
   invalidate it. The key stores a copy of the face remapping, which
@@ -91,7 +96,9 @@ cursor it held to the inline draft.
   redisplay: a PGTK child frame's resize takes effect before the next
   redisplay, so measuring later would show the grown draft scrolled in the
   old height for a frame. Resize and move are one compound call, issued only
-  when the requested geometry changed. Creating the hidden frame and hiding
+  when the requested geometry differs from the frame's own: restoring a
+  window configuration, as leaving the minibuffer does, rounds the frame to
+  whole lines. Creating the hidden frame and hiding
   it bind `pgtk-wait-for-event-timeout` to nil: PGTK otherwise runs its event
   loop for that whole timeout (0.1 s) on every hide. Updates run after the user's commands in
   the view and, coalesced into one timer, on the view's render cadence and

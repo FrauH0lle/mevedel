@@ -160,8 +160,8 @@ Scrolling away from the composer and back returns point to the draft, as in a
 terminal. Emacs keeps point visible, so a scroll command that hides the
 draft moves point onto transcript or chrome rows, often the background
 `[Manage]` row just above the rail. The view remembers the draft offset per
-window; the next scroll command after which that position is fully visible
-puts point back. Commands carrying the `scroll-command` property, other-window
+window and buffer; the next scroll command after which that position is fully
+visible puts point back. Commands carrying the `scroll-command` property, other-window
 scrolling, and touchpad momentum (`pixel-scroll-start-momentum`) count as
 scrolling; any other command in that window is a deliberate move and drops the
 pending return. Redraws while scrolled away keep the reader position as before.
@@ -386,6 +386,11 @@ focus is explicit.
   run. Global command hooks now capture view windows only on scroll commands
   and restore only those whose viewport changed; ordinary commands do not walk
   windows or measure geometry.
+- **A pending return belongs to its buffer (2026-11-19).** The return was kept
+  per window only, so after the window came to show another view
+  programmatically or between test cases, a scroll moved that view's transcript cursor to the
+  first view's draft offset (or, with the floating composer, into it). The
+  return now records its buffer and applies only while the window shows it.
 
 - **Status rows are visits too (2026-10-31).** Collapsing an expanded
   background row while the composer sat mid-window moved the composer to the

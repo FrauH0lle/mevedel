@@ -54,6 +54,7 @@
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--scroll-command-p "mevedel-view-composer" (command))
+(declare-function mevedel-view--scroll-return "mevedel-view-composer" (window))
 (declare-function mevedel-view--set-viewport "mevedel-view-composer" (window viewport))
 (declare-function mevedel-view--viewport-at-y "mevedel-view-composer"
                   (window position y))
@@ -150,9 +151,11 @@ one line.  The frame floats half a line above the host's bottom edge."
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
 Cached until the buffer, WINDOW's width or the face remapping (text
-scale) changes, so scrolling the host measures nothing.  Measuring
-fontifies the draft, which modifies the buffer, so the cache records the
-buffer's state after measuring: otherwise every key measured twice."
+scale) changes, so scrolling the host measures nothing.  LIMIT holds the
+parent's line height, so global text scaling also misses the cache.
+Measuring fontifies the draft, which modifies the buffer, so the cache
+records the buffer's state after measuring: otherwise every key measured
+twice."
   (let ((key (lambda () (list (buffer-modified-tick) (window-body-width window t)
                               face-remapping-alist start limit)))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
@@ -265,9 +268,12 @@ the rail: redisplay alone would recenter it onto transcript rows."
         (cl-incf (nth 3 geometry)))
       (set-window-parameter window 'mevedel-floating-composer-pinned (<= natural cap))
       ;; One compound call: a separate resize would first hang the growing
-      ;; frame below its old top, and on PGTK that geometry can stick.
-      (unless (equal geometry (frame-parameter frame 'mevedel-floating-composer-geometry))
-        (set-frame-parameter frame 'mevedel-floating-composer-geometry geometry)
+      ;; frame below its old top, and on PGTK that geometry can stick.  It is
+      ;; compared with the frame itself: restoring a window configuration, as
+      ;; leaving the minibuffer does, rounds the frame to whole lines.
+      (unless (equal geometry (list (frame-text-width frame) (frame-text-height frame)
+                                    (car (frame-position frame))
+                                    (cdr (frame-position frame))))
         (apply #'set-frame-size-and-position-pixelwise frame geometry)))
     (mevedel-floating-composer--pin window)
     (when (< (window-point window) start)
@@ -435,7 +441,7 @@ cursor move between the host and the floating composer."
              (mevedel-floating-composer--needed-p selected))
         (mevedel-floating-composer--show selected)
         (when-let* ((scrolled)
-                    (offset (window-parameter selected 'mevedel-view-scroll-return)))
+                    (offset (mevedel-view--scroll-return selected)))
           ;; The floating composer now owns the draft cursor; a stale inline
           ;; return must not overwrite edits made there.
           (set-window-parameter selected 'mevedel-view-scroll-return nil)
@@ -531,7 +537,7 @@ above the floating composer.  Do nothing while none floats over WINDOW."
               (frame mevedel-floating-composer--frame)
               ((frame-live-p frame))
               ((frame-visible-p frame))
-              (top (- (nth 3 (frame-parameter frame 'mevedel-floating-composer-geometry))
+              (top (- (cdr (frame-position frame))
                       (nth 1 (window-inside-pixel-edges window))))
               (height (save-excursion (goto-char position) (line-pixel-height)))
               (above-p (lambda ()
