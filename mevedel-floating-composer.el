@@ -165,13 +165,22 @@ buffer's state after measuring: otherwise every key measured twice."
         height))))
 
 (defun mevedel-floating-composer--pin (window)
-  "Start WINDOW at the rail unless its draft is capped, then it follows point.
-Scrolling a capped draft stops at the rail, never showing transcript text."
-  (when-let* ((start (mevedel-floating-composer--start))
-              ((or (window-parameter window 'mevedel-floating-composer-pinned)
-                   (< (window-start window) start))))
-    (unless (= start (window-start window))
-      (set-window-start window start t))
+  "Start WINDOW at the rail unless its draft is capped.
+A capped draft scrolls just enough to show WINDOW's point, never above
+the rail: redisplay alone would recenter it onto transcript rows."
+  (when-let* ((start (mevedel-floating-composer--start)))
+    (if (window-parameter window 'mevedel-floating-composer-pinned)
+        (unless (= start (window-start window))
+          (set-window-start window start t))
+      (let ((point (window-point window)))
+        (when (< (window-start window) start)
+          (set-window-start window start t))
+        (when-let* ((y (cond ((< point (window-start window)) 0)
+                             ((not (mevedel-view--position-screen-y point window t))
+                              (- (window-body-height window t)
+                                 (save-excursion (goto-char point) (line-pixel-height)))))))
+          (set-window-start
+           window (max start (car (mevedel-view--viewport-at-y window point y))) t))))
     (unless (zerop (window-vscroll window t))
       (set-window-vscroll window 0 t))))
 
