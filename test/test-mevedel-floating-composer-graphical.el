@@ -162,6 +162,23 @@ Focus changes arrive asynchronously, so wait up to half a second."
   (let ((region (mevedel-view-zone-region 'progress)))
     (buffer-substring-no-properties (overlay-start region) (overlay-end region))))
 
+(defun mevedel-floating-composer-test--tall-draft ()
+  "Make the shown floating composer's draft taller than its cap, keeping point.
+Its window shows the draft's end."
+  (save-excursion
+    (goto-char (point-max))
+    (insert (mapconcat (lambda (i) (format "\ndraft line %d" i)) (number-sequence 1 40) "")))
+  (let ((window (mevedel-floating-composer-test--window)))
+    (unless (eq window (selected-window))
+      (set-window-point window (point-max))))
+  (mevedel-floating-composer--update)
+  (mevedel-floating-composer-test--settle))
+
+(defun mevedel-floating-composer-test--within-draft-p (window)
+  "Return non-nil when floating-composer WINDOW shows no transcript text."
+  (and (>= (window-start window) (mevedel-floating-composer--start))
+       (zerop (window-vscroll window t))))
+
 
 ;;
 ;;; Cursor hand-over
@@ -341,6 +358,132 @@ Focus changes arrive asynchronously, so wait up to half a second."
       (should (= 4 (mevedel-floating-composer-test--offset)))
       (should-not (mevedel-floating-composer--window))
       (customize-set-variable 'mevedel-floating-composer t))))
+
+
+;;
+;;; Keys and pointer
+
+(mevedel-deftest mevedel-floating-composer/keys ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window)))
+      ,test))
+  (test)
+  :doc "C-c C-SPC toggles between the floating composer and the transcript"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window))
+          (parent (window-frame host)))
+      (should (window-parameter window 'mevedel-floating-composer))
+      (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
+      (should (eq host (selected-window)))
+      (should (< (point) (mevedel-view--input-start)))
+      (should (eq window (mevedel-floating-composer-test--window)))
+      (should (memq (frame-focus parent) (list nil parent)))
+      (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
+      (should (eq window (selected-window)))
+      (should (= 4 (mevedel-floating-composer-test--offset)))
+      (should (eq (window-frame window) (frame-focus parent)))
+      (should (mevedel-floating-composer-test--focused-p parent))))
+  :doc "C-c C-SPC from the transcript enters the floating composer"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (should (eq host (selected-window)))
+    (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
+    (should (window-parameter (selected-window) 'mevedel-floating-composer))
+    (should (mevedel-view--position-in-input-region-p (point))))
+  :doc "C-c C-SPC toggles the inline draft while the composer is visible"
+  (progn
+    (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
+    (should (eq host (selected-window)))
+    (should (< (point) (mevedel-view--input-start)))
+    (should-not (mevedel-floating-composer-test--window))
+    (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
+    (should (eq host (selected-window)))
+    (should (= 4 (mevedel-floating-composer-test--offset))))
+  :doc "M-v in a short floating composer never shows transcript text"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window)))
+      (dotimes (_ 2)
+        (mevedel-floating-composer-test--keys "M-v" 'scroll-down-command)
+        (should (eq window (selected-window)))
+        (should (mevedel-floating-composer-test--within-draft-p window)))))
+  :doc "C-v and M-v page within a capped draft and stop at its top"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (mevedel-floating-composer-test--tall-draft)
+    (let ((window (selected-window))
+          (start (mevedel-floating-composer--start)))
+      (should-not (window-parameter window 'mevedel-floating-composer-pinned))
+      (mevedel-floating-composer-test--keys "C-v" 'scroll-up-command)
+      (should (eq window (selected-window)))
+      (should (> (window-start window) start))
+      (dotimes (_ 3)
+        (mevedel-floating-composer-test--keys "M-v" 'scroll-down-command)
+        (should (eq window (selected-window)))
+        (should (mevedel-floating-composer-test--within-draft-p window)))
+      (should (= start (window-start window)))
+      (should (mevedel-view--position-in-input-region-p (point)))))
+  :doc "C-M-v and C-M-S-v scroll the host from the floating composer"
+  (progn
+    ;; Another window comes first on the host's frame.
+    (set-window-buffer (split-window host nil 'left) (get-buffer-create "*scratch*"))
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window))
+          (start (window-start host)))
+      (mevedel-floating-composer-test--keys "C-M-S-v" 'scroll-other-window-down)
+      (mevedel-floating-composer-test--keys "C-M-S-v" 'scroll-other-window-down)
+      (should (eq window (selected-window)))
+      (should (< (window-start host) start))
+      (setq start (window-start host))
+      (mevedel-floating-composer-test--keys "C-M-v" 'scroll-other-window)
+      (should (eq window (selected-window)))
+      (should (> (window-start host) start))
+      (should (= 4 (mevedel-floating-composer-test--offset)))))
+  :doc "the wheel over the host scrolls it without moving focus"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window))
+          (start (window-start host)))
+      (mevedel-floating-composer-test--wheel 'wheel-up host)
+      (should (eq window (selected-window)))
+      (should (eq (window-frame window) (frame-focus (window-frame host))))
+      (should (< (window-start host) start))))
+  :doc "the wheel over the floating composer stops at the draft's edge without moving focus"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (mevedel-floating-composer-test--tall-draft)
+    (let ((window (mevedel-floating-composer-test--window))
+          (point (point)))
+      (should (eq host (selected-window)))
+      (should (> (window-start window) (mevedel-floating-composer--start)))
+      (dotimes (_ 30)
+        (mevedel-floating-composer-test--wheel 'wheel-up window)
+        (should (eq host (selected-window)))
+        (should (mevedel-floating-composer-test--within-draft-p window)))
+      (should (= (mevedel-floating-composer--start) (window-start window)))
+      (should (= point (point)))
+      (should-not (frame-focus (window-frame host)))))
+  :doc "C-x 2 and C-x 3 in the floating composer split the host"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window))
+          (parent (window-frame host)))
+      (mevedel-floating-composer-test--keys "C-x 2" 'split-window-below)
+      (mevedel-floating-composer-test--keys "C-x 3" 'split-window-right)
+      (should (= 3 (length (window-list parent 'nomini))))
+      (should (eq window (frame-root-window (window-frame window))))
+      (should (eq window (selected-window)))
+      (should (window-live-p host))))
+  :doc "transcript keys keep their meaning while the floating composer is shown"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (should (mevedel-floating-composer-test--window))
+    (dolist (key '("n" "p" "TAB" "TAB" "RET" "t"))
+      (let ((command (keymap-lookup mevedel-view--display-map key)))
+        (should (eq command (key-binding (kbd key))))
+        (mevedel-floating-composer-test--keys key command)
+        (should (eq host (selected-window)))))))
 
 
 ;;

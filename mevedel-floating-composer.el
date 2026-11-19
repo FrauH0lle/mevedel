@@ -27,6 +27,11 @@
 ;; frame's keystrokes to it with `redirect-frame-focus'; hand-back clears
 ;; the redirect and selects the host.  Selecting another window from the
 ;; floating composer moves the redirect along (`select-frame' does that).
+;;
+;; Keys follow the selected window: in the floating composer `C-v'/`M-v'
+;; and the wheel never scroll above the rail, `C-M-v' scrolls the host and
+;; `C-x 2'/`C-x 3' split it.  `C-c C-SPC' toggles the cursor between the
+;; composer and the transcript.
 
 ;;; Code:
 
@@ -149,9 +154,11 @@ buffer's state after measuring: otherwise every key measured twice."
         height))))
 
 (defun mevedel-floating-composer--pin (window)
-  "Start WINDOW at the rail unless its draft is capped, then it follows point."
-  (when-let* (((window-parameter window 'mevedel-floating-composer-pinned))
-              (start (mevedel-floating-composer--start)))
+  "Start WINDOW at the rail unless its draft is capped, then it follows point.
+Scrolling a capped draft stops at the rail, never showing transcript text."
+  (when-let* ((start (mevedel-floating-composer--start))
+              ((or (window-parameter window 'mevedel-floating-composer-pinned)
+                   (< (window-start window) start))))
     (unless (= start (window-start window))
       (set-window-start window start t))
     (unless (zerop (window-vscroll window t))
@@ -199,6 +206,7 @@ buffer's state after measuring: otherwise every key measured twice."
         (set-window-parameter window 'mevedel-view-geometry-excluded t)
         (set-window-parameter window 'mevedel-floating-composer t)
         (set-window-parameter window 'no-other-window t)
+        (set-window-parameter window 'split-window #'mevedel-floating-composer--split-host)
         (set-window-point window (point-max)))
       (mevedel-note-frame--paint-border frame)
       (add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
@@ -293,6 +301,48 @@ Leave it when another view redirected the same frame since."
   (setq mevedel-floating-composer--frame nil
         mevedel-floating-composer--host nil
         mevedel-floating-composer--timer nil))
+
+(defun mevedel-floating-composer--split-host (window size side &optional pixelwise)
+  "Split the host of floating-composer WINDOW instead of WINDOW.
+SIZE, SIDE and PIXELWISE are as for `split-window'."
+  (let ((host (buffer-local-value 'mevedel-floating-composer--host (window-buffer window))))
+    (unless (window-live-p host)
+      (user-error "No transcript window to split"))
+    (split-window host size side pixelwise)))
+
+(defun mevedel-floating-composer--scroll-target ()
+  "Return the window `scroll-other-window' scrolls.
+From the floating composer that is its host."
+  (if (and (window-parameter nil 'mevedel-floating-composer)
+           (window-live-p mevedel-floating-composer--host))
+      mevedel-floating-composer--host
+    ;; Binding the local value lets the global default decide.
+    (let ((other-window-scroll-default (default-value 'other-window-scroll-default)))
+      (other-window-for-scrolling))))
+
+(defun mevedel-floating-composer-toggle ()
+  "Move the cursor between the composer and the transcript.
+The composer is the floating composer while it is shown, else the inline
+draft.  Inline, each toggle returns to where the previous one left."
+  (interactive)
+  (let ((window (mevedel-floating-composer--window))
+        (host mevedel-floating-composer--host))
+    (cond
+     ((and window (eq window (selected-window)) (window-live-p host))
+      (mevedel-floating-composer--select host (window-point host)))
+     ((and window (eq host (selected-window)) (frame-visible-p (window-frame window)))
+      (let ((point (window-point window)))
+        (mevedel-floating-composer--select
+         window (if (mevedel-view--position-in-input-region-p point) point (point-max)))))
+     (t
+      (let ((back (window-parameter nil 'mevedel-floating-composer-back))
+            (draft (mevedel-view--position-in-input-region-p (point))))
+        (set-window-parameter nil 'mevedel-floating-composer-back (point))
+        (goto-char (cond ((and back (<= back (point-max))
+                               (xor draft (mevedel-view--position-in-input-region-p back)))
+                          back)
+                         (draft (window-start))
+                         (t (point-max)))))))))
 
 (defun mevedel-floating-composer--active-p (frame)
   "Return non-nil when floating-composer FRAME receives the keystrokes."
@@ -435,6 +485,7 @@ option goes off, so views without one pay nothing."
 (defun mevedel-floating-composer-setup ()
   "Enable the floating composer in the current interactive view."
   (add-hook 'post-command-hook #'mevedel-floating-composer--post-command 80 t)
+  (setq-local other-window-scroll-default #'mevedel-floating-composer--scroll-target)
   (dolist (hook '(window-size-change-functions
                   window-buffer-change-functions
                   window-selection-change-functions))
