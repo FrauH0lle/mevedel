@@ -335,6 +335,13 @@ power policy pinned to `full`. Values and statistics as above (scenario vs
 baseline; paired median [min, max] over 6 rounds); the earlier run's value
 follows in parentheses.
 
+Crossing and first-show CPU, KWin and redisplay totals are whole-transition
+numbers, not per notch. A scroll-away total covers every notch up to the
+crossing and the settling between them; a scroll-back total likewise
+covers all its notches, starting from the viewport the scroll-away left;
+a first-show total also covers removing the frame, the return crossing and
+the settling around them. Their latencies time only the crossing notch.
+
 - **Typing in the visible floating composer** (`on-visible` vs
   `off-inline`, 40 keys per run): latency 2.50 vs 1.72 ms median (n 240
   each), per-round ratio 1.51 [1.41, 1.67] (1.62 [1.42, 1.74]); Emacs CPU
@@ -360,8 +367,8 @@ follows in parentheses.
   the benchmark stopped at its first crossing; `ecef42ff` makes it scroll
   away notch by notch, as scrolling back already did, and report the
   crossing notch's latency. With the option on a crossing now takes an
-  extra notch whose CPU and redisplay cycles the run counts, while `off`
-  leaves the draft after one.
+  extra notch whose CPU and redisplay cycles the whole-transition totals
+  count, while `off` leaves the draft after one.
 - **Idle with a request, visible, against the hidden rail** (`off-away`,
   4 s): Emacs CPU +87.7 [+80.5, +109.3] ms (+88.8 [+80.4, +95.3]), KWin CPU
   +21.8 [+18.7, +29.2] ms, redisplay cycles +19 [+18, +20]. Against the
@@ -373,7 +380,8 @@ follows in parentheses.
 - **Stream, visible, against the hidden rail:** Emacs CPU
   +188.5 [+171.6, +226.8] ms (+227.9 [+173.5, +273.1]), redisplay cycles
   +40 [+37, +43].
-- **First show:** 55.81 ms median, p90 62.81 ms (n 36) (50.72, p90 61.85).
+- **First show:** latency of the crossing notch 55.81 ms median, p90
+  62.81 ms (n 36) (50.72, p90 61.85).
 
 ## Alternatives
 
