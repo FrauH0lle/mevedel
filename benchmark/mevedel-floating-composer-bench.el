@@ -69,14 +69,22 @@
   (dolist (f '(make-frame-visible make-frame-invisible))
     (advice-add f :before (mevedel-fc-bench--count-frame :visibility))))
 
-(defun mevedel-fc-bench--cpu-ns (pid)
-  "Return PID's CPU time in nanoseconds, summed over its threads."
-  (let ((total 0))
-    (dolist (task (ignore-errors (directory-files (format "/proc/%d/task" pid) t "\\`[0-9]")))
-      (with-temp-buffer
-        (when (ignore-errors (insert-file-contents (file-name-concat task "schedstat")) t)
-          (cl-incf total (read (current-buffer))))))
-    total))
+(defun mevedel-fc-bench--cpu-ns (pids)
+  "Return the CPU times of PIDS' threads in nanoseconds, as ((TASK . NS) ...)."
+  (let (threads)
+    (dolist (pid pids)
+      (dolist (task (ignore-errors (directory-files (format "/proc/%d/task" pid) t "\\`[0-9]")))
+        (with-temp-buffer
+          (when (ignore-errors (insert-file-contents (file-name-concat task "schedstat")) t)
+            (push (cons task (read (current-buffer))) threads)))))
+    threads))
+
+(defun mevedel-fc-bench--cpu-delta (after before)
+  "Return the CPU nanoseconds AFTER's threads used since BEFORE.
+Per thread, so a thread exiting in between cannot make it negative; that
+thread's CPU time since BEFORE is lost."
+  (cl-loop for (task . ns) in after
+           sum (- ns (or (cdr (assoc task before)) 0))))
 
 (defun mevedel-fc-bench--find-kwin ()
   "Return the PID of the KWin this Emacs runs under."
@@ -94,12 +102,13 @@
                      (equal (alist-get 'comm attributes) "Xwayland"))
            collect pid))
 
-(defun mevedel-fc-bench--snapshot ()
-  "Return the current counters and CPU times."
-  (append (list :emacs-ns (mevedel-fc-bench--cpu-ns (emacs-pid))
-                :kwin-ns (mevedel-fc-bench--cpu-ns mevedel-fc-bench--kwin)
-                :xwayland-ns (apply #'+ (mapcar #'mevedel-fc-bench--cpu-ns
-                                                (mevedel-fc-bench--xwayland)))
+(defun mevedel-fc-bench--snapshot (xwayland)
+  "Return the current counters and CPU times, with XWAYLAND's PIDs.
+The caller finds those PIDs: scanning every process would count in Emacs's
+CPU time."
+  (append (list :emacs-ns (mevedel-fc-bench--cpu-ns (list (emacs-pid)))
+                :kwin-ns (mevedel-fc-bench--cpu-ns (list mevedel-fc-bench--kwin))
+                :xwayland-ns (mevedel-fc-bench--cpu-ns xwayland)
                 :gcs gcs-done :wall (float-time))
           (copy-sequence mevedel-fc-bench--counters)))
 
@@ -232,19 +241,24 @@ Return the latency of the notch that crossed, in ms."
 
 (defun mevedel-fc-bench--measure (round scenario workload function)
   "Record WORKLOAD of SCENARIO in ROUND; FUNCTION returns latency samples."
-  (garbage-collect)
-  (mevedel-fc-bench--settle)
-  (let* ((before (mevedel-fc-bench--snapshot))
-         (focused (eq t (frame-focus-state (selected-frame))))
+  (let* ((xwayland (mevedel-fc-bench--xwayland))
+         (_ (progn (garbage-collect) (mevedel-fc-bench--settle)))
+         (before (mevedel-fc-bench--snapshot xwayland))
+         ;; The floating composer never holds compositor focus; its parent does.
+         (focused (eq t (frame-focus-state (or (frame-parent (selected-frame))
+                                                (selected-frame)))))
          (attended (not (mevedel-view--unattended-p)))
          (samples (funcall function))
-         (after (mevedel-fc-bench--snapshot))
+         (after (mevedel-fc-bench--snapshot xwayland))
          (record (list :round round :scenario (symbol-name scenario)
                        :workload (symbol-name workload)
                        :focused (if focused t :false) :attended (if attended t :false)
                        :samples-ms (vconcat samples))))
     (cl-loop for (key value) on after by #'cddr
-             do (setq record (plist-put record key (- value (plist-get before key)))))
+             do (setq record (plist-put record key
+                                        (if (listp value)
+                                            (mevedel-fc-bench--cpu-delta value (plist-get before key))
+                                          (- value (plist-get before key))))))
     (push record mevedel-fc-bench--records)))
 
 (defun mevedel-fc-bench--repeat (n events)
@@ -339,11 +353,13 @@ Return the latency of the notch that crossed, in ms."
                                            (mevedel-fc-bench--settle)))))
              (measure 'cross-back (lambda () backs))))
          (mevedel-view--start-spinner "Working on the benchmark request")
-         ;; Last: under KWin, focus did not return to the view's frame once
-         ;; a floating composer had existed, so the next scenario maps a
-         ;; fresh frame instead of restoring focus.
-         (mevedel-fc-bench--focus (make-frame '((width . 40) (height . 10))))
-         (measure 'idle-unfocused (lambda () (mevedel-fc-bench--idle 4))))))))
+         ;; Last, since the next scenario maps a fresh frame anyway.  The
+         ;; focused frame shows another buffer, so no window attends the view.
+         (let ((view (current-buffer)))
+           (mevedel-fc-bench--focus (with-current-buffer (get-buffer-create "*scratch*")
+                                      (make-frame '((width . 40) (height . 10)))))
+           (with-current-buffer view
+             (measure 'idle-unfocused (lambda () (mevedel-fc-bench--idle 4))))))))))
 
 (defun mevedel-fc-bench--fresh-frame ()
   "Select a newly mapped, focused 100x45 frame; delete every other frame."

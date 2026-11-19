@@ -20,6 +20,13 @@
 ;; floating composer at the same draft offset, and a scroll that brings
 ;; that offset fully back into the host returns it inline.  Timers and
 ;; window hooks only place, show or hide an unselected floating composer.
+;;
+;; The floating composer never takes compositor focus: under PGTK a child
+;; frame that once held it never returns it to its parent, which left the
+;; view unattended.  Hand-over selects its frame and redirects the host
+;; frame's keystrokes to it with `redirect-frame-focus'; hand-back clears
+;; the redirect and selects the host.  Selecting another window from the
+;; floating composer moves the redirect along (`select-frame' does that).
 
 ;;; Code:
 
@@ -43,6 +50,9 @@
 
 ;; `mevedel-structs'
 (defvar mevedel-view--agent-transcript-p)
+
+;; PGTK
+(defvar pgtk-wait-for-event-timeout)
 
 
 ;;
@@ -117,9 +127,11 @@ one line.  The frame floats half a line above the host's bottom edge."
 
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
-Cached until the buffer, WINDOW's width or the face remapping (text
-scale) changes, so scrolling the host measures nothing."
-  (let ((key (list (buffer-modified-tick) (window-body-width window t)
+Cached until the buffer's text, WINDOW's width or the face remapping
+\(text scale) changes, so scrolling the host measures nothing.  Text
+property changes alone, like overlay changes, keep the cached height: the
+view's own property updates after each key otherwise measured twice."
+  (let ((key (list (buffer-chars-modified-tick) (window-body-width window t)
                    face-remapping-alist start limit))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
     (if (equal key (car cache))
@@ -152,22 +164,26 @@ scale) changes, so scrolling the host measures nothing."
   (let ((frame mevedel-floating-composer--frame)
         (border mevedel-note-frame-border-width))
     (unless (and (frame-live-p frame) (eq (frame-parent frame) parent))
-      (when (frame-live-p frame) (delete-frame frame))
-      (setq frame (make-frame
-                   `((name . "mevedel-composer")
-                     (parent-frame . ,parent)
-                     (minibuffer . ,(minibuffer-window parent))
-                     (font . ,(frame-parameter parent 'font))
-                     (width . 0) (height . 0) (visibility . nil)
-                     ;; Showing it must not take focus; hand-over selects it.
-                     (no-focus-on-map . t)
-                     (internal-border-width . ,border)
-                     (child-frame-border-width . ,border)
-                     ;; Frame fringes count in its native width even when the
-                     ;; window hides them, widening it past the inset.
-                     (left-fringe . 0) (right-fringe . 0)
-                     (mevedel-view-animate-as-parent . t)
-                     ,@mevedel--child-frame-parameters)))
+      (when (frame-live-p frame)
+        (mevedel-floating-composer--release)
+        (delete-frame frame))
+      (setq frame (let ((pgtk-wait-for-event-timeout nil))
+                    ;; Creating it hidden waits like `--hide' does.
+                    (make-frame
+                     `((name . "mevedel-composer")
+                       (parent-frame . ,parent)
+                       (minibuffer . ,(minibuffer-window parent))
+                       (font . ,(frame-parameter parent 'font))
+                       (width . 0) (height . 0) (visibility . nil)
+                       ;; It never takes compositor focus; see the Commentary.
+                       (no-focus-on-map . t) (no-accept-focus . t)
+                       (internal-border-width . ,border)
+                       (child-frame-border-width . ,border)
+                       ;; Frame fringes count in its native width even when the
+                       ;; window hides them, widening it past the inset.
+                       (left-fringe . 0) (right-fringe . 0)
+                       (mevedel-view-animate-as-parent . t)
+                       ,@mevedel--child-frame-parameters))))
       (let ((window (frame-root-window frame)))
         (set-window-buffer window (current-buffer))
         (set-window-dedicated-p window t)
@@ -221,13 +237,31 @@ scale) changes, so scrolling the host measures nothing."
   (when-let* ((frame mevedel-floating-composer--frame)
               ((frame-live-p frame))
               ((frame-visible-p frame)))
-    (make-frame-invisible frame)))
+    ;; PGTK otherwise runs its event loop for the whole timeout (0.1 s)
+    ;; on every hide, waiting for map events a hidden child never gets.
+    (let ((pgtk-wait-for-event-timeout nil))
+      (make-frame-invisible frame))))
 
 (defun mevedel-floating-composer--select (window position)
-  "Select WINDOW with input focus and point at POSITION."
-  (select-frame-set-input-focus (window-frame window))
-  (select-window window)
-  (goto-char position))
+  "Select WINDOW, the host or the floating composer, with point at POSITION.
+The host's frame keeps compositor focus; when WINDOW is the floating
+composer, its parent's keystrokes are redirected to it."
+  (let ((parent (frame-parent (window-frame window))))
+    (mevedel-floating-composer--release)
+    (select-window window)
+    (when parent
+      (redirect-frame-focus parent (window-frame window)))
+    (goto-char position)
+    (mevedel-floating-composer--paint-borders)))
+
+(defun mevedel-floating-composer--release ()
+  "Stop redirecting the host frame's keystrokes to the floating composer."
+  (when-let* ((frame mevedel-floating-composer--frame)
+              ((frame-live-p frame))
+              (parent (frame-parent frame))
+              ;; `select-frame' retargets the redirect at the parent itself.
+              ((memq (frame-focus parent) (list frame parent))))
+    (redirect-frame-focus parent nil)))
 
 (defun mevedel-floating-composer--remove ()
   "Delete the floating composer, returning a cursor it holds inline."
@@ -237,6 +271,8 @@ scale) changes, so scrolling the host measures nothing."
                (eq (window-buffer mevedel-floating-composer--host) (current-buffer)))
       (mevedel-floating-composer--select mevedel-floating-composer--host
                                          (window-point window)))
+    ;; A redirect to a deleted frame would outlive it.
+    (mevedel-floating-composer--release)
     (delete-frame (window-frame window)))
   (when (timerp mevedel-floating-composer--timer)
     (cancel-timer mevedel-floating-composer--timer))
@@ -244,11 +280,16 @@ scale) changes, so scrolling the host measures nothing."
         mevedel-floating-composer--host nil
         mevedel-floating-composer--timer nil))
 
+(defun mevedel-floating-composer--active-p (frame)
+  "Return non-nil when floating-composer FRAME receives the keystrokes."
+  (and (eq frame (selected-frame))
+       (frame-focus-state (frame-parent frame))))
+
 (defun mevedel-floating-composer--paint-borders ()
   "Repaint every floating composer's border to show its focus."
   (dolist (frame (frame-list))
     (when (frame-parameter frame 'mevedel-view-animate-as-parent)
-      (mevedel-note-frame--paint-border frame))))
+      (mevedel-note-frame--paint-border frame #'mevedel-floating-composer--active-p))))
 
 (add-function :after after-focus-change-function
               #'mevedel-floating-composer--paint-borders)
@@ -295,7 +336,10 @@ cursor move between the host and the floating composer."
                  (mevedel-view--position-screen-y (window-point window) host t))
             (mevedel-floating-composer--select host (window-point window))
             (mevedel-floating-composer--hide))
-           (t (mevedel-floating-composer--show host)))))
+           (t (mevedel-floating-composer--show host)
+              ;; A mouse click selects it without a hand-over.
+              (unless (eq (frame-focus (window-frame host)) (window-frame window))
+                (mevedel-floating-composer--select window (point)))))))
        ((and (mevedel-floating-composer--host-p selected)
              (mevedel-floating-composer--needed-p selected))
         (mevedel-floating-composer--show selected)

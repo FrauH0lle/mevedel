@@ -350,20 +350,25 @@ display type, and recreates it otherwise."
     (mevedel-note-frame--paint-border frame)
     frame))
 
-(defun mevedel-note-frame--paint-border (&optional frame)
+(defun mevedel-note-frame--paint-border (&optional frame focused)
   "Paint FRAME's border to show whether it holds focus.
+FOCUSED, a function of FRAME, decides that; it defaults to
+`frame-focus-state'.  An unchanged color is not set again: that would
+refresh FRAME's faces for nothing.
 The border width alone draws nothing: without an explicit background on
 `internal-border' and `child-frame-border' the border takes the default
 background and is invisible against the frame."
   (let ((frame (or frame mevedel-note-frame--frame)))
     (when (frame-live-p frame)
       (let ((color (face-attribute
-                    (if (frame-focus-state frame)
+                    (if (funcall (or focused #'frame-focus-state) frame)
                         'mevedel-note-frame-border
                       'mevedel-note-frame-border-inactive)
                     :background nil 'default)))
-        (set-face-background 'internal-border color frame)
-        (set-face-background 'child-frame-border color frame)))))
+        (unless (and (equal color (face-background 'child-frame-border frame))
+                     (equal color (face-background 'internal-border frame)))
+          (set-face-background 'internal-border color frame)
+          (set-face-background 'child-frame-border color frame))))))
 
 (add-function :after after-focus-change-function
               #'mevedel-note-frame--paint-border)

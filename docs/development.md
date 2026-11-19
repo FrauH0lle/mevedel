@@ -853,9 +853,12 @@ commands through the command loop. The scenarios are `off-inline` (the
 baseline, and the equal-visible-work control with the rail visible inline),
 `off-away`, `on-never`, `on-hidden` and `on-visible`. Workloads are typing,
 wrapped-draft deletion, 100 production stream chunks, 4 s idle with a request,
-without one and unfocused, first show, and wheel crossings away and back.
+without one and unfocused (a second frame showing another buffer holds focus),
+first show, and wheel crossings away and back.
 Latency runs from event delivery until no timer is due and redisplay finished.
-CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland.
+CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland;
+the Xwayland processes are found before the measured interval, since scanning
+every process would count as Emacs CPU.
 Counts cover redisplay cycles and floating-composer move/resize and show/hide
 calls. The report pairs each scenario with its baseline per round. It warns
 when a workload began with the view's frame unfocused or the view unattended;
