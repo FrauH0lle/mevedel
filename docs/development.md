@@ -831,6 +831,36 @@ text properties, not equivalent hooks, overlays, markers, mode state, layout
 or redisplay. Its time is a text-mutation floor, not an achievable UI latency
 target or a graphical redisplay measurement.
 
+### Floating composer performance gate
+
+```bash
+python3 scripts/bench-floating-composer.py --rounds 6 --output /tmp/fc-raw.json
+python3 scripts/bench-floating-composer.py --report /tmp/fc-raw.json
+```
+
+Compares the floating composer ([ADR 0134](adr/0134-float-the-composer.md))
+with the option off. The runner byte-compiles the package and
+`benchmark/mevedel-floating-composer-bench.el` into a temporary directory and
+runs one private presenting KWin session (the graphical-check runner above).
+Its client starts three graphical Emacs processes: a presentation probe, the
+benchmark, and a second probe. The probes log Wayland traffic and must show
+completed frame callbacks; the benchmark itself runs unlogged. Nothing touches
+the running editor.
+
+A warm-up round precedes the rounds, which alternate scenario order. Each
+scenario gets a freshly mapped, focused frame and a fresh view, and drives real
+commands through the command loop. The scenarios are `off-inline` (the
+baseline, and the equal-visible-work control with the rail visible inline),
+`off-away`, `on-never`, `on-hidden` and `on-visible`. Workloads are typing,
+wrapped-draft deletion, 100 production stream chunks, 4 s idle with a request,
+without one and unfocused, first show, and wheel crossings away and back.
+Latency runs from event delivery until no timer is due and redisplay finished.
+CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland.
+Counts cover redisplay cycles and floating-composer move/resize and show/hide
+calls. The report pairs each scenario with its baseline per round. It warns
+when a workload began with the view's frame unfocused or the view unattended;
+such a run does not measure the attended view.
+
 ### Reloading into a running Emacs
 
 Load compiled code into a live editor, never bare sources. Interpreted
