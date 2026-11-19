@@ -123,6 +123,8 @@ History and status readers keep their native viewport when a window changes
 height, including growth caused by a shrinking echo area. Only for windows whose
 point is in the editable composer, height-only growth repairs newly exposed blank
 space using the height delta, provided the same buffer and width were displayed previously. This
+delta compares two native body heights recorded by redisplay; the fresh
+pre-redisplay measurement serves callers that measure before redisplay. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
 scrolling, reflow or buffer replacement. The first size change also remembers
 the original height and viewport. While the buffer and width remain unchanged
@@ -263,6 +265,21 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Size changes compare native heights (2026-11-19).** One graphical run of
+  the header round-trip regression ended with window start 1249 instead of
+  1266. Its size hook first recorded old and new body heights `800 -> 800`
+  when the header shrank the body to 785 pixels: the new height came from the
+  fresh pre-redisplay measurement and was stale. An equal pair saves no
+  snapshot, so the return `785 -> 800` counted as new growth and moved the
+  start back one line. Injecting only that stale first reading
+  reproduces the failure exactly. The cause of the stale reading in the
+  original run was not found: 226 matched native runs had no spontaneous
+  failures. Redisplay has already settled both heights when the size hook
+  runs, so the hook now reads the new height with `window-body-height`, the
+  same source as `window-old-body-pixel-height`. This restores the native read
+  the hook used before the measurement helper was unified. Callers that
+  measure before redisplay keep the fresh helper.
 
 - **Anchoring cost over rendered content; stream updates anchored twice (2026-11-07).**
   An exploratory graphical benchmark (pgtk under a private nested
