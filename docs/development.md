@@ -854,7 +854,9 @@ baseline, and the equal-visible-work control with the rail visible inline),
 `off-away`, `on-never`, `on-hidden` and `on-visible`. Workloads are typing,
 wrapped-draft deletion, 100 production stream chunks, 4 s idle with a request,
 without one and unfocused (a second frame showing another buffer holds focus),
-first show, and wheel crossings away and back.
+first show, and wheel crossings away and back. Unfocused idle runs before any
+crossing, so `on-never` has never created a floating-composer frame; crossings
+count each direction's commands separately, without the pauses between them.
 Latency runs from event delivery until no timer is due and redisplay finished.
 CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland;
 the Xwayland processes are found before the measured interval, since scanning

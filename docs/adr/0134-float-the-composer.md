@@ -35,9 +35,14 @@ cursor it held to the inline draft.
   redirect and selects the host. Selecting another window from the floating
   composer, for example by clicking the host, retargets the redirect at the
   newly selected frame (`select-frame` does this for the frame holding
-  compositor focus); clicking into the floating composer sets it. Its border
-  shows the active face while it is the selected frame and its parent has
-  compositor focus.
+  compositor focus); clicking into the floating composer sets it. Removing
+  the floating composer (view killed, option off) clears the redirect it set,
+  wherever it points by then. When the host window is deleted or shows
+  another buffer, a window-buffer change hook clears the redirect in that
+  redisplay, before the next keystroke, and a timer then deletes the orphaned
+  floating composer. Its border shows the active face while it is the
+  selected frame and its parent has compositor focus, repainted on
+  compositor focus and window selection changes.
 - **Excluded from view geometry.** The floating composer's window carries
   `mevedel-view-geometry-excluded`, so `mevedel-view--windows`' geometry
   answer omits it. Viewport capture and restoration (ADR 0126), composer
@@ -50,11 +55,13 @@ cursor it held to the inline draft.
   carries `mevedel-view-animate-as-parent` so animation's frame choice treats
   it as its parent.
 - **Placement cost.** The composer's natural height is measured with a pixel
-  limit of the cap plus one line and cached until the buffer's text, the
-  window width or the face remapping (text scale) changes, so scrolling the
-  host measures nothing. Text property changes alone keep the cached height,
-  as overlay changes do; the view's own property updates after each key
-  otherwise measured every key twice. A typed key still measures once before
+  limit of the cap plus one line and cached until the buffer
+  (`buffer-modified-tick`, so property changes such as a face height count),
+  the window width or the face remapping (text scale) changes, so scrolling
+  the host measures nothing. Measuring fontifies the draft, which itself
+  modifies the buffer, so the cache records the buffer's state after
+  measuring; keyed before, every key measured twice. Overlay changes do not
+  invalidate it. A typed key still measures once before
   redisplay: a PGTK child frame's resize takes effect before the next
   redisplay, so measuring later would show the grown draft scrolled in the
   old height for a frame. Resize and move are one compound call, issued only
@@ -118,8 +125,9 @@ Its findings had these causes, now removed:
   `make-frame-invisible` always runs GTK's event loop for the whole
   `pgtk-wait-for-event-timeout`. Creating the hidden frame paid the same wait,
   100 of the 157 ms first show.
-- **Per-keystroke height measurement:** a property-only change after each
-  key missed the cache, so every key measured twice.
+- **Per-keystroke height measurement:** the measurement's own fontification
+  modified the buffer after the cache key was taken, so the next update
+  measured again: every key measured twice.
 - **Idle CPU with a floating-composer frame:** the benchmark scanned every
   process inside its measured interval, summed per-thread CPU so an exiting
   thread made it smaller, and its "unfocused" frame showed the view itself.
@@ -129,67 +137,74 @@ Its findings had these causes, now removed:
 
 Second run, on the tree that records this section: Emacs 31.1 pgtk,
 byte-compiled, private presenting KWin (virtual, OpenGL, no lock screen);
-presentation probes before and after with 72 and 65 completed frame
+presentation probes before and after with 70 and 66 completed frame
 callbacks; one warm-up round and 6 alternating rounds; every measured
 workload began focused and attended except `idle-unfocused`, which is
-unattended by design. Values are scenario vs baseline; "paired" is the
-per-round difference, median [min, max] over 6 rounds. No parity verdict is
-recorded here.
+unattended by design and measured before any crossing, so `on-never` has
+never created a frame. Crossings count each direction's commands
+separately; their CPU includes the benchmark reading per-thread CPU before
+each command, equally in every scenario. Values are scenario vs baseline;
+"paired" is the per-round difference, median [min, max] over 6 rounds. No
+parity verdict is recorded here.
 
 Remaining regressions other than visible rail animation:
 
 - **Typing in the visible floating composer** (`on-visible` vs `off-inline`,
-  40 keys per run): latency including redisplay 2.20 vs 1.45 ms median
-  (pooled, n 240 each), per-round ratio 1.54 [1.42, 1.67]; Emacs CPU
-  +39 [+32, +56] ms per run. A probe split this: with the floating
+  40 keys per run): latency including redisplay 2.63 vs 1.75 ms median
+  (pooled, n 240 each), per-round ratio 1.46 [1.34, 1.69]; Emacs CPU
+  +56 [+30, +73] ms per run. A probe split this: with the floating
   composer's update disabled, keys still cost 1.88-2.40 ms against
   1.36-1.82 ms inline (run medians, 4 alternating runs of 40 keys), so most
   of it is redisplaying the second window; the one remaining measurement
   per key takes about 0.06 ms of layout.
 - **Wrapped-draft deletion in the visible floating composer** (30 keys per
-  run): Emacs CPU +27 [+1, +49] ms per run and up to one more GC; latency is
-  lower, 3.41 vs 4.17 ms median (n 180 each), ratio 0.81 [0.76, 0.87].
-- **Unfocused idle with a floating-composer frame** (4 s, the view's frame
-  unfocused): `on-never` Emacs CPU +5.6 [+3.4, +10.5] ms, KWin CPU
-  +3.1 [-0.4, +4.3] ms; `on-hidden` +1.6 [-1.8, +3.9] ms and `on-visible`
-  +1.5 [-2.3, +7.4] ms (both inconclusive). Each has +2 [+2, +2] redisplay
-  cycles. A probe found one extra redisplay with no Lisp timer due, about
-  0.9 and 1.4 s after focus left, so the frame's window-system events, not
-  mevedel code, drive it.
+  run): Emacs CPU +41 [+19, +51] ms per run and up to one more GC
+  (+1 [+0, +1]); latency is lower, 3.81 vs 4.31 ms median (n 180 each),
+  ratio 0.86 [0.77, 0.95].
+- **Unfocused idle with a floating-composer frame that exists** (4 s, the
+  view's frame unfocused): `on-hidden` Emacs CPU +2.0 [-2.2, +7.6] ms and
+  redisplay cycles +0.5 [+0, +1]; `on-visible` Emacs CPU +3.1 [-1.0, +18.9] ms
+  and redisplay cycles +1 [+0, +8]. The CPU differences are inconclusive. A
+  probe found an extra redisplay with no Lisp timer due, about 0.9 and 1.4 s
+  after focus left, so the frame's window-system events drive it.
 - **Idle with a request, against the equal-visible-work control**
-  (`on-visible` vs `off-inline`, 4 s): redisplay cycles +1.5 [+1, +2];
-  Emacs CPU +3.6 [-3.5, +18.5] ms and KWin CPU +0.5 [-0.2, +3.8] ms are
-  inconclusive.
+  (`on-visible` vs `off-inline`, 4 s): Emacs CPU +5.6 [-0.2, +8.8] ms; KWin
+  CPU -0.5 [-5.5, +1.4] ms and redisplay cycles +0 [-1, +1].
 - **Streaming against the same control** (100 chunks at 40 ms): redisplay
-  cycles +16.5 [+16, +19]; Emacs CPU -27.4 [-61.7, +54.8] ms and KWin CPU
-  -1.4 [-14.3, +27.3] ms are inconclusive.
-- **Scroll away into the floating composer:** one more GC per 12 crossings
-  (2 vs 1); latency is lower (below).
-- **First show,** which creates the child frame once per view: 44.54 ms
-  median, p90 58.93 ms (n 36), no "off" counterpart. Without PGTK's wait
+  cycles +13 [+7, +19]; Emacs CPU +5.5 [-10.7, +41.0] ms and KWin CPU
+  +7.8 [-62.7, +27.1] ms are inconclusive.
+- **First show,** which creates the child frame once per view: 53.12 ms
+  median, p90 58.46 ms (n 36), no "off" counterpart. Without PGTK's wait
   this is frame creation itself.
 
 Visible rail animation (`on-visible` vs `off-away`, the rail hidden):
 
-- **Idle with a request in flight, 4 s:** Emacs CPU +84.1 [+82.4, +91.2] ms,
-  KWin CPU +23.2 [+21.4, +25.1] ms, redisplay cycles +20 [+20, +20].
-- **Stream, 100 chunks at 40 ms:** Emacs CPU +196.3 [+117.8, +211.4] ms,
-  KWin CPU +23.0 [-3.5, +42.5] ms, redisplay cycles +40 [+40, +41], one more
-  GC.
+- **Idle with a request in flight, 4 s:** Emacs CPU +90.4 [+77.5, +93.7] ms,
+  KWin CPU +27.0 [+21.1, +30.5] ms, redisplay cycles +19 [+18, +19].
+- **Stream, 100 chunks at 40 ms:** Emacs CPU +194.3 [+169.8, +236.1] ms,
+  KWin CPU +32.9 [-48.0, +52.3] ms, redisplay cycles +39.5 [+35, +41], one
+  more GC.
 
 No regression measured:
 
-- **Crossings** (`on-never` vs `off-inline`, n 72 each): scroll back 2.98 vs
-  5.74 ms median, ratio 0.54 [0.47, 0.55]; scroll away 5.79 vs 7.52 ms,
-  ratio 0.80 [0.72, 0.86], KWin CPU +1.5 [-1.1, +1.9] ms per 12 crossings.
-- **On but never shown and hidden after use** (`on-never`, `on-hidden` vs
-  `off-inline`): typing 1.46 and 1.26 vs 1.45 ms; wrapped deletion 4.01 and
-  3.33 vs 4.17 ms; stream Emacs CPU -27.1 [-63.9, +26.0] and
-  -23.6 [-53.0, +21.4] ms; idle with a request +1.8 [-2.6, +5.6] and
-  +0.6 [-9.0, +9.0] ms; quiet idle -2.7 and -2.7 ms.
-- **Visible floating composer, quiet idle:** Emacs CPU -2.6 [-4.7, -2.3] ms.
+- **Scroll away** (`on-never` vs `off-inline`, 12 crossings per run, n 72
+  each): 6.09 vs 7.69 ms median, ratio 0.80 [0.78, 0.81]; Emacs CPU
+  -41 [-67, -20] ms, KWin CPU -1.1 [-1.9, +0.2] ms, redisplay cycles
+  -1 [-1, -1] and GCs -1 [-1, +0] per run.
+- **Scroll back:** 3.30 vs 6.05 ms median, ratio 0.55 [0.53, 0.56]; Emacs CPU
+  -1.8 [-27.8, +1.0] ms, KWin CPU -4.8 [-7.6, -3.8] ms, redisplay cycles
+  -4 [-4, -4] per run; GCs +0.5 [-1, +1] (inconclusive).
+- **On but never created** (`on-never` vs `off-inline`): typing 1.71 vs
+  1.75 ms; wrapped deletion 4.24 vs 4.31 ms; stream Emacs CPU
+  -1.1 [-7.5, +18.0] ms; idle with a request +0.8 [-2.3, +4.2] ms; quiet idle
+  +0.2 [-0.1, +0.5] ms; unfocused idle +0.7 [-5.0, +6.7] ms with redisplay
+  cycles +0 [-1, +1].
+- **Hidden after use** (`on-hidden` vs `off-inline`): typing 1.49 vs 1.75 ms;
+  wrapped deletion 3.68 vs 4.31 ms; stream Emacs CPU +14.3 [-14.0, +46.3] ms;
+  idle with a request +1.3 [-4.9, +6.5] ms; quiet idle +0.6 [+0.2, +0.9] ms.
+- **Visible floating composer, quiet idle:** Emacs CPU -0.0 [-0.3, +0.6] ms.
 - **Child-frame move/resize** calls were 0 in every measured workload (the
-  draft height did not change); show/hide were 2 per crossing.
+  draft height did not change); show/hide were 1 per crossing direction.
 
 ## Alternatives
 

@@ -90,6 +90,11 @@ returns it inline.  Turning this off removes every floating composer."
 (defvar-local mevedel-floating-composer--timer nil
   "Pending coalesced placement update.")
 
+(defvar-local mevedel-floating-composer--redirected nil
+  "Frame whose keystrokes this view redirected to its floating composer.
+`select-frame' can retarget that redirect at another frame, so releasing
+clears it whatever it points at now.")
+
 (defvar mevedel-floating-composer--updating nil
   "Non-nil during an update; `make-frame' can run timers re-entrantly.")
 
@@ -127,18 +132,18 @@ one line.  The frame floats half a line above the host's bottom edge."
 
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
-Cached until the buffer's text, WINDOW's width or the face remapping
-\(text scale) changes, so scrolling the host measures nothing.  Text
-property changes alone, like overlay changes, keep the cached height: the
-view's own property updates after each key otherwise measured twice."
-  (let ((key (list (buffer-chars-modified-tick) (window-body-width window t)
-                   face-remapping-alist start limit))
+Cached until the buffer, WINDOW's width or the face remapping (text
+scale) changes, so scrolling the host measures nothing.  Measuring
+fontifies the draft, which modifies the buffer, so the cache records the
+buffer's state after measuring: otherwise every key measured twice."
+  (let ((key (lambda () (list (buffer-modified-tick) (window-body-width window t)
+                              face-remapping-alist start limit)))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
-    (if (equal key (car cache))
+    (if (equal (funcall key) (car cache))
         (cdr cache)
       (let ((height (cdr (window-text-pixel-size window start (point-max) nil limit))))
         (set-window-parameter window 'mevedel-floating-composer-height
-                              (cons (copy-tree key) height))
+                              (cons (funcall key) height))
         height))))
 
 (defun mevedel-floating-composer--pin (window)
@@ -250,18 +255,17 @@ composer, its parent's keystrokes are redirected to it."
     (mevedel-floating-composer--release)
     (select-window window)
     (when parent
-      (redirect-frame-focus parent (window-frame window)))
+      (redirect-frame-focus parent (window-frame window))
+      (setq mevedel-floating-composer--redirected parent))
     (goto-char position)
     (mevedel-floating-composer--paint-borders)))
 
 (defun mevedel-floating-composer--release ()
-  "Stop redirecting the host frame's keystrokes to the floating composer."
-  (when-let* ((frame mevedel-floating-composer--frame)
-              ((frame-live-p frame))
-              (parent (frame-parent frame))
-              ;; `select-frame' retargets the redirect at the parent itself.
-              ((memq (frame-focus parent) (list frame parent))))
-    (redirect-frame-focus parent nil)))
+  "Clear the keystroke redirect this view established, wherever it points."
+  (when-let* ((parent mevedel-floating-composer--redirected))
+    (setq mevedel-floating-composer--redirected nil)
+    (when (and (frame-live-p parent) (frame-focus parent))
+      (redirect-frame-focus parent nil))))
 
 (defun mevedel-floating-composer--remove ()
   "Delete the floating composer, returning a cursor it holds inline."
@@ -385,10 +389,38 @@ has its cursor in this view's draft or shows another buffer."
 (defun mevedel-floating-composer--on-window (window)
   "Respond to a size, buffer or selection change of WINDOW.
 These run inside redisplay, so they reschedule rather than make frames;
-the floating composer's own resize only restores its pin."
+the floating composer's own changes restore its pin and repaint its
+border, which shows whether it is selected."
   (if (window-parameter window 'mevedel-floating-composer)
-      (mevedel-floating-composer--pin window)
+      (progn (mevedel-floating-composer--pin window)
+             (mevedel-floating-composer--paint-borders))
     (mevedel-floating-composer-refresh)))
+
+(defun mevedel-floating-composer--check-hosts (frame)
+  "Release floating composers over FRAME whose host is gone.
+Runs from `window-buffer-change-functions' when a window on FRAME was
+deleted or changed buffer, so a keystroke cannot reach an orphaned
+floating composer; deleting it waits for a timer, outside redisplay."
+  (dolist (child (frame-list))
+    (when (and (eq (frame-parent child) frame)
+               (frame-parameter child 'mevedel-view-animate-as-parent))
+      (let ((buffer (window-buffer (frame-root-window child))))
+        (with-current-buffer buffer
+          (let ((host mevedel-floating-composer--host))
+            (when (and host (not (and (window-live-p host)
+                                      (eq (window-buffer host) buffer))))
+              (mevedel-floating-composer--release)
+              (run-at-time 0 nil #'mevedel-floating-composer--remove-orphan buffer))))))))
+
+(defun mevedel-floating-composer--remove-orphan (buffer)
+  "Remove BUFFER's floating composer if its host is still gone."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((host mevedel-floating-composer--host))
+        (unless (and (window-live-p host) (eq (window-buffer host) buffer))
+          (mevedel-floating-composer--remove))))))
+
+(add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
 
 (defun mevedel-floating-composer-setup ()
   "Enable the floating composer in the current interactive view."

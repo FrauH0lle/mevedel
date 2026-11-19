@@ -128,6 +128,10 @@ Focus changes arrive asynchronously, so wait up to half a second."
      (list (list 'down-mouse-1 posn)) 'mouse-drag-region)
     (mevedel-floating-composer-test--deliver (list (list 'mouse-1 posn)) nil)))
 
+(defun mevedel-floating-composer-test--border-color (face)
+  "Return FACE's background, the floating composer's border color for it."
+  (face-attribute face :background nil 'default))
+
 (defun mevedel-floating-composer-test--window ()
   "Return the shown floating composer's window, or nil."
   (when-let* ((window (mevedel-floating-composer--window))
@@ -223,10 +227,42 @@ Focus changes arrive asynchronously, so wait up to half a second."
     (mevedel-floating-composer-test--scroll-away t)
     (let ((frame (selected-frame)))
       (should (eq frame (frame-focus (window-frame host))))
+      (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
+                     (face-background 'child-frame-border frame)))
       (mevedel-floating-composer-test--click host)
       (should (eq host (selected-window)))
       (should (memq (frame-focus (window-frame host)) (list nil (window-frame host))))
-      (should (mevedel-floating-composer-test--focused-p (window-frame host)))))
+      (should (mevedel-floating-composer-test--focused-p (window-frame host)))
+      (should (equal (mevedel-floating-composer-test--border-color
+                      'mevedel-note-frame-border-inactive)
+                     (face-background 'child-frame-border frame)))))
+  :doc "removing it clears the redirect after another frame was selected"
+  (let ((parent (window-frame host))
+        (other (with-current-buffer (get-buffer-create "*scratch*")
+                 (make-frame '((width . 30) (height . 5))))))
+    (unwind-protect
+        (progn
+          ;; Mapping OTHER takes compositor focus; the parent must hold it.
+          (should (mevedel-floating-composer-test--focus parent))
+          (mevedel-floating-composer-test--scroll-away t)
+          ;; As `other-frame' does, `select-frame' retargets the redirect.
+          (select-frame other)
+          (should (eq other (frame-focus parent)))
+          (with-current-buffer view-buf (mevedel-floating-composer--remove))
+          (should-not (frame-focus parent)))
+      (select-frame parent)
+      (redirect-frame-focus parent nil)
+      (delete-frame other)))
+  :doc "deleting the host clears the redirect before the next command"
+  (let ((parent (window-frame host)))
+    (mevedel-floating-composer-test--scroll-away t)
+    (should (eq (selected-frame) (frame-focus parent)))
+    (set-window-buffer (split-window host nil 'right) (get-buffer-create "*scratch*"))
+    (delete-window host)
+    (mevedel-floating-composer-test--settle)
+    (should-not (frame-focus parent))
+    (mevedel-floating-composer-test--settle)
+    (should-not (with-current-buffer view-buf (mevedel-floating-composer--window))))
   :doc "clicking the floating composer redirects the host frame's keystrokes to it"
   (progn
     (mevedel-floating-composer-test--scroll-away nil)
@@ -355,17 +391,20 @@ Focus changes arrive asynchronously, so wait up to half a second."
     (should (eq window (selected-window)))
     (should (= 0 measured))
     (should (= 0 placed)))
-  :doc "a draft edit measures once and keeps an unchanged geometry"
+  :doc "a draft edit and the refresh after it measure once and keep the geometry"
   (progn
     (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+    (mevedel-floating-composer--update)
     (should (= 1 measured))
     (should (= 0 placed)))
-  :doc "a text property change alone measures nothing"
-  (progn
+  :doc "a property change that makes the draft taller grows the frame"
+  (let ((height (window-pixel-height window)))
     (let ((inhibit-read-only t))
-      (put-text-property (mevedel-view--input-start) (point-max) 'mevedel-test t))
+      (put-text-property (1- (point-max)) (point-max) 'face '(:height 4.0)))
     (mevedel-floating-composer--update)
-    (should (= 0 measured)))
+    (should (= 1 measured))
+    (mevedel-floating-composer-test--settle)
+    (should (> (window-pixel-height window) height)))
   :doc "a taller draft resizes and moves in one call"
   (progn
     (mevedel-floating-composer-test--keys "C-o" 'open-line)

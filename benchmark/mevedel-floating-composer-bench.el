@@ -244,22 +244,60 @@ Return the latency of the notch that crossed, in ms."
   (let* ((xwayland (mevedel-fc-bench--xwayland))
          (_ (progn (garbage-collect) (mevedel-fc-bench--settle)))
          (before (mevedel-fc-bench--snapshot xwayland))
-         ;; The floating composer never holds compositor focus; its parent does.
-         (focused (eq t (frame-focus-state (or (frame-parent (selected-frame))
-                                                (selected-frame)))))
-         (attended (not (mevedel-view--unattended-p)))
+         (state (mevedel-fc-bench--state))
          (samples (funcall function))
-         (after (mevedel-fc-bench--snapshot xwayland))
-         (record (list :round round :scenario (symbol-name scenario)
-                       :workload (symbol-name workload)
-                       :focused (if focused t :false) :attended (if attended t :false)
-                       :samples-ms (vconcat samples))))
-    (cl-loop for (key value) on after by #'cddr
-             do (setq record (plist-put record key
-                                        (if (listp value)
-                                            (mevedel-fc-bench--cpu-delta value (plist-get before key))
-                                          (- value (plist-get before key))))))
-    (push record mevedel-fc-bench--records)))
+         (after (mevedel-fc-bench--snapshot xwayland)))
+    (mevedel-fc-bench--record round scenario workload state samples
+                              (mevedel-fc-bench--delta before after))))
+
+(defun mevedel-fc-bench--state ()
+  "Return the view's state as (:focused FOCUSED :attended ATTENDED)."
+  ;; The floating composer never holds compositor focus; its parent does.
+  (list :focused (if (eq t (frame-focus-state (or (frame-parent (selected-frame))
+                                                  (selected-frame))))
+                     t :false)
+        :attended (if (mevedel-view--unattended-p) :false t)))
+
+(defun mevedel-fc-bench--delta (before after)
+  "Return the counters and CPU times from snapshot BEFORE to AFTER."
+  (cl-loop for (key value) on after by #'cddr
+           nconc (list key (if (listp value)
+                               (mevedel-fc-bench--cpu-delta value (plist-get before key))
+                             (- value (plist-get before key))))))
+
+(defun mevedel-fc-bench--record (round scenario workload state samples delta)
+  "Record WORKLOAD of SCENARIO in ROUND: STATE, latency SAMPLES and DELTA."
+  (push (append (list :round round :scenario (symbol-name scenario)
+                      :workload (symbol-name workload) :samples-ms (vconcat samples))
+                state delta)
+        mevedel-fc-bench--records))
+
+(defun mevedel-fc-bench--crossings (round scenario n)
+  "Record N crossings away and back of SCENARIO in ROUND, each direction alone.
+Counters cover only the crossing commands, not the pauses between them."
+  (let* ((xwayland (mevedel-fc-bench--xwayland))
+         (_ (progn (garbage-collect) (mevedel-fc-bench--settle)))
+         (state (mevedel-fc-bench--state))
+         (sums (list 'cross-away nil 'cross-back nil))
+         (samples (list 'cross-away nil 'cross-back nil)))
+    (dotimes (_ n)
+      (dolist (direction '(cross-away cross-back))
+        (let* ((before (mevedel-fc-bench--snapshot xwayland))
+               (latency (if (eq direction 'cross-away)
+                            (mevedel-fc-bench--away)
+                          (mevedel-fc-bench--back)))
+               (delta (mevedel-fc-bench--delta before (mevedel-fc-bench--snapshot xwayland))))
+          (push latency (plist-get samples direction))
+          (setf (plist-get sums direction)
+                (if-let* ((sum (plist-get sums direction)))
+                    (cl-loop for (key value) on sum by #'cddr
+                             nconc (list key (+ value (plist-get delta key))))
+                  delta))
+          (mevedel-fc-bench--settle))))
+    (dolist (direction '(cross-away cross-back))
+      (mevedel-fc-bench--record round scenario direction state
+                                (nreverse (plist-get samples direction))
+                                (plist-get sums direction)))))
 
 (defun mevedel-fc-bench--repeat (n events)
   "Return latencies of N commands EVENTS, paced like typing."
@@ -329,6 +367,23 @@ Return the latency of the notch that crossed, in ms."
          (measure 'idle-request (lambda () (mevedel-fc-bench--idle 4)))
          (mevedel-view--stop-spinner)
          (measure 'idle-quiet (lambda () (mevedel-fc-bench--idle 4)))
+         ;; Before any crossing, so `on-never' has never created a frame.  The
+         ;; focused frame shows another buffer, so no window attends the view.
+         (mevedel-view--start-spinner "Working on the benchmark request")
+         (when (eq scenario 'on-never)
+           (mevedel-fc-bench--check (not mevedel-floating-composer--frame)
+                                    "no floating-composer frame"))
+         (let ((view (current-buffer))
+               (frame (window-frame (mevedel-fc-bench--host)))
+               (other (with-current-buffer (get-buffer-create "*scratch*")
+                        (make-frame '((width . 40) (height . 10))))))
+           (mevedel-fc-bench--focus other)
+           (with-current-buffer view
+             (measure 'idle-unfocused (lambda () (mevedel-fc-bench--idle 4))))
+           (delete-frame other)
+           (mevedel-fc-bench--focus frame)
+           (set-buffer view))
+         (mevedel-view--stop-spinner)
          (when (memq scenario '(off-inline on-never))
            (mevedel-fc-bench--settle 0.2)
            (unless (mevedel-view--position-in-input-region-p (point))
@@ -343,23 +398,7 @@ Return the latency of the notch that crossed, in ms."
                                                   (mevedel-fc-bench--settle)
                                                   (mevedel-fc-bench--back)
                                                   (mevedel-fc-bench--settle)))))))
-           (let (backs)
-             (measure 'cross-away
-                      (lambda ()
-                        (cl-loop repeat 12
-                                 collect (prog1 (mevedel-fc-bench--away)
-                                           (mevedel-fc-bench--settle)
-                                           (push (mevedel-fc-bench--back) backs)
-                                           (mevedel-fc-bench--settle)))))
-             (measure 'cross-back (lambda () backs))))
-         (mevedel-view--start-spinner "Working on the benchmark request")
-         ;; Last, since the next scenario maps a fresh frame anyway.  The
-         ;; focused frame shows another buffer, so no window attends the view.
-         (let ((view (current-buffer)))
-           (mevedel-fc-bench--focus (with-current-buffer (get-buffer-create "*scratch*")
-                                      (make-frame '((width . 40) (height . 10)))))
-           (with-current-buffer view
-             (measure 'idle-unfocused (lambda () (mevedel-fc-bench--idle 4))))))))))
+           (mevedel-fc-bench--crossings round scenario 12)))))))
 
 (defun mevedel-fc-bench--fresh-frame ()
   "Select a newly mapped, focused 100x45 frame; delete every other frame."
