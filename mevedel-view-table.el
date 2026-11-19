@@ -1004,7 +1004,7 @@ Reuse LAYOUT's relocation map when the same raw table is reinserted."
          (target-buffer (current-buffer))
          (old-point (point))
          (windows (mapcar (lambda (win) (list win (window-point win) (window-start win)))
-                          (get-buffer-window-list (current-buffer) nil t)))
+                          (mevedel-view--windows 'geometry)))
          (delta (- (length new) (- end beg)))
          records success)
     (when (and raw (not (eq mapping (cdr previous))))

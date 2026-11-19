@@ -75,6 +75,9 @@
 (declare-function mevedel-execution-target-native-root
                   "mevedel-execution-target" (cl-x) t)
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-toggle "mevedel-floating-composer" ())
+
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
                   (session buffer trigger &optional captures))
@@ -721,7 +724,8 @@ above `mevedel-view--input-marker'."
   "C-c C-k" #'mevedel-view-abort
   "C-c C-j" #'mevedel-view-jump-to-interaction
   "C-c C-o" #'mevedel-menu
-  "C-c C-q" #'mevedel-pending-inputs-clear)
+  "C-c C-q" #'mevedel-pending-inputs-clear
+  "C-c C-SPC" #'mevedel-floating-composer-toggle)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
   "Return a composed display-fragment keymap from MAPS.
@@ -1164,7 +1168,7 @@ consults the file name handlers each time."
   "Return display columns available for the status strip."
   (let* ((buffer (current-buffer))
          (selected (selected-window))
-         (windows (get-buffer-window-list buffer nil t))
+         (windows (mevedel-view--windows 'geometry buffer))
          (width (cond
                  ((eq (window-buffer selected) buffer)
                   (window-body-width selected))
@@ -1714,7 +1718,7 @@ so does a view without windows in a batch Emacs, where tests run views
 undisplayed.  The window-change hook resumes a view when it reappears.
 An unattended session otherwise paid a quarter of its CPU redisplaying
 spinner frames and live rows nobody saw."
-  (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
+  (let ((windows (mevedel-view--windows 'visibility buffer)))
     (if (null windows)
         (not noninteractive)
       (not (cl-some #'mevedel-view--window-attended-p windows)))))

@@ -9,6 +9,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-utilities)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-animation)
@@ -7681,6 +7682,76 @@ turn's later text, live and after reconstruction."
                  "[edits]" "2 permissions" 40 "Working..." "Working... · 2s")))
       (should (string-prefix-p "[edits] · ⚠ 2 permissions · C-c C-j" rail))
       (should-not (string-match-p "Working" rail)))))
+
+(mevedel-deftest mevedel-view--animation-window-frame
+  (:doc "A child frame marked to animate as its parent shares the parent's palette.")
+  (let ((window (selected-window))
+        (frame (selected-frame)))
+    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) 'parent)))
+      (should (eq frame (mevedel-view--animation-window-frame window)))
+      (unwind-protect
+          (progn
+            (set-frame-parameter frame 'mevedel-view-animate-as-parent t)
+            (should (eq 'parent (mevedel-view--animation-window-frame window))))
+        (set-frame-parameter frame 'mevedel-view-animate-as-parent nil)))))
+
+(mevedel-deftest mevedel-view--spinner-framerate ()
+  (let ((mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-battery-framerate 5)
+        (mevedel-view-spinner-power-policy 'full)
+        (mevedel-view-spinner-animate t))
+    ,test)
+  (test)
+  :doc "applies the user's power policy by default"
+  (should (= 30 (mevedel-view--spinner-framerate)))
+  :doc "applies a given policy instead"
+  (should (= 5 (mevedel-view--spinner-framerate 'save)))
+  :doc "is zero while animation is off"
+  (let ((mevedel-view-spinner-animate nil))
+    (should (zerop (mevedel-view--spinner-framerate)))))
+
+(mevedel-deftest mevedel-view--spinner-label-power-policy ()
+  (with-temp-buffer
+    (insert "Working...")
+    (setq-local mevedel-view--spinner-label-target
+                (cons (copy-marker 1) (copy-marker (point-max))))
+    (save-window-excursion
+      (let* ((inline (selected-window))
+             (floating (split-window))
+             (mevedel-view-spinner-power-policy 'full)
+             (showing nil)
+             (attended (list inline floating)))
+        (set-window-parameter floating 'mevedel-floating-composer t)
+        (cl-letf (((symbol-function 'mevedel-view--windows)
+                   (lambda (&rest _) (list inline floating)))
+                  ((symbol-function 'mevedel-view--window-attended-p)
+                   (lambda (window) (memq window attended)))
+                  ((symbol-function 'mevedel-view--animation-span-in-window-p)
+                   (lambda (_start _end window) (memq window showing))))
+          ,test))))
+  (test)
+  :doc "a label shown only in a floating composer animates under `save'"
+  (progn
+    (setq showing (list floating))
+    (should (eq 'save (mevedel-view--spinner-label-power-policy))))
+  :doc "a label also shown inline keeps the user's policy"
+  (progn
+    (setq showing (list inline floating))
+    (should (eq 'full (mevedel-view--spinner-label-power-policy))))
+  :doc "an unattended inline window does not count"
+  (progn
+    (setq showing (list inline floating)
+          attended (list floating))
+    (should (eq 'save (mevedel-view--spinner-label-power-policy))))
+  :doc "a label no attended window shows keeps the user's policy"
+  (progn
+    (setq attended nil showing (list floating))
+    (should (eq 'full (mevedel-view--spinner-label-power-policy))))
+  :doc "no label keeps the user's policy"
+  (progn
+    (setq showing (list floating)
+          mevedel-view--spinner-label-target nil)
+    (should (eq 'full (mevedel-view--spinner-label-power-policy)))))
 
 (mevedel-deftest mevedel-view--animation-frozen-p
   (:doc "Input pause and reduced motion independently freeze presentation.")

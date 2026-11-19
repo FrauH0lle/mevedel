@@ -115,6 +115,41 @@ BODY runs inside the view buffer."
   (let ((noninteractive nil))
     (should (mevedel-note-frame--available-p))))
 
+(mevedel-deftest mevedel-note-frame--paint-border ()
+  (let ((frame (selected-frame))
+        (parent (selected-frame))
+        (standard-display-table nil)
+        (redrawn nil))
+    (skip-unless (not (display-graphic-p frame)))
+    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) parent))
+              ;; Run the deferred redraw at once and record it.
+              ((symbol-function 'run-at-time)
+               (lambda (_time _repeat function &rest args) (apply function args)))
+              ((symbol-function 'redraw-frame)
+               (lambda (&optional frame) (push frame redrawn))))
+      (unwind-protect
+          ,test
+        (set-face-foreground 'border nil frame))))
+  (test)
+  :doc "a terminal child's border shows focus in its own border face's foreground"
+  (progn
+    (mevedel-note-frame--paint-border frame #'always)
+    (should (equal (face-attribute 'mevedel-note-frame-border :background nil 'default)
+                   (face-foreground 'border frame)))
+    (mevedel-note-frame--paint-border frame #'ignore)
+    (should (equal (face-attribute 'mevedel-note-frame-border-inactive :background
+                                   nil 'default)
+                   (face-foreground 'border frame)))
+    (should-not (face-foreground 'border t))
+    (should-not standard-display-table))
+  :doc "redraws the parent only when the color changes"
+  (progn
+    (mevedel-note-frame--paint-border frame #'always)
+    (mevedel-note-frame--paint-border frame #'always)
+    (should (equal (list parent) redrawn))
+    (mevedel-note-frame--paint-border frame #'ignore)
+    (should (equal (list parent parent) redrawn))))
+
 (mevedel-deftest mevedel-note-frame-display
   (:doc "`mevedel-note-frame-display' creates and reuses note frames")
   ,test
@@ -462,5 +497,20 @@ them while the frame is still alive"
     (should-not mevedel-note-frame--pending-restore)))
 
 (provide 'test-mevedel-note-frame)
+
+
+(ert-deftest mevedel-note-frame-border-is-prominent ()
+  "The border defaults to 3 px; active and inactive faces stay distinct."
+  (should (= 3 (eval (car (get 'mevedel-note-frame-border-width
+                               'standard-value)))))
+  (dolist (bg '(dark light))
+    (let (colors)
+      (dolist (face '(mevedel-note-frame-border
+                      mevedel-note-frame-border-inactive))
+        (let ((spec (cdr (assq bg (mapcar (lambda (e) (cons (cadr (caar e)) (cdr e)))
+                                          (get face 'face-defface-spec))))))
+          (push (plist-get spec :background) colors)))
+      (should (cl-every #'stringp colors))
+      (should-not (equal (car colors) (cadr colors))))))
 
 ;;; test-mevedel-note-frame.el ends here

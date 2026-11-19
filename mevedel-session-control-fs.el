@@ -9,9 +9,15 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (eval-when-compile
-  (require 'cl-lib)
   (require 'tramp-sh))
+
+;; `tramp' and `tramp-sh', required on the remote paths that call these
+(declare-function tramp-compute-multi-hops "tramp" (vec))
+(declare-function tramp-get-connection-process "tramp" (vec))
+(declare-function tramp-get-method-parameter "tramp" (vec param &optional default))
+(declare-function tramp-ssh-or-plink-options "tramp-sh" (vec))
 
 ;; Every control operation both refuses to nest and runs with timers
 ;; suspended, and the latter is a macro, so this is a load-time dependency

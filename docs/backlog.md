@@ -10,7 +10,11 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Continue the work on the "always visible prompt" (the composer stays visible while the transcript scrolls). Two prototypes, from 2026-10-26, are in `.scratch/floating-composer/` (restored from session snapshots on 2026-11-17): a child frame (`mevedel-floating-composer.el`, checked by `check.el`, `check-typing.el` and `run-check.sh`) and a split window (`check-split.el`). Not the pinned prompt header shipped on 2026-10-31.
+- Move the composer into its own buffer, out of the view buffer. Large; scope,
+  estimate and open problems are in
+  [ADR 0134's alternatives](adr/0134-float-the-composer.md#alternatives). Also
+  the escalation path if the floating composer regresses typing, scrolling or
+  streaming.
 
 ## Proactive sessions
 

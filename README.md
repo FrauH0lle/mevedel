@@ -681,9 +681,21 @@ a local file into the view
 inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
 the next send.
 
+When you scroll the view away from the composer while typing, a **floating
+composer** keeps the same draft visible in a small frame over the bottom of
+the window, so you can read the transcript and write together. The cursor goes
+with it; scrolling back to the composer returns the cursor inline. `C-c C-SPC`
+moves the cursor between the composer and the transcript, and clicking the
+floating composer selects it. Inside it, `C-v`/`M-v` page a long draft,
+`C-M-v`/`C-M-S-v` scroll the transcript, and `C-c C-j`, `C-c RET` and the
+other composer keys work as inline. It also works in terminal Emacs. Set
+`mevedel-floating-composer` to nil to keep the composer inline only; see
+[ADR 0134](docs/adr/0134-float-the-composer.md) for the exact rules.
+
 | Command                              | Command Description                                      |
 |--------------------------------------|----------------------------------------------------------|
 | `mevedel-view-send`                  | Send the current view input to the backing data buffer.  |
+| `mevedel-floating-composer-toggle`   | Move the cursor between the composer and the transcript (`C-c C-SPC`). |
 | `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
 | `mevedel-view-retract-pending`       | Withdraw the newest pending entry into an empty composer (`C-c C-w`). |
 | `mevedel-view-resume-pending`        | Resume leftover steering in one turn, then queued follow-ups (`C-c C-r`). |
@@ -702,6 +714,7 @@ the next send.
 | Custom Variable                                | Variable Description                                               |
 |------------------------------------------------|--------------------------------------------------------------------|
 | `mevedel-view-fontify-responses`               | Fontify assistant response bodies using Org-style faces.           |
+| `mevedel-floating-composer`                    | Show the composer over a view window scrolled away from it (default t). |
 | `mevedel-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
 | `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |

@@ -23,6 +23,13 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-leave "mevedel-floating-composer" ())
+(declare-function mevedel-floating-composer-return "mevedel-floating-composer"
+                  (window position))
+(declare-function mevedel-floating-composer-reveal "mevedel-floating-composer"
+                  (window start position))
+
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
@@ -636,15 +643,15 @@ composer.  Repeating the command cycles outward through the pending
 cards and wraps.  Other windows do not move.
 Remember this window's draft position and return there on settlement only
 if the window is still visiting that interaction.  Reveal hidden Plan
-approvals as needed."
+approvals as needed.  From the floating composer, visit the card in its
+host, above the floating composer."
   (interactive)
   (when-let* ((session (mevedel-view--session))
               (entry (mevedel-session-pending-plan-approval session))
               ((plist-get entry :hidden)))
     (plist-put entry :hidden nil)
     (mevedel-plan-approval-render session))
-  (let* ((window (selected-window))
-         (current (get-text-property (point) 'mevedel-view-interaction-id))
+  (let* ((current (get-text-property (point) 'mevedel-view-interaction-id))
          (pairs (nreverse
                  (seq-filter
                   (lambda (pair)
@@ -655,7 +662,9 @@ approvals as needed."
          (bounds (and pair (mevedel-view-zone-fragment-bounds
                             'interaction (car pair)))))
     (unless bounds (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No pending question or approval"))
-    (let* ((saved (assq window mevedel-view--interaction-focus-return))
+    (mevedel-floating-composer-leave)
+    (let* ((window (selected-window))
+           (saved (assq window mevedel-view--interaction-focus-return))
            (input-start (mevedel-view--input-start))
            (offset (if (>= (point) input-start)
                        (- (point) input-start)
@@ -670,7 +679,8 @@ approvals as needed."
         (push (list window (car pair) offset)
               mevedel-view--interaction-focus-return))
       (goto-char position)
-      (set-window-point window position))))
+      (set-window-point window position)
+      (mevedel-floating-composer-reveal window (plist-get bounds :start) position))))
 
 (defun mevedel-view--interaction-focused-visits ()
   "Return saved visits whose windows still point inside their interaction.
@@ -691,12 +701,16 @@ Never move a window that left its visited card or focus a newly arriving one."
   (setq mevedel-view--interaction-focus-return nil)
   (dolist (visit visits)
     (pcase-let ((`(,window ,id ,offset) visit))
-      (if (assoc id pairs)
-          (push visit mevedel-view--interaction-focus-return)
-        (set-window-point
-         window (min (point-max) (+ (mevedel-view--input-start) offset)))
-        (when (eq window (selected-window))
-          (goto-char (window-point window)))))))
+      (let ((position (min (point-max) (+ (mevedel-view--input-start) offset))))
+        (cond
+         ((assoc id pairs)
+          (push visit mevedel-view--interaction-focus-return))
+         ;; A draft off screen returns to the floating composer instead.
+         ((mevedel-floating-composer-return window position))
+         (t
+          (set-window-point window position)
+          (when (eq window (selected-window))
+            (goto-char position))))))))
 
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays.

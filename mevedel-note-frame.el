@@ -73,7 +73,7 @@
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-note-frame-border-width 2
+(defcustom mevedel-note-frame-border-width 3
   "Border width of the note frame in pixels."
   :type 'integer
   :group 'mevedel)
@@ -86,16 +86,16 @@ The frame fits itself to its content between this and
   :group 'mevedel)
 
 (defface mevedel-note-frame-border
-  '((((background dark)) :background "#5c7a80")
-    (((background light)) :background "#7d979d"))
+  '((((background dark)) :background "#2ec4b6")
+    (((background light)) :background "#0b8a8a"))
   "Border of the note frame while it has focus.
 The background attribute is what paints; a face that inherits an unset
 background makes the border invisible against the frame."
   :group 'mevedel)
 
 (defface mevedel-note-frame-border-inactive
-  '((((background dark)) :background "#2d383b")
-    (((background light)) :background "#c6d2d5"))
+  '((((background dark)) :background "#1c6f73")
+    (((background light)) :background "#6cb9bd"))
   "Border of the note frame while another frame has focus."
   :group 'mevedel)
 
@@ -350,20 +350,37 @@ display type, and recreates it otherwise."
     (mevedel-note-frame--paint-border frame)
     frame))
 
-(defun mevedel-note-frame--paint-border (&optional frame)
+(defun mevedel-note-frame--paint-border (&optional frame focused)
   "Paint FRAME's border to show whether it holds focus.
+FOCUSED, a function of FRAME, decides that; it defaults to
+`frame-focus-state'.  An unchanged color is not set again: that would
+refresh FRAME's faces for nothing.
 The border width alone draws nothing: without an explicit background on
 `internal-border' and `child-frame-border' the border takes the default
-background and is invisible against the frame."
+background and is invisible against the frame.  A terminal draws a child
+frame's border as box characters in that frame's own `border' face, so
+there the color is its foreground.  A shown terminal child's box changes
+only when its parent is redrawn; that waits for a timer, outside
+redisplay, and happens only when the color changed."
   (let ((frame (or frame mevedel-note-frame--frame)))
     (when (frame-live-p frame)
       (let ((color (face-attribute
-                    (if (frame-focus-state frame)
+                    (if (funcall (or focused #'frame-focus-state) frame)
                         'mevedel-note-frame-border
                       'mevedel-note-frame-border-inactive)
                     :background nil 'default)))
-        (set-face-background 'internal-border color frame)
-        (set-face-background 'child-frame-border color frame)))))
+        (cond
+         ((not (display-graphic-p frame))
+          (unless (equal color (face-foreground 'border frame))
+            (set-face-foreground 'border color frame)
+            (when-let* ((parent (frame-parent frame)))
+              (run-at-time 0 nil (lambda ()
+                                   (when (frame-live-p parent)
+                                     (redraw-frame parent)))))))
+         ((not (and (equal color (face-background 'child-frame-border frame))
+                    (equal color (face-background 'internal-border frame))))
+          (set-face-background 'internal-border color frame)
+          (set-face-background 'child-frame-border color frame)))))))
 
 (add-function :after after-focus-change-function
               #'mevedel-note-frame--paint-border)

@@ -693,6 +693,40 @@
         (should (< (mevedel-view-zone-width)
                    (max (window-body-width) (window-body-width other))))))))
 
+(mevedel-deftest mevedel-view--geometry-excluded-p
+  (:doc "answers a window's geometry-exclusion parameter")
+  (save-window-excursion
+    (let ((window (split-window)))
+      (should-not (mevedel-view--geometry-excluded-p window))
+      (set-window-parameter window 'mevedel-view-geometry-excluded t)
+      (should (mevedel-view--geometry-excluded-p window)))))
+
+(mevedel-deftest mevedel-view--windows
+  (:doc "omits a geometry-excluded window from geometry, chrome width and the viewport setter, never from visibility")
+  (save-window-excursion
+    (with-temp-buffer
+      (delete-other-windows)
+      (switch-to-buffer (current-buffer))
+      (dotimes (n 50) (insert (format "row %d\n" n)))
+      (let ((host (selected-window))
+            (excluded (split-window-right -20)))
+        (set-window-buffer excluded (current-buffer))
+        (should (seq-set-equal-p (list host excluded) (mevedel-view--windows 'geometry)))
+        (set-window-parameter excluded 'mevedel-view-geometry-excluded t)
+        (should (equal (list host) (mevedel-view--windows 'geometry)))
+        (should (seq-set-equal-p (list host excluded)
+                                 (mevedel-view--windows 'visibility)))
+        (should (equal (list host)
+                       (with-temp-buffer
+                         (mevedel-view--windows 'geometry (window-buffer host)))))
+        ;; The narrower excluded window no longer constrains chrome.
+        (should (= (window-body-width host) (mevedel-view-zone-width)))
+        (mevedel-view--set-viewport excluded (cons 20 0))
+        (should (= 1 (window-start excluded)))
+        (mevedel-view--set-viewport host (cons 20 0))
+        (should (= 20 (window-start host)))
+        (should-error (mevedel-view--windows 'other))))))
+
 (mevedel-deftest mevedel-view-zone--on-window-change
   (:doc "runs the width-change hook once per actual width change, in the view buffer")
   (save-window-excursion

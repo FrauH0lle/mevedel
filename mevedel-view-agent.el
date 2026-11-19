@@ -10,6 +10,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 (require 'mevedel-view-zone)
 
 ;; `cl-extra'
@@ -655,7 +656,7 @@ still show the composer with point in it return it to the pixel Y it
 had before the inspection opened instead of rising above empty space.  A
 window the user moved into history meanwhile keeps its start."
   (when (mevedel-view--agent-transcript-view-p view-buffer)
-    (let ((windows (get-buffer-window-list view-buffer nil t))
+    (let ((windows (mevedel-view--windows 'visibility view-buffer))
           data-buffer live-p transcript-info parent anchors)
       (with-current-buffer view-buffer
         (setq data-buffer mevedel--data-buffer

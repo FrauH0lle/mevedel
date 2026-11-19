@@ -6,7 +6,8 @@
 ;; any single mevedel module: colour tinting for overlay styling, tag-query
 ;; prefix/infix conversion, environment-info string assembly for system
 ;; prompts, synthetic transcript insertion and response-marker handling, and
-;; various text and path manipulation utilities, and nonblocking socket cleanup.
+;; various text and path manipulation utilities, nonblocking socket cleanup,
+;; and the geometry and visibility answers to "which windows show this view".
 
 ;;; Code:
 
@@ -469,6 +470,32 @@ because a missing tool is looked up just as often as a present one."
                  (if remote (executable-find name remote) (executable-find name))
                  mevedel--executable-cache)
       cached)))
+
+
+;;
+;;; View windows
+
+(defun mevedel-view--geometry-excluded-p (window)
+  "Return non-nil when WINDOW keeps its own viewport outside view geometry.
+Its `mevedel-view-geometry-excluded' parameter says so."
+  (window-parameter window 'mevedel-view-geometry-excluded))
+
+(defun mevedel-view--windows (purpose &optional buffer)
+  "Return the live windows on any frame showing BUFFER's view, for PURPOSE.
+BUFFER defaults to the current buffer.  PURPOSE `visibility' answers
+every such window: animation visibility, attention and frame choice.
+PURPOSE `geometry' omits windows `mevedel-view--geometry-excluded-p'
+accepts: viewport capture and restoration, composer anchoring,
+blank-space and growth repair, and narrowest-window chrome fitting."
+  (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
+    (cl-ecase purpose
+      (visibility windows)
+      (geometry
+       ;; Hot paths call this per update; copy only when a window is excluded.
+       (if (cl-loop for window in windows
+                    never (mevedel-view--geometry-excluded-p window))
+           windows
+         (cl-remove-if #'mevedel-view--geometry-excluded-p windows))))))
 
 
 ;;

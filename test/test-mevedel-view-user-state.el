@@ -19,6 +19,7 @@
           "helpers"))
 (require 'mwheel)
 (require 'mevedel-execution)
+(require 'mevedel-floating-composer)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
@@ -584,7 +585,9 @@ WINDOW defaults to the selected window, but need not be selected."
 (mevedel-deftest mevedel-view-user-state/scroll-return ()
   (progn
     (skip-unless (display-graphic-p))
-    (let ((scroll-preserve-screen-position t)
+    ;; The floating composer would take the draft cursor (its own suite).
+    (let ((mevedel-floating-composer nil)
+          (scroll-preserve-screen-position t)
           (mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
           (mouse-wheel-progressive-speed nil))
       (mevedel-view-user-state-test--with-view
@@ -677,6 +680,26 @@ WINDOW defaults to the selected window, but need not be selected."
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window))
 
+(mevedel-deftest mevedel-view--scroll-return ()
+  (with-temp-buffer
+    (save-window-excursion
+      (let ((window (selected-window)))
+        (set-window-buffer window (current-buffer))
+        (unwind-protect
+            ,test
+          (set-window-parameter window 'mevedel-view-scroll-return nil)))))
+  (test)
+  :doc "returns the offset recorded for the buffer the window shows"
+  (progn
+    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
+    (should (= 7 (mevedel-view--scroll-return window))))
+  :doc "ignores an offset recorded for a buffer the window showed earlier"
+  (with-temp-buffer
+    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
+    (should-not (mevedel-view--scroll-return window)))
+  :doc "returns nil without a pending return"
+  (should-not (mevedel-view--scroll-return window)))
+
 (mevedel-deftest mevedel-view--return-from-scroll ()
   (mevedel-view-user-state-test--with-view
     (mevedel-view-test--insert-composer-draft
@@ -692,14 +715,16 @@ WINDOW defaults to the selected window, but need not be selected."
            (away (save-excursion (goto-char transcript) (line-beginning-position))))
       (set-window-start nil bottom)
       (cl-flet ((run (command thunk)
-                  (let ((this-command command))
+                  ;; ADR 0126's own return; the floating composer has its suite.
+                  (let ((this-command command)
+                        (mevedel-floating-composer nil))
                     (run-hooks 'pre-command-hook)
                     (funcall thunk)
                     (run-hooks 'post-command-hook))))
         ;; A scroll displaces point from the draft.
         (run 'scroll-down-command
              (lambda () (set-window-start nil away) (goto-char transcript)))
-        (should (= 4 (window-parameter nil 'mevedel-view-scroll-return)))
+        (should (= 4 (mevedel-view--scroll-return (selected-window))))
         ,action)))
   (action)
   :doc "a later scroll showing the draft returns point to its offset"
@@ -712,7 +737,25 @@ WINDOW defaults to the selected window, but need not be selected."
     (run 'forward-char #'ignore)
     (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
     (should (= transcript (point)))
-    (should-not (window-parameter nil 'mevedel-view-scroll-return))))
+    (should-not (window-parameter nil 'mevedel-view-scroll-return)))
+  :doc "a return pending for another view does not move this view's point"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 60)
+      (mevedel-view-test--insert-data
+       data-buf (format "Line %d of another response.\n" i) 'response))
+    (switch-to-buffer view-buf)
+    (mevedel-view--full-rerender)
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 2)
+    (goto-char (point-min))
+    (search-forward "Line 20 ")
+    (let ((point (point))
+          (bottom (save-excursion
+                    (goto-char (point-max))
+                    (forward-line (- 1 (window-body-height)))
+                    (point))))
+      (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
+      (should (= point (point))))))
 
 (mevedel-deftest mevedel-view-user-state/live-reader ()
   ;; The graphical runner repeats every transition after a real wheel event

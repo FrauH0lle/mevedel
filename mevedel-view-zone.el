@@ -21,6 +21,7 @@
   (require 'cl-lib))
 
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 
 ;; `mevedel-utilities'
 (declare-function mevedel-diagnostic-message "mevedel-utilities" (scope format-string &rest args))
@@ -211,7 +212,7 @@ unrelated redraw changes their height.")
   "Return the narrowest body width of the windows showing this buffer.
 Without such a window, return the selected window's body width.  Chrome
 that fits in it stays one screen row per line in every window."
-  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
+  (let ((windows (mevedel-view--windows 'geometry)))
     (if windows
         (apply #'min (mapcar #'window-body-width windows))
       (window-body-width))))
@@ -666,7 +667,7 @@ the zone or losing the table discards the proof."
           (list window (copy-marker window-point t)
                 (copy-marker (window-start window) t)
                 (mevedel-view-zone--input-offset window-point))))
-      (get-buffer-window-list (current-buffer) nil t)))))
+      (mevedel-view--windows 'geometry)))))
 
 (defun mevedel-view-zone--restore-view-state (state)
   "Restore composer text, point, and displayed windows from STATE."
@@ -950,7 +951,7 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
               composer visit y
               (and y (eq (car visit) 'interaction)
                    (or (mevedel-view--window-blank-pixels window) 0)))))
-    (get-buffer-window-list (current-buffer) nil t))))
+    (mevedel-view--windows 'geometry))))
 
 (defun mevedel-view-zone--restore-logical-state (zone state)
   "Restore positions for ZONE STATE, returning (VISITED-WINDOWS LOST-STARTS).

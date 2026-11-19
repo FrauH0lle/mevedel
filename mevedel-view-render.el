@@ -14,6 +14,7 @@
 (require 'mevedel-plan)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view-fontify)
+(require 'mevedel-utilities)
 (require 'mevedel-view-prepare)
 
 ;; `cl-extra'
@@ -48,6 +49,9 @@
 (declare-function mevedel-execution-transcript-pending-render-data
                   "mevedel-execution-transcript"
                   (data-buffer tool-use-id))
+
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-refresh "mevedel-floating-composer" ())
 
 ;; `mevedel-note-frame'
 (declare-function mevedel-note-frame-refresh
@@ -4561,7 +4565,8 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-note-frame-refresh)
-              (mevedel-note-frame-refresh))))))
+              (mevedel-note-frame-refresh))
+            (mevedel-floating-composer-refresh)))))
       ;; A fresh or retained tail rewrites only the in-flight turn and the
       ;; zones below it; anchor readers there without counting old history.
       (and (or fresh-tail-p retained-p) in-flight-p
@@ -5401,7 +5406,7 @@ are left bare, while blank lines between payload lines keep the gutter."
 OPEN-TAG carries trusted metadata; BODY supplies only the event preview.
 KIND and SENDER identify the mailbox record.  Payload text never determines
 whether a record is a terminal event."
-  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+  (let* ((windows (mevedel-view--windows 'geometry))
          (width (max 20 (- (if windows
                               (apply #'min (mapcar #'window-body-width windows))
                             (window-body-width))
@@ -6889,7 +6894,7 @@ Room is kept for that count, the unconfined note and the disclosure
 marker, measured against the narrowest window showing the view.  Failure
 counts cut off with the summary are added up after the `…', as in
 `… (2 failed)', so a folded row always shows that a call failed."
-  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+  (let* ((windows (mevedel-view--windows 'geometry))
          (width (if windows
                     (apply #'min (mapcar #'window-body-width windows))
                   (window-body-width)))
@@ -6937,7 +6942,7 @@ counts cut off with the summary are added up after the `…', as in
   (let (members)
     (dolist (pos (cons (point)
                        (mapcar #'window-point
-                               (get-buffer-window-list nil nil t))))
+                               (mevedel-view--windows 'visibility))))
       (when (and (< pos (point-max))
                  (memq (get-text-property pos 'mevedel-view-type)
                        '(tool-summary tool-pending)))
@@ -8517,7 +8522,7 @@ turns may follow in callbacks."
   (let ((ranges (list (cons (point) (1+ (point))))) sources selected prompt)
     (when (and mark-active (mark))
       (push (cons (region-beginning) (1+ (region-end))) ranges))
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (dolist (window (mevedel-view--windows 'geometry))
       ;; The response at the top is anchored, but its governing user turn
       ;; can be farther up.  Keep that header in the immediate projection.
       (when anchors-only
@@ -9049,7 +9054,8 @@ disappear from the screen; otherwise it waits for the next boundary render."
        t (plist-get rendering :interaction-visits))
       (mevedel-view--ensure-request-progress live-data-buf)
       (when (fboundp 'mevedel-note-frame-refresh)
-        (mevedel-note-frame-refresh)))
+        (mevedel-note-frame-refresh))
+      (mevedel-floating-composer-refresh))
     (mevedel-view--debug-log
      'full-rerender-after-render
      :last-assistant-turn-start

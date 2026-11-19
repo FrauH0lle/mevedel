@@ -123,6 +123,8 @@ History and status readers keep their native viewport when a window changes
 height, including growth caused by a shrinking echo area. Only for windows whose
 point is in the editable composer, height-only growth repairs newly exposed blank
 space using the height delta, provided the same buffer and width were displayed previously. This
+delta compares two native body heights recorded by redisplay; the fresh
+pre-redisplay measurement serves callers that measure before redisplay. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
 scrolling, reflow or buffer replacement. The first size change also remembers
 the original height and viewport. While the buffer and width remain unchanged
@@ -158,8 +160,8 @@ Scrolling away from the composer and back returns point to the draft, as in a
 terminal. Emacs keeps point visible, so a scroll command that hides the
 draft moves point onto transcript or chrome rows, often the background
 `[Manage]` row just above the rail. The view remembers the draft offset per
-window; the next scroll command after which that position is fully visible
-puts point back. Commands carrying the `scroll-command` property, other-window
+window and buffer; the next scroll command after which that position is fully
+visible puts point back. Commands carrying the `scroll-command` property, other-window
 scrolling, and touchpad momentum (`pixel-scroll-start-momentum`) count as
 scrolling; any other command in that window is a deliberate move and drops the
 pending return. Redraws while scrolled away keep the reader position as before.
@@ -167,6 +169,10 @@ Capture uses each displayed view window's own point and buffer, and restoration
 applies only to windows whose viewport actually scrolled. Wheel scrolling over
 a non-selected window and `scroll-other-window` work even from a different
 selected buffer, without changing the selected window's point or viewport.
+[ADR 0134](0134-float-the-composer.md) amends this for the selected window:
+while its floating composer is enabled, a scroll that hides the draft cursor
+hands it to the floating composer instead, and the return moves it back from
+there.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
@@ -259,6 +265,21 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Size changes compare native heights (2026-11-19).** One graphical run of
+  the header round-trip regression ended with window start 1249 instead of
+  1266. Its size hook first recorded old and new body heights `800 -> 800`
+  when the header shrank the body to 785 pixels: the new height came from the
+  fresh pre-redisplay measurement and was stale. An equal pair saves no
+  snapshot, so the return `785 -> 800` counted as new growth and moved the
+  start back one line. Injecting only that stale first reading
+  reproduces the failure exactly. The cause of the stale reading in the
+  original run was not found: 226 matched native runs had no spontaneous
+  failures. Redisplay has already settled both heights when the size hook
+  runs, so the hook now reads the new height with `window-body-height`, the
+  same source as `window-old-body-pixel-height`. This restores the native read
+  the hook used before the measurement helper was unified. Callers that
+  measure before redisplay keep the fresh helper.
 
 - **Anchoring cost over rendered content; stream updates anchored twice (2026-11-07).**
   An exploratory graphical benchmark (pgtk under a private nested
@@ -365,6 +386,11 @@ focus is explicit.
   run. Global command hooks now capture view windows only on scroll commands
   and restore only those whose viewport changed; ordinary commands do not walk
   windows or measure geometry.
+- **A pending return belongs to its buffer (2026-11-19).** The return was kept
+  per window only, so after the window came to show another view
+  programmatically or between test cases, a scroll moved that view's transcript cursor to the
+  first view's draft offset (or, with the floating composer, into it). The
+  return now records its buffer and applies only while the window shows it.
 
 - **Status rows are visits too (2026-10-31).** Collapsing an expanded
   background row while the composer sat mid-window moved the composer to the
