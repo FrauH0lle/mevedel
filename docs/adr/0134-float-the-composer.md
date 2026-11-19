@@ -136,7 +136,7 @@ their transcript meaning (`n`, `p`, `t`, `TAB`, `RET`).
   `other-window-scroll-default` buffer-locally to return the host from the
   floating composer and defer to the global default elsewhere.
 - The wheel scrolls the window under the pointer (`mouse-wheel-follow-mouse`)
-  and leaves the selection, and so the keystroke redirect, where it was.
+  and leaves the selection, and so any keystroke redirect, where it was.
 - `C-x 2`/`C-x 3` there split the host: the floating composer's window
   carries a `split-window` parameter that splits the host instead. The
   cursor stays in the floating composer.

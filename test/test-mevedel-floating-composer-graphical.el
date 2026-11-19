@@ -391,7 +391,7 @@ Its window shows the draft's end."
       (mevedel-floating-composer-test--keys "C-c C-SPC" 'mevedel-floating-composer-toggle)
       (should (eq window (selected-window)))
       (should (= 4 (mevedel-floating-composer-test--offset)))
-      (should (eq (window-frame window) (frame-focus parent)))
+      (should (mevedel-floating-composer-test--redirected-p parent (window-frame window)))
       (should (mevedel-floating-composer-test--focused-p parent))))
   :doc "C-c C-SPC from the transcript enters the floating composer"
   (progn
@@ -456,7 +456,8 @@ Its window shows the draft's end."
           (start (window-start host)))
       (mevedel-floating-composer-test--wheel 'wheel-up host)
       (should (eq window (selected-window)))
-      (should (eq (window-frame window) (frame-focus (window-frame host))))
+      (should (mevedel-floating-composer-test--redirected-p
+               (window-frame host) (window-frame window)))
       (should (< (window-start host) start))))
   :doc "the wheel over the floating composer stops at the draft's edge without moving focus"
   (progn

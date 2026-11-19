@@ -23,7 +23,8 @@
 
 (defconst mevedel-terminal-check--selector
   '(or (tag mevedel-floating-composer/hand-over)
-       (tag mevedel-floating-composer/host-geometry))
+       (tag mevedel-floating-composer/host-geometry)
+       (tag mevedel-floating-composer/keys))
   "ERT selector for the cases the terminal child runs.")
 
 (defun mevedel-terminal-check-run ()
