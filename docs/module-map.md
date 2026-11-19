@@ -127,6 +127,7 @@ Chat / view
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-execution.el   background-work panel: agent and execution rows, inline inspection, actions
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
+  mevedel-floating-composer.el composer child frame over a view window scrolled away from it
   mevedel-view-input-files.el local file drops and clipboard-image input
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
   mevedel-view-native.el      optional native presentation, placement, fallback and teardown

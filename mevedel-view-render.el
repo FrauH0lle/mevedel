@@ -54,6 +54,10 @@
 (declare-function mevedel-note-frame-refresh
                   "mevedel-note-frame" ())
 
+;; `mevedel-floating-composer'
+(declare-function mevedel-floating-composer-refresh "mevedel-floating-composer" ())
+(autoload 'mevedel-floating-composer-refresh "mevedel-floating-composer")
+
 ;; `mevedel-gptel-retry'
 (declare-function mevedel-gptel-retry-available-p "mevedel-gptel-retry" (buffer &optional failure-id))
 (declare-function mevedel-gptel-retry-failed-turn "mevedel-gptel-retry" (buffer failure-id))
@@ -4562,7 +4566,8 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-note-frame-refresh)
-              (mevedel-note-frame-refresh))))))
+              (mevedel-note-frame-refresh))
+            (mevedel-floating-composer-refresh)))))
       ;; A fresh or retained tail rewrites only the in-flight turn and the
       ;; zones below it; anchor readers there without counting old history.
       (and (or fresh-tail-p retained-p) in-flight-p
@@ -9050,7 +9055,8 @@ disappear from the screen; otherwise it waits for the next boundary render."
        t (plist-get rendering :interaction-visits))
       (mevedel-view--ensure-request-progress live-data-buf)
       (when (fboundp 'mevedel-note-frame-refresh)
-        (mevedel-note-frame-refresh)))
+        (mevedel-note-frame-refresh))
+      (mevedel-floating-composer-refresh))
     (mevedel-view--debug-log
      'full-rerender-after-render
      :last-assistant-turn-start
