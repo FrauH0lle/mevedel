@@ -143,10 +143,10 @@ Focus changes arrive asynchronously, so wait up to half a second."
 
 (defun mevedel-floating-composer-test--painted-border (frame)
   "Return the color FRAME's border shows.
-A terminal draws its box in FRAME's own `mevedel-note-frame-tty-border'."
+A terminal draws its box in FRAME's own `border' face."
   (if (display-graphic-p frame)
       (face-background 'child-frame-border frame)
-    (face-foreground 'mevedel-note-frame-tty-border frame)))
+    (face-foreground 'border frame)))
 
 (defun mevedel-floating-composer-test--redirected-p (parent frame)
   "Return non-nil when PARENT's keystrokes reach FRAME.
@@ -1076,6 +1076,30 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (goto-char (+ (mevedel-view--input-start) 4))
     (mevedel-floating-composer-test--scroll-away t)
     (should (eq parent (frame-parent (selected-frame)))))
+  :doc "moving to another frame tears the old one down before deleting it"
+  (let ((other (make-frame '((width . 60) (height . 20))))
+        (seen :unset))
+    (unwind-protect
+        (progn
+          (select-frame parent)
+          (mevedel-floating-composer-test--scroll-away nil)
+          (let* ((old (window-frame (mevedel-floating-composer-test--window)))
+                 (record (lambda (frame)
+                           (when (eq frame old)
+                             (setq seen (buffer-local-value
+                                         'mevedel-floating-composer--frame view-buf))))))
+            (add-hook 'delete-frame-functions record)
+            (unwind-protect
+                (progn
+                  (set-window-buffer (frame-root-window other) view-buf)
+                  (with-current-buffer view-buf
+                    (mevedel-floating-composer--show (frame-root-window other)))
+                  (should-not (frame-live-p old))
+                  (should-not seen))
+              (remove-hook 'delete-frame-functions record))))
+      (with-current-buffer view-buf (mevedel-floating-composer--remove))
+      (select-frame parent)
+      (delete-frame other)))
   :doc "killing the view removes it and its redirect"
   (let ((frame (progn (mevedel-floating-composer-test--scroll-away t)
                       (selected-frame))))
@@ -1208,6 +1232,21 @@ placement gives now, with its cursor visible.  Return its window if shown."
 ;;
 ;;; Long drafts
 
+(defun mevedel-floating-composer-test--tall-rail (host row-height vscroll)
+  "Make the rail's first row ROW-HEIGHT pixels tall; start HOST VSCROLL into it.
+The cursor sits on that row, outside the draft."
+  (mevedel-view--start-spinner "Working")
+  (let ((start (mevedel-floating-composer--start))
+        (inhibit-read-only t))
+    (put-text-property start (1+ start) 'display
+                       `(space :width 1 :height (,row-height)))
+    (goto-char start)
+    (mevedel-view--set-viewport host (cons start vscroll))
+    (redisplay t)
+    (should (= start (window-start host)))
+    (should (= vscroll (window-vscroll host t)))
+    (should-not (mevedel-view--position-in-input-region-p (window-point host)))))
+
 (defun mevedel-floating-composer-test--rail-at (host y)
   "Show the composer's start at pixel Y of HOST, the cursor two lines above."
   (let ((start (mevedel-floating-composer--start)))
@@ -1238,6 +1277,14 @@ placement gives now, with its cursor visible.  Return its window if shown."
   (progn
     (mevedel-floating-composer-test--rail-at host (- height (/ line 2)))
     (should (mevedel-floating-composer--needed-p host)))
+  :doc "an oversized rail row clipped at both edges shows it"
+  (progn
+    (mevedel-floating-composer-test--tall-rail host (+ height 120) 3)
+    (should (mevedel-floating-composer--needed-p host)))
+  :doc "a rail row clipped only at the top hides it when the next row shows"
+  (progn
+    (mevedel-floating-composer-test--tall-rail host (/ height 3) 3)
+    (should-not (mevedel-floating-composer--needed-p host)))
   :doc "a window showing only transcript shows it"
   (progn
     (mevedel-view--set-viewport host (cons (point-min) 0))

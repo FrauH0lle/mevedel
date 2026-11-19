@@ -37,10 +37,11 @@
 ;;
 ;; On a terminal it is a terminal child frame: its geometry is in cells and
 ;; Emacs draws its border as box characters one cell outside the frame,
-;; only while the frame is decorated; `mevedel-note-frame--paint-border'
-;; colors that box per frame to show focus.  A terminal sends keystrokes to the
-;; selected child frame itself, and `select-frame' does not move a redirect
-;; there, so a terminal parent is never redirected.
+;; only while the frame is decorated, in the frame's own `border' face;
+;; `mevedel-note-frame--paint-border' sets that face's foreground to show
+;; focus.  A terminal sends keystrokes to the selected child frame itself,
+;; and `select-frame' does not move a redirect there, so a terminal parent
+;; is never redirected.
 
 ;;; Code:
 
@@ -198,9 +199,10 @@ the rail: redisplay alone would recenter it onto transcript rows."
   (let ((frame mevedel-floating-composer--frame)
         (border mevedel-note-frame-border-width))
     (unless (and (frame-live-p frame) (eq (frame-parent frame) parent))
+      ;; Another frame's window hosts it now: tear the old frame down as
+      ;; removing does, so deletion's hooks never see it as this view's.
       (when (frame-live-p frame)
-        (mevedel-floating-composer--release)
-        (delete-frame frame))
+        (mevedel-floating-composer--remove))
       (setq frame (let ((pgtk-wait-for-event-timeout nil))
                     ;; Creating it hidden waits like `--hide' does.
                     (make-frame
@@ -417,12 +419,26 @@ Note-frame windows and historical segments have none."
 
 (defun mevedel-floating-composer--needed-p (host)
   "Return non-nil when HOST shows neither its cursor's draft nor the composer.
-The composer runs to the buffer end, so HOST shows a full line of it
-exactly when its start is fully visible or at or above HOST's start."
+The composer runs to the buffer end, so HOST shows a full row of it when
+its start is fully visible.  When the composer covers HOST's top, that is
+HOST's first displayed row, or, if only that row's top is clipped, the
+next one.  A cursor in the draft costs no visibility query; a HOST
+starting above the composer costs one."
   (and (not (mevedel-view--position-in-input-region-p (window-point host)))
        (when-let* ((start (mevedel-floating-composer--start)))
-         (not (or (<= start (window-start host))
-                  (mevedel-view--position-screen-y start host t))))))
+         (let ((top (window-start host)))
+           (not (if (< top start)
+                    (mevedel-view--position-screen-y start host t)
+                  ;; (X Y) when fully visible, else (X Y RTOP RBOT ROWH VPOS).
+                  (let ((first (pos-visible-in-window-p top host t)))
+                    (or (and first (null (cddr first)))
+                        ;; A row clipped below as well leaves nothing under it.
+                        (and first (zerop (nth 3 first))
+                             (mevedel-view--position-screen-y
+                              (save-excursion (goto-char top)
+                                              (vertical-motion 1 host)
+                                              (point))
+                              host t))))))))))
 
 (defun mevedel-floating-composer--update (&optional command)
   "Show, place or hide this view's floating composer.

@@ -31,12 +31,12 @@ the view's next command.
   a decorated frame, so the floating composer overrides the shared
   `undecorated` parameter there, uses a one-cell border in the placement and
   places the frame inside it; the box stays inside the host. Emacs 31 draws
-  the box in no face of its own, but resolves a face given to the box glyphs
-  of `standard-display-table` on each child frame. So the first terminal
-  border painted gives those six slots `mevedel-note-frame-tty-border`,
-  keeping their characters and leaving a slot that has its own face; the
-  face is unset globally, so other child frames look as before, and its
-  per-frame foreground carries the active and inactive border colors. A terminal sends keystrokes to the selected child frame itself and
+  the box in the child frame's own `border` face (bug#80043), so the
+  floating composer sets that face's foreground on its frame alone to the
+  active or inactive border color, leaving other child frames' borders
+  as they are. A shown child's box cells change only when its parent is
+  redrawn, so a color change redraws the parent from a timer, outside
+  redisplay; an unchanged color redraws nothing. A terminal sends keystrokes to the selected child frame itself and
   `select-frame` never moves a redirect there, so a stale redirect would send
   the host's later keystrokes back to the floating composer: on a terminal
   hand-over selects the floating composer without redirecting its parent.

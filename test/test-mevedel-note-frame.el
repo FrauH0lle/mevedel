@@ -117,47 +117,38 @@ BODY runs inside the view buffer."
 
 (mevedel-deftest mevedel-note-frame--paint-border ()
   (let ((frame (selected-frame))
-        (standard-display-table nil))
+        (parent (selected-frame))
+        (standard-display-table nil)
+        (redrawn nil))
     (skip-unless (not (display-graphic-p frame)))
-    (unwind-protect
-        ,test
-      (set-face-foreground 'mevedel-note-frame-tty-border nil frame)))
+    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) parent))
+              ;; Run the deferred redraw at once and record it.
+              ((symbol-function 'run-at-time)
+               (lambda (_time _repeat function &rest args) (apply function args)))
+              ((symbol-function 'redraw-frame)
+               (lambda (&optional frame) (push frame redrawn))))
+      (unwind-protect
+          ,test
+        (set-face-foreground 'border nil frame))))
   (test)
-  :doc "a terminal frame's border shows focus in its own box face's foreground"
+  :doc "a terminal child's border shows focus in its own border face's foreground"
   (progn
     (mevedel-note-frame--paint-border frame #'always)
     (should (equal (face-attribute 'mevedel-note-frame-border :background nil 'default)
-                   (face-foreground 'mevedel-note-frame-tty-border frame)))
+                   (face-foreground 'border frame)))
     (mevedel-note-frame--paint-border frame #'ignore)
     (should (equal (face-attribute 'mevedel-note-frame-border-inactive :background
                                    nil 'default)
-                   (face-foreground 'mevedel-note-frame-tty-border frame)))
-    (should-not (face-foreground 'mevedel-note-frame-tty-border t))))
-
-(mevedel-deftest mevedel-note-frame--tty-box-face ()
-  (let ((standard-display-table nil))
-    ,test)
-  (test)
-  :doc "gives every box slot the box face, with Emacs's default characters"
+                   (face-foreground 'border frame)))
+    (should-not (face-foreground 'border t))
+    (should-not standard-display-table))
+  :doc "redraws the parent only when the color changes"
   (progn
-    (mevedel-note-frame--tty-box-face)
-    (should (equal (make-glyph-code ?| 'mevedel-note-frame-tty-border)
-                   (display-table-slot standard-display-table 'box-vertical)))
-    (should (equal (make-glyph-code ?+ 'mevedel-note-frame-tty-border)
-                   (display-table-slot standard-display-table 'box-up-left))))
-  :doc "keeps a user's box characters"
-  (progn
-    (setq standard-display-table (make-display-table))
-    (set-display-table-slot standard-display-table 'box-horizontal ?=)
-    (mevedel-note-frame--tty-box-face)
-    (should (equal (make-glyph-code ?= 'mevedel-note-frame-tty-border)
-                   (display-table-slot standard-display-table 'box-horizontal))))
-  :doc "leaves a slot that has its own face"
-  (let ((glyph (make-glyph-code ?~ 'bold)))
-    (setq standard-display-table (make-display-table))
-    (set-display-table-slot standard-display-table 'box-horizontal glyph)
-    (mevedel-note-frame--tty-box-face)
-    (should (equal glyph (display-table-slot standard-display-table 'box-horizontal)))))
+    (mevedel-note-frame--paint-border frame #'always)
+    (mevedel-note-frame--paint-border frame #'always)
+    (should (equal (list parent) redrawn))
+    (mevedel-note-frame--paint-border frame #'ignore)
+    (should (equal (list parent parent) redrawn))))
 
 (mevedel-deftest mevedel-note-frame-display
   (:doc "`mevedel-note-frame-display' creates and reuses note frames")
