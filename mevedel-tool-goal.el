@@ -4,10 +4,13 @@
 
 ;; Create, inspect, and complete session Goals through the ordinary tool
 ;; pipeline.  Only the owning root request can control its Goal, and a
-;; completion claim is accepted only after an independent verifier passes it.
+;; completion claim is accepted only after an independent verifier passes it,
+;; or passes everything it could check (PARTIAL).  Repeated rejected claims
+;; block the Goal instead of looping.
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'mevedel-engine)
 (require 'mevedel-tool-registry)
 
@@ -147,7 +150,8 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
 (defun mevedel-tool-goal-update
     (status summary &optional session captured-id)
   "Set SESSION's active Goal to terminal STATUS.
-SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
+SUMMARY is required for `blocked' and an optional note for `complete'.
+CAPTURED-ID must match its Goal identity."
   (setq session (or session mevedel--session)
         status (if (stringp status) (intern (downcase status)) status))
   (let ((goal (and session (mevedel-session-goal session))))
@@ -164,7 +168,8 @@ SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
     (setf (mevedel-goal-status goal) status
           (mevedel-goal-reason-diagnostic goal) nil
           (mevedel-goal-reason goal)
-          (and (eq status 'blocked) (string-trim summary))
+          (and (stringp summary) (not (string-blank-p summary))
+               (string-trim summary))
           (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
     (format "Goal status changed to %s" status)))
 
@@ -195,22 +200,30 @@ GOAL's accepted plan, when it has one, is included verbatim."
   (list :status 'error
         :result
         (format "Goal remains active: completion verification %s. This turn ends here; the next Goal turn addresses the findings, then calls UpdateGoal again.\n\n%s"
-                (pcase (plist-get outcome :verdict)
-                  ('fail "returned FAIL")
-                  ('partial "returned PARTIAL")
-                  (_ (if (plist-get outcome :verification-rejected)
-                         "produced no valid verdict"
-                       "did not finish")))
-                (or (plist-get outcome :result) (plist-get outcome :message) ""))))
+                (mevedel-tool-goal--rejection-label outcome)
+                (mevedel-tool-goal--report outcome))))
+
+(defun mevedel-tool-goal--rejection-label (outcome)
+  "Return how rejected verification OUTCOME ended, for a tool result."
+  (cond ((eq (plist-get outcome :verdict) 'fail) "returned FAIL")
+        ((plist-get outcome :verification-rejected) "produced no valid verdict")
+        (t "did not finish")))
+
+(defun mevedel-tool-goal--report (outcome)
+  "Return verification OUTCOME's report text."
+  (or (plist-get outcome :result) (plist-get outcome :message) ""))
 
 (defun mevedel-tool-goal--handle-update (callback args)
   "Handle UpdateGoal ARGS from the current root request through CALLBACK.
-Blocked settles at once.  Completion is accepted only when an independent
-verifier passes it; any other verdict returns its report, keeps the Goal
-active, and ends the turn at this tool boundary so the rejected attempt
-settles as its own Goal turn before continuation."
+Blocked settles at once.  Completion is accepted when an independent
+verifier passes it, or passes all it could check (PARTIAL).  Any other
+outcome rejects the claim: it returns the report, keeps the Goal active, and
+ends the turn at this tool boundary so the rejected attempt settles as its
+own Goal turn before continuation.  The rejection that reaches
+`mevedel-goal-max-rejected-completions' blocks the Goal instead."
   (let* ((fsm (mevedel-tool-goal--request "UpdateGoal"))
          (session mevedel--session)
+         (buffer (current-buffer))
          (goal-id (plist-get (mevedel-engine-info fsm) :mevedel-goal-id))
          (status (plist-get args :status))
          ;; Captured now: the pipeline binds these only while this runs.
@@ -228,25 +241,54 @@ settles as its own Goal turn before continuation."
        (mevedel-tool-goal--verification-prompt
         session (mevedel-session-goal session))
        (lambda (outcome)
-         (cond
-          ((not (funcall active-p)))
-          ((eq (plist-get outcome :verdict) 'pass)
-           (funcall
-            commit
-            (lambda ()
-              (let ((reply
-                     (condition-case err
-                         (list :result (mevedel-tool-goal-update
-                                        'complete nil session goal-id))
-                       (error
-                        (list :status 'error
-                              :result (format "Error: %s"
-                                              (error-message-string err)))))))
-                (funcall callback reply)))))
-          (t
-           (mevedel-turn-end-at-boundary fsm 'goal-verification-failed)
-           (funcall callback
-                    (mevedel-tool-goal--verification-failure outcome)))))
+         (cl-labels
+             ((settle (status summary reply)
+                ;; REPLY formats the result once the status change succeeded.
+                (funcall
+                 commit
+                 (lambda ()
+                   (funcall
+                    callback
+                    (condition-case err
+                        (funcall reply (mevedel-tool-goal-update
+                                        status summary session goal-id))
+                      (error
+                       (list :status 'error
+                             :result (format "Error: %s"
+                                             (error-message-string err))))))))))
+           (when (funcall active-p)
+             (pcase (plist-get outcome :verdict)
+               ('pass
+                (settle 'complete nil (lambda (changed) (list :result changed))))
+               ;; PARTIAL means every requirement the verifier could check
+               ;; holds; only an environmental limitation stopped the rest,
+               ;; which another attempt cannot change.
+               ('partial
+                (settle 'complete
+                        (concat "Completed with PARTIAL verification: an "
+                                "environmental limitation kept the verifier "
+                                "from checking some requirements; its report "
+                                "is in the transcript.")
+                        (lambda (changed)
+                          (list :result
+                                (format "%s.\n\n%s" changed
+                                        (mevedel-tool-goal--report outcome))))))
+               (_
+                (mevedel-turn-end-at-boundary fsm 'goal-verification-failed)
+                (let ((count (mevedel-goal-record-rejected-completion buffer)))
+                  (if (< count mevedel-goal-max-rejected-completions)
+                      (funcall callback
+                               (mevedel-tool-goal--verification-failure outcome))
+                    (let ((summary
+                           (format "Completion verification rejected %d consecutive claims (last %s)."
+                                   count (mevedel-tool-goal--rejection-label outcome))))
+                      (settle 'blocked summary
+                              (lambda (_changed)
+                                (list :status 'error
+                                      :result
+                                      (format "Goal blocked: %s The user decides how to continue.\n\n%s"
+                                              summary
+                                              (mevedel-tool-goal--report outcome)))))))))))))
        'goal-review))))
 
 (defun mevedel-tool-goal--register ()

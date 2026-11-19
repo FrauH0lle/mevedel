@@ -354,15 +354,22 @@ runs the `verifier` agent in a separate request, using the `goal-review`
 workload's model and effort, while the Goal stays active. The verifier receives
 the exact objective and, when the Goal has one, the accepted plan verbatim, but
 no account of the implementer's work or test results; it discovers the
-changes and current state itself. Only a final `VERDICT: PASS` completes the
-Goal, and only if it is still the same active Goal. FAIL, PARTIAL, a report
-without exactly one final verdict line, or a verifier failure returns the
-report as the tool result, leaves the Goal active, and ends the root turn at
-that tool boundary. The rejected attempt therefore settles as its own Goal turn:
+changes and current state itself. A final `VERDICT: PASS` completes the Goal,
+and only if it is still the same active Goal. `VERDICT: PARTIAL` also completes
+it: the verifier reserves PARTIAL for requirements an environmental limitation
+kept it from checking, with everything it could check holding, and another
+attempt cannot change the environment. The Goal reason then records the
+partial verification and the tool result carries the report. FAIL, a report
+without exactly one final verdict line, or a verifier failure rejects the
+claim: it returns the report as the tool result, leaves the Goal active, and
+ends the root turn at that tool boundary. The rejected attempt therefore settles as its own Goal turn:
 it is counted, captured by the journal, and checkpointed, queued follow-ups get
 their turn, and ordinary continuation starts the next attempt with the report
-in its history. The "same condition across three consecutive Goal turns" rule
-for `blocked` thus counts completion attempts. An unreadable accepted
+in its history. The rejection that reaches
+`mevedel-goal-max-rejected-completions` consecutive rejected claims (default
+3) instead blocks the Goal, naming the count and last outcome in its reason.
+The count is not persisted; starting, resuming, or clearing a Goal restarts
+it, and a restored Goal is paused anyway. An unreadable accepted
 plan refuses verification. A user abort interrupts the verifier and pauses the
 Goal as for any Goal turn. Canonical turn settlement still persists the final
 accounting.

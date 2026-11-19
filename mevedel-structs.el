@@ -353,7 +353,8 @@ owner alongside the newly committed session state."
   id                 ; versioned string identity
   objective          ; non-empty free-form string
   status             ; active, paused, blocked, budget-limited, or complete
-  reason             ; non-empty string for paused/blocked/budget-limited
+  reason             ; non-empty string for paused/blocked/budget-limited;
+                     ; optional note for complete
   reason-diagnostic  ; non-nil when reason is private host diagnostic text
   implementation-policy ; exact model/effort/permission snapshot or nil
   token-budget       ; positive integer or nil

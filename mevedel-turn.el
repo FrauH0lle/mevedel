@@ -59,6 +59,9 @@
 (declare-function mevedel-compact-estimation-record-token-baseline
                   "mevedel-compact-estimation" (fsm))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-probe
                   "mevedel-execution-target"
@@ -325,10 +328,10 @@ buffer switch, which costs microseconds in a buffer with many locals."
              (buffer-local-value 'mevedel--turn-settlements-pending
                                  buffer)))))
 
-;;;###autoload
 (defun mevedel-busy-p ()
   "Return non-nil while any buffer in this Emacs runs or settles a turn.
-For callers outside mevedel, such as a host deciding when to restart."
+The sleep inhibitor asks this; a host deciding when to restart asks
+`mevedel-restart-unsafe-p'."
   (and (cl-some
         (lambda (buffer)
           (with-current-buffer buffer
@@ -341,6 +344,23 @@ For callers outside mevedel, such as a host deciding when to restart."
                          (and (mevedel-session-agent-registry mevedel--session)
                               (mevedel-agent-control-active-turn-p mevedel--session)))))))
         (buffer-list))
+       t))
+
+;;;###autoload
+(defun mevedel-restart-unsafe-p ()
+  "Return non-nil while restarting this Emacs would interrupt mevedel work.
+Beyond `mevedel-busy-p', an idle session counts while it owns a live
+command or Monitor, or an active Goal waiting between turns.  For callers
+outside mevedel, such as a host deciding when to restart."
+  (and (or (mevedel-busy-p)
+           (cl-some
+            (lambda (buffer)
+              (when-let* ((session (buffer-local-value 'mevedel--session buffer)))
+                (or (and (featurep 'mevedel-execution)
+                         (mevedel-execution-session-live-p session))
+                    (when-let* ((goal (mevedel-session-goal session)))
+                      (eq (mevedel-goal-status goal) 'active)))))
+            (buffer-list)))
        t))
 
 (defun mevedel-request-state-label (&optional buffer)

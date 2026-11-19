@@ -446,9 +446,12 @@ are mapped below the opened workspace root before containment is checked."
                    (eq t (plist-get plist :reason-diagnostic)))
                (let ((reason (plist-get plist :reason))
                      (status (plist-get plist :status)))
-                 (if (memq status '(paused blocked budget-limited))
-                     (and (stringp reason) (not (string-blank-p reason)))
-                   (null reason)))
+                 ;; Stopped Goals need a reason; a completed one may carry a
+                 ;; note, such as partial verification; an active one has none.
+                 (if (null reason)
+                     (memq status '(active complete))
+                   (and (stringp reason) (not (string-blank-p reason))
+                        (not (eq status 'active)))))
                (or (null (plist-get plist :token-budget))
                    (and (integerp (plist-get plist :token-budget))
                         (> (plist-get plist :token-budget) 0)))

@@ -13,9 +13,11 @@ independent check is at the completion claim: `UpdateGoal(complete)` runs the
 `verifier` agent in a separate request, using the `goal-review` workload
 (default tier: `strong`), with the exact objective and any
 accepted plan but no implementer claims, and completes the Goal only on its
-fixed final `VERDICT: PASS` line. Any other verdict returns the findings to the
-still-active Goal and ends the root turn at that tool boundary, so each rejected
-attempt settles as its own Goal turn and continuation starts the next. This keeps a small lifecycle with explicit terminal tool
+fixed final `VERDICT: PASS` or `VERDICT: PARTIAL` line, recording a PARTIAL
+completion's unverified scope in the Goal reason. Any other outcome returns the
+findings to the still-active Goal and ends the root turn at that tool boundary,
+so each rejected attempt settles as its own Goal turn and continuation starts
+the next. A configurable number of consecutive rejections blocks the Goal. This keeps a small lifecycle with explicit terminal tool
 calls and a completion contract supplied in Goal context. Assessing repository
 evidence remains model judgment; neither tool nor verifier proves completion.
 
@@ -103,3 +105,15 @@ not run, and a network drop lost the only checkpoint. The "same condition
 across three consecutive Goal turns" rule for `blocked` could never apply to
 repeated rejections. Ending the turn at the rejected claim gives those
 mechanisms their boundaries without a time or token heuristic.
+
+Completion first required PASS. The verifier reserves PARTIAL for requirements
+an environmental limitation (no network, display, or host access) kept it from
+checking, while everything it could check holds. No implementer turn can
+change that environment, so a PARTIAL claim was rejected again and again until
+the model chose to block or an optional budget ran out. That rule was prompt
+guidance, not a mechanism, and a Goal with no budget could loop indefinitely.
+This mattered once an active Goal began holding a host's nightly restart
+(`mevedel-restart-unsafe-p`): a looping Goal would postpone updates forever.
+PARTIAL now completes with a recorded note, and a configurable number of
+consecutive FAIL or invalid outcomes blocks the Goal for the user. The
+independent verifier still decides; only the consequence of its verdict changed.
