@@ -1137,6 +1137,16 @@ Other buffers render a table once and cache nothing."
                               '(mevedel-view-source nil mevedel-view-source-key nil
                                 fontified nil)
                               content)
+      ;; Fontification may or may not copy `font-lock-face' into `face',
+      ;; depending on how a response was chunked.  Layout reads both, so
+      ;; the copy would only split streamed and redrawn tables in the cache.
+      (let ((position 0))
+        (while (< position (length content))
+          (let ((next (next-property-change position content (length content)))
+                (face (get-text-property position 'face content)))
+            (when (and face (equal face (get-text-property position 'font-lock-face content)))
+              (remove-text-properties position next '(face nil) content))
+            (setq position next))))
       (list content inset (mevedel-view-table--window-layout window)))))
 
 (defun mevedel-view-table--layout (source window inset)

@@ -109,6 +109,31 @@
                 (should (equal draft (mevedel-view--input-text))))
             (mevedel-view--cancel-realign-timer)))))))
 
+(mevedel-deftest mevedel-view-table-decorate/layout-cache-duplicate-face ()
+  ,test
+  (test)
+  :doc "a face duplicating font-lock-face does not split the layout cache"
+  ;; Streamed and redrawn copies of one table differ only in such a face.
+  ;; A miss reinserts the table raw and moves a window reading inside it.
+  (mevedel-test--with-displayed-buffer
+    (mevedel-view-mode)
+    (mevedel-view-render-initialize)
+    (let ((inhibit-read-only t)
+          (source "| A | B |\n|---|---|\n| target | value |\n")
+          (faces '(markdown-ts-table-header markdown-ts-table)))
+      (unwind-protect
+          (progn
+            (insert (propertize source 'font-lock-face faces 'face faces))
+            (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+            (set-window-start (selected-window) (point-min))
+            (mevedel-view--realign-markdown)
+            (should (string-search "│ target" (buffer-string)))
+            (erase-buffer)
+            (insert (propertize source 'font-lock-face faces))
+            (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+            (should (string-search "│ target" (buffer-string))))
+        (mevedel-view--cancel-realign-timer)))))
+
 (mevedel-deftest mevedel-view-table-rerender/deferred ()
                  ,test
                  (test)

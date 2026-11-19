@@ -2448,7 +2448,8 @@ Markdown rendering adds small view-only affordances:
   carries the view's own source/read-only/turn properties across the
   rewrite. Each view retains the latest layout per completed table source.
   Reuse requires the same source and rendering properties (not projection source
-  handles), window width, inset, fonts, and text scale. A color-only theme
+  handles, or a `face` that only repeats `font-lock-face`), window width, inset,
+  fonts, and text scale. A color-only theme
   change does not invalidate the layout. A redraw that reinserts a table laid
   out before reapplies its rows and can reuse its source-position map. A new
   table still waits for its deferred first layout;
