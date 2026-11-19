@@ -167,6 +167,10 @@ Capture uses each displayed view window's own point and buffer, and restoration
 applies only to windows whose viewport actually scrolled. Wheel scrolling over
 a non-selected window and `scroll-other-window` work even from a different
 selected buffer, without changing the selected window's point or viewport.
+[ADR 0134](0134-float-the-composer.md) amends this for the selected window:
+while its floating composer is enabled, a scroll that hides the draft cursor
+hands it to the floating composer instead, and the return moves it back from
+there.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking

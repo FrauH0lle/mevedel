@@ -19,6 +19,7 @@
           "helpers"))
 (require 'mwheel)
 (require 'mevedel-execution)
+(require 'mevedel-floating-composer)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
@@ -584,7 +585,9 @@ WINDOW defaults to the selected window, but need not be selected."
 (mevedel-deftest mevedel-view-user-state/scroll-return ()
   (progn
     (skip-unless (display-graphic-p))
-    (let ((scroll-preserve-screen-position t)
+    ;; The floating composer would take the draft cursor (its own suite).
+    (let ((mevedel-floating-composer nil)
+          (scroll-preserve-screen-position t)
           (mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
           (mouse-wheel-progressive-speed nil))
       (mevedel-view-user-state-test--with-view
@@ -692,7 +695,9 @@ WINDOW defaults to the selected window, but need not be selected."
            (away (save-excursion (goto-char transcript) (line-beginning-position))))
       (set-window-start nil bottom)
       (cl-flet ((run (command thunk)
-                  (let ((this-command command))
+                  ;; ADR 0126's own return; the floating composer has its suite.
+                  (let ((this-command command)
+                        (mevedel-floating-composer nil))
                     (run-hooks 'pre-command-hook)
                     (funcall thunk)
                     (run-hooks 'post-command-hook))))

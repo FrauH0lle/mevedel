@@ -204,3 +204,7 @@ to the decision bearing that ID.
 - [ADR 0133: Add a persistent sandbox Eval mode](0133-add-persistent-sandbox-eval.md)
   extends ADR 0024's Eval execution scope with a confined, per-owner child
   Emacs that keeps state between calls.
+
+- [ADR 0134: Float the composer as a second window on the view buffer](0134-float-the-composer.md)
+  shows the composer in a child frame over a view window scrolled away from
+  it, and amends ADR 0126's scroll-away return for the selected window.

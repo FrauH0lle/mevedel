@@ -37,7 +37,7 @@
   '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el"
     "test-mevedel-view-mouse.el" "test-mevedel-window-graphical.el"
     "test-mevedel-view-user-state.el" "test-mevedel-view-zone-absent-graphical.el"
-    "test-mevedel-note-conversation.el")
+    "test-mevedel-note-conversation.el" "test-mevedel-floating-composer-graphical.el")
   "Default real-display ERT suites.")
 
 (defun mevedel-graphical-check--options (arguments)

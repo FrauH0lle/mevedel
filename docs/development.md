@@ -581,9 +581,9 @@ multiline `>` composer draft survives. It explicitly enables and forces font
 lock, checks the assistant's native Markdown bold face after redisplay, and
 exports the frame. Fixture buffers have visible names: Emacs refuses to enable font
 lock for internal names beginning with a space. No face-copying workaround is
-needed. The existing graphical table and native viewport geometry ERT suites
-and live mouse-event interleaving suites then run in that same graphical
-process. The mouse suite delivers press/release through `unread-command-events`
+needed. The existing graphical table, native viewport geometry and floating
+composer ERT suites and live mouse-event interleaving suites then run in that
+same graphical process. The mouse suite delivers press/release through `unread-command-events`
 and the command loop, with a tick or stream chunk between them; it checks queued
 and freshly resolved releases with and without explicit redisplay.
 Unexpected results **or skipped

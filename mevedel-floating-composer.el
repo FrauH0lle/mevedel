@@ -1,0 +1,359 @@
+;;; mevedel-floating-composer.el -- Floating composer child frame -*- lexical-binding: t -*-
+
+;; Copyright (C) 2025- FrauH0lle
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+
+;; While the selected view window is scrolled away from the composer, a
+;; child frame floats over the bottom of that window (the host) and shows
+;; the same view buffer from the rail down.  It is a second window on the
+;; view buffer, not a copy: draft, rail, keymaps and progress are shared.
+;;
+;; Its window is excluded from the view's geometry walks, so viewport
+;; restoration, composer anchoring and chrome fitting ignore it, while
+;; animation visibility still counts it.
+;;
+;; Focus moves only from `post-command-hook': a scroll command that pushes
+;; the selected window's draft cursor off screen hands the cursor to the
+;; floating composer at the same draft offset, and a scroll that brings
+;; that offset fully back into the host returns it inline.  Timers and
+;; window hooks only place, show or hide an unselected floating composer.
+
+;;; Code:
+
+(require 'mevedel-note-frame)
+(require 'mevedel-utilities)
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view--position-in-input-region-p
+                  "mevedel-view-composer" (position))
+(declare-function mevedel-view--position-screen-y
+                  "mevedel-view-composer" (position window &optional fully))
+(declare-function mevedel-view--scroll-command-p "mevedel-view-composer" (command))
+
+;; `mevedel-view-segments'
+(declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view--request-progress-region-start "mevedel-view-stream" ())
+
+;; `mevedel-structs'
+(defvar mevedel-view--agent-transcript-p)
+
+
+;;
+;;; Customization
+
+(defun mevedel-floating-composer--set-option (symbol value)
+  "Set SYMBOL to VALUE; turning it off removes every floating composer."
+  (set-default-toplevel-value symbol value)
+  (unless value
+    (dolist (buffer (buffer-list))
+      (when (buffer-local-value 'mevedel-floating-composer--frame buffer)
+        (with-current-buffer buffer
+          (mevedel-floating-composer--remove))))))
+
+(defcustom mevedel-floating-composer t
+  "Non-nil shows the composer over a view window scrolled away from it.
+Scrolling the selected view window away from the composer with the cursor
+in the draft moves the cursor into the floating composer; scrolling back
+returns it inline.  Turning this off removes every floating composer."
+  :type 'boolean
+  :initialize #'custom-initialize-default
+  :set #'mevedel-floating-composer--set-option
+  :group 'mevedel)
+
+
+;;
+;;; State
+
+(defvar-local mevedel-floating-composer--frame nil
+  "This view's floating-composer child frame, kept hidden between uses.")
+
+(defvar-local mevedel-floating-composer--host nil
+  "Window the floating composer currently floats over.")
+
+(defvar-local mevedel-floating-composer--timer nil
+  "Pending coalesced placement update.")
+
+(defvar mevedel-floating-composer--updating nil
+  "Non-nil during an update; `make-frame' can run timers re-entrantly.")
+
+
+;;
+;;; Placement
+
+(defun mevedel-floating-composer--place (edges char-width char-height natural border)
+  "Return (WIDTH HEIGHT X Y) in pixels for the floating composer.
+EDGES are the host's text-area (LEFT TOP RIGHT BOTTOM) relative to its
+frame.  CHAR-WIDTH and CHAR-HEIGHT are the parent's character size,
+NATURAL the composer's displayed height and BORDER the frame's border
+width.  WIDTH and HEIGHT are the frame's text size: the host's text width
+less a two-column inset per side, shrunk so a narrow host still contains
+the frame, and NATURAL capped at half the host's text height but at least
+one line.  The frame floats half a line above the host's bottom edge."
+  (pcase-let* ((`(,left ,top ,right ,bottom) edges)
+               (body-width (- right left))
+               (inset (max 0 (min (* 2 char-width)
+                                  (/ (- body-width (* 2 border) char-width) 2))))
+               (height (max char-height (min (/ (- bottom top) 2) natural))))
+    (list (max 1 (- body-width (* 2 inset) (* 2 border)))
+          height
+          (+ left inset)
+          (- bottom (/ char-height 2) height (* 2 border)))))
+
+(defun mevedel-floating-composer--start ()
+  "Return where the floating composer starts: the rail, else the prompt."
+  (when-let* ((pos (or (mevedel-view--request-progress-region-start)
+                       (mevedel-view--input-marker-position))))
+    (save-excursion
+      (goto-char pos)
+      (skip-chars-forward "\n")
+      (point))))
+
+(defun mevedel-floating-composer--natural-height (window start limit)
+  "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
+Cached until the buffer, WINDOW's width or the face remapping (text
+scale) changes, so scrolling the host measures nothing."
+  (let ((key (list (buffer-modified-tick) (window-body-width window t)
+                   face-remapping-alist start limit))
+        (cache (window-parameter window 'mevedel-floating-composer-height)))
+    (if (equal key (car cache))
+        (cdr cache)
+      (let ((height (cdr (window-text-pixel-size window start (point-max) nil limit))))
+        (set-window-parameter window 'mevedel-floating-composer-height
+                              (cons (copy-tree key) height))
+        height))))
+
+(defun mevedel-floating-composer--pin (window)
+  "Start WINDOW at the rail unless its draft is capped, then it follows point."
+  (when-let* (((window-parameter window 'mevedel-floating-composer-pinned))
+              (start (mevedel-floating-composer--start)))
+    (unless (= start (window-start window))
+      (set-window-start window start t))
+    (unless (zerop (window-vscroll window t))
+      (set-window-vscroll window 0 t))))
+
+
+;;
+;;; Frame
+
+(defun mevedel-floating-composer--window ()
+  "Return the floating composer's window, or nil."
+  (and (frame-live-p mevedel-floating-composer--frame)
+       (frame-root-window mevedel-floating-composer--frame)))
+
+(defun mevedel-floating-composer--make (parent)
+  "Return this view's floating-composer frame, a hidden child of PARENT."
+  (let ((frame mevedel-floating-composer--frame)
+        (border mevedel-note-frame-border-width))
+    (unless (and (frame-live-p frame) (eq (frame-parent frame) parent))
+      (when (frame-live-p frame) (delete-frame frame))
+      (setq frame (make-frame
+                   `((name . "mevedel-composer")
+                     (parent-frame . ,parent)
+                     (minibuffer . ,(minibuffer-window parent))
+                     (font . ,(frame-parameter parent 'font))
+                     (width . 0) (height . 0) (visibility . nil)
+                     ;; Showing it must not take focus; hand-over selects it.
+                     (no-focus-on-map . t)
+                     (internal-border-width . ,border)
+                     (child-frame-border-width . ,border)
+                     ;; Frame fringes count in its native width even when the
+                     ;; window hides them, widening it past the inset.
+                     (left-fringe . 0) (right-fringe . 0)
+                     (mevedel-view-animate-as-parent . t)
+                     ,@mevedel--child-frame-parameters)))
+      (let ((window (frame-root-window frame)))
+        (set-window-buffer window (current-buffer))
+        (set-window-dedicated-p window t)
+        (dolist (parameter '(mode-line-format header-line-format tab-line-format))
+          (set-window-parameter window parameter 'none))
+        (set-window-parameter window 'mevedel-view-geometry-excluded t)
+        (set-window-parameter window 'mevedel-floating-composer t)
+        (set-window-parameter window 'no-other-window t)
+        (set-window-point window (point-max)))
+      (mevedel-note-frame--paint-border frame)
+      (setq mevedel-floating-composer--frame frame))
+    frame))
+
+(defun mevedel-floating-composer--show (host)
+  "Show the floating composer over HOST, refitting it to the draft."
+  (let* ((parent (window-frame host))
+         (frame (mevedel-floating-composer--make parent))
+         (window (frame-root-window frame))
+         (edges (window-inside-pixel-edges host))
+         (char-width (frame-char-width parent))
+         (char-height (frame-char-height parent))
+         (border mevedel-note-frame-border-width)
+         (start (mevedel-floating-composer--start))
+         (cap (/ (- (nth 3 edges) (nth 1 edges)) 2))
+         (width (car (mevedel-floating-composer--place
+                      edges char-width char-height 0 border)))
+         (frame-resize-pixelwise t)
+         (window-min-height 1))
+    (setq mevedel-floating-composer--host host)
+    ;; The draft wraps at the final width, so measure only after taking it.
+    (unless (= width (frame-text-width frame))
+      (set-frame-size frame width (max char-height (frame-text-height frame)) t))
+    (let* ((natural (mevedel-floating-composer--natural-height
+                     window start (+ cap char-height)))
+           (geometry (mevedel-floating-composer--place
+                      edges char-width char-height natural border)))
+      (set-window-parameter window 'mevedel-floating-composer-pinned (<= natural cap))
+      ;; One compound call: a separate resize would first hang the growing
+      ;; frame below its old top, and on PGTK that geometry can stick.
+      (unless (equal geometry (frame-parameter frame 'mevedel-floating-composer-geometry))
+        (set-frame-parameter frame 'mevedel-floating-composer-geometry geometry)
+        (apply #'set-frame-size-and-position-pixelwise frame geometry)))
+    (mevedel-floating-composer--pin window)
+    (when (< (window-point window) start)
+      (set-window-point window (point-max)))
+    (unless (frame-visible-p frame)
+      (make-frame-visible frame))))
+
+(defun mevedel-floating-composer--hide ()
+  "Hide the floating composer, keeping its frame for reuse."
+  (when-let* ((frame mevedel-floating-composer--frame)
+              ((frame-live-p frame))
+              ((frame-visible-p frame)))
+    (make-frame-invisible frame)))
+
+(defun mevedel-floating-composer--select (window position)
+  "Select WINDOW with input focus and point at POSITION."
+  (select-frame-set-input-focus (window-frame window))
+  (select-window window)
+  (goto-char position))
+
+(defun mevedel-floating-composer--remove ()
+  "Delete the floating composer, returning a cursor it holds inline."
+  (when-let* ((window (mevedel-floating-composer--window)))
+    (when (and (eq window (selected-window))
+               (window-live-p mevedel-floating-composer--host)
+               (eq (window-buffer mevedel-floating-composer--host) (current-buffer)))
+      (mevedel-floating-composer--select mevedel-floating-composer--host
+                                         (window-point window)))
+    (delete-frame (window-frame window)))
+  (when (timerp mevedel-floating-composer--timer)
+    (cancel-timer mevedel-floating-composer--timer))
+  (setq mevedel-floating-composer--frame nil
+        mevedel-floating-composer--host nil
+        mevedel-floating-composer--timer nil))
+
+(defun mevedel-floating-composer--paint-borders ()
+  "Repaint every floating composer's border to show its focus."
+  (dolist (frame (frame-list))
+    (when (frame-parameter frame 'mevedel-view-animate-as-parent)
+      (mevedel-note-frame--paint-border frame))))
+
+(add-function :after after-focus-change-function
+              #'mevedel-floating-composer--paint-borders)
+
+
+;;
+;;; Update
+
+(defun mevedel-floating-composer--host-p (window)
+  "Return non-nil when WINDOW can host this view's floating composer.
+Note-frame windows, historical segments and terminals have none."
+  (and mevedel-floating-composer
+       (not mevedel-view--agent-transcript-p)
+       (eq (window-buffer window) (current-buffer))
+       (not (frame-parent (window-frame window)))
+       (display-graphic-p (window-frame window))
+       (not (mevedel-view-historical-segment-p))))
+
+(defun mevedel-floating-composer--needed-p (host)
+  "Return non-nil when HOST shows neither its cursor's draft nor the composer."
+  (and (not (mevedel-view--position-in-input-region-p (window-point host)))
+       (let ((start (mevedel-floating-composer--start)))
+         (and start
+              (not (and (mevedel-view--position-screen-y start host t)
+                        (mevedel-view--position-screen-y (point-max) host t)))))))
+
+(defun mevedel-floating-composer--update (&optional command)
+  "Show, place or hide this view's floating composer.
+COMMAND non-nil means the user's command just finished: only then may the
+cursor move between the host and the floating composer."
+  (unless mevedel-floating-composer--updating
+    (let* ((mevedel-floating-composer--updating t)
+           (selected (selected-window))
+           (window (mevedel-floating-composer--window))
+           (scrolled (and command (mevedel-view--scroll-command-p this-command))))
+      (cond
+       ((window-minibuffer-p selected))
+       ((eq selected window)
+        (let ((host mevedel-floating-composer--host))
+          (cond
+           ((not (and (window-live-p host) (mevedel-floating-composer--host-p host)))
+            (when command (mevedel-floating-composer--remove)))
+           ((and scrolled
+                 (mevedel-view--position-screen-y (window-point window) host t))
+            (mevedel-floating-composer--select host (window-point window))
+            (mevedel-floating-composer--hide))
+           (t (mevedel-floating-composer--show host)))))
+       ((and (mevedel-floating-composer--host-p selected)
+             (mevedel-floating-composer--needed-p selected))
+        (mevedel-floating-composer--show selected)
+        (when-let* ((scrolled)
+                    (offset (window-parameter selected 'mevedel-view-scroll-return)))
+          ;; The floating composer now owns the draft cursor; a stale inline
+          ;; return must not overwrite edits made there.
+          (set-window-parameter selected 'mevedel-view-scroll-return nil)
+          (mevedel-floating-composer--select
+           (mevedel-floating-composer--window)
+           (min (point-max) (+ (mevedel-view--input-start) offset)))))
+       (t (mevedel-floating-composer--hide))))))
+
+(defun mevedel-floating-composer--run (buffer)
+  "Run the coalesced update for BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq mevedel-floating-composer--timer nil)
+      (mevedel-floating-composer--update))))
+
+(defun mevedel-floating-composer-refresh ()
+  "Schedule one placement update of this view's floating composer.
+Called on the view's render cadence; never moves the cursor.  Schedules
+nothing while the floating composer is hidden and the selected window
+has its cursor in this view's draft or shows another buffer."
+  (when (and mevedel-floating-composer
+             ;; Not the variable: a timer armed under TRAMP can be discarded.
+             (not (mevedel--timer-pending-p mevedel-floating-composer--timer))
+             (or (let ((frame mevedel-floating-composer--frame))
+                   (and (frame-live-p frame) (frame-visible-p frame)))
+                 (let ((window (selected-window)))
+                   (and (eq (window-buffer window) (current-buffer))
+                        (not (mevedel-view--position-in-input-region-p
+                              (window-point window)))))))
+    (setq mevedel-floating-composer--timer
+          (run-at-time 0 nil #'mevedel-floating-composer--run (current-buffer)))))
+
+(defun mevedel-floating-composer--post-command ()
+  "Update after a command, which may move the cursor."
+  (when mevedel-floating-composer
+    (mevedel-floating-composer--update t)))
+
+(defun mevedel-floating-composer--on-window (window)
+  "Respond to a size, buffer or selection change of WINDOW.
+These run inside redisplay, so they reschedule rather than make frames;
+the floating composer's own resize only restores its pin."
+  (if (window-parameter window 'mevedel-floating-composer)
+      (mevedel-floating-composer--pin window)
+    (mevedel-floating-composer-refresh)))
+
+(defun mevedel-floating-composer-setup ()
+  "Enable the floating composer in the current interactive view."
+  (add-hook 'post-command-hook #'mevedel-floating-composer--post-command 80 t)
+  (dolist (hook '(window-size-change-functions
+                  window-buffer-change-functions
+                  window-selection-change-functions))
+    (add-hook hook #'mevedel-floating-composer--on-window nil t))
+  (add-hook 'kill-buffer-hook #'mevedel-floating-composer--remove nil t))
+
+(provide 'mevedel-floating-composer)
+;;; mevedel-floating-composer.el ends here

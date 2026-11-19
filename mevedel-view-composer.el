@@ -19,6 +19,7 @@
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
 (require 'mevedel-session-durability)
+(require 'mevedel-floating-composer)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-pending-inputs)
@@ -2058,6 +2059,7 @@ and other input properties remain untouched."
               #'mevedel-view--finish-draft-command 90)
     (add-hook 'window-size-change-functions
               #'mevedel-view--repair-window-growth nil t)
+    (mevedel-floating-composer-setup)
     (mevedel-view--update-composer-indent)))
 
 ;;
