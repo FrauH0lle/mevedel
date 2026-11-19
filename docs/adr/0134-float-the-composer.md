@@ -16,27 +16,32 @@ cursor it held to the inline draft. Setting it with `setq` does the same at
 the view's next command.
 
 - **Child frame over the host.** The frame uses the note frame's shared
-  child-frame parameters and its active and inactive border faces, repainted
-  on focus change. It is inset two columns from each side of the host's text
-  area (less on a host too narrow for that), floats half a line above its
-  bottom edge and is as tall as the composer from the rail down, capped at
-  half the host's text height. The frame is created once per view, hidden
-  between uses, and deleted with the view or when the option is turned off.
-  Note-frame windows, historical segments and agent transcript views never
-  have one.
+  child-frame parameters, without a border and with the theme's ordinary
+  default background. It spans the host's full width, text area and both
+  fringes, and sits flush on the host's text-area bottom; its window carries
+  the host's fringe widths, so the draft stays aligned with transcript text.
+  It is as tall as its top line plus the composer from the rail down, the
+  latter capped at half the host's text height. The frame is created once
+  per view, hidden between uses, and deleted with the view or when the
+  option is turned off. Note-frame windows, historical segments and agent
+  transcript views never have one.
+- **Top line.** The window's header line is drawn with the frame's own
+  `header-line` face: an overline in the `shadow` foreground over the
+  default background, one piece across the whole width, fringes included.
+  On the left it shows `↑ N more` in `shadow` while N draft lines of a
+  capped draft are scrolled out above (counting costs nothing while none
+  are); on the right a `↓ Back to bottom` button
+  (`mevedel-floating-composer-back-to-bottom`, mouse-1) in a theme-derived
+  tint of the background. Clicking it selects the host at the floating
+  composer's draft position and scrolls the host so the buffer end shows on
+  its last row (or, for a draft taller than the window, the cursor's line);
+  the floating composer then hides by the rules below. The faces are set on
+  the frame again only after a theme reset or changed them.
 - **Terminal frames.** In terminal Emacs it is a terminal child frame with
   the same behavior. Its geometry is in whole cells (a terminal's pixel is a
-  cell, so the half-line gap rounds to none). Emacs draws a terminal child
-  frame's border as box characters one cell outside the frame and only around
-  a decorated frame, so the floating composer overrides the shared
-  `undecorated` parameter there, uses a one-cell border in the placement and
-  places the frame inside it; the box stays inside the host. Emacs 31 draws
-  the box in the child frame's own `border` face (bug#80043), so the
-  floating composer sets that face's foreground on its frame alone to the
-  active or inactive border color, leaving other child frames' borders
-  as they are. A shown child's box cells change only when its parent is
-  redrawn, so a color change redraws the parent from a timer, outside
-  redisplay; an unchanged color redraws nothing. A terminal sends keystrokes to the selected child frame itself and
+  cell). A terminal cannot draw an overline, so the top line fills the space
+  between its texts with `─` characters. A terminal sends keystrokes to the
+  selected child frame itself and
   `select-frame` never moves a redirect there, so a stale redirect would send
   the host's later keystrokes back to the floating composer: on a terminal
   hand-over selects the floating composer without redirecting its parent.
@@ -65,9 +70,7 @@ the view's next command.
   another buffer, a window-buffer change hook, installed with the first
   floating composer and removed when the option goes off, clears the
   redirect in that redisplay, before the next keystroke, and a timer then deletes the orphaned
-  floating composer. Its border shows the active face while it is the
-  selected frame and its parent has compositor focus, repainted on
-  compositor focus and window selection changes.
+  floating composer.
 - **Excluded from view geometry.** The floating composer's window carries
   `mevedel-view-geometry-excluded`, so `mevedel-view--windows`' geometry
   answer omits it. Viewport capture and restoration (ADR 0126), composer
@@ -91,11 +94,18 @@ the view's next command.
   floating composer's typing cost and chose to slow, not stop, its animation
   (2026-11-19).
 - **Placement cost.** The composer's natural height is measured with a pixel
-  limit of the cap plus one line and cached until the buffer
+  limit of the top line, the cap and one more line (the limit counts from
+  the window's top, header included) and cached until the buffer
   (`buffer-modified-tick`, so property changes such as a face height count),
-  the window width or the face remapping (text scale) changes, so scrolling
-  the host measures nothing. The pixel limit holds the parent's line height,
-  so global text scaling also invalidates it. Measuring fontifies the draft,
+  the window width, the face remapping (text scale) or a face or fontset
+  definition changes (the generations the table layouts keep, which count
+  global text scaling and a named face of the draft changing size), so
+  scrolling the host measures nothing. The top line's `↑ N more` count is
+  kept on the same terms plus the window start. The top line's height is at least the parent's line
+  height plus `overline-margin`: until the window is drawn, and after a font
+  change until it is redrawn, Emacs reports an estimate from the font alone,
+  without the overline's margin, and a frame sized by it is too short.
+  Measuring fontifies the draft,
   which itself
   modifies the buffer, so the cache records the buffer's state after
   measuring; keyed before, every key measured twice. Overlay changes do not
@@ -158,10 +168,14 @@ their transcript meaning (`n`, `p`, `t`, `TAB`, `RET`).
   each toggle returning to where the previous one left the window's cursor.
   Clicking the floating composer selects it as the toggle does.
 - In the floating composer `C-v` and `M-v` page within a capped draft. After
-  every command, and whenever redisplay finds it scrolled (touchpad momentum
-  scrolls within one command), its window start is clamped to the rail, so neither these
+  every command, and whenever redisplay finds it scrolled above the rail
+  (touchpad momentum scrolls within one command), its window start is
+  clamped to the rail, so neither these
   keys nor the wheel ever show transcript text in it; an uncapped draft
-  stays pinned at the rail. Scrolling below the draft's end shows blank
+  stays pinned at the rail. Redisplay scrolling it down to show point in a
+  frame still too short is left alone: pinning that back made redisplay
+  scroll again without end; a size change of its window schedules a refit
+  instead. Scrolling below the draft's end shows blank
   space, as in any window.
 - `C-M-v`/`C-M-S-v` there scroll the host: the view sets
   `other-window-scroll-default` buffer-locally to return the host from the
@@ -185,12 +199,11 @@ buffers are normally skipped. Several changes before one redisplay coalesce.
 The floating composer therefore adds an incremental update of its window to
 redisplays that follow typing or streaming, only while it is shown. Without
 the geometry exclusion it would also add a full anchoring pass per stream
-update (about 1 ms each in ADR 0126's measurements) and narrow the
-transcript's chrome by its inset.
+update (about 1 ms each in ADR 0126's measurements).
 
-The rail is fitted to the host, so in the narrower floating composer a long
-rail wraps; the measured height includes the wrap, and since the floating
-composer's width follows only the host there is no resize loop.
+The rail is fitted to the host; the floating composer has the host's text
+width, and its measured height includes any wrap. Since its width follows
+only the host there is no resize loop.
 
 ### Performance gate against "off"
 
@@ -312,6 +325,64 @@ No regression measured:
 - **Child-frame move/resize** calls were 0 in every paired workload (the
   draft height did not change); show/hide were 1 per crossing direction.
 
+### Rerun with the full-width frame and top line
+
+Run on the tree at `ecef42ff` (2026-11-19), after the full-width frame and
+top line replaced the inset, bordered one: Emacs 31.1 pgtk, byte-compiled,
+private presenting KWin; presentation probes before and after with 68 and
+66 completed frame callbacks; one warm-up round and 6 alternating rounds;
+power policy pinned to `full`. Values and statistics as above (scenario vs
+baseline; paired median [min, max] over 6 rounds); the earlier run's value
+follows in parentheses.
+
+Crossing and first-show CPU, KWin and redisplay totals are whole-transition
+numbers, not per notch. A scroll-away total covers every notch up to the
+crossing and the settling between them; a scroll-back total likewise
+covers all its notches, starting from the viewport the scroll-away left;
+a first-show total also covers removing the frame, the return crossing and
+the settling around them. Their latencies time only the crossing notch.
+
+- **Typing in the visible floating composer** (`on-visible` vs
+  `off-inline`, 40 keys per run): latency 2.50 vs 1.72 ms median (n 240
+  each), per-round ratio 1.51 [1.41, 1.67] (1.62 [1.42, 1.74]); Emacs CPU
+  +56 [+38, +64] ms per run (+65 [+39, +86]).
+- **Wrapped-draft deletion, visible** (30 keys per run): Emacs CPU
+  +46 [+36, +50] ms (+46 [+34, +55]); latency 3.76 vs 4.26 ms median,
+  ratio 0.88 [0.82, 0.89] (0.87 [0.83, 0.98]).
+- **One child-frame refit per visible session:** typing and wrapped
+  deletion each count one move/resize call per run (the earlier run: 0),
+  not one per key. The cause is unverified; a likely one is that the top
+  line's `↑`/`↓` come from a fallback font a pixel taller than the default,
+  so the drawn top line is taller than the height computed before drawing
+  and the size change refits the frame once.
+- **Scroll back** (`on-never` vs `off-inline`, 12 crossings per run, n 72
+  each): 2.83 vs 6.12 ms median, ratio 0.47 [0.43, 0.49] (0.56
+  [0.52, 0.58]); Emacs CPU +74 [+36, +117] ms, redisplay cycles
+  +46 [+45, +47] per run.
+- **Scroll away is not comparable with earlier runs:** 8.74 vs 7.83 ms
+  median, ratio 1.12 [1.09, 1.16]; Emacs CPU +205 [+187, +220] ms, KWin CPU
+  +17 [+13, +27] ms, redisplay cycles +51 [+49, +51] per run. Since the
+  floating composer appears only once the host shows no composer line
+  (`19fbf2c8`), one wheel notch no longer always hands the cursor over and
+  the benchmark stopped at its first crossing; `ecef42ff` makes it scroll
+  away notch by notch, as scrolling back already did, and report the
+  crossing notch's latency. With the option on a crossing now takes an
+  extra notch whose CPU and redisplay cycles the whole-transition totals
+  count, while `off` leaves the draft after one.
+- **Idle with a request, visible, against the hidden rail** (`off-away`,
+  4 s): Emacs CPU +87.7 [+80.5, +109.3] ms (+88.8 [+80.4, +95.3]), KWin CPU
+  +21.8 [+18.7, +29.2] ms, redisplay cycles +19 [+18, +20]. Against the
+  rail visible inline: Emacs CPU -54.2 [-57.8, -37.0] ms (-47.5).
+- **Quiet idle, visible:** Emacs CPU -0.39 [-0.86, +0.05] ms
+  (+0.3 [-1.2, +0.7]).
+- **Unfocused idle, visible** (vs `off-inline`): Emacs CPU
+  -2.5 [-10.2, +28.7] ms, inconclusive (+3.5 [-3.9, +16.7]).
+- **Stream, visible, against the hidden rail:** Emacs CPU
+  +188.5 [+171.6, +226.8] ms (+227.9 [+173.5, +273.1]), redisplay cycles
+  +40 [+37, +43].
+- **First show:** latency of the crossing notch 55.81 ms median, p90
+  62.81 ms (n 36) (50.72, p90 61.85).
+
 ## Alternatives
 
 - **Docked window below the transcript.** Covers nothing, but shrinks the
@@ -338,3 +409,17 @@ No regression measured:
   Deferred: it is the escalation path if the floating composer measurably
   regresses typing, scrolling or streaming, and a separate architecture item
   regardless.
+
+## Decision history
+
+- **The inset, bordered frame was replaced by a full-width frame under a top
+  rule** (2026-11-19). The floating composer was first inset two columns from
+  each side of the host's text area, floated half a line above its bottom and
+  wore the note frame's teal border, active or inactive by focus (on a
+  terminal, box characters in the frame's own `border` face). The inset left
+  clipped transcript fragments visible around the frame. After comparing
+  Claude Code and Codex with a prototype, the user chose the full-width,
+  flush frame with a rule, `↑ N more` and a "Back to bottom" button; the
+  border painting and its focus colors were removed. The rule is the header
+  face's overline because the prototype's stretched strike-through segments
+  broke at the fringes.

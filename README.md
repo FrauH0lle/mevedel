@@ -682,9 +682,11 @@ inserts an `@file` mention and grants a one-shot exact-file `Read` permission fo
 the next send.
 
 When you scroll the view away from the composer while typing, a **floating
-composer** keeps the same draft visible in a small frame over the bottom of
-the window, so you can read the transcript and write together. The cursor goes
-with it; scrolling back to the composer returns the cursor inline. `C-c C-SPC`
+composer** keeps the same draft visible across the bottom of the window, under
+a thin rule, so you can read the transcript and write together. The cursor goes
+with it; scrolling back to the composer, or clicking its **↓ Back to bottom**
+button, returns the cursor inline. `↑ N more` shows draft lines scrolled out
+above a long draft. `C-c C-SPC`
 moves the cursor between the composer and the transcript, and clicking the
 floating composer selects it. Inside it, `C-v`/`M-v` page a long draft,
 `C-M-v`/`C-M-S-v` scroll the transcript, and `C-c C-j`, `C-c RET` and the

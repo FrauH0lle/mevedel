@@ -137,17 +137,6 @@ Focus changes arrive asynchronously, so wait up to half a second."
      (list (list 'down-mouse-1 posn)) 'mouse-drag-region)
     (mevedel-floating-composer-test--deliver (list (list 'mouse-1 posn)) nil)))
 
-(defun mevedel-floating-composer-test--border-color (face)
-  "Return FACE's background, the floating composer's border color for it."
-  (face-attribute face :background nil 'default))
-
-(defun mevedel-floating-composer-test--painted-border (frame)
-  "Return the color FRAME's border shows.
-A terminal draws its box in FRAME's own `border' face."
-  (if (display-graphic-p frame)
-      (face-background 'child-frame-border frame)
-    (face-foreground 'border frame)))
-
 (defun mevedel-floating-composer-test--redirected-p (parent frame)
   "Return non-nil when PARENT's keystrokes reach FRAME.
 A terminal sends them to the selected frame, so it must have no redirect."
@@ -221,14 +210,14 @@ placement gives now, with its cursor visible.  Return its window if shown."
                ;; Measured afresh, so a stale cached height shows.
                (natural (cdr (window-text-pixel-size
                               window (mevedel-floating-composer--start) (point-max)
-                              nil (+ cap char-height)))))
+                              nil (+ (window-header-line-height window) cap char-height)))))
           (should (memq (selected-frame) (list parent own)))
           (should (eq host mevedel-floating-composer--host))
           (should (eq buffer (window-buffer host)))
           (pcase-let ((`(,width ,height ,x ,y)
                        (mevedel-floating-composer--place
-                        edges (frame-char-width parent) char-height natural
-                        mevedel-note-frame-border-width)))
+                        edges (window-fringes host) char-height natural
+                        (window-header-line-height window))))
             (should (equal (list width height x y)
                            (list (frame-text-width own) (frame-text-height own)
                                  (car (frame-position own)) (cdr (frame-position own))))))
@@ -263,12 +252,25 @@ placement gives now, with its cursor visible.  Return its window if shown."
       ;; The host stays a history reader for ADR 0126.
       (should (< (window-point host) (mevedel-view--input-start)))
       (should-not (window-parameter host 'mevedel-view-scroll-return))
+      ;; Full width, fringes included, and flush on the host's bottom.
       (pcase-let ((`(,left ,_ ,right ,bottom) (window-inside-pixel-edges host))
+                  (`(,left-fringe ,right-fringe . ,_) (window-fringes host))
                   (`(,x . ,y) (frame-position frame)))
-        (should (> x left))
-        ;; The inset is the same on both sides.
-        (should (= (- x left) (- right x (frame-pixel-width frame))))
-        (should (< (+ y (frame-pixel-height frame)) bottom)))))
+        (should (= (- left left-fringe) x))
+        (should (= (+ right right-fringe) (+ x (frame-pixel-width frame))))
+        (should (= bottom (+ y (frame-pixel-height frame)))))))
+  :doc "its top line rules off the draft and offers the way back to the bottom"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let* ((window (selected-window))
+           (line (format-mode-line (window-parameter window 'header-line-format)
+                                   nil window)))
+      (should (> (window-header-line-height window) 0))
+      (should (string-suffix-p " ↓ Back to bottom " line))
+      ;; A terminal cannot draw the overline, so the rule is characters.
+      (unless (display-graphic-p)
+        (should (string-prefix-p "───" line))
+        (should (= (window-total-width window) (string-width line))))))
   :doc "scrolling the host back returns the cursor inline at the same offset"
   (progn
     (mevedel-floating-composer-test--scroll-away t)
@@ -308,15 +310,10 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (mevedel-floating-composer-test--scroll-away t)
     (let ((frame (selected-frame)))
       (should (mevedel-floating-composer-test--redirected-p (window-frame host) frame))
-      (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
-                     (mevedel-floating-composer-test--painted-border frame)))
       (mevedel-floating-composer-test--click host)
       (should (eq host (selected-window)))
       (should (memq (frame-focus (window-frame host)) (list nil (window-frame host))))
-      (should (mevedel-floating-composer-test--focused-p (window-frame host)))
-      (should (equal (mevedel-floating-composer-test--border-color
-                      'mevedel-note-frame-border-inactive)
-                     (mevedel-floating-composer-test--painted-border frame)))))
+      (should (mevedel-floating-composer-test--focused-p (window-frame host)))))
   :doc "removing it clears the redirect after another frame was selected"
   (let ((parent (window-frame host))
         (other (with-current-buffer (get-buffer-create "*scratch*")
@@ -437,6 +434,119 @@ placement gives now, with its cursor visible.  Return its window if shown."
           (should-not (memq #'mevedel-floating-composer--check-hosts
                             (default-value 'window-buffer-change-functions))))
       (customize-set-variable 'mevedel-floating-composer t))))
+
+
+;;
+;;; Look and top line
+
+(defun mevedel-floating-composer-test--png-rows (png rows)
+  "Return the first ROWS pixel rows of PNG, an 8-bit RGB or RGBA image.
+Each row is a list of (R G B) pixels."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert png)
+    (cl-flet ((u32 (pos) (cl-loop for i below 4 sum (ash (char-after (+ pos i)) (* 8 (- 3 i))))))
+      (let ((pos 9) width channels data)
+        (while (< pos (point-max))
+          (let ((length (u32 pos))
+                (type (buffer-substring (+ pos 4) (+ pos 8)))
+                (start (+ pos 8)))
+            (pcase type
+              ("IHDR" (setq width (u32 start)
+                            channels (pcase (char-after (+ start 9)) (2 3) (6 4)))
+                      (should (= 8 (char-after (+ start 8)))))
+              ("IDAT" (push (buffer-substring start (+ start length)) data)))
+            (setq pos (+ start length 4))))
+        (erase-buffer)
+        (insert (apply #'concat (nreverse data)))
+        (should (zlib-decompress-region (point-min) (point-max)))
+        (let* ((stride (* width channels))
+               (prior (make-vector stride 0))
+               result)
+          (dotimes (row rows)
+            (let ((base (+ (point-min) (* row (1+ stride))))
+                  (line (make-vector stride 0)))
+              ;; Undo the row's PNG filter (RFC 2083, section 6).
+              (dotimes (i stride)
+                (let* ((a (if (>= i channels) (aref line (- i channels)) 0))
+                       (b (aref prior i))
+                       (c (if (>= i channels) (aref prior (- i channels)) 0))
+                       (p (- (+ a b) c)))
+                  (aset line i (logand 255 (+ (char-after (+ base 1 i))
+                                              (pcase (char-after base)
+                                                (0 0) (1 a) (2 b) (3 (/ (+ a b) 2))
+                                                (4 (cond ((and (<= (abs (- p a)) (abs (- p b)))
+                                                               (<= (abs (- p a)) (abs (- p c))))
+                                                          a)
+                                                         ((<= (abs (- p b)) (abs (- p c))) b)
+                                                         (t c)))))))))
+              (push (cl-loop for i from 0 below stride by channels
+                             collect (list (aref line i) (aref line (+ i 1)) (aref line (+ i 2))))
+                    result)
+              (setq prior line)))
+          (nreverse result))))))
+
+(defun mevedel-floating-composer-test--rgb (color frame)
+  "Return COLOR on FRAME as 8-bit (R G B)."
+  (mapcar (lambda (value) (/ value 257)) (color-values color frame)))
+
+(mevedel-deftest mevedel-floating-composer/top-line ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window)))
+      (mevedel-floating-composer-test--scroll-away t)
+      (let* ((window (selected-window))
+             (frame (window-frame window)))
+        (should (window-parameter window 'mevedel-floating-composer))
+        ,test)))
+  (test)
+  :doc "a borderless frame keeps the draft aligned with the transcript text"
+  (progn
+    (should (= (frame-text-width frame) (frame-pixel-width frame)))
+    (should (= (frame-text-height frame) (frame-pixel-height frame)))
+    (should (= (car (window-inside-pixel-edges host))
+               (+ (car (frame-position frame)) (car (window-inside-pixel-edges window))))))
+  :doc "the top pixel row is one rule edge to edge over the theme's background"
+  (progn
+    (redisplay t)
+    (pcase-let ((`(,rule ,below)
+                 (mevedel-floating-composer-test--png-rows (x-export-frames frame 'png) 2)))
+      (should (= (frame-pixel-width frame) (length rule)))
+      (should (equal (list (mevedel-floating-composer-test--rgb
+                            (face-foreground 'shadow frame t) frame))
+                     (seq-uniq rule)))
+      (should (equal (face-background 'default (window-frame host) t)
+                     (face-background 'default frame t)))
+      (should (equal (mevedel-floating-composer-test--rgb
+                      (face-background 'default frame t) frame)
+                     (car below)))))
+  :doc "clicking Back to bottom returns the cursor inline with the draft shown"
+  (let ((parent (window-frame host)))
+    (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+    (let ((posn (posn-at-x-y (- (window-pixel-width window) (* 4 (frame-char-width frame)))
+                             1 window)))
+      (should (eq 'header-line (posn-area posn)))
+      ;; Only a real click marks its head a mouse click, which the header
+      ;; line's key prefix needs; a fresh Emacs may not have had one yet.
+      (dolist (head '(down-mouse-1 mouse-1))
+        (put head 'event-kind 'mouse-click))
+      (mevedel-floating-composer-test--deliver (list (list 'down-mouse-1 posn)) nil)
+      (mevedel-floating-composer-test--deliver
+       (list (list 'mouse-1 posn)) 'mevedel-floating-composer-back-to-bottom))
+    (should (eq host (selected-window)))
+    (should (= 5 (mevedel-floating-composer-test--offset)))
+    (should (mevedel-view--position-screen-y (point-max) host t))
+    (should-not (mevedel-floating-composer-test--window))
+    (should-not (frame-focus parent))
+    (should (mevedel-floating-composer-test--focused-p parent)))
+  :doc "a click after the host left the view does nothing"
+  (let ((posn (posn-at-x-y (- (window-pixel-width window) (* 4 (frame-char-width frame)))
+                           1 window)))
+    ;; Before the orphan cleanup, which waits for a timer.
+    (set-window-buffer host (get-buffer-create "*scratch*"))
+    (let ((point (window-point host)))
+      (mevedel-floating-composer-back-to-bottom (list 'mouse-1 posn))
+      (should (eq window (selected-window)))
+      (should (= point (window-point host))))))
 
 
 ;;
@@ -877,7 +987,22 @@ placement gives now, with its cursor visible.  Return its window if shown."
   :doc "a taller draft resizes and moves in one call"
   (progn
     (mevedel-floating-composer-test--keys "C-o" 'open-line)
-    (should (= 1 placed))))
+    (should (= 1 placed)))
+  :doc "a named face of the draft growing taller refits it"
+  (let ((face (make-face 'mevedel-floating-composer-test--draft-face)))
+    (unwind-protect
+        (progn
+          (let ((inhibit-read-only t))
+            (put-text-property (mevedel-view--input-start) (point-max) 'face face))
+          (mevedel-floating-composer--update)
+          (mevedel-floating-composer-test--settle)
+          (let ((height (window-body-height window t)))
+            ;; Neither the text nor the default face changes.
+            (set-face-attribute face nil :height 3.0)
+            (mevedel-floating-composer--update)
+            (mevedel-floating-composer-test--settle)
+            (should (> (window-body-height window t) (* 2 height)))))
+      (set-face-attribute face nil :height 'unspecified))))
 
 
 (mevedel-deftest mevedel-floating-composer--hide ()
@@ -1123,33 +1248,19 @@ placement gives now, with its cursor visible.  Return its window if shown."
         (should-not (mevedel-floating-composer--window))
         (should (eq host (selected-window))))
     (customize-set-variable 'mevedel-floating-composer t))
-  :doc "M-x, completion and C-g return to the draft offset; the border shows the minibuffer"
+  :doc "M-x, completion and C-g return to the draft offset"
   (progn
     (mevedel-floating-composer-test--scroll-away t)
     (let* ((window (selected-window))
-           (frame (selected-frame))
-           (active (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border))
-           (inactive (mevedel-floating-composer-test--border-color
-                      'mevedel-note-frame-border-inactive))
-           (borders nil)
-           (record (lambda ()
-                     (redisplay t)
-                     (push (face-background 'child-frame-border frame) borders))))
-      (add-hook 'minibuffer-setup-hook record)
-      (unwind-protect
-          (dolist (keys '(("M-x ignor TAB RET" . ignore) ("M-x C-g")))
-            (mevedel-floating-composer-test--keys (car keys) (cdr keys))
-            ;; A queued C-g quits a redisplay in the hook, so record once.
-            (remove-hook 'minibuffer-setup-hook record)
-            (should-not (active-minibuffer-window))
-            (should (eq window (selected-window)))
-            (should (= 4 (mevedel-floating-composer-test--offset)))
-            (should (eq frame (frame-focus parent)))
-            (should (equal active (face-background 'child-frame-border frame)))
-            ;; Leaving the minibuffer restores a window configuration.
-            (should (eq window (mevedel-floating-composer-test--sound view-buf))))
-        (remove-hook 'minibuffer-setup-hook record))
-      (should (equal (list inactive) borders))))
+           (frame (selected-frame)))
+      (dolist (keys '(("M-x ignor TAB RET" . ignore) ("M-x C-g")))
+        (mevedel-floating-composer-test--keys (car keys) (cdr keys))
+        (should-not (active-minibuffer-window))
+        (should (eq window (selected-window)))
+        (should (= 4 (mevedel-floating-composer-test--offset)))
+        (should (eq frame (frame-focus parent)))
+        ;; Leaving the minibuffer restores a window configuration.
+        (should (eq window (mevedel-floating-composer-test--sound view-buf))))))
   :doc "text scaling refits it without editing the draft"
   (unwind-protect
       (progn
@@ -1323,7 +1434,10 @@ The cursor sits on that row, outside the draft."
                   (should (eq window (selected-window)))
                   (should (mevedel-view--position-screen-y (point) window t))
                   (should (>= (window-start window) rail))
-                  (should (= cap (frame-text-height frame)))))
+                  ;; The draft is capped; the top line comes on top.
+                  (should (= cap (window-body-height window t)))
+                  (should (= (+ cap (window-header-line-height window))
+                             (frame-text-height frame)))))
         (check)
         (while (and (< moves 100) (< (line-end-position) (point-max)))
           (mevedel-floating-composer-test--keys "C-n" 'next-line)

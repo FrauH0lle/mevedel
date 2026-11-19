@@ -173,16 +173,23 @@ CPU time."
            (point) (mevedel-view--input-start) (window-start) (point-max))))
 
 (defun mevedel-fc-bench--away ()
-  "Scroll away with the draft cursor; return the latency in ms."
-  (prog1 (mevedel-fc-bench--wheel 'wheel-up)
-    (if mevedel-floating-composer
-        (mevedel-fc-bench--check
-         (and (mevedel-fc-bench--shown-p)
-              (eq (selected-window) (mevedel-floating-composer--window)))
-         "the floating composer shown and selected")
-      (mevedel-fc-bench--check
-       (not (mevedel-view--position-in-input-region-p (point)))
-       "the cursor in history"))))
+  "Scroll away notch by notch with the draft cursor until it crosses.
+The floating composer appears only once the host shows no composer line,
+which can take more than one notch.  Return the latency of the notch
+that crossed, in ms."
+  (let ((notches 0) latency)
+    (while (not (and latency
+                     (if mevedel-floating-composer
+                         (and (mevedel-fc-bench--shown-p)
+                              (eq (selected-window) (mevedel-floating-composer--window)))
+                       (not (mevedel-view--position-in-input-region-p (point))))))
+      (mevedel-fc-bench--check (< (cl-incf notches) 6)
+                               (if mevedel-floating-composer
+                                   "the floating composer shown and selected"
+                                 "the cursor in history"))
+      (when latency (mevedel-fc-bench--settle))
+      (setq latency (mevedel-fc-bench--wheel 'wheel-up)))
+    latency))
 
 (defun mevedel-fc-bench--back ()
   "Scroll back notch by notch until the cursor is inline.
