@@ -115,6 +115,50 @@ BODY runs inside the view buffer."
   (let ((noninteractive nil))
     (should (mevedel-note-frame--available-p))))
 
+(mevedel-deftest mevedel-note-frame--paint-border ()
+  (let ((frame (selected-frame))
+        (standard-display-table nil))
+    (skip-unless (not (display-graphic-p frame)))
+    (unwind-protect
+        ,test
+      (set-face-foreground 'mevedel-note-frame-tty-border nil frame)))
+  (test)
+  :doc "a terminal frame's border shows focus in its own box face's foreground"
+  (progn
+    (mevedel-note-frame--paint-border frame #'always)
+    (should (equal (face-attribute 'mevedel-note-frame-border :background nil 'default)
+                   (face-foreground 'mevedel-note-frame-tty-border frame)))
+    (mevedel-note-frame--paint-border frame #'ignore)
+    (should (equal (face-attribute 'mevedel-note-frame-border-inactive :background
+                                   nil 'default)
+                   (face-foreground 'mevedel-note-frame-tty-border frame)))
+    (should-not (face-foreground 'mevedel-note-frame-tty-border t))))
+
+(mevedel-deftest mevedel-note-frame--tty-box-face ()
+  (let ((standard-display-table nil))
+    ,test)
+  (test)
+  :doc "gives every box slot the box face, with Emacs's default characters"
+  (progn
+    (mevedel-note-frame--tty-box-face)
+    (should (equal (make-glyph-code ?| 'mevedel-note-frame-tty-border)
+                   (display-table-slot standard-display-table 'box-vertical)))
+    (should (equal (make-glyph-code ?+ 'mevedel-note-frame-tty-border)
+                   (display-table-slot standard-display-table 'box-up-left))))
+  :doc "keeps a user's box characters"
+  (progn
+    (setq standard-display-table (make-display-table))
+    (set-display-table-slot standard-display-table 'box-horizontal ?=)
+    (mevedel-note-frame--tty-box-face)
+    (should (equal (make-glyph-code ?= 'mevedel-note-frame-tty-border)
+                   (display-table-slot standard-display-table 'box-horizontal))))
+  :doc "leaves a slot that has its own face"
+  (let ((glyph (make-glyph-code ?~ 'bold)))
+    (setq standard-display-table (make-display-table))
+    (set-display-table-slot standard-display-table 'box-horizontal glyph)
+    (mevedel-note-frame--tty-box-face)
+    (should (equal glyph (display-table-slot standard-display-table 'box-horizontal)))))
+
 (mevedel-deftest mevedel-note-frame-display
   (:doc "`mevedel-note-frame-display' creates and reuses note frames")
   ,test

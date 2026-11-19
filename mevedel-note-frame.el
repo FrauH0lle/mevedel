@@ -19,6 +19,7 @@
 
 ;;; Code:
 
+(require 'disp-table)
 (require 'mevedel-utilities)
 
 (eval-when-compile (require 'cl-lib))
@@ -97,6 +98,11 @@ background makes the border invisible against the frame."
   '((((background dark)) :background "#1c6f73")
     (((background light)) :background "#6cb9bd"))
   "Border of the note frame while another frame has focus."
+  :group 'mevedel)
+
+(defface mevedel-note-frame-tty-border '((t))
+  "Box around a terminal child frame, painted per frame to show focus.
+Unset, it draws the box as Emacs does without it."
   :group 'mevedel)
 
 
@@ -357,7 +363,9 @@ FOCUSED, a function of FRAME, decides that; it defaults to
 refresh FRAME's faces for nothing.
 The border width alone draws nothing: without an explicit background on
 `internal-border' and `child-frame-border' the border takes the default
-background and is invisible against the frame."
+background and is invisible against the frame.  On a terminal the color
+is the foreground of FRAME's `mevedel-note-frame-tty-border'; see
+`mevedel-note-frame--tty-box-face'."
   (let ((frame (or frame mevedel-note-frame--frame)))
     (when (frame-live-p frame)
       (let ((color (face-attribute
@@ -365,10 +373,33 @@ background and is invisible against the frame."
                         'mevedel-note-frame-border
                       'mevedel-note-frame-border-inactive)
                     :background nil 'default)))
-        (unless (and (equal color (face-background 'child-frame-border frame))
-                     (equal color (face-background 'internal-border frame)))
+        (cond
+         ((not (display-graphic-p frame))
+          (mevedel-note-frame--tty-box-face)
+          (unless (equal color (face-foreground 'mevedel-note-frame-tty-border frame))
+            (set-face-foreground 'mevedel-note-frame-tty-border color frame)))
+         ((not (and (equal color (face-background 'child-frame-border frame))
+                    (equal color (face-background 'internal-border frame))))
           (set-face-background 'internal-border color frame)
-          (set-face-background 'child-frame-border color frame))))))
+          (set-face-background 'child-frame-border color frame)))))))
+
+(defun mevedel-note-frame--tty-box-face ()
+  "Draw terminal child-frame boxes in `mevedel-note-frame-tty-border'.
+Emacs 31 draws the box in no face of its own, but it resolves a face on a
+`standard-display-table' box glyph on each child frame.  So give the box
+slots that face, keeping their characters; a slot with its own face is
+left alone, and so is its border's focus color."
+  (unless standard-display-table
+    (setq standard-display-table (make-display-table)))
+  (pcase-dolist (`(,slot . ,char) '((box-vertical . ?|) (box-horizontal . ?-)
+                                    (box-down-right . ?+) (box-down-left . ?+)
+                                    (box-up-right . ?+) (box-up-left . ?+)))
+    (let ((glyph (display-table-slot standard-display-table slot)))
+      (unless (and glyph (glyph-face glyph))
+        (set-display-table-slot
+         standard-display-table slot
+         (make-glyph-code (if glyph (glyph-char glyph) char)
+                          'mevedel-note-frame-tty-border))))))
 
 (add-function :after after-focus-change-function
               #'mevedel-note-frame--paint-border)

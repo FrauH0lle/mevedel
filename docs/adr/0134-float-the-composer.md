@@ -12,7 +12,8 @@ of that window, the host. It is a second window on the view buffer, not a
 copy and not a separate buffer: draft, rail, mode badge, keymaps and live
 progress are the view buffer's own. `mevedel-floating-composer` (default on)
 turns it off; turning it off removes every floating composer and returns a
-cursor it held to the inline draft.
+cursor it held to the inline draft. Setting it with `setq` does the same at
+the view's next command.
 
 - **Child frame over the host.** The frame uses the note frame's shared
   child-frame parameters and its active and inactive border faces, repainted
@@ -29,13 +30,20 @@ cursor it held to the inline draft.
   frame's border as box characters one cell outside the frame and only around
   a decorated frame, so the floating composer overrides the shared
   `undecorated` parameter there, uses a one-cell border in the placement and
-  places the frame inside it; the box, in the `border` face, stays inside the
-  host. A terminal sends keystrokes to the selected child frame itself and
+  places the frame inside it; the box stays inside the host. Emacs 31 draws
+  the box in no face of its own, but resolves a face given to the box glyphs
+  of `standard-display-table` on each child frame. So the first terminal
+  border painted gives those six slots `mevedel-note-frame-tty-border`,
+  keeping their characters and leaving a slot that has its own face; the
+  face is unset globally, so other child frames look as before, and its
+  per-frame foreground carries the active and inactive border colors. A terminal sends keystrokes to the selected child frame itself and
   `select-frame` never moves a redirect there, so a stale redirect would send
   the host's later keystrokes back to the floating composer: on a terminal
   hand-over selects the floating composer without redirecting its parent.
 - **When.** Only the selected window can be a host, and only while it shows
-  neither its cursor's draft position nor the whole composer. So it follows
+  neither its cursor's draft position nor a full line of the composer (rail
+  or draft), so it hides as soon as the host fully shows the first line of a
+  composer taller than the window. So it follows
   the selected window across splits, window selection and frame resizes, and
   hides while another frame, tab or buffer is selected; closing its parent
   frame deletes it.
@@ -150,7 +158,8 @@ their transcript meaning (`n`, `p`, `t`, `TAB`, `RET`).
   each toggle returning to where the previous one left the window's cursor.
   Clicking the floating composer selects it as the toggle does.
 - In the floating composer `C-v` and `M-v` page within a capped draft. After
-  every command its window start is clamped to the rail, so neither these
+  every command, and whenever redisplay finds it scrolled (touchpad momentum
+  scrolls within one command), its window start is clamped to the rail, so neither these
   keys nor the wheel ever show transcript text in it; an uncapped draft
   stays pinned at the rail. Scrolling below the draft's end shows blank
   space, as in any window.

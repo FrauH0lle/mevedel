@@ -17,6 +17,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mwheel)
+(require 'pixel-scroll)
 (require 'mevedel-chat)
 (require 'mevedel-floating-composer)
 (require 'mevedel-readiness)
@@ -139,6 +140,13 @@ Focus changes arrive asynchronously, so wait up to half a second."
 (defun mevedel-floating-composer-test--border-color (face)
   "Return FACE's background, the floating composer's border color for it."
   (face-attribute face :background nil 'default))
+
+(defun mevedel-floating-composer-test--painted-border (frame)
+  "Return the color FRAME's border shows.
+A terminal draws its box in FRAME's own `mevedel-note-frame-tty-border'."
+  (if (display-graphic-p frame)
+      (face-background 'child-frame-border frame)
+    (face-foreground 'mevedel-note-frame-tty-border frame)))
 
 (defun mevedel-floating-composer-test--redirected-p (parent frame)
   "Return non-nil when PARENT's keystrokes reach FRAME.
@@ -301,14 +309,14 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (let ((frame (selected-frame)))
       (should (mevedel-floating-composer-test--redirected-p (window-frame host) frame))
       (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
-                     (face-background 'child-frame-border frame)))
+                     (mevedel-floating-composer-test--painted-border frame)))
       (mevedel-floating-composer-test--click host)
       (should (eq host (selected-window)))
       (should (memq (frame-focus (window-frame host)) (list nil (window-frame host))))
       (should (mevedel-floating-composer-test--focused-p (window-frame host)))
       (should (equal (mevedel-floating-composer-test--border-color
                       'mevedel-note-frame-border-inactive)
-                     (face-background 'child-frame-border frame)))))
+                     (mevedel-floating-composer-test--painted-border frame)))))
   :doc "removing it clears the redirect after another frame was selected"
   (let ((parent (window-frame host))
         (other (with-current-buffer (get-buffer-create "*scratch*")
@@ -412,6 +420,20 @@ placement gives now, with its cursor visible.  Return its window if shown."
       (should (eq host (selected-window)))
       (should (= 4 (mevedel-floating-composer-test--offset)))
       (should-not (mevedel-floating-composer--window))
+      (customize-set-variable 'mevedel-floating-composer t)))
+  :doc "setting the option off with setq removes it after the next command"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (should (mevedel-floating-composer-test--window))
+    (unwind-protect
+        (progn
+          (setq mevedel-floating-composer nil)
+          (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+          (should (eq host (selected-window)))
+          (should (= 5 (mevedel-floating-composer-test--offset)))
+          (should-not (mevedel-floating-composer--window))
+          (should-not (memq #'mevedel-floating-composer--check-hosts
+                            (default-value 'window-buffer-change-functions))))
       (customize-set-variable 'mevedel-floating-composer t))))
 
 
@@ -520,6 +542,22 @@ placement gives now, with its cursor visible.  Return its window if shown."
       (should (= (mevedel-floating-composer--start) (window-start window)))
       (should (= point (point)))
       (should-not (frame-focus (window-frame host)))))
+  :doc "wheel momentum over the floating composer stops at the draft's edge between commands"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (mevedel-floating-composer-test--tall-draft)
+    (let ((window (mevedel-floating-composer-test--window)))
+      (should (eq host (selected-window)))
+      (should (> (window-start window) (mevedel-floating-composer--start)))
+      ;; The body of `pixel-scroll-start-momentum': one command scrolls the
+      ;; window under the pointer tick by tick, redisplaying in between.
+      (dotimes (_ 40)
+        (with-selected-window window
+          (pixel-scroll-precision-scroll-up 40))
+        (redisplay t)
+        (should (mevedel-floating-composer-test--within-draft-p window)))
+      (should (= (mevedel-floating-composer--start) (window-start window)))
+      (should (eq host (selected-window)))))
   :doc "C-x 2 and C-x 3 in the floating composer split the host"
   (progn
     (mevedel-floating-composer-test--scroll-away t)
@@ -689,6 +727,94 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (should (eq window (selected-window)))
     (should (= 6 (mevedel-floating-composer-test--offset)))
     (should (equal viewport (cons (window-start host) (window-vscroll host t))))))
+
+(mevedel-deftest mevedel-floating-composer-reveal ()
+  (mevedel-floating-composer-test--with-view
+    (let* ((host (selected-window))
+           (below (lambda (lines)
+                    (save-excursion (goto-char (window-end host t))
+                                    (forward-line lines)
+                                    (point)))))
+      ,test))
+  (test)
+  :doc "does nothing while no floating composer floats over the window"
+  (let ((viewport (cons (window-start host) (window-vscroll host t))))
+    (mevedel-floating-composer-reveal host (point-min) (point-min))
+    (should (equal viewport (cons (window-start host) (window-vscroll host t)))))
+  :doc "a position already above the floating composer moves nothing"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((viewport (cons (window-start host) (window-vscroll host t))))
+      (mevedel-floating-composer-reveal host (window-start host) (window-start host))
+      (should (equal viewport (cons (window-start host) (window-vscroll host t))))))
+  :doc "a hidden card that fits starts at the window's top"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((start (funcall below 0)))
+      (mevedel-floating-composer-reveal host start (funcall below 2))
+      (should (= start (window-start host)))))
+  :doc "a hidden line of a card too tall for that shows just above the floating composer"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((position (funcall below 2))
+          (window (mevedel-floating-composer-test--window)))
+      (mevedel-floating-composer-reveal host (point-min) position)
+      (redisplay t)
+      (should (mevedel-floating-composer-test--above-p position host window))
+      (should (> (window-start host) (point-min))))))
+
+(mevedel-deftest mevedel-floating-composer-return ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window))
+          (draft (+ (mevedel-view--input-start) 4)))
+      ,test))
+  (test)
+  :doc "returns nil while no floating composer is shown"
+  (progn
+    (goto-char (point-min))
+    (should-not (mevedel-floating-composer-return host draft))
+    (should (eq host (selected-window))))
+  :doc "returns nil when the window fully shows the position"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (should-not (mevedel-floating-composer-return host (window-start host)))
+    (should (eq host (selected-window))))
+  :doc "moves the cursor into the floating composer, leaving the host's point"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((point (window-point host)))
+      (should (mevedel-floating-composer-return host draft))
+      (should (eq (mevedel-floating-composer-test--window) (selected-window)))
+      (should (= 4 (mevedel-floating-composer-test--offset)))
+      (should (= point (window-point host)))))
+  :doc "does nothing for a window that is not selected"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((other (split-window host nil 'below)))
+      (should-not (mevedel-floating-composer-return other draft))
+      (should (eq host (selected-window))))))
+
+(mevedel-deftest mevedel-floating-composer-leave ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window)))
+      ,test))
+  (test)
+  :doc "moves a cursor in the floating composer to its host at the same position"
+  (progn
+    (mevedel-floating-composer-test--scroll-away t)
+    (let ((window (selected-window)))
+      (should (window-parameter window 'mevedel-floating-composer))
+      (mevedel-floating-composer-leave)
+      (should (eq host (selected-window)))
+      (should (= 4 (mevedel-floating-composer-test--offset)))
+      (should-not (frame-focus (window-frame host)))))
+  :doc "leaves a cursor in the host where it is"
+  (progn
+    (mevedel-floating-composer-test--scroll-away nil)
+    (let ((point (point)))
+      (mevedel-floating-composer-leave)
+      (should (eq host (selected-window)))
+      (should (= point (point))))))
 
 
 ;;
@@ -1081,6 +1207,49 @@ placement gives now, with its cursor visible.  Return its window if shown."
 
 ;;
 ;;; Long drafts
+
+(defun mevedel-floating-composer-test--rail-at (host y)
+  "Show the composer's start at pixel Y of HOST, the cursor two lines above."
+  (let ((start (mevedel-floating-composer--start)))
+    (mevedel-view--set-viewport host (mevedel-view--viewport-at-y host start y))
+    (goto-char (save-excursion (goto-char start) (forward-line -2) (point)))
+    (redisplay t)
+    (should-not (mevedel-view--position-in-input-region-p (window-point host)))))
+
+(mevedel-deftest mevedel-floating-composer--needed-p ()
+  (mevedel-floating-composer-test--with-view
+    (let* ((host (selected-window))
+           (height (cdr (mevedel-view--window-body-geometry host)))
+           (line (frame-char-height)))
+      ;; Rail and draft together are taller than the window.
+      (mevedel-floating-composer-test--grow-draft (* 2 (window-body-height host)))
+      ,test))
+  (test)
+  :doc "the rail on the window's last full row hides it, however tall the draft"
+  (progn
+    (mevedel-floating-composer-test--rail-at host (- height line))
+    (should-not (mevedel-view--position-screen-y (point-max) host))
+    (should-not (mevedel-floating-composer--needed-p host)))
+  :doc "a draft filling the window from the rail hides it"
+  (progn
+    (mevedel-floating-composer-test--rail-at host (* 4 line))
+    (should-not (mevedel-floating-composer--needed-p host)))
+  :doc "the rail cut off at the window's bottom shows it"
+  (progn
+    (mevedel-floating-composer-test--rail-at host (- height (/ line 2)))
+    (should (mevedel-floating-composer--needed-p host)))
+  :doc "a window showing only transcript shows it"
+  (progn
+    (mevedel-view--set-viewport host (cons (point-min) 0))
+    (goto-char (point-min))
+    (redisplay t)
+    (should (mevedel-floating-composer--needed-p host)))
+  :doc "the cursor in the draft never shows it"
+  (progn
+    (mevedel-view--set-viewport host (cons (point-min) 0))
+    (redisplay t)
+    (goto-char (+ (mevedel-view--input-start) 4))
+    (should-not (mevedel-floating-composer--needed-p host))))
 
 (mevedel-deftest mevedel-floating-composer/long-draft ()
   (mevedel-floating-composer-test--with-view
