@@ -425,13 +425,11 @@ body height and composer draft."
         (face-background 'internal-border frame)))
 
 (ert-deftest mevedel-note-frame-border-follows-theme-graphical ()
-  "A shown note frame repaints its border when the theme changes.
-With MEVEDEL_BORDER_CAPTURE_DIR set, also exports each state's PNG."
+  "A shown note frame repaints its border when the theme changes."
   (skip-unless (display-graphic-p))
   (let* ((parent (selected-frame))
          (saved (list (face-attribute 'default :foreground parent)
-                      (face-attribute 'default :background parent)))
-         (dir (getenv "MEVEDEL_BORDER_CAPTURE_DIR")))
+                      (face-attribute 'default :background parent))))
     (mevedel-window-graphical-test--with-frame '("Border prompt")
       (unwind-protect
           (dolist (theme '(("dark" "#bbc2cf" "#282c34" "#3b4252")
@@ -452,15 +450,7 @@ With MEVEDEL_BORDER_CAPTURE_DIR set, also exports each state's PNG."
                   (mevedel-note-frame--paint-border frame (nth 2 state))
                   (redisplay t)
                   (should (equal (list (nth 1 state) (nth 1 state))
-                                 (mevedel-window-graphical-test--border-px frame)))
-                  (when dir
-                    ;; A compositor screenshot: frame export omits the border.
-                    ;; An external writer also passes the leak guard.
-                    (sit-for 0.7)       ; let the compositor present the repaint
-                    (call-process "spectacle" nil nil nil "-b" "-n" "-f" "-o"
-                                  (expand-file-name
-                                   (format "%s-%s.png" name (car state))
-                                   dir)))))))
+                                 (mevedel-window-graphical-test--border-px frame)))))))
         (set-face-attribute 'default parent :foreground (nth 0 saved)
                             :background (nth 1 saved))
         (run-hook-with-args 'enable-theme-functions 'border-test)))))
