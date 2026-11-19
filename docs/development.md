@@ -857,6 +857,8 @@ without one and unfocused (a second frame showing another buffer holds focus),
 first show, and wheel crossings away and back. Unfocused idle runs before any
 crossing, so `on-never` has never created a floating-composer frame; crossings
 count each direction's commands separately, without the pauses between them.
+The spinner power policy is pinned to `full`, so rails animate at the normal
+rate unless the floating composer's own battery-ceiling rule applies.
 Latency runs from event delivery until no timer is due and redisplay finished.
 CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland;
 the Xwayland processes are found before the measured interval, since scanning

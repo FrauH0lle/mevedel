@@ -428,7 +428,10 @@ Counters cover only the crossing commands, not the pauses between them."
   (setq scroll-preserve-screen-position t
         mouse-wheel-scroll-amount '(20 ((shift) . hscroll))
         mouse-wheel-progressive-speed nil
-        mevedel-view-spinner-animate t)
+        mevedel-view-spinner-animate t
+        ;; Normal rate everywhere, so only the floating composer's own rule
+        ;; applies the battery ceiling, whatever the host's power source.
+        mevedel-view-spinner-power-policy 'full)
   (add-hook 'post-command-hook #'mevedel-fc-bench--post-command 100))
 
 (defun mevedel-fc-bench-run (output rounds)

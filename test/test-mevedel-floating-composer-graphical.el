@@ -21,6 +21,7 @@
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-native)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 
@@ -464,6 +465,32 @@ Focus changes arrive asynchronously, so wait up to half a second."
       (dotimes (_ 3) (mevedel-floating-composer-test--settle))
       (should (equal rail (mevedel-floating-composer-test--rail)))
       (should (equal state mevedel-view--spinner-rendered-state))
-      (should (= (1- (window-body-width host)) (nth 3 state))))))
+      (should (= (1- (window-body-width host)) (nth 3 state)))))
+  :doc "the rail animates at the battery ceiling while only the floating composer shows it"
+  (let ((mevedel-view-spinner-animate t)
+        (mevedel-view-spinner-style 'shimmer)
+        (mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-battery-framerate 1)
+        (mevedel-view-spinner-power-policy 'full)
+        specs)
+    ;; Keep the label in the Lisp plan and record what native presentation gets.
+    (cl-letf (((symbol-function 'mevedel-view-native-sync)
+               (lambda (new &rest _) (setq specs new) nil)))
+      (cl-flet ((periods ()
+                  (setq specs nil)
+                  (mevedel-view--start-spinner-timer t)
+                  (list (cdr (cl-find 'metadata mevedel-view--spinner-timer-plan
+                                      :key #'car :test-not #'eq))
+                        (nth 4 (car specs)))))
+        (pcase-let ((`(,plan ,native) (periods)))
+          (should (< plan 0.5))
+          (should (< native 0.5)))
+        (mevedel-floating-composer-test--scroll-away nil)
+        (should (mevedel-floating-composer-test--window))
+        (should-not (mevedel-view--position-screen-y
+                     (mevedel-floating-composer--start) host))
+        (pcase-let ((`(,plan ,native) (periods)))
+          (should (>= plan 1.0))
+          (should (>= native 1.0)))))))
 
 ;;; test-mevedel-floating-composer-graphical.el ends here

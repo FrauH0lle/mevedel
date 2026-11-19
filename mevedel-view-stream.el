@@ -920,13 +920,36 @@ windows."
                   target 'mevedel-view-inline-spinner-frame))
                mevedel-view--spinner-tool-targets)))
 
-(defun mevedel-view--spinner-visual-period (style &optional glyph-fallback)
+(defun mevedel-view--spinner-label-power-policy ()
+  "Return the power policy for the request label's animation.
+While every attended window showing the label is a floating composer,
+return `save', the policy that always applies the battery ceiling; the
+user accepted the floating composer's cost only at that rate.  Otherwise
+return `mevedel-view-spinner-power-policy'."
+  (let ((target mevedel-view--spinner-label-target)
+        windows)
+    (when-let* ((start (car-safe target))
+                ((marker-position start)))
+      (dolist (window (mevedel-view--windows 'visibility))
+        (when (and (mevedel-view--window-attended-p window)
+                   (mevedel-view--animation-span-in-window-p
+                    (marker-position start) (marker-position (cdr target)) window))
+          (push window windows))))
+    (if (and windows
+             (cl-every (lambda (window)
+                         (window-parameter window 'mevedel-floating-composer))
+                       windows))
+        'save
+      mevedel-view-spinner-power-policy)))
+
+(defun mevedel-view--spinner-visual-period (style &optional glyph-fallback policy)
   "Return effective time between visual frames for STYLE, or nil.
-GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback."
+GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback.  POLICY
+overrides `mevedel-view-spinner-power-policy'."
   (let ((rate (mevedel-view-power-framerate
                mevedel-view-spinner-framerate
                mevedel-view-spinner-battery-framerate
-               mevedel-view-spinner-power-policy
+               (or policy mevedel-view-spinner-power-policy)
                mevedel-view-spinner-animate)))
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
@@ -1092,21 +1115,29 @@ a window resize."
       (mevedel-view--recheck-spinner-after-redisplay))))
 
 (defun mevedel-view--sync-native-animation (main tools)
-  "Offload the visible MAIN label and TOOLS when native presentation is ready."
+  "Offload the visible MAIN label and TOOLS when native presentation is ready.
+The label animates under `mevedel-view--spinner-label-power-policy'."
   (let* ((rate (mevedel-view-power-framerate
                 mevedel-view-spinner-framerate mevedel-view-spinner-battery-framerate
                 mevedel-view-spinner-power-policy mevedel-view-spinner-animate))
+         (main-rate (if main
+                        (mevedel-view-power-framerate
+                         mevedel-view-spinner-framerate
+                         mevedel-view-spinner-battery-framerate
+                         (mevedel-view--spinner-label-power-policy)
+                         mevedel-view-spinner-animate)
+                      rate))
          (seconds (mevedel-view--animation-seconds))
          specs)
     (when (and (> rate 0) (not (mevedel-view--animation-frozen-p)))
-      (when main
+      (when (and main (> main-rate 0))
         (push (list mevedel-view--spinner-label-target mevedel-view-spinner-style
                     (buffer-substring-no-properties
                      (car mevedel-view--spinner-label-target)
                      (cdr mevedel-view--spinner-label-target))
                     'mevedel-view-spinner
                     (if (memq mevedel-view-spinner-style '(shimmer breathe bounce))
-                        (/ 1.0 rate) main)) specs))
+                        (/ 1.0 main-rate) main)) specs))
       (dolist (target tools)
         (when-let* ((period (mevedel-view--spinner-visual-period mevedel-view-tool-spinner-style)))
           (push (list target mevedel-view-tool-spinner-style
@@ -1209,7 +1240,8 @@ rechecked without changing the displayed animation phase."
                  (setq mevedel-view--spinner-main-color-p main-color)
                  (when main-visible
                    (mevedel-view--spinner-visual-period
-                    mevedel-view-spinner-style (not main-color)))))
+                    mevedel-view-spinner-style (not main-color)
+                    (mevedel-view--spinner-label-power-policy)))))
          (tool-targets (and visible
                             (cl-remove-if-not
                              (lambda (target)

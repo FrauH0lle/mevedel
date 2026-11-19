@@ -54,6 +54,15 @@ cursor it held to the inline draft.
   composer, so animation visibility keeps counting its window, and its frame
   carries `mevedel-view-animate-as-parent` so animation's frame choice treats
   it as its parent.
+- **Slower rail animation in the floating composer.** While every attended
+  window showing the request label is a floating composer, the label
+  animates at the battery frame-rate ceiling
+  (`mevedel-view-spinner-battery-framerate`, the rate the `save` power policy
+  always applies), in the Lisp timer and in native presentation alike. When
+  the rail is also visible inline, it runs at the normal rate. Pending-tool
+  rows keep their rate. No option controls this: the user accepted the
+  floating composer's typing cost and chose to slow, not stop, its animation
+  (2026-11-19).
 - **Placement cost.** The composer's natural height is measured with a pixel
   limit of the cap plus one line and cached until the buffer
   (`buffer-modified-tick`, so property changes such as a face height count),
@@ -137,72 +146,85 @@ Its findings had these causes, now removed:
 
 Second run, on the tree that records this section: Emacs 31.1 pgtk,
 byte-compiled, private presenting KWin (virtual, OpenGL, no lock screen);
-presentation probes before and after with 70 and 66 completed frame
+presentation probes before and after with 71 and 66 completed frame
 callbacks; one warm-up round and 6 alternating rounds; every measured
 workload began focused and attended except `idle-unfocused`, which is
 unattended by design and measured before any crossing, so `on-never` has
-never created a frame. Crossings count each direction's commands
-separately; their CPU includes the benchmark reading per-thread CPU before
-each command, equally in every scenario. Values are scenario vs baseline;
-"paired" is the per-round difference, median [min, max] over 6 rounds. No
-parity verdict is recorded here.
+never created a frame. The power policy is pinned to `full`, so only the
+floating composer's rule applies the battery ceiling (15 fps); earlier runs
+left it at `auto`, which in the private session animated every rail at the
+ceiling (`off-inline` idle with a request: 86-92 ms Emacs CPU and 20-21
+redisplay cycles per 4 s under `auto`, 142 ms and 36 under `full`).
+Crossings count each direction's commands separately; their CPU includes
+the benchmark reading per-thread CPU before each command, equally in every
+scenario. Values are scenario vs baseline; "paired" is the per-round
+difference, median [min, max] over 6 rounds. No parity verdict is recorded
+here.
 
 Remaining regressions other than visible rail animation:
 
 - **Typing in the visible floating composer** (`on-visible` vs `off-inline`,
-  40 keys per run): latency including redisplay 2.63 vs 1.75 ms median
-  (pooled, n 240 each), per-round ratio 1.46 [1.34, 1.69]; Emacs CPU
-  +56 [+30, +73] ms per run. A probe split this: with the floating
+  40 keys per run): latency including redisplay 2.35 vs 1.51 ms median
+  (pooled, n 240 each), per-round ratio 1.53 [1.38, 1.76]; Emacs CPU
+  +60 [+36, +70] ms per run. A probe split this: with the floating
   composer's update disabled, keys still cost 1.88-2.40 ms against
   1.36-1.82 ms inline (run medians, 4 alternating runs of 40 keys), so most
   of it is redisplaying the second window; the one remaining measurement
-  per key takes about 0.06 ms of layout.
+  per key takes about 0.06 ms of layout. The user accepted this cost
+  (2026-11-19).
 - **Wrapped-draft deletion in the visible floating composer** (30 keys per
-  run): Emacs CPU +41 [+19, +51] ms per run and up to one more GC
-  (+1 [+0, +1]); latency is lower, 3.81 vs 4.31 ms median (n 180 each),
-  ratio 0.86 [0.77, 0.95].
+  run): Emacs CPU +55 [+34, +58] ms per run and one more GC (+1 [+1, +1]);
+  latency is lower, 3.63 vs 4.05 ms median (n 180 each), ratio
+  0.89 [0.87, 0.92].
 - **Unfocused idle with a floating-composer frame that exists** (4 s, the
-  view's frame unfocused): `on-hidden` Emacs CPU +2.0 [-2.2, +7.6] ms and
-  redisplay cycles +0.5 [+0, +1]; `on-visible` Emacs CPU +3.1 [-1.0, +18.9] ms
-  and redisplay cycles +1 [+0, +8]. The CPU differences are inconclusive. A
-  probe found an extra redisplay with no Lisp timer due, about 0.9 and 1.4 s
-  after focus left, so the frame's window-system events drive it.
-- **Idle with a request, against the equal-visible-work control**
-  (`on-visible` vs `off-inline`, 4 s): Emacs CPU +5.6 [-0.2, +8.8] ms; KWin
-  CPU -0.5 [-5.5, +1.4] ms and redisplay cycles +0 [-1, +1].
-- **Streaming against the same control** (100 chunks at 40 ms): redisplay
-  cycles +13 [+7, +19]; Emacs CPU +5.5 [-10.7, +41.0] ms and KWin CPU
-  +7.8 [-62.7, +27.1] ms are inconclusive.
-- **First show,** which creates the child frame once per view: 53.12 ms
-  median, p90 58.46 ms (n 36), no "off" counterpart. Without PGTK's wait
+  view's frame unfocused): `on-hidden` Emacs CPU +4.0 [-4.2, +7.3] ms and
+  redisplay cycles +0.5 [+0, +1]; `on-visible` +3.5 [-3.7, +9.3] ms and
+  +0.5 [+0, +1]. The CPU differences are inconclusive; the never-created
+  control `on-never` also measured +5.9 [-3.9, +11.5] ms with +0 [-1, +1]
+  redisplay cycles. A probe found an extra redisplay with no Lisp timer due,
+  about 0.9 and 1.4 s after focus left, so the frame's window-system events
+  drive it.
+- **Hidden after use, streaming:** KWin CPU +10.7 [+3.1, +13.6] ms per 100
+  chunks; Emacs CPU +23.3 [-15.8, +73.6] ms is inconclusive. `on-never`
+  measured KWin CPU +5.1 [+4.2, +17.9] ms in the same workload.
+- **Scroll away:** KWin CPU +1.5 [+0.2, +2.9] ms per 12 crossings
+  (`on-never` vs `off-inline`); GCs +0.5 [+0, +1] (inconclusive).
+- **First show,** which creates the child frame once per view: 47.95 ms
+  median, p90 61.14 ms (n 36), no "off" counterpart. Without PGTK's wait
   this is frame creation itself.
 
-Visible rail animation (`on-visible` vs `off-away`, the rail hidden):
+Visible rail animation, with the rail visible only in the floating composer
+and so animating at the battery ceiling:
 
-- **Idle with a request in flight, 4 s:** Emacs CPU +90.4 [+77.5, +93.7] ms,
-  KWin CPU +27.0 [+21.1, +30.5] ms, redisplay cycles +19 [+18, +19].
-- **Stream, 100 chunks at 40 ms:** Emacs CPU +194.3 [+169.8, +236.1] ms,
-  KWin CPU +32.9 [-48.0, +52.3] ms, redisplay cycles +39.5 [+35, +41], one
-  more GC.
+- **Idle with a request, against the hidden rail** (`on-visible` vs
+  `off-away`, 4 s): Emacs CPU +85.6 [+81.8, +88.3] ms, KWin CPU
+  +21.3 [+20.4, +23.2] ms, redisplay cycles +19 [+19, +19].
+- **Idle with a request, against the rail visible inline at the normal rate**
+  (`off-inline`): Emacs CPU -46.9 [-59.9, -39.8] ms, KWin CPU
+  -15.1 [-20.3, -11.8] ms, redisplay cycles -14 [-14, -13].
+- **Stream, 100 chunks at 40 ms, against the hidden rail:** Emacs CPU
+  +209.5 [+176.3, +239.0] ms, KWin CPU +18.4 [+10.2, +39.5] ms, redisplay
+  cycles +40 [+34, +41], one more GC. Against the inline rail: Emacs CPU
+  -31.3 [-55.9, +4.6] ms (inconclusive), KWin CPU -1.0 [-17.4, +4.5] ms,
+  redisplay cycles -5 [-10, -2].
 
 No regression measured:
 
 - **Scroll away** (`on-never` vs `off-inline`, 12 crossings per run, n 72
-  each): 6.09 vs 7.69 ms median, ratio 0.80 [0.78, 0.81]; Emacs CPU
-  -41 [-67, -20] ms, KWin CPU -1.1 [-1.9, +0.2] ms, redisplay cycles
-  -1 [-1, -1] and GCs -1 [-1, +0] per run.
-- **Scroll back:** 3.30 vs 6.05 ms median, ratio 0.55 [0.53, 0.56]; Emacs CPU
-  -1.8 [-27.8, +1.0] ms, KWin CPU -4.8 [-7.6, -3.8] ms, redisplay cycles
-  -4 [-4, -4] per run; GCs +0.5 [-1, +1] (inconclusive).
-- **On but never created** (`on-never` vs `off-inline`): typing 1.71 vs
-  1.75 ms; wrapped deletion 4.24 vs 4.31 ms; stream Emacs CPU
-  -1.1 [-7.5, +18.0] ms; idle with a request +0.8 [-2.3, +4.2] ms; quiet idle
-  +0.2 [-0.1, +0.5] ms; unfocused idle +0.7 [-5.0, +6.7] ms with redisplay
-  cycles +0 [-1, +1].
-- **Hidden after use** (`on-hidden` vs `off-inline`): typing 1.49 vs 1.75 ms;
-  wrapped deletion 3.68 vs 4.31 ms; stream Emacs CPU +14.3 [-14.0, +46.3] ms;
-  idle with a request +1.3 [-4.9, +6.5] ms; quiet idle +0.6 [+0.2, +0.9] ms.
-- **Visible floating composer, quiet idle:** Emacs CPU -0.0 [-0.3, +0.6] ms.
+  each): 6.20 vs 7.87 ms median, ratio 0.78 [0.76, 0.83]; Emacs CPU
+  -24 [-37, +1] ms and redisplay cycles -1 [-1, -1] per run.
+- **Scroll back:** 3.34 vs 6.18 ms median, ratio 0.54 [0.51, 0.56]; p90
+  25.63 vs 12.31 ms; Emacs CPU -42.6 [-71.2, -27.0] ms, KWin CPU
+  -6.3 [-8.6, -5.8] ms, redisplay cycles -4 [-4, -4] and GCs -1 [-1, +0] per
+  run.
+- **On but never created** (`on-never` vs `off-inline`): typing 1.46 vs
+  1.51 ms; wrapped deletion 4.09 vs 4.05 ms, ratio 1.01 [0.96, 1.17]; stream
+  Emacs CPU +8.2 [-31.4, +46.3] ms; idle with a request -2.0 [-14.0, +13.5] ms;
+  quiet idle +0.1 [-0.8, +0.5] ms.
+- **Hidden after use** (`on-hidden` vs `off-inline`): typing 1.33 vs
+  1.51 ms; wrapped deletion 3.61 vs 4.05 ms; idle with a request
+  +0.7 [-9.4, +13.9] ms; quiet idle +0.1 [-0.5, +0.5] ms.
+- **Visible floating composer, quiet idle:** Emacs CPU -0.2 [-0.8, +0.1] ms.
 - **Child-frame move/resize** calls were 0 in every measured workload (the
   draft height did not change); show/hide were 1 per crossing direction.
 
