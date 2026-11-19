@@ -2,11 +2,12 @@
 
 ;;; Commentary:
 
-;; A real view in a graphical frame, driven through the command loop.  Each
+;; A real view in a real frame, driven through the command loop.  Each
 ;; case reads what the user sees: the selected window, the cursor's draft
 ;; offset, whether the floating composer is shown, and the host window's
 ;; start, vertical scroll, point and rail width.  The frame holds real
-;; compositor focus; nothing stubs `frame-focus-state'.  Batch runs skip them.
+;; compositor focus; nothing stubs `frame-focus-state'.  Batch runs skip them;
+;; test/terminal-check.el runs the main cases in a terminal frame.
 
 ;;; Code:
 
@@ -32,12 +33,12 @@
   "Multiline draft whose first editable character is `>'.")
 
 (defmacro mevedel-floating-composer-test--with-view (&rest body)
-  "Run BODY in a graphical view showing its composer at the window bottom.
+  "Run BODY in a view showing its composer at the window bottom.
 The draft holds point at offset 4.  BODY can set `agents', which the
 background panel reads; `data-buf' and `view-buf' are bound too."
   (declare (indent 0) (debug t))
   `(progn
-     (skip-unless (display-graphic-p))
+     (skip-unless (not noninteractive))
      (save-window-excursion
        (delete-other-windows)
        (mevedel-view-test--with-buffers
@@ -134,6 +135,13 @@ Focus changes arrive asynchronously, so wait up to half a second."
   "Return FACE's background, the floating composer's border color for it."
   (face-attribute face :background nil 'default))
 
+(defun mevedel-floating-composer-test--redirected-p (parent frame)
+  "Return non-nil when PARENT's keystrokes reach FRAME.
+A terminal sends them to the selected frame, so it must have no redirect."
+  (if (display-graphic-p parent)
+      (eq frame (frame-focus parent))
+    (null (frame-focus parent))))
+
 (defun mevedel-floating-composer-test--window ()
   "Return the shown floating composer's window, or nil."
   (when-let* ((window (mevedel-floating-composer--window))
@@ -228,7 +236,7 @@ Focus changes arrive asynchronously, so wait up to half a second."
   (progn
     (mevedel-floating-composer-test--scroll-away t)
     (let ((frame (selected-frame)))
-      (should (eq frame (frame-focus (window-frame host))))
+      (should (mevedel-floating-composer-test--redirected-p (window-frame host) frame))
       (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
                      (face-background 'child-frame-border frame)))
       (mevedel-floating-composer-test--click host)
@@ -249,7 +257,7 @@ Focus changes arrive asynchronously, so wait up to half a second."
           (mevedel-floating-composer-test--scroll-away t)
           ;; As `other-frame' does, `select-frame' retargets the redirect.
           (select-frame other)
-          (should (eq other (frame-focus parent)))
+          (should (mevedel-floating-composer-test--redirected-p parent other))
           (with-current-buffer view-buf (mevedel-floating-composer--remove))
           (should-not (frame-focus parent)))
       (select-frame parent)
@@ -258,7 +266,7 @@ Focus changes arrive asynchronously, so wait up to half a second."
   :doc "deleting the host clears the redirect before the next command"
   (let ((parent (window-frame host)))
     (mevedel-floating-composer-test--scroll-away t)
-    (should (eq (selected-frame) (frame-focus parent)))
+    (should (mevedel-floating-composer-test--redirected-p parent (selected-frame)))
     (set-window-buffer (split-window host nil 'right) (get-buffer-create "*scratch*"))
     (delete-window host)
     (mevedel-floating-composer-test--settle)
@@ -277,9 +285,9 @@ Focus changes arrive asynchronously, so wait up to half a second."
           ;; A second view takes input on the same parent frame.
           (with-current-buffer other-buf
             (mevedel-floating-composer--select (frame-root-window other) 1))
-          (should (eq other (frame-focus parent)))
+          (should (mevedel-floating-composer-test--redirected-p parent other))
           (with-current-buffer view-buf (mevedel-floating-composer--release))
-          (should (eq other (frame-focus parent))))
+          (should (mevedel-floating-composer-test--redirected-p parent other)))
       (select-frame parent)
       (redirect-frame-focus parent nil)
       (delete-frame other)
@@ -302,7 +310,8 @@ Focus changes arrive asynchronously, so wait up to half a second."
       (should (eq host (selected-window)))
       (mevedel-floating-composer-test--click window)
       (should (eq window (selected-window)))
-      (should (eq (window-frame window) (frame-focus (window-frame host))))))
+      (should (mevedel-floating-composer-test--redirected-p
+               (window-frame host) (window-frame window)))))
   :doc "scrolling away with the cursor in the transcript keeps it there"
   (progn
     (mevedel-floating-composer-test--scroll-away nil)
