@@ -21,8 +21,19 @@ cursor it held to the inline draft.
   bottom edge and is as tall as the composer from the rail down, capped at
   half the host's text height. The frame is created once per view, hidden
   between uses, and deleted with the view or when the option is turned off.
-  For now only graphical frames have one; note-frame windows, historical
-  segments and agent transcript views never do.
+  Note-frame windows, historical segments and agent transcript views never
+  have one.
+- **Terminal frames.** In terminal Emacs it is a terminal child frame with
+  the same behavior. Its geometry is in whole cells (a terminal's pixel is a
+  cell, so the half-line gap rounds to none). Emacs draws a terminal child
+  frame's border as box characters one cell outside the frame and only around
+  a decorated frame, so the floating composer overrides the shared
+  `undecorated` parameter there, uses a one-cell border in the placement and
+  places the frame inside it; the box, in the `border` face, stays inside the
+  host. A terminal sends keystrokes to the selected child frame itself and
+  `select-frame` never moves a redirect there, so a stale redirect would send
+  the host's later keystrokes back to the floating composer: on a terminal
+  hand-over selects the floating composer without redirecting its parent.
 - **When.** Only the selected window can be a host, and only while it shows
   neither its cursor's draft position nor the whole composer. So it follows
   the selected window across splits, window selection and frame resizes, and
@@ -110,7 +121,22 @@ cursor it held to the inline draft.
   cursor there, so a draft taller than the window can return too.
 - Only `post-command-hook` moves the cursor. Timers, window hooks, streaming
   and other background updates only place, show or hide a floating composer
-  that is not selected.
+  that is not selected. Settling a card visited with `C-c C-j` is the one
+  exception, described below.
+- `C-c C-j` from the floating composer moves the cursor to the host first, so
+  the visit and the draft offset it remembers belong to the host, and selects
+  the card there. While a floating composer is shown over the window, a card
+  whose cursor line would be hidden behind it is scrolled to the window's
+  top, or, if the card is too tall for that, its cursor line just above the
+  floating composer. Arriving cards move nothing.
+- Settling the visited card, while the host still visits it, returns the
+  cursor to the remembered draft offset: inline when the host fully shows
+  that position, otherwise in the shown floating composer, leaving the host's
+  point in the transcript.
+- Sending with `C-c RET` from the floating composer needs no rule of its own:
+  the host's point is in the transcript, so ADR 0126 keeps its viewport as a
+  history reader, and the cursor stays in the emptied floating composer.
+  Input typed while the submission is prepared is kept as inline.
 - With the option off ADR 0126's per-window return-to-draft is unchanged.
 
 ## Rationale and consequences

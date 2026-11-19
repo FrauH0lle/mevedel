@@ -2,11 +2,12 @@
 
 ;;; Commentary:
 
-;; A real view in a graphical frame, driven through the command loop.  Each
+;; A real view in a real frame, driven through the command loop.  Each
 ;; case reads what the user sees: the selected window, the cursor's draft
 ;; offset, whether the floating composer is shown, and the host window's
 ;; start, vertical scroll, point and rail width.  The frame holds real
-;; compositor focus; nothing stubs `frame-focus-state'.  Batch runs skip them.
+;; compositor focus; nothing stubs `frame-focus-state'.  Batch runs skip them;
+;; test/terminal-check.el runs the main cases in a terminal frame.
 
 ;;; Code:
 
@@ -16,7 +17,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mwheel)
+(require 'mevedel-chat)
 (require 'mevedel-floating-composer)
+(require 'mevedel-readiness)
+(require 'mevedel-turn)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-animation)
@@ -34,12 +38,12 @@
   "Multiline draft whose first editable character is `>'.")
 
 (defmacro mevedel-floating-composer-test--with-view (&rest body)
-  "Run BODY in a graphical view showing its composer at the window bottom.
+  "Run BODY in a view showing its composer at the window bottom.
 The draft holds point at offset 4.  BODY can set `agents', which the
 background panel reads; `data-buf' and `view-buf' are bound too."
   (declare (indent 0) (debug t))
   `(progn
-     (skip-unless (display-graphic-p))
+     (skip-unless (not noninteractive))
      (save-window-excursion
        (delete-other-windows)
        (mevedel-view-test--with-buffers
@@ -135,6 +139,13 @@ Focus changes arrive asynchronously, so wait up to half a second."
 (defun mevedel-floating-composer-test--border-color (face)
   "Return FACE's background, the floating composer's border color for it."
   (face-attribute face :background nil 'default))
+
+(defun mevedel-floating-composer-test--redirected-p (parent frame)
+  "Return non-nil when PARENT's keystrokes reach FRAME.
+A terminal sends them to the selected frame, so it must have no redirect."
+  (if (display-graphic-p parent)
+      (eq frame (frame-focus parent))
+    (null (frame-focus parent))))
 
 (defun mevedel-floating-composer-test--window ()
   "Return the shown floating composer's window, or nil."
@@ -265,7 +276,7 @@ placement gives now, with its cursor visible.  Return its window if shown."
   (progn
     (mevedel-floating-composer-test--scroll-away t)
     (let ((frame (selected-frame)))
-      (should (eq frame (frame-focus (window-frame host))))
+      (should (mevedel-floating-composer-test--redirected-p (window-frame host) frame))
       (should (equal (mevedel-floating-composer-test--border-color 'mevedel-note-frame-border)
                      (face-background 'child-frame-border frame)))
       (mevedel-floating-composer-test--click host)
@@ -286,7 +297,7 @@ placement gives now, with its cursor visible.  Return its window if shown."
           (mevedel-floating-composer-test--scroll-away t)
           ;; As `other-frame' does, `select-frame' retargets the redirect.
           (select-frame other)
-          (should (eq other (frame-focus parent)))
+          (should (mevedel-floating-composer-test--redirected-p parent other))
           (with-current-buffer view-buf (mevedel-floating-composer--remove))
           (should-not (frame-focus parent)))
       (select-frame parent)
@@ -295,7 +306,7 @@ placement gives now, with its cursor visible.  Return its window if shown."
   :doc "deleting the host clears the redirect before the next command"
   (let ((parent (window-frame host)))
     (mevedel-floating-composer-test--scroll-away t)
-    (should (eq (selected-frame) (frame-focus parent)))
+    (should (mevedel-floating-composer-test--redirected-p parent (selected-frame)))
     (set-window-buffer (split-window host nil 'right) (get-buffer-create "*scratch*"))
     (delete-window host)
     (mevedel-floating-composer-test--settle)
@@ -314,9 +325,9 @@ placement gives now, with its cursor visible.  Return its window if shown."
           ;; A second view takes input on the same parent frame.
           (with-current-buffer other-buf
             (mevedel-floating-composer--select (frame-root-window other) 1))
-          (should (eq other (frame-focus parent)))
+          (should (mevedel-floating-composer-test--redirected-p parent other))
           (with-current-buffer view-buf (mevedel-floating-composer--release))
-          (should (eq other (frame-focus parent))))
+          (should (mevedel-floating-composer-test--redirected-p parent other)))
       (select-frame parent)
       (redirect-frame-focus parent nil)
       (delete-frame other)
@@ -339,7 +350,8 @@ placement gives now, with its cursor visible.  Return its window if shown."
       (should (eq host (selected-window)))
       (mevedel-floating-composer-test--click window)
       (should (eq window (selected-window)))
-      (should (eq (window-frame window) (frame-focus (window-frame host))))))
+      (should (mevedel-floating-composer-test--redirected-p
+               (window-frame host) (window-frame window)))))
   :doc "scrolling away with the cursor in the transcript keeps it there"
   (progn
     (mevedel-floating-composer-test--scroll-away nil)
@@ -428,6 +440,105 @@ placement gives now, with its cursor visible.  Return its window if shown."
     (mevedel-view--interaction-register
      '(:kind ask :id ask :count 1 :body "A question for the user?\n"))
     (should (string-search "A question for the user?" (buffer-string)))))
+
+
+;;
+;;; Cards and sending
+
+(defun mevedel-floating-composer-test--answer ()
+  "Settle the test card, as answering it does."
+  (interactive)
+  (mevedel-view--interaction-unregister 'ask))
+
+(defun mevedel-floating-composer-test--card (lines)
+  "Register a pending question card with LINES detail lines."
+  (mevedel-view--interaction-register
+   (list :kind 'ask :id 'ask :count 1
+         :body (concat "A question for the user?\n"
+                       (mapconcat (lambda (i) (format "Detail %d\n" i))
+                                  (number-sequence 1 lines) ""))
+         :keymap (define-keymap "RET" #'mevedel-floating-composer-test--answer))))
+
+(defun mevedel-floating-composer-test--above-p (position host window)
+  "Return non-nil when POSITION's line shows in HOST above WINDOW's frame."
+  (when-let* ((y (mevedel-view--position-screen-y position host t)))
+    (<= (+ y (save-excursion (goto-char position) (line-pixel-height)))
+        (- (cdr (frame-position (window-frame window)))
+           (nth 1 (window-inside-pixel-edges host))))))
+
+(mevedel-deftest mevedel-floating-composer/jump-and-send ()
+  (mevedel-floating-composer-test--with-view
+    (let ((host (selected-window)))
+      (mevedel-floating-composer-test--scroll-away t)
+      (let ((window (selected-window)))
+        (should (mevedel-floating-composer-test--window))
+        (mevedel-floating-composer-test--keys "a" 'self-insert-command)
+        ,test)))
+  (test)
+  :doc "C-c C-j visits a card above the floating composer; settling returns to it"
+  (progn
+    ;; The cursor sits so far down the draft that the host never shows it.
+    (insert (make-string 60 ?\n))
+    (mevedel-floating-composer-test--card 40)
+    (mevedel-floating-composer-test--settle)
+    ;; Arrival moves nothing.
+    (should (eq window (selected-window)))
+    (should (= 65 (mevedel-floating-composer-test--offset)))
+    (mevedel-floating-composer-test--keys "C-c C-j" 'mevedel-view-jump-to-interaction)
+    (should (eq host (selected-window)))
+    (should (eq 'ask (get-text-property (point) 'mevedel-view-interaction-id)))
+    (should (mevedel-floating-composer-test--window))
+    (should (mevedel-floating-composer-test--above-p (point) host window))
+    (should-not (frame-focus (window-frame host)))
+    (mevedel-floating-composer-test--keys "RET" 'mevedel-floating-composer-test--answer)
+    (should-not (string-search "A question for the user?" (buffer-string)))
+    (should (eq window (selected-window)))
+    (should (= 65 (mevedel-floating-composer-test--offset)))
+    (should (eq (window-frame window) (frame-focus (window-frame host))))
+    ;; The host stays a history reader.
+    (should (< (window-point host) (mevedel-view--input-start))))
+  :doc "settling with the inline draft visible returns the cursor inline"
+  (progn
+    (mevedel-floating-composer-test--card 1)
+    (mevedel-floating-composer-test--keys "C-c C-j" 'mevedel-view-jump-to-interaction)
+    (should (eq host (selected-window)))
+    (mevedel-floating-composer-test--to-bottom)
+    (should (eq 'ask (get-text-property (window-point host) 'mevedel-view-interaction-id)))
+    (mevedel-floating-composer-test--keys "RET" 'mevedel-floating-composer-test--answer)
+    (should (eq host (selected-window)))
+    (should (= 5 (mevedel-floating-composer-test--offset)))
+    (should-not (mevedel-floating-composer-test--window)))
+  :doc "sending keeps the host's viewport and the cursor in the emptied floating composer"
+  (let ((viewport (cons (window-start host) (window-vscroll host t))))
+    (cl-letf (((symbol-function 'mevedel--dispatch-request) #'ignore)
+              ((symbol-function 'mevedel-request-assert-target-ready) #'ignore)
+              ((symbol-function 'mevedel-readiness-assert) #'ignore))
+      (mevedel-floating-composer-test--keys "C-c RET" 'mevedel-view-send))
+    (should (string-search "acative draft" (buffer-string)))
+    (should (equal "" (mevedel-view--input-text)))
+    (should (eq window (selected-window)))
+    (should (mevedel-floating-composer-test--window))
+    (should (equal viewport (cons (window-start host) (window-vscroll host t)))))
+  :doc "input typed while a submission is prepared survives in the floating composer"
+  (let ((viewport (cons (window-start host) (window-vscroll host t)))
+        (hook (symbol-function 'mevedel-view--run-prompt-submit-hook))
+        pending)
+    (cl-letf (((symbol-function 'mevedel--dispatch-request) #'ignore)
+              ((symbol-function 'mevedel-request-assert-target-ready) #'ignore)
+              ((symbol-function 'mevedel-readiness-assert) #'ignore)
+              ;; Preparation finishes after the user typed on.
+              ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+               (lambda (&rest args) (setq pending (lambda () (apply hook args))))))
+      (mevedel-floating-composer-test--keys "C-c RET" 'mevedel-view-send)
+      (should pending)
+      (mevedel-floating-composer-test--keys "b" 'self-insert-command)
+      (funcall pending)
+      (mevedel-floating-composer-test--settle))
+    (should (string-search "acative draft" (buffer-string)))
+    (should (equal "> acabtive draft\nsecond line" (mevedel-view--input-text)))
+    (should (eq window (selected-window)))
+    (should (= 6 (mevedel-floating-composer-test--offset)))
+    (should (equal viewport (cons (window-start host) (window-vscroll host t))))))
 
 
 ;;
