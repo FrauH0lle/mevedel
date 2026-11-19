@@ -97,9 +97,11 @@ the view's next command.
   limit of the top line, the cap and one more line (the limit counts from
   the window's top, header included) and cached until the buffer
   (`buffer-modified-tick`, so property changes such as a face height count),
-  the window width, the face remapping (text scale) or the default face's
-  height on its frame (global text scale) changes, so scrolling the host
-  measures nothing. The top line's height is at least the parent's line
+  the window width, the face remapping (text scale) or a face or fontset
+  definition changes (the generations the table layouts keep, which count
+  global text scaling and a named face of the draft changing size), so
+  scrolling the host measures nothing. The top line's `↑ N more` count is
+  kept on the same terms plus the window start. The top line's height is at least the parent's line
   height plus `overline-margin`: until the window is drawn, and after a font
   change until it is redrawn, Emacs reports an estimate from the font alone,
   without the overline's margin, and a frame sized by it is too short.

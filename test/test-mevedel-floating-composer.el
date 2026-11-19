@@ -61,6 +61,21 @@
       (should (string-prefix-p " ↑ 7 more ─" line))
       (should (string-suffix-p (concat button " ") line))
       (should (= (window-total-width window) (string-width line)))))
+  :doc "the count is reused until the window start or the draft changes"
+  (let ((counted 0)
+        (count (symbol-function 'count-screen-lines))
+        (line-start (lambda (n) (save-excursion (goto-char start) (forward-line n) (point)))))
+    (cl-letf (((symbol-function 'count-screen-lines)
+               (lambda (&rest args) (cl-incf counted) (apply count args))))
+      (set-window-start window (funcall line-start 7))
+      (should (string-prefix-p " ↑ 7 more " (mevedel-floating-composer--top-line)))
+      (should (string-prefix-p " ↑ 7 more " (mevedel-floating-composer--top-line)))
+      (should (= 1 counted))
+      (set-window-start window (funcall line-start 9))
+      (should (string-prefix-p " ↑ 9 more " (mevedel-floating-composer--top-line)))
+      (save-excursion (goto-char start) (insert "inserted line\n"))
+      (should (string-prefix-p " ↑ 10 more " (mevedel-floating-composer--top-line)))
+      (should (= 3 counted))))
   :doc "the button returns to the bottom on mouse-1"
   (should (eq #'mevedel-floating-composer-back-to-bottom
               (keymap-lookup (get-text-property 1 'local-map mevedel-floating-composer--button)

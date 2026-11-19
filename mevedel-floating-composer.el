@@ -77,6 +77,10 @@
 ;; PGTK
 (defvar pgtk-wait-for-event-timeout)
 
+;; `mevedel-view-table', loaded with the view
+(defvar mevedel-view-table--font-generation)
+(defvar mevedel-view-table--fontset-generation)
+
 
 ;;
 ;;; Customization
@@ -148,17 +152,25 @@ half the host's text height but at least one line."
       (skip-chars-forward "\n")
       (point))))
 
+(defun mevedel-floating-composer--layout-key (window &rest values)
+  "Return what WINDOW's draft layout depends on, followed by VALUES.
+The current buffer's text and properties, WINDOW's width, the face
+remapping (text scale) and the face and fontset generations the table
+layouts keep, which also count global text scaling."
+  (cl-list* (current-buffer) (buffer-modified-tick) (window-body-width window t)
+            face-remapping-alist
+            (bound-and-true-p mevedel-view-table--font-generation)
+            (bound-and-true-p mevedel-view-table--fontset-generation)
+            values))
+
 (defun mevedel-floating-composer--natural-height (window start limit)
   "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
-Cached until the buffer, WINDOW's width or the face remapping (text
-scale) changes, so scrolling the host measures nothing.  The default
-face's height on WINDOW's frame keys global text scaling.
+Cached until its `mevedel-floating-composer--layout-key' changes, so
+scrolling the host measures nothing.
 Measuring fontifies the draft, which modifies the buffer, so the cache
 records the buffer's state after measuring: otherwise every key measured
 twice."
-  (let ((key (lambda () (list (buffer-modified-tick) (window-body-width window t)
-                              face-remapping-alist start limit
-                              (face-attribute 'default :height (window-frame window)))))
+  (let ((key (lambda () (mevedel-floating-composer--layout-key window start limit)))
         (cache (window-parameter window 'mevedel-floating-composer-height)))
     (if (equal (funcall key) (car cache))
         (cdr cache)
@@ -271,11 +283,20 @@ them or changed its colors: setting them refreshes FRAME's faces."
 On the left `↑ N more' when N draft lines are scrolled out above, on the
 right `mevedel-floating-composer--button'.  A terminal cannot draw the
 overline, so there `─' characters fill the space between them.  Counting
-costs nothing while no draft line is hidden."
+costs nothing while no draft line is hidden, and the count is kept until
+the window start or the draft's layout changes."
   (let* ((window (selected-window))
          (start (mevedel-floating-composer--start))
          (hidden (if (and start (> (window-start window) start))
-                     (count-screen-lines start (window-start window) nil window)
+                     (let ((key (mevedel-floating-composer--layout-key
+                                 window start (window-start window)))
+                           (cache (window-parameter window 'mevedel-floating-composer-hidden)))
+                       (if (equal key (car cache))
+                           (cdr cache)
+                         (let ((count (count-screen-lines start (window-start window) nil window)))
+                           (set-window-parameter window 'mevedel-floating-composer-hidden
+                                                 (cons (copy-tree key) count))
+                           count)))
                    0))
          (more (if (> hidden 0) (propertize (format " ↑ %d more " hidden) 'face 'shadow) ""))
          (button mevedel-floating-composer--button)
@@ -292,9 +313,13 @@ Its host scrolls to show the composer at the bottom, so the floating
 composer hides after this command."
   (interactive "e")
   (with-current-buffer (window-buffer (posn-window (event-start event)))
+    ;; A stale click, from an old frame or after the host left this view
+    ;; but before the orphan cleanup, must not move another window's point.
     (when-let* ((window (mevedel-floating-composer--window))
+                ((eq window (posn-window (event-start event))))
                 (host mevedel-floating-composer--host)
-                ((window-live-p host)))
+                ((window-live-p host))
+                ((eq (window-buffer host) (current-buffer))))
       (mevedel-floating-composer--select host (window-point window))
       (cl-flet ((to-bottom (position)
                   (mevedel-view--set-viewport

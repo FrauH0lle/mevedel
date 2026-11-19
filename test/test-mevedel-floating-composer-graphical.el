@@ -537,7 +537,16 @@ Each row is a list of (R G B) pixels."
     (should (mevedel-view--position-screen-y (point-max) host t))
     (should-not (mevedel-floating-composer-test--window))
     (should-not (frame-focus parent))
-    (should (mevedel-floating-composer-test--focused-p parent))))
+    (should (mevedel-floating-composer-test--focused-p parent)))
+  :doc "a click after the host left the view does nothing"
+  (let ((posn (posn-at-x-y (- (window-pixel-width window) (* 4 (frame-char-width frame)))
+                           1 window)))
+    ;; Before the orphan cleanup, which waits for a timer.
+    (set-window-buffer host (get-buffer-create "*scratch*"))
+    (let ((point (window-point host)))
+      (mevedel-floating-composer-back-to-bottom (list 'mouse-1 posn))
+      (should (eq window (selected-window)))
+      (should (= point (window-point host))))))
 
 
 ;;
@@ -978,7 +987,22 @@ Each row is a list of (R G B) pixels."
   :doc "a taller draft resizes and moves in one call"
   (progn
     (mevedel-floating-composer-test--keys "C-o" 'open-line)
-    (should (= 1 placed))))
+    (should (= 1 placed)))
+  :doc "a named face of the draft growing taller refits it"
+  (let ((face (make-face 'mevedel-floating-composer-test--draft-face)))
+    (unwind-protect
+        (progn
+          (let ((inhibit-read-only t))
+            (put-text-property (mevedel-view--input-start) (point-max) 'face face))
+          (mevedel-floating-composer--update)
+          (mevedel-floating-composer-test--settle)
+          (let ((height (window-body-height window t)))
+            ;; Neither the text nor the default face changes.
+            (set-face-attribute face nil :height 3.0)
+            (mevedel-floating-composer--update)
+            (mevedel-floating-composer-test--settle)
+            (should (> (window-body-height window t) (* 2 height)))))
+      (set-face-attribute face nil :height 'unspecified))))
 
 
 (mevedel-deftest mevedel-floating-composer--hide ()
