@@ -231,9 +231,14 @@ Emacs CPU and 20-21 redisplay cycles per 4 s under `auto`, 142 ms and 36 under
 includes the benchmark reading per-thread CPU before each command, equally in
 every scenario. Values are scenario vs baseline; "paired" is the per-round
 difference, median [min, max] over 6 rounds. No parity verdict is recorded
-here. The second run, before keys, long drafts, `C-c C-j`, window handling
-and terminal support landed, measured the same within these ranges except
-where noted.
+here. A repeat of the whole gate at `34da91d5` measured no cost clearly
+above these: medians above a range here were inconclusive (quiet-idle CPU
+under 1 ms, stream redisplay cycles with ranges spanning zero), and the
+visible floating composer measured less (typing ratio 1.34 [1.26, 1.77],
+Emacs CPU +33 [+26, +89] ms; wrapped deletion +29 [+15, +84] ms; stream
+against the hidden rail +169 [+167, +226] ms). The second run, before keys,
+long drafts, `C-c C-j`, window handling and terminal support landed,
+measured the same within these ranges except where noted.
 
 Remaining regressions other than visible rail animation:
 
@@ -250,13 +255,6 @@ Remaining regressions other than visible rail animation:
   run): Emacs CPU +46 [+34, +55] ms per run and one more GC (+1 [+1, +1]);
   latency is lower, 3.56 vs 4.15 ms median (n 180 each), ratio
   0.87 [0.83, 0.98].
-- **Wrapped-draft deletion, on but never shown** (`on-never`, new in the
-  final run): latency 4.28 vs 4.15 ms median (n 180 each), per-round
-  difference +0.21 [+0.04, +0.34] ms, ratio 1.05 [1.01, 1.08], higher in
-  every round; Emacs CPU +10 [-6, +38] ms (inconclusive). The second run
-  measured ratio 1.01 [0.96, 1.17]. Typing in the same scenario: 1.70 vs
-  1.52 ms pooled, per-round ratio 1.03 [0.93, 1.17] (inconclusive). Not
-  explained.
 - **Unfocused idle with a floating-composer frame that exists** (4 s, the
   view's frame unfocused): `on-hidden` Emacs CPU +6.5 [-0.4, +18.8] ms and
   redisplay cycles +1 [+0, +8]; `on-visible` +3.5 [-3.9, +16.7] ms and
@@ -299,8 +297,13 @@ No regression measured:
   +25.7 [-44.8, +75.3] ms and KWin CPU +4.9 [-18.7, +25.3] ms per 100 chunks,
   both inconclusive (the second run measured KWin +10.7 [+3.1, +13.6] ms);
   `on-never` +28.6 [-60.7, +82.7] and +3.3 [-13.3, +42.7] ms.
-- **On but never created** (`on-never` vs `off-inline`), apart from wrapped
-  deletion above: idle with a request +3.6 [-8.5, +23.8] ms; quiet idle
+- **On but never created** (`on-never` vs `off-inline`): wrapped deletion
+  4.28 vs 4.15 ms median, per-round ratio 1.05 [1.01, 1.08], higher in every
+  round of this run only; a repeat of the whole gate at `34da91d5` measured
+  ratio 0.94 [0.89, 1.12] (rounds 1-5 quiet, round 6 under an unrelated
+  test suite), and isolated per-merge runs and a key-interleaved control
+  straddled zero. Typing 1.70 vs 1.52 ms, ratio 1.03 [0.93, 1.17] (repeat:
+  0.95 [0.78, 1.17]). Idle with a request +3.6 [-8.5, +23.8] ms; quiet idle
   +0.1 [-0.2, +0.4] ms.
 - **Hidden after use** (`on-hidden` vs `off-inline`): typing 1.42 vs
   1.52 ms; wrapped deletion 3.61 vs 4.15 ms; idle with a request
