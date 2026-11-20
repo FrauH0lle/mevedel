@@ -976,6 +976,22 @@ every byte and error.  Other files are read normally."
              (plist-get preview :text)))
     (should (= 20 (plist-get preview :omitted-chars)))))
 
+(mevedel-deftest mevedel--head-tail-preview-parts-artifact ()
+  ,test
+  (test)
+  :doc "names the artifact and how to Read it, keeping the marker intact"
+  (let* ((address "artifact://executions/x.log")
+         (text (plist-get
+                (mevedel--head-tail-preview-parts
+                 "1234\n67890" "abc\ndefghi" 30 10 address)
+                :text)))
+    (should (string-match-p
+             "\\[mevedel: tool output truncated; omitted 20 chars\\]" text))
+    (should (string-match-p
+             (regexp-quote
+              "Read(file_path=\"artifact://executions/x.log\", offset=1, limit=2000)")
+             text))))
+
 (mevedel-deftest mevedel--clamped-integer ()
   ,test
   (test)

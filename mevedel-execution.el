@@ -231,7 +231,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--head-tail-preview-parts
                   "mevedel-utilities"
-                  (head tail total-length &optional preview-size))
+                  (head tail total-length &optional preview-size artifact))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (scope key format &rest args))
 
@@ -250,7 +250,9 @@
   "Maximum unread characters returned inline by one managed observation.
 
 Larger unread ranges use the shared newline-aware head-and-tail preview while
-the complete spool remains at the path in the execution facts."
+the complete spool remains at the path in the execution facts.  The 2000
+default is deliberate: it bounds what each observation adds to the model's
+context.  The truncation marker names the artifact to Read for the rest."
   :type 'integer
   :group 'mevedel)
 
@@ -1316,7 +1318,8 @@ execution's progress cost."
                (if (file-remote-p
                     (or (mevedel-execution--record-workdir record) ""))
                    (mevedel-execution--record-recoverable-output-path record)
-                 (and (mevedel-execution--record-yielded-p record)
+                 (and (or (mevedel-execution--record-yielded-p record)
+                          (mevedel-execution--record-retained-p record))
                       (mevedel-execution--spool-path record)))))
     (let ((memo (mevedel-execution--record-artifact-address record)))
       (if (equal path (car memo))
@@ -1487,7 +1490,8 @@ outstanding, else nil."
     (or (mevedel-execution--record-output-head record) "")
     (or (mevedel-execution--record-output-tail record) "")
     (or (mevedel-execution--record-output-chars record) 0)
-    mevedel-execution-inline-output-limit)
+    mevedel-execution-inline-output-limit
+    (mevedel-execution--artifact-address record))
    :text))
 
 (defun mevedel-execution--emit-progress (record)
@@ -1550,7 +1554,8 @@ the UI-host primitives instead."
            (or (mevedel-execution--record-unread-head record) "")
            (or (mevedel-execution--record-unread-tail record) "")
            (or (mevedel-execution--record-unread-chars record) 0)
-           mevedel-execution-inline-output-limit))
+           mevedel-execution-inline-output-limit
+           (mevedel-execution--artifact-address record)))
          (visible-bytes
           (+ (string-bytes (plist-get parts :head))
              (string-bytes (plist-get parts :tail)))))
@@ -1559,6 +1564,16 @@ the UI-host primitives instead."
 
 (defun mevedel-execution--unread-range (record)
   "Return RECORD's next unread range without consuming it."
+  ;; A foreground result about to be truncated keeps its spool reachable:
+  ;; move it out of the hidden pending directory and retain it.  Small
+  ;; outputs never reach this branch, so they cost nothing.
+  (when (and (not (mevedel-execution--record-yielded-p record))
+             (not (file-remote-p
+                   (or (mevedel-execution--record-workdir record) "")))
+             (> (or (mevedel-execution--record-unread-chars record) 0)
+                mevedel-execution-inline-output-limit))
+    (mevedel-execution--publish-yielded-artifact record)
+    (setf (mevedel-execution--record-retained-p record) t))
   (let* ((start (or (mevedel-execution--record-read-offset record) 0))
          (end (mevedel-execution--record-output-bytes record))
          (preview (mevedel-execution--unread-preview record (- end start))))
@@ -1647,7 +1662,8 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
                       (plist-get
                        (mevedel--head-tail-preview-parts
                         result result (length result)
-                        mevedel-execution-inline-output-limit)
+                        mevedel-execution-inline-output-limit
+                        (mevedel-execution--artifact-address record))
                        :text)
                     result)
           :output (plist-get range :output)

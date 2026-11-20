@@ -792,6 +792,39 @@
                               (plist-get preview :output)))
       (should (= 10 (plist-get preview :omitted))))))
 
+(mevedel-deftest mevedel-execution--unread-preview-artifact ()
+  ,test
+  (test)
+  :doc "unread preview of a yielded execution names its readable artifact"
+  (let* ((root (make-temp-file "mevedel-execution-marker-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution-inline-output-limit 20)
+         (finish (file-name-concat root "finish"))
+         initial final id)
+    (mevedel-execution-start-bash
+     (lambda (value) (setq initial value))
+     :session session :owner "main" :owner-context session
+     :command (list "sh" "-c"
+                    "sleep 0.2; printf '%0300d' 0; while test ! -e \"$1\"; do sleep .01; done"
+                    "marker" finish)
+     :workdir root :writable-roots (list root)
+     :artifact-directory
+     (file-name-concat (mevedel-session-save-path session)
+                       "tool-results" "executions")
+     :yield-time-ms 10)
+    (test-mevedel-execution--wait (lambda () initial))
+    (setq id (plist-get (plist-get initial :facts) :execution-id))
+    (with-temp-file finish)
+    (setq final (test-mevedel-execution--observe session id))
+    (let ((address (plist-get (plist-get final :facts) :output-path))
+          (output (plist-get final :output)))
+      (should (string-prefix-p "artifact://executions/" address))
+      (should (string-match-p "tool output truncated" output))
+      (should (string-match-p
+               (regexp-quote (format "Read(file_path=%S, offset=1" address))
+               output)))))
+
 (mevedel-deftest mevedel-execution--collect-stderr ()
   ,test
   (test)

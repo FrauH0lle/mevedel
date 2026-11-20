@@ -1308,13 +1308,14 @@ never worth failing a tool call over."
     (apply #'concat (nreverse parts))))
 
 (defun mevedel--head-tail-preview-parts
-    (head tail total-length &optional preview-size)
+    (head tail total-length &optional preview-size artifact)
   "Return a newline-aware preview plist from bounded HEAD and TAIL.
 
 TOTAL-LENGTH is the complete character count.  HEAD and TAIL must contain at
 least PREVIEW-SIZE prefix and suffix characters respectively when the complete
 text is oversized.  The result contains `:text', `:head', `:tail', and the
-exact `:omitted-chars'."
+exact `:omitted-chars'.  A non-nil ARTIFACT address is named after the
+truncation marker with the Read call that retrieves the saved output."
   (let ((preview-size (or preview-size 2000)))
     (if (<= total-length preview-size)
         (let ((text (substring head 0 total-length)))
@@ -1345,6 +1346,10 @@ exact `:omitted-chars'."
                  (format
                   "[mevedel: tool output truncated; omitted %d chars]\n"
                   omitted)
+                 (if artifact
+                     (format "[mevedel: full output saved at %s; Read(file_path=%S, offset=1, limit=2000) and continue with the returned offset]\n"
+                             artifact artifact)
+                   "")
                  tail-text)
          :head head-text
          :tail tail-text

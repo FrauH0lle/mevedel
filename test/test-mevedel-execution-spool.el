@@ -14,6 +14,43 @@
                             (or buffer-file-name load-file-name byte-compile-current-file))
                            "mevedel-session-test-support"))
 
+(require 'mevedel-execution-test-helpers
+         (file-name-concat (file-name-directory
+                            (or buffer-file-name load-file-name byte-compile-current-file))
+                           "mevedel-execution-test-helpers"))
+
+(mevedel-deftest mevedel-execution-foreground-truncation-artifact
+  (:doc "a truncated foreground result names an artifact that Read resolves")
+  (let* ((root (make-temp-file "mevedel-fg-trunc-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-execution-inline-output-limit 20)
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-execution-start-bash
+           (lambda (value) (setq result value))
+           :session session :owner "main" :owner-context session
+           :command (list "sh" "-c" "printf 'HEAD\\n'; printf 'MIDDLE-%0200d\\n' 0; printf 'TAIL\\n'")
+           :workdir root :writable-roots (list root)
+           :artifact-directory
+           (file-name-concat (mevedel-session-save-path session)
+                             "tool-results" "executions")
+           :yield-time-ms 30000)
+          (test-mevedel-execution--wait (lambda () result))
+          (should-not (plist-get (plist-get result :facts) :execution-id))
+          (let* ((output (plist-get result :output))
+                 (address (and (string-match
+                                "Read(file_path=\"\\(artifact://[^\"]+\\)\"" output)
+                               (match-string 1 output))))
+            (should (string-match-p "tool output truncated" output))
+            (should address)
+            (should (equal address (plist-get (plist-get result :facts) :output-path)))
+            (should (string-match-p
+                     "MIDDLE-"
+                     (plist-get (test-mevedel-spool--tool session 'read address)
+                                :result)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-execution-spool-tools
   (:doc "Read pagination, directory/file Grep and logical Glob survive compression")
   (let* ((root (make-temp-file "mevedel-spool-tools-" t))
