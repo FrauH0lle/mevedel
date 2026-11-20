@@ -109,6 +109,26 @@
         (should (equal '("phone" "tablet")
                        (sort (append (plist-get (cdar controls) :guestIds) nil) #'string<)))))))
 
+(mevedel-deftest mevedel-notify/workspace-start-failure ()
+  ,test
+  (test)
+  :doc "a run failing before a session exists reaches the local notifier and its workspace lobby"
+  (let* ((workspace (mevedel-workspace--create :type 'file :root default-directory))
+         (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+         (subs (make-hash-table :test #'equal)) local pushed
+         (mevedel-notify-function (lambda (kind details) (setq local (cons kind details)))))
+    (puthash "phone" '(:writable t) subs)
+    (puthash default-directory (list :push-guests subs :guests (make-hash-table)
+                                     :transport 'lobby) mevedel-collaboration-lobby--lobbies)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
+               (lambda (transport frame) (push (cons transport frame) pushed))))
+      (mevedel-notify workspace 'failure "Release check failed: model unavailable"))
+    (should (eq 'failure (car local)))
+    (should (eq workspace (plist-get (cdr local) :workspace)))
+    (should-not (plist-get (cdr local) :session))
+    (should (equal "Release check failed: model unavailable" (plist-get (cdr local) :text)))
+    (should (equal pushed '((lobby :t "push" :guestIds ["phone"]))))))
+
 (mevedel-deftest mevedel-tool-notify/authority ()
   ,test
   (test)

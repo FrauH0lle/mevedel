@@ -113,6 +113,9 @@
 (defvar-local mevedel-compact-run-cancel nil
   "Cancellation thunk for the active compaction run, or nil.")
 
+(defvar mevedel-compact-run-callback-aborted-p nil
+  "Non-nil while delivering a cancelled compaction's callback.")
+
 (defvar-local mevedel-compact-run-failure-count 0
   "Consecutive compaction failures in this session.")
 
@@ -176,8 +179,8 @@
      (or (plist-get (mevedel-compact-run--state-target state) :origin) "/root")
      (car models) (cadr models))))
 
-(defun mevedel-compact-run--finish (state err)
-  "Settle compaction STATE once with ERR."
+(defun mevedel-compact-run--finish (state err &optional aborted)
+  "Settle compaction STATE once with ERR, identifying an ABORTED run."
   (unless (mevedel-compact-run--state-settled state)
     (setf (mevedel-compact-run--state-settled state) t)
     (let ((chat-buffer (mevedel-compact-run--state-chat-buffer state))
@@ -209,7 +212,8 @@
          :error-class
          (and err (if (symbolp err) err 'compaction-error))))
       (when-let* ((callback (mevedel-compact-run--state-callback state)))
-        (funcall callback err))
+        (let ((mevedel-compact-run-callback-aborted-p aborted))
+          (funcall callback err)))
       ;; Automatic compaction continues its existing turn.  Manual
       ;; compaction has no turn-end edge to release inputs held by it.
       (when (and (null err) (not (mevedel-compact-run--state-auto state))
@@ -217,10 +221,10 @@
         (mevedel-pending-inputs-schedule-held-input-delivery chat-buffer)))))
 
 (defun mevedel-compact-run--fail
-    (state err retryable &optional ignore-failure-count)
+    (state err retryable &optional aborted)
   "Fail compaction STATE with ERR.
-Retry when RETRYABLE and attempts remain.  IGNORE-FAILURE-COUNT leaves
-the persistent failure counter unchanged."
+Retry when RETRYABLE and attempts remain.  An ABORTED run leaves the
+persistent failure counter unchanged."
   (unless (mevedel-compact-run--state-settled state)
     (if (and retryable
              (< (mevedel-compact-run--state-attempt state) 3))
@@ -241,14 +245,14 @@ the persistent failure counter unchanged."
                 (when (buffer-live-p chat-buffer)
                   (with-current-buffer chat-buffer
                     (mevedel-compact-run--begin-attempt state))))))))
-      (unless ignore-failure-count
+      (unless aborted
         (cl-incf mevedel-compact-run-failure-count))
       (mevedel-diagnostic-warning
        (mevedel-diagnostic-scope (mevedel-compact-run--state-session state))
        'mevedel err :warning)
       (unless (mevedel-compact-run--state-auto state)
         (mevedel-view-stream-end-progress mevedel--view-buffer))
-      (mevedel-compact-run--finish state err))))
+      (mevedel-compact-run--finish state err aborted))))
 
 (defun mevedel-compact-run--finish-success (state summary)
   "Complete compaction STATE after applying SUMMARY."

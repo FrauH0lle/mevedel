@@ -88,6 +88,7 @@
 (autoload 'mevedel-schedule-cancel "mevedel-schedule")
 (autoload 'mevedel-schedule-format-time "mevedel-schedule")
 (autoload 'mevedel-schedule-now "mevedel-schedule")
+(autoload 'mevedel-schedule-resume "mevedel-schedule")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -182,7 +183,7 @@
     (let ((seconds (max 0 (- (plist-get item :due) (mevedel-schedule-now))))
           (pending (eq 'pending (plist-get item :status))))
       (list (plist-get item :id)
-            (vector "wake-up" (if pending "Pending" "Expired")
+            (vector "wake-up" (capitalize (symbol-name (plist-get item :status)))
                     (mevedel--truncate-display
                      (replace-regexp-in-string "[\n\r\t]+" " " (plist-get item :note))
                      40 "…")
@@ -329,10 +330,18 @@
                       :body (concat
                              (mevedel-report-fields
                               (list "Status" (symbol-name (plist-get item :status)))
+                              (when-let* ((reason (plist-get item :pause-reason))) (list "Reason" reason))
                               (list "Time" (mevedel-schedule-format-time (plist-get item :due)))
                               (when-let* ((expires (plist-get item :expires-at)))
                                 (list "Expires" (mevedel-schedule-format-time expires))))
-                             "\n" (plist-get item :note) "\n")))))
+                             "\n" (plist-get item :note) "\n"
+                             (mapconcat
+                              (lambda (run)
+                                (format "%s  %s%s" (mevedel-schedule-format-time (plist-get run :time))
+                                        (capitalize (symbol-name (plist-get run :outcome)))
+                                        (if-let* ((reason (plist-get run :reason)))
+                                            (concat ": " reason) "")))
+                              (plist-get item :runs) "\n"))))))
    ((eq (plist-get item :kind) 'sandbox)
     (list :title "Idle sandbox" :subtitle (plist-get item :owner)
           :sections (list (list :id 'sandbox :title "Persistent Eval"
@@ -413,6 +422,14 @@ is cancelled."
       (mevedel-background-list--call-control #'mevedel-execution-stop-user)
       (message "mevedel: execution stopping")))))
 
+(defun mevedel-background-list-resume ()
+  "Resume the selected paused wake-up."
+  (interactive)
+  (let ((session (mevedel-background-list--session)) (item (mevedel-cockpit-surface-selected)))
+    (unless (and (mevedel-background-list--wake-up-p item) (eq 'paused (plist-get item :status)))
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope session) "Select a paused wake-up"))
+    (mevedel-schedule-resume session (mevedel-session-root-buffer session) (plist-get item :id))))
+
 (defun mevedel-background-list-visit ()
   "Open the selected agent's transcript or execution's live artifact."
   (interactive)
@@ -452,6 +469,7 @@ is cancelled."
     :keys (("i" "Send a line to the selected PTY execution" mevedel-background-list-send-input)
            ("C-c C-c" "Interrupt the selected execution or agent turn" mevedel-background-list-interrupt)
            ("k" "Stop the selected execution, interrupt the agent's turn, or cancel the wake-up" mevedel-background-list-stop)
+           ("r" "Resume the selected paused wake-up" mevedel-background-list-resume)
            ("o" "Open the agent transcript or execution artifact" mevedel-background-list-visit)))
   "Cockpit surface spec for background work.")
 

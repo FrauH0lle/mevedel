@@ -70,9 +70,7 @@
 (autoload 'mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts")
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-cleanup-assessment
-                  "mevedel-session-durability" (session-dir &optional observation))
-(autoload 'mevedel-session-durability-cleanup-assessment "mevedel-session-durability")
+(autoload 'mevedel-session-durability--holder "mevedel-session-durability")
 
 ;; `mevedel-turn'
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
@@ -99,7 +97,12 @@
 (define-error 'mevedel-workspace-schedule-missing
   "No such workspace schedule record" 'user-error)
 
-(defvar mevedel-workspace-schedule-fired-functions nil
+(autoload 'mevedel-workspace-schedule-run-fired "mevedel-workspace-schedule-runs")
+(autoload 'mevedel-workspace-schedule-run-settled "mevedel-workspace-schedule-runs")
+(autoload 'mevedel-workspace-schedule-reconcile-run "mevedel-workspace-schedule-runs")
+(autoload 'mevedel-workspace-schedule-run-blocks-p "mevedel-workspace-schedule-runs")
+
+(defvar mevedel-workspace-schedule-fired-functions '(mevedel-workspace-schedule-run-fired)
   "Abnormal hook run once a firing has recorded its run.
 Each function receives the workspace and the run record, whatever its
 status: `launched', `skipped', `expired' or `setup-error'.")
@@ -474,6 +477,19 @@ otherwise drop each other's entry."
     (run-hook-with-args 'mevedel-workspace-schedule-changed-functions workspace)
     due))
 
+(defun mevedel-workspace-schedule--restore-workspace (workspace)
+  "Reconcile WORKSPACE's runs and timer.  Return non-nil if still indexed."
+  (let (pending)
+    (dolist (job (mevedel-workspace-schedule-list workspace))
+      (dolist (run (mevedel-workspace-schedule-runs workspace (plist-get job :id)))
+        (unless (or (plist-get run :outcome)
+                    (mevedel-workspace-schedule-reconcile-run workspace run))
+          (setq pending t))))
+    (or (mevedel-workspace-schedule--refresh workspace)
+        (when pending
+          (mevedel-workspace-schedule--index (mevedel-workspace-schedule--root workspace))
+          t))))
+
 (defun mevedel-workspace-schedule--prune (workspace file)
   "Delete WORKSPACE's index FILE after its store read as inactive.
 The store is read again afterwards, as `mevedel-schedule--prune' does for
@@ -482,7 +498,7 @@ and a re-read that signals puts the entry back before the error propagates."
   (delete-file file)
   (let (confirmed)
     (unwind-protect
-        (progn (mevedel-workspace-schedule--refresh workspace)
+        (progn (mevedel-workspace-schedule--restore-workspace workspace)
                (setq confirmed t))
       (unless confirmed
         (mevedel-workspace-schedule--index (mevedel-workspace-schedule--root workspace))))))
@@ -506,7 +522,7 @@ no active schedule.  An entry that cannot be read now is kept."
              ((not (file-accessible-directory-p root))
               (error "%s is not reachable" root))
              (t (let ((workspace (mevedel-workspace-schedule-workspace root)))
-                  (unless (mevedel-workspace-schedule--refresh workspace)
+                  (unless (mevedel-workspace-schedule--restore-workspace workspace)
                     (mevedel-workspace-schedule--prune workspace file)))))
           (error
            (mevedel-diagnostic-warning
@@ -544,26 +560,22 @@ no active schedule.  An entry that cannot be read now is kept."
 ;;
 ;;; Runs
 
-(defun mevedel-workspace-schedule--previous-busy-p (workspace id)
+(defun mevedel-workspace-schedule--previous-busy-p (workspace id due)
   "Return non-nil when the latest run of WORKSPACE's schedule ID still works.
-Open here, its session must be busy.  Otherwise its first request must not
-have settled while another live Emacs holds the session."
-  (when-let* ((run (cl-find-if (lambda (run) (plist-get run :session-id))
+Check an open session locally; otherwise use its lease or its claim at DUE."
+  (when-let* ((run (cl-find-if (lambda (run) (or (plist-get run :session-id)
+                                                 (eq 'claimed (plist-get run :status))))
                                (mevedel-workspace-schedule-runs workspace id)
-                               :from-end t))
-              (session-id (plist-get run :session-id)))
-    (if-let* ((open (cl-find-if
+                               :from-end t)))
+    (if-let* ((session-id (plist-get run :session-id))
+              (open (cl-find-if
                      (lambda (entry)
                        (equal session-id (mevedel-session-session-id
                                           (buffer-local-value 'mevedel--session (cdr entry)))))
                      (mevedel--workspace-sessions workspace))))
-        (mevedel-turn-busy-p (cdr open))
-      (and (not (plist-get run :settled-at))
-           (eq 'foreign
-               (plist-get (mevedel-session-durability-cleanup-assessment
-                           (file-name-concat (mevedel-session-artifacts-sessions-dir workspace)
-                                             session-id))
-                          :state))))))
+        (or (buffer-local-value 'mevedel-workspace-schedule--run-active (cdr open))
+            (mevedel-turn-busy-p (cdr open)))
+      (mevedel-workspace-schedule-run-blocks-p workspace run due))))
 
 (defun mevedel-workspace-schedule--fire (workspace id now)
   "Fire WORKSPACE's schedule ID, due by clock seconds NOW, at most once.
@@ -591,9 +603,11 @@ Emacs fired it."
                                    :last-scheduled-at due))
                (run (list :schedule-id id :scheduled-at due :fired-at now
                           :status (cond (late 'expired)
-                                        ((mevedel-workspace-schedule--previous-busy-p workspace id)
+                                        ((mevedel-workspace-schedule--previous-busy-p workspace id due)
                                          'skipped)
                                         (t 'claimed)))))
+          (when (eq 'claimed (plist-get run :status))
+            (setf (plist-get run :holder) (mevedel-session-durability--holder)))
           (pcase (mevedel-workspace-schedule--commit
                   workspace
                   (list (list :op 'verify :path path :content bytes)
@@ -616,8 +630,9 @@ Emacs fired it."
   (mevedel-workspace-schedule-update-run
    workspace (plist-get run :schedule-id) (plist-get run :scheduled-at)
    (lambda (current)
-     (cl-loop for (key value) on keys by #'cddr
-              do (setq current (plist-put current key value)))
+     (unless (and (plist-member keys :status) (plist-get current :outcome))
+       (cl-loop for (key value) on keys by #'cddr
+                do (setq current (plist-put current key value))))
      current)))
 
 (defun mevedel-workspace-schedule--prompt (schedule run)
@@ -630,7 +645,7 @@ Emacs fired it."
               (mevedel-schedule-format-time (plist-get run :scheduled-at))
               (mevedel--duration-label late)))))
 
-(defun mevedel-workspace-schedule--launch (workspace schedule run)
+(cl-defun mevedel-workspace-schedule--launch (workspace schedule run)
   "Start claimed RUN of SCHEDULE in a new session of WORKSPACE.
 The session's own preset, model, effort and permission mode start as the
 approved ones, so every turn in it runs under them until someone changes
@@ -643,6 +658,11 @@ window.  Return the committed run record, `setup-error' on failure."
         buffer)
     (condition-case err
         (progn
+          (let ((current (car (mevedel-workspace-schedule--read
+                               (mevedel-workspace-schedule--run-path
+                                workspace (plist-get run :schedule-id) (plist-get run :scheduled-at))))))
+            (unless (and (eq 'claimed (plist-get current :status)) (not (plist-get current :outcome)))
+              (cl-return-from mevedel-workspace-schedule--launch current)))
           ;; An open session with this name, as from a same-named schedule
           ;; due at the same time, must not receive this run.
           (let ((base name) (count 1))
@@ -663,6 +683,8 @@ window.  Return the committed run record, `setup-error' on failure."
               (setq run (mevedel-workspace-schedule--record
                          workspace run :status 'launched
                          :session-id (mevedel-session-session-id session)))
+              (when (plist-get run :outcome)
+                (cl-return-from mevedel-workspace-schedule--launch run))
               (setq-local mevedel-workspace-schedule-run
                           (list :workspace root :schedule-id (plist-get run :schedule-id)
                                 :scheduled-at (plist-get run :scheduled-at)
@@ -670,7 +692,8 @@ window.  Return the committed run record, `setup-error' on failure."
                           mevedel-workspace-schedule--run-active t)
               (mevedel--submit-generated-turn
                (mevedel-workspace-schedule--prompt schedule run)
-               nil nil nil 'workspace-schedule)))
+               nil nil nil (list :turn-trigger 'workspace-schedule
+                                 :workspace-schedule-run mevedel-workspace-schedule-run))))
           run)
       (error
        (when (buffer-live-p buffer)
@@ -685,22 +708,7 @@ OUTCOME is its terminal outcome.  The record's `:settled-at' tells another
 Emacs that the run no longer blocks the next one."
   (when (and mevedel-workspace-schedule--run-active mevedel-workspace-schedule-run)
     (setq-local mevedel-workspace-schedule--run-active nil)
-    (let ((run mevedel-workspace-schedule-run))
-      (condition-case err
-          (mevedel-workspace-schedule--record
-           (mevedel-session-workspace mevedel--session)
-           (list :schedule-id (plist-get run :schedule-id)
-                 :scheduled-at (plist-get run :scheduled-at))
-           :settled-at (mevedel-schedule-now))
-        ;; The user deleted the schedule while its run was working.
-        (mevedel-workspace-schedule-missing nil)
-        (error
-         (mevedel-diagnostic-warning
-          (plist-get run :workspace) 'mevedel
-          (format "Settlement of workspace schedule run %s@%d was not recorded: %s"
-                  (plist-get run :schedule-id) (plist-get run :scheduled-at)
-                  (error-message-string err))
-          :warning))))
+    (mevedel-workspace-schedule-run-settled mevedel-workspace-schedule-run outcome)
     (run-hook-with-args 'mevedel-workspace-schedule-run-settled-functions
                         mevedel-workspace-schedule-run outcome)))
 
@@ -717,6 +725,17 @@ receipt file per schedule, so a repeated notice from a later run is dropped."
     (mevedel-workspace-schedule--path (mevedel-session-workspace session)
                                       (plist-get run :schedule-id)
                                       "notify-receipts.json")))
+
+(defun mevedel-workspace-schedule-record-notice ()
+  "Mark the current root's active run as having emitted a Notify notice."
+  (when (and mevedel-workspace-schedule--run-active mevedel-workspace-schedule-run)
+    (condition-case err
+        (mevedel-workspace-schedule--record
+         (mevedel-session-workspace mevedel--session) mevedel-workspace-schedule-run :notified t)
+      (error (mevedel-diagnostic-warning
+              (mevedel-diagnostic-scope mevedel--session) 'mevedel
+              (format "Could not record the run's delivered notice: %s" (error-message-string err))
+              :warning)))))
 
 (provide 'mevedel-workspace-schedule)
 ;;; mevedel-workspace-schedule.el ends here

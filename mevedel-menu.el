@@ -35,6 +35,9 @@
                   "mevedel-background-list" (&optional context))
 (autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
 
+;; `mevedel-schedules-list'
+(autoload 'mevedel-schedules-list-open "mevedel-schedules-list" nil t)
+
 ;; `mevedel-chat'
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
@@ -1495,6 +1498,8 @@ asked, such as a collaboration guest's turn."
       ('background
        (mevedel-cockpit-call-in-data
         context #'mevedel-background-list-open context))
+      ('schedules
+       (mevedel-schedules-list-open context))
       ('artifacts
        (mevedel-cockpit-call-in-data
         context #'mevedel-artifacts-list-open context))
@@ -1707,6 +1712,11 @@ nothing to restore."
   "Open the background-work cockpit surface."
   (interactive)
   (mevedel-menu-open 'background))
+
+(defun mevedel-menu--open-schedules ()
+  "Open the workspace's standing jobs."
+  (interactive)
+  (mevedel-menu-open 'schedules))
 
 (defun mevedel-menu--open-artifacts ()
   "Open the artifacts cockpit surface."
@@ -1937,6 +1947,7 @@ The value is `wide', `medium' or `narrow'; see
 (transient-define-group mevedel-menu--workspace-group
   ["Workspace"
    :pad-keys t
+   ("j" "Standing jobs" mevedel-menu--open-schedules)
    ("x" mevedel-menu--open-background
     :description mevedel-menu--background-description)
    ("w" mevedel-menu--open-worktree

@@ -273,8 +273,8 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
          :aggressive aggressive
          :instructions instructions)))))
 
-(defun mevedel--compact-terminate-request (fsm status err)
-  "Move FSM to its error state after compaction failure ERR.
+(defun mevedel--compact-terminate-request (fsm status err &optional aborted)
+  "Move FSM to its error state after compaction failure ERR, or ABRT if ABORTED.
 
 STATUS is the gptel status shown before the terminal transition.  gptel
 settles a turn from its terminal states, so a compaction that refuses to
@@ -291,11 +291,12 @@ a request that will never reach them."
         (kill-buffer data))
       (plist-put info :data nil))
     (gptel--update-status status 'error)
-    (plist-put info :status (format "Compaction failed: %s" err))
-    (plist-put info :error
-               (list :type "compaction_error" :message (format "%s" err)))
+    (unless aborted
+      (plist-put info :status (format "Compaction failed: %s" err))
+      (plist-put info :error
+                 (list :type "compaction_error" :message (format "%s" err))))
     (setf (gptel-fsm-info fsm) info)
-    (gptel--fsm-transition fsm 'ERRS)))
+    (gptel--fsm-transition fsm (if aborted 'ABRT 'ERRS))))
 
 (defun mevedel--compact-auto-failure (fsm chat-buffer err)
   "Surface automatic compaction failure ERR for CHAT-BUFFER and end FSM."
@@ -665,6 +666,9 @@ state machine."
                            (cond
                             ((eq err :skip)
                              (continue-with-snapshot))
+                            ((and mevedel-compact-run-callback-aborted-p
+                                  (not (plist-get info :mevedel-request-id)))
+                             (mevedel--compact-terminate-request fsm " Abort" err t))
                             (err
                              (mevedel--compact-auto-failure
                               fsm source-buffer err))

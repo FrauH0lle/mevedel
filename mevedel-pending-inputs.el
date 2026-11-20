@@ -90,6 +90,7 @@
 
 ;; `mevedel-schedule'
 (declare-function mevedel-schedule-wake-request-context "mevedel-schedule" (session))
+(autoload 'mevedel-schedule-settle-wake "mevedel-schedule")
 (autoload 'mevedel-schedule-wake-request-context "mevedel-schedule")
 
 ;; `mevedel-skills-invoke'
@@ -1487,22 +1488,25 @@ runs under the session's current permission settings."
            (setq-local mevedel-skills--pending-request-context context))
          (setq mevedel-view--pending-guest-attribution
                (list :type 'background-event))
-         (unwind-protect
+         (let* ((records (cl-remove-if-not (lambda (r) (eq 'WAKE_UP (plist-get r :type)))
+                                           (mevedel-agent-control-context-mailbox session)))
+                (trigger (if records (list :turn-trigger 'scheduled-wake :wake-runs records)
+                           'background-event)))
+           (unwind-protect
              (condition-case err
                  (mevedel--submit-generated-turn
                   mevedel-pending-inputs--event-trigger
-                  mevedel-pending-inputs--event-trigger nil nil
-                  (if (cl-find 'WAKE_UP (mevedel-agent-control-context-mailbox session)
-                               :key (lambda (record) (plist-get record :type)))
-                      'scheduled-wake
-                    'background-event))
+                  mevedel-pending-inputs--event-trigger nil nil trigger)
                ;; Admission drains the override; a start that failed must
                ;; not leave it for a later turn.
                (error (setq-local mevedel-skills--pending-request-context nil)
+                      (when (and records (plist-get trigger :wake-runs))
+                        (mevedel-schedule-settle-wake session data-buffer trigger 'error
+                                                      (error-message-string err)))
                       (signal (car err) (cdr err))))
            ;; Consumed where the prompt is inserted; a start that
            ;; failed before that must not label a later prompt.
-           (setq mevedel-view--pending-guest-attribution nil)))))))
+           (setq mevedel-view--pending-guest-attribution nil))))))))
 
 (defun mevedel-pending-inputs--run-event-wake (data-buffer)
   "Start a background-event turn for DATA-BUFFER once the transport is idle.

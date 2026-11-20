@@ -298,7 +298,7 @@ The closed sidecar schema is `v0.5.16`, including recovery issues, retained inpu
 naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 for an artifact's own conversation, that artifact's id (`:dedicated-artifact`),
-and the session's pending and expired [wake-ups](tools.md#schedule) (`:schedules`).
+and its [wake-ups and their recent outcomes](tools.md#schedule) (`:schedules`).
 Other schemas are rejected by the runtime loader; older sessions are converted
 only by the [explicit migration](#explicit-session-migration). Recovery records
 contain issue messages, never credentials.

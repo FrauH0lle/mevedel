@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-agent-control)
+(require 'mevedel-background-list)
 (require 'mevedel-chat)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-recovery)
@@ -141,6 +142,9 @@ for each started turn; `mevedel-schedule-test--settle' runs offered work."
       (should (= 2 (length records)))
       (should (string-search "overdue_by=\"1h 40m\""
                              (mevedel-tools--message-delivery-block (car (last records))))))
+    (let ((details (mevedel-background-list--details
+                    (cons :kind (cons 'wake-up (car (mevedel-schedule-pending session)))) nil)))
+      (should (string-search "Skipped" (plist-get (car (plist-get details :sections)) :body))))
     (should (= (+ now 1200) (plist-get (car (mevedel-schedule-pending session)) :due))))
 
   :doc "a cron wake-up re-arms for its next calendar time"

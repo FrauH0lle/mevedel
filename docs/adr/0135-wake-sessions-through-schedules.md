@@ -68,10 +68,17 @@ starts a fresh session for each run.
   background-event prompt, never the Goal continuation text. It neither
   resumes a paused or blocked Goal nor counts toward an active Goal, even
   when the wake-up shares the turn with other unread mail.
-- **Expiry and lateness.** A firing past its expiry costs no model turn: the
-  entry stays in the store as `expired` until cancelled, and the 20 most recent
-  expired entries are kept. A late but unexpired firing is delivered once with
-  its overdue annotation; the model judges whether it still matters.
+- **Expiry and lateness.** A firing past its expiry costs no model turn. A late
+  but unexpired firing is delivered once with its overdue annotation; missed
+  repeats appear as a skipped span rather than a burst of catch-up turns. The
+  session keeps the 20 most recent terminal entries (expired, failed or skipped).
+- **Run failures.** Attribute a wake-up's outcome to the background request
+  admitted for its mail, not the next turn to settle in the session. In
+  particular a user who reads that mail is not responsible for running the
+  wake-up. A failed run always notifies. Its third consecutive failure pauses
+  a recurring schedule and announces the pause in the same notice; success or
+  an explicit resume resets the count. This keeps a broken job from spending
+  indefinitely without sending two alerts for one failure.
 - **Sessions that are not open.** An Emacs-wide index under `mevedel-user-dir`
   names every saved session holding a pending wake-up, one file per session.
   It is a cache: at startup `mevedel-schedule-restore` reads each indexed
@@ -196,9 +203,10 @@ continuity comes from memory and the agent's notes.
 
 Single firing for workspace schedules uses an exclusive run record instead of
 a renewable workspace holder lease. A holder lease must be renewed while idle
-and taken over when its holder sleeps; the run record has no holder, so
-nothing goes stale, and it is the "recorded before it runs" fact itself. The
-same store lock serializes edits from tools and future management surfaces
-with firings. Overlap across Emacs instances relies on the run's recorded
-first-request settlement and the run session's own lease, since a busy
-request is only visible in the Emacs that runs it.
+and taken over when its holder sleeps; the run record needs no renewal.
+It identifies the claimant so a restart can distinguish a proven death
+from a possibly suspended client. A later firing can retire a claim that
+never launched: the launcher checks the same record before submitting work.
+The same store lock serializes edits and firings. After launch, overlap
+across Emacs instances relies on first-request settlement and the run
+session's own lease, since only the owner sees the active request.

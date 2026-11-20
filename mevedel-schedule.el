@@ -32,6 +32,7 @@
 
 (require 'cl-lib)
 (require 'iso8601)
+(require 'mevedel-notify)
 (require 'mevedel-structs)
 (require 'subr-x)
 
@@ -150,6 +151,13 @@ DUE is the clock second their earliest schedule needs attention.")
 (defun mevedel-schedule-format-time (seconds)
   "Return SECONDS as an ISO 8601 local time with its UTC offset."
   (format-time-string "%FT%T%:z" seconds))
+
+(defun mevedel-schedule-timing-label (timing)
+  "Describe schedule TIMING as a local time, repeating interval, or cron."
+  (pcase (plist-get timing :kind)
+    ('once (mevedel-schedule-format-time (plist-get timing :at)))
+    ('interval (concat "Every " (mevedel--duration-label (plist-get timing :seconds))))
+    ('cron (plist-get timing :expression))))
 
 (defun mevedel-schedule--resolve-local (wall)
   "Return the absolute seconds of local wall-clock time WALL.
@@ -336,16 +344,31 @@ Return nil for a one-shot timing."
        (cl-evenp (length entry))
        (stringp (plist-get entry :id))
        (stringp (plist-get entry :note))
-       (mevedel-schedule-timing-p (plist-get entry :timing) (plist-get entry :created-at))
-       (integerp (plist-get entry :created-at))
        (integerp (plist-get entry :due))
+       (natnump (or (plist-get entry :failures) 0))
+       (let ((runs (plist-get entry :runs)))
+         (and (proper-list-p runs) (<= (length runs) 20)
+              (cl-every (lambda (run)
+                          (and (proper-list-p run) (integerp (plist-get run :time))
+                               (memq (plist-get run :outcome) '(done skipped failed))
+                               (let ((reason (plist-get run :reason)))
+                                 (or (null reason) (stringp reason))))) runs)))
        (let ((model (plist-get entry :model)) (effort (plist-get entry :effort)))
          (and (or (null model) (stringp model)) (or (null effort) (stringp effort))))
        (let ((expires (plist-get entry :expires-at)))
          (or (null expires) (integerp expires)))
+       ;; Retained one-shot results have no timing or creation timestamp.
+       (or (memq (plist-get entry :status) '(failed skipped))
+           (let ((created-at (plist-get entry :created-at)))
+             (and (integerp created-at)
+                  (mevedel-schedule-timing-p (plist-get entry :timing) created-at))))
        (pcase (plist-get entry :status)
          ('pending t)
-         ('expired (integerp (plist-get entry :expired-at))))))
+         ('paused (and (not (eq 'once (plist-get (plist-get entry :timing) :kind)))
+                       (stringp (plist-get entry :pause-reason))))
+         ('expired (integerp (plist-get entry :expired-at)))
+         ((or 'failed 'skipped)
+          (eq (plist-get entry :status) (plist-get (car (plist-get entry :runs)) :outcome))))))
 
 (defun mevedel-schedule-timing-p (timing created-at)
   "Return non-nil when TIMING, stored at CREATED-AT, is one creation accepts."
@@ -392,6 +415,12 @@ Return nil for a one-shot timing."
   (when (fboundp 'mevedel-background-list-refresh-session)
     (mevedel-background-list-refresh-session session buffer)))
 
+(defun mevedel-schedule--assert-capacity (session)
+  "Signal a user error when SESSION cannot admit another pending schedule."
+  (when (>= (length (mevedel-schedule-pending session)) mevedel-schedule-max-pending)
+    (user-error "This session already has %d pending schedules; cancel one first"
+                mevedel-schedule-max-pending)))
+
 (defun mevedel-schedule-create (session buffer when note &optional expires model effort)
   "Create a wake-up in SESSION, whose root data buffer is BUFFER.
 WHEN is the timing text accepted by `mevedel-schedule-parse-timing'.  NOTE
@@ -408,10 +437,7 @@ unavailable model or unsupported effort is an error here, not at fire time."
   (when (> (length note) mevedel-schedule-max-note-length)
     (user-error "Wake-up note exceeds %d characters"
                 mevedel-schedule-max-note-length))
-  (when (>= (length (mevedel-schedule-pending session))
-            mevedel-schedule-max-pending)
-    (user-error "This session already has %d pending schedules; cancel one first"
-                mevedel-schedule-max-pending))
+  (mevedel-schedule--assert-capacity session)
   (let* ((now (mevedel-schedule-now))
          (timing (mevedel-schedule-parse-timing when now))
          (recurring (not (eq 'once (plist-get timing :kind))))
@@ -458,6 +484,23 @@ Return the removed entry.  Expired wake-ups are removed the same way."
     (mevedel-schedule--commit session previous)
     (mevedel-schedule--changed session buffer)
     entry))
+
+(defun mevedel-schedule-resume (session buffer id)
+  "Resume paused wake-up ID for SESSION in BUFFER, resetting its failures."
+  (let* ((previous (mevedel-session-schedules session))
+         (entry (cl-find id previous :key (lambda (e) (plist-get e :id)) :test #'equal))
+         (now (mevedel-schedule-now)))
+    (unless (eq (plist-get entry :status) 'paused) (user-error "Wake-up %s is not paused" id))
+    (let ((next (mevedel-schedule-next-run (plist-get entry :timing) now))
+          (resumed (copy-sequence entry)))
+      (if (and (plist-get entry :expires-at) (> next (plist-get entry :expires-at)))
+          (setf (mevedel-session-schedules session) (mevedel-schedule--expire session entry now))
+        (mevedel-schedule--assert-capacity session)
+        (setf (plist-get resumed :status) 'pending (plist-get resumed :due) next
+              (plist-get resumed :failures) 0 (plist-get resumed :pause-reason) nil
+              (mevedel-session-schedules session) (cl-substitute resumed entry previous)))
+      (mevedel-schedule--commit session previous)
+      (mevedel-schedule--changed session buffer))))
 
 (defun mevedel-schedule-hand-over (session)
   "Commit SESSION's store and index entry without its wake-ups.
@@ -780,16 +823,70 @@ by the same turn keeps the session's selection.  The result is for
       (list :model (mevedel-model-parse-selector (plist-get first :model))
             :effort (mevedel-model-parse-effort (plist-get first :effort))))))
 
-(defun mevedel-schedule--expire (session entry now)
-  "Return SESSION's schedules with ENTRY recorded as expired at NOW."
-  (let* ((all (append (remq entry (mevedel-session-schedules session))
-                      (list (plist-put (plist-put (copy-sequence entry) :status 'expired)
-                                       :expired-at now))))
-         (expired (cl-remove-if-not (lambda (other) (eq 'expired (plist-get other :status)))
-                                    all))
+(defun mevedel-schedule--with-run (entry run)
+  "Return ENTRY with RUN prepended to its bounded recent history."
+  (plist-put (copy-sequence entry) :runs
+             (seq-take (cons run (plist-get entry :runs)) 20)))
+
+(defun mevedel-schedule-settle-wake (session buffer context outcome reason)
+  "Record OUTCOME and REASON for the wake records in BUFFER's request CONTEXT.
+An ordinary user turn owns no wake runs, even if it consumed SESSION's mail."
+  (let ((previous (mevedel-session-schedules session))
+        (mail (mevedel-session-messages session)) retired notices)
+    (dolist (record (plist-get context :wake-runs))
+      (when-let* ((id (plist-get (plist-get record :meta) :schedule-id)))
+        (let* ((entries (mevedel-session-schedules session))
+               (entry (cl-find id entries :key (lambda (e) (plist-get e :id)) :test #'equal))
+               (status (pcase outcome ('success 'done) ((or 'abort 'aborted) 'skipped) (_ 'failed)))
+               (failed (eq status 'failed))
+               (count (+ (or (plist-get entry :failures) 0) (if failed 1 0)))
+               (pause (and failed (= count 3) (eq (plist-get entry :status) 'pending)))
+               (run (list :id (plist-get record :id) :time (mevedel-schedule-now)
+                          :outcome status :reason (if (eq status 'skipped) "Interrupted" reason))))
+          (push (plist-get record :id) retired)
+          (if entry
+            (let ((updated (mevedel-schedule--with-run entry run)))
+              (setf (plist-get updated :failures) (if (eq status 'done) 0 count))
+              (when pause
+                (setf (plist-get updated :status) 'paused
+                      (plist-get updated :pause-reason) (format "Three consecutive failures: %s" (or reason outcome))))
+              (setf (mevedel-session-schedules session) (cl-substitute updated entry entries)))
+            ;; One-shots are already removed by the mailbox commit.  Retain
+            ;; their failed or interrupted run without recreating a schedule.
+            (unless (eq status 'done)
+              (let ((due (plist-get (plist-get record :meta) :scheduled-at)))
+                (setf (mevedel-session-schedules session)
+                      (mevedel-schedule--retain-history
+                       (append entries (list (list :id id :status status :note (plist-get record :payload)
+                                                   :due (floor (float-time (date-to-time due)))
+                                                   :runs (list run)))))))))
+          (when failed
+            (push (format "Wake-up %s failed: %s%s" id (or reason outcome)
+                          (if pause "; paused after three consecutive failures" "")) notices)))))
+    ;; Preflight may have failed before either engine injected the mail.
+    ;; Retire only accounted wake records, together with their outcome.
+    (mevedel-session--set-messages
+     session (cl-remove-if (lambda (r) (member (plist-get r :id) retired)) mail))
+    (condition-case err
+        (mevedel-schedule--commit session previous)
+      ((error quit) (mevedel-session--set-messages session mail) (signal (car err) (cdr err))))
+    (setf (plist-get context :wake-runs) nil)
+    (dolist (notice (nreverse notices)) (mevedel-notify session 'failure notice))
+    (mevedel-schedule--changed session buffer)))
+
+(defun mevedel-schedule--retain-history (all)
+  "Retain active schedules and the most recent terminal entries from ALL."
+  (let* ((expired (cl-remove-if-not (lambda (other) (memq (plist-get other :status) '(expired failed skipped))) all))
          ;; The oldest records beyond the retention limit are dropped.
          (dropped (butlast expired mevedel-schedule-retained-expired)))
     (cl-remove-if (lambda (other) (memq other dropped)) all)))
+
+(defun mevedel-schedule--expire (session entry now &optional updated)
+  "Return SESSION's schedules with ENTRY expired at NOW, retaining UPDATED history."
+  (mevedel-schedule--retain-history
+   (append (remq entry (mevedel-session-schedules session))
+           (list (plist-put (plist-put (copy-sequence (or updated entry)) :status 'expired)
+                            :expired-at now)))))
 
 (defun mevedel-schedule--retry-later (session buffer entry err)
   "Restore ENTRY in SESSION after its delivery failed with ERR.
@@ -824,12 +921,20 @@ BUFFER is the root data buffer offered the background-event turn."
           ;; Removal and the record share the mailbox commit, so a firing is
           ;; never both delivered and still pending in the persisted store.
           (setf (mevedel-session-schedules session)
-                (let ((next (mevedel-schedule-next-run (plist-get entry :timing) now)))
+                (let* ((timing (plist-get entry :timing))
+                       (due (plist-get entry :due))
+                       (next (mevedel-schedule-next-run timing now))
+                       (missed (and next (< due now) (mevedel-schedule-next-run timing due)))
+                       (updated (if (and missed (<= missed now))
+                                    (mevedel-schedule--with-run
+                                     entry (list :time missed :outcome 'skipped
+                                                 :reason "Missed cadence before overdue firing"))
+                                  (copy-sequence entry))))
                   (cond ((null next) (remq entry previous))
                         ;; A run past expiry would only be dropped; free the slot now.
                         ((and expires (> next expires))
-                         (mevedel-schedule--expire session entry now))
-                        (t (cl-substitute (plist-put (copy-sequence entry) :due next)
+                         (mevedel-schedule--expire session entry now updated))
+                        (t (cl-substitute (plist-put updated :due next)
                                           entry previous)))))
           (mevedel-agent-control-enqueue-wake-up
            session (plist-get entry :note) (mevedel-schedule--record-meta entry now)

@@ -10,36 +10,39 @@
 (require 'mevedel-utilities)
 
 ;; `mevedel-collaboration-guest'
-(declare-function mevedel-collaboration-push-notice "mevedel-collaboration-guest" (session kind))
+(declare-function mevedel-collaboration-push-notice "mevedel-collaboration-guest" (owner kind))
 
 (defcustom mevedel-notify-function nil
   "Function called with a notice kind and its details plist, or nil.
 For `permission' the details are the admitted card, without its internal
 `:callback'.  There is one notice per card, with no rate limiting.
-For `notify' and `goal', `:text' holds the notice.  All kinds include
-`:session'.  Return values are ignored and errors become warnings.
+For `notify', `goal' and `failure', `:text' holds the notice.  All kinds
+include `:session', nil with `:workspace' if a run failed before opening
+its session.  Return values are ignored and errors become warnings.
 See the desktop notification examples in docs/permissions.md."
   :type '(choice (const :tag "Disabled" nil) function)
   :group 'mevedel)
 
-(defun mevedel-notify (session kind details)
-  "Deliver KIND of notice for SESSION with DETAILS.
+(defun mevedel-notify (owner kind details)
+  "Deliver KIND of notice for session or workspace OWNER with DETAILS.
 DETAILS is the sanitized card plist for `permission', otherwise text.
 No text is sent to a push service.  Return the lobby wake receipt, if any."
   (when mevedel-notify-function
     (condition-case err
         (funcall mevedel-notify-function kind
-                 (if (eq kind 'permission) details
-                   (list :session session :text details)))
+                 (cond ((eq kind 'permission) details)
+                       ((mevedel-workspace-p owner)
+                        (list :session nil :workspace owner :text details))
+                       (t (list :session owner :text details))))
       (error (mevedel-diagnostic-warning
-              (mevedel-diagnostic-scope session) 'mevedel
+              (mevedel-diagnostic-scope owner) 'mevedel
               (format "%s notify failed: %S" (capitalize (symbol-name kind)) err)
               :warning))))
   (when (fboundp 'mevedel-collaboration-push-notice)
     (condition-case err
-        (mevedel-collaboration-push-notice session kind)
+        (mevedel-collaboration-push-notice owner kind)
       (error (mevedel-diagnostic-warning
-              (mevedel-diagnostic-scope session) 'mevedel
+              (mevedel-diagnostic-scope owner) 'mevedel
               (format "Remote notice failed: %S" err) :warning)
              nil))))
 

@@ -1365,7 +1365,7 @@ TRIGGER identifies an automatic submission across asynchronous preparation."
    model-input
    (lambda ()
      (gptel-request nil
-		    :context (and trigger (list :turn-trigger trigger))
+		    :context (if (listp trigger) trigger (list :turn-trigger trigger))
 		    :stream gptel-stream
 		    :transforms gptel-prompt-transform-functions
 		    :fsm (gptel-make-fsm

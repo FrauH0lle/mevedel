@@ -987,11 +987,11 @@ Before a mutation, call PERSIST with the guest id and new endpoint
              (plist-get room :push-guests))
     (mevedel-collaboration--push-guests room guest-ids)))
 
-(defun mevedel-collaboration--push-audience (session room kind)
-  "Wake subscribers to SESSION's ROOM and workspace lobby for KIND.
+(defun mevedel-collaboration--push-audience (owner room kind)
+  "Wake subscribers to ROOM and the lobby of session or workspace OWNER for KIND.
 `all' means user-turn completion; other kinds target writable devices.
 Return the lobby guest ids and endpoints selected for a wake."
-  (let* ((workspace (and session (mevedel-session-workspace session)))
+  (let* ((workspace (if (mevedel-session-p owner) (mevedel-session-workspace owner) owner))
          (lobby (and workspace (fboundp 'mevedel-collaboration-lobby--find)
                      (mevedel-collaboration-lobby--find workspace)))
          (all (eq kind 'all))
@@ -1028,12 +1028,12 @@ Return the lobby guest ids and endpoints selected for a wake."
                (plist-get lobby :guests)))
     woken))
 
-(defun mevedel-collaboration-push-notice (session kind)
-  "Wake SESSION's writable subscribers for KIND and return lobby recipients.
+(defun mevedel-collaboration-push-notice (owner kind)
+  "For KIND, wake writable subscribers of the session or workspace OWNER.
 Permission cards reach room guests on display, not on admission."
-  (let* ((room (unless (eq kind 'permission)
-                 (mevedel-collaboration--room-for-session session)))
-         (woken (mevedel-collaboration--push-audience session room kind)))
+  (let* ((room (and (mevedel-session-p owner) (not (eq kind 'permission))
+                    (mevedel-collaboration--room-for-session owner)))
+         (woken (mevedel-collaboration--push-audience owner room kind)))
     (when room
       (maphash (lambda (peer guest)
                  (when (and (plist-get guest :ready) (plist-get guest :writable))

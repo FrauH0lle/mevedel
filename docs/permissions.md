@@ -739,13 +739,15 @@ one deadline, kept in the transient `permission-absence` session slot.
   [sleep inhibitor](sessions.md#system-sleep) held.
 
 `mevedel-notify-function` (default nil) receives a kind and a details plist;
-`:session` identifies the session for every kind:
+`:session` identifies the session. If a workspace schedule fails before it
+opens a session, `:session` is nil and `:workspace` identifies the workspace.
 
 | Kind | When | Details |
 |---|---|---|
 | `permission` | A card needs a human answer | Card entry (without its internal `:callback`) |
 | `notify` | The root uses `Notify` | `:text`, the agent’s short message |
 | `goal` | A Goal becomes complete or blocked | `:text`, the Goal status and objective |
+| `failure` | A scheduled run fails, including the failure that pauses it | `:text`, the failure notice |
 
 Permission notices fire once per card, without rate limiting, when the card
 enters the queue. Redraw, coalescing, resolution, and automatic approval do not

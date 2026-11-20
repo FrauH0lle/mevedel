@@ -33,6 +33,7 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
+(declare-function mevedel-agent-control-context-mailbox "mevedel-agent-control" (context))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -725,6 +726,30 @@ Each function receives the terminal outcome symbol, such as `success',
 `error' or `abort'.  A failing function is reported and does not stop
 settlement.")
 
+(autoload 'mevedel-schedule-settle-wake "mevedel-schedule")
+
+(defvar mevedel-turn-settlement-reason nil
+  "Provider's reason for the current terminal outcome, while its hooks run.")
+
+(defun mevedel--turn-publish-outcome (info outcome reason)
+  "Publish OUTCOME and REASON for INFO's turn in the current root buffer."
+  (when (bound-and-true-p mevedel--session)
+    (setf (mevedel-session-last-outcome mevedel--session) outcome)
+    (let ((context (plist-get info :context)))
+      (when (and (listp context) (plist-get context :wake-runs))
+        (condition-case err
+            (mevedel-schedule-settle-wake mevedel--session (current-buffer) context outcome reason)
+          (error (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer))
+                                             "Wake run settlement failed: %s"
+                                             (error-message-string err)))))))
+  (let ((mevedel-turn-settlement-reason reason))
+    (dolist (function mevedel-turn-settled-functions)
+      (condition-case err
+          (funcall function outcome)
+        (error (mevedel-diagnostic-message (mevedel-diagnostic-scope (current-buffer))
+                                           "%s (turn settlement step %s failed)"
+                                           (error-message-string err) function))))))
+
 (defun mevedel--turn-record-settlement (fsm outcome)
   "Record terminal OUTCOME for FSM's active request.
 Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
@@ -732,14 +757,7 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (when (bound-and-true-p mevedel--session)
-        (setf (mevedel-session-last-outcome mevedel--session) outcome))
-      (dolist (function mevedel-turn-settled-functions)
-        (condition-case err
-            (funcall function outcome)
-          (error (mevedel-diagnostic-message (mevedel-diagnostic-scope chat-buffer)
-                                             "%s (turn settlement step %s failed)"
-                                             (error-message-string err) function))))
+      (mevedel--turn-publish-outcome info outcome (mevedel--fsm-error-message fsm))
       (when (featurep 'mevedel-readiness)
         (mevedel-readiness-record-turn info outcome (mevedel--fsm-error-message fsm)))
       (when (and (bound-and-true-p mevedel--session)
@@ -1327,8 +1345,8 @@ available."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
+      (mevedel--turn-publish-outcome info 'lost "Turn ownership was lost")
       (when (bound-and-true-p mevedel--session)
-        (setf (mevedel-session-last-outcome mevedel--session) 'lost)
         (mevedel-recovery-report mevedel--session "request" 'request
                                  "Turn ownership was lost; review the transcript before continuing" nil))
       (when (bound-and-true-p mevedel--session)
@@ -1438,6 +1456,31 @@ An older terminal callback must not clear a replacement submission."
                        (plist-get info :mevedel-pending-permission-mode)))
           (setq mevedel--pending-permission-mode nil))))))
 
+(defvar mevedel-workspace-schedule-run)
+(declare-function mevedel-workspace-schedule--turn-settled "mevedel-workspace-schedule" (outcome))
+
+(defun mevedel--turn-record-rejected-schedule (fsm info status)
+  "Record FSM's unadmitted STATUS using only the scheduled run captured in INFO."
+  (when-let* ((context (plist-get info :context))
+              ((listp context))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when (bound-and-true-p mevedel--session)
+        (let ((mevedel-turn-settlement-reason (and (eq status 'error) (mevedel--fsm-error-message fsm))))
+          (cond
+           ((plist-get context :wake-runs)
+            ;; A newer turn may already have consumed some of these records.
+            (setf (plist-get context :wake-runs)
+                  (cl-intersection (plist-get context :wake-runs)
+                                   (mevedel-agent-control-context-mailbox mevedel--session)
+                                   :test #'equal :key (lambda (r) (plist-get r :id))))
+            (when (plist-get context :wake-runs)
+              (mevedel-schedule-settle-wake mevedel--session buffer context status mevedel-turn-settlement-reason)))
+           ((and (bound-and-true-p mevedel-workspace-schedule-run)
+                 (eq mevedel-workspace-schedule-run (plist-get context :workspace-schedule-run)))
+            (mevedel-workspace-schedule--turn-settled status))))))))
+
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS.
 
@@ -1446,7 +1489,11 @@ also autosaves, and it reaches here from the same process sentinel."
   (mevedel--turn-clear-pending-policy fsm)
   (cond
    ((mevedel--turn-settled-p fsm)
-    (mevedel--turn-stamp-settled fsm))
+    (let* ((info (mevedel-engine-info fsm))
+           (rejected (and (memq status '(error aborted)) (not (plist-get info :mevedel-request-id))
+                          (not (plist-get info :mevedel-turn-settled)))))
+      (mevedel--turn-stamp-settled fsm)
+      (when rejected (mevedel--turn-record-rejected-schedule fsm info status))))
    ((mevedel--turn-lost-p fsm)
     (mevedel--turn-settle-lost fsm))
    (t

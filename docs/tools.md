@@ -1742,12 +1742,19 @@ decisions, queued or paused follow-ups and recovery blockers, coalesces with
 other unread mail, and dispatches under the session's current permissions. A
 woken turn finishes quietly like other turns the user did not start, so the
 Schedule prompt directs the model to use [Notify](#notify) when the user should
-hear the result. A
-wake-up past its expiry is not delivered: it stays in the session's store as
-`expired`, without a model turn, until cancelled; the 20 most recent expired
-wake-ups are kept. The background-work cockpit (`/ps`) lists pending and
-expired wake-ups after agents and executions, and `k` cancels the selected
-one.
+hear the result. A failed wake-up is not quiet: it records the failure and
+sends one `failure` notice. On the third consecutive failure, the same notice
+says that the recurring wake-up is paused. A successful run or a manual resume
+resets the count. If the user starts a turn that reads the wake-up's mail,
+that turn's outcome does not count against the wake-up.
+
+Open the background-work cockpit (`/ps`) to inspect a session's wake-ups and
+their recent outcomes. Missed repeats appear as a skipped span, not a series
+of catch-up turns. An interrupted wake-up is also skipped; neither kind counts
+as a failure. A wake-up past expiry is recorded as expired without running a
+model. The session retains its 20 most recent terminal entries (expired,
+failed or skipped). Use `r` on a paused wake-up to resume it or `k` to cancel
+the selected wake-up.
 
 One Emacs-wide timer is armed for the earliest pending wake-up across open root
 buffers and closed saved sessions, and re-armed on every create, cancel,
@@ -1787,10 +1794,11 @@ each other's updates. A firing exclusively creates its run record in the same
 program that moves the schedule to its next time: exactly one Emacs fires each
 run, and it is recorded before the session starts. A firing records
 `expired` past the expiry, `skipped` while the previous run is still working,
-and otherwise starts the run. A previous run open in this Emacs is working
-while its session is busy; one open elsewhere is working until its first
-request records `:settled-at` while another live Emacs holds its session
-lease. Otherwise the run starts: the session is
+and otherwise starts the run. A run open here blocks the next one while
+its first request awaits admission or its session is busy. A run open
+elsewhere blocks while its first request is unsettled and the lease is
+current. An expired lease lets the next firing proceed; it does not prove
+the old run failed. When a run starts, the session is
 created without a window, its own preset, model, effort and permission mode set
 to the approved ones, saved, and the prompt submitted as a quiet
 `workspace-schedule` turn (annotated when it starts at least a minute late).
@@ -1802,6 +1810,25 @@ error when the session could not start. A one-shot schedule is `finished`
 after its run; one whose next run would pass its expiry is `expired`. While a
 run's first request is in flight, [Notify](#notify) receipts belong to the
 schedule, so identical text from consecutive runs is suppressed for 24 hours.
+
+Use `M-x mevedel-schedules-list-open` (Standing jobs in the workspace menu)
+to see the timing, next run and status. Open a row for its history: each run
+shows when it fired, the outcome, and a link to the run session if one was
+created. `notified` means the run issued a failure notice or a non-duplicate
+`Notify`; it is not a delivery receipt from a desktop or phone. A duplicate
+`Notify` alone leaves the run `quiet`. `p` pauses, `r` resumes, and `d` asks
+before deleting the schedule and its history.
+
+A failed launch or first request records `failed` with the error and issues
+one failure notice. After a restart, an unfinished run is marked failed only
+if its holder is known to be dead (including after a reboot of the same
+machine) or its session lease was released without a reserved transfer.
+If a run was claimed but never launched, the next firing can mark that
+claim `skipped`: the former claimant can no longer submit it. Cancelling
+a run while its request awaits admission also records `skipped`, not a failure.
+The third consecutive failure pauses an active recurring job and says so in
+that same notice. A successful run resets the count; skipped runs do not
+change it. Resuming clears the count and the pause reason.
 
 ## Eval execution scope
 

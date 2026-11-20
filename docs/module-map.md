@@ -248,6 +248,8 @@ Prompt / presets / agents
   mevedel-goal.el             phase-free Goal continuation controller
   mevedel-schedule.el         session wake-ups: timing, store, one-timer scheduler, mailbox firing
   mevedel-workspace-schedule.el workspace schedules: locked store, exclusive run claims, headless run sessions
+  mevedel-workspace-schedule-runs.el   run outcomes, failure notices and standing-job pause/resume
+  mevedel-schedules-list.el   standing jobs cockpit and linked run history
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Provider readiness and recovery (all providers)

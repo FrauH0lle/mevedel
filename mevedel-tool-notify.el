@@ -25,6 +25,7 @@
 (defvar mevedel-workspace-schedule-run)
 (declare-function mevedel-workspace-schedule-notify-receipt-file
                   "mevedel-workspace-schedule" (session))
+(declare-function mevedel-workspace-schedule-record-notice "mevedel-workspace-schedule" ())
 
 (defun mevedel-tool-notify--receipt-file (session)
   "Return the notice receipt file owned by SESSION.
@@ -70,6 +71,8 @@ An active workspace schedule run shares its schedule's file instead."
     (if (not (mevedel-tool-notify--claim mevedel--session text))
         (list :result "Duplicate notice suppressed.")
       (mevedel-notify mevedel--session 'notify text)
+      (when (featurep 'mevedel-workspace-schedule)
+        (mevedel-workspace-schedule-record-notice))
       (list :result (concat "Notified: " text)))))
 
 (defun mevedel-tool-notify-register ()

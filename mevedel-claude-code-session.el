@@ -185,7 +185,7 @@ TRIGGER names the initiator of an automatic root turn."
             (message "mevedel: starting Claude with an excerpt continuation"))
           (setf (mevedel-engine-info request)
                 (append (mevedel-engine-info request)
-                        (list :context (and trigger (list :turn-trigger trigger))
+                        (list :context (if (listp trigger) trigger (list :turn-trigger trigger))
                               :backend backend :model model-id :reasoning-effort effort
                               :mevedel-native-before-history (copy-tree history)
                               :external-history t :mevedel-native-isolated isolated)))
