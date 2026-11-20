@@ -20,7 +20,10 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-native)
 (require 'mevedel-view-render)
+
+(declare-function mevedel-view-native--stats "ext:mevedel-view-native" ())
 (require 'mevedel-view-composer-test-helpers
          (file-name-concat
           (file-name-directory
@@ -91,6 +94,23 @@
         (should (= (window-pixel-height dock) short))
         (should (= (window-start dock) (point-min)))))))
 
+(ert-deftest mevedel-view-composer-graphical/reopen-dock-at-draft-height ()
+  "Restoring a dock for a long draft does not start at a placeholder height."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (pair-height (+ (window-pixel-height dock) (window-pixel-height transcript))))
+      (insert (mapconcat (lambda (_) "wrapped draft ") (number-sequence 1 500)))
+      (select-window transcript)
+      (let ((ignore-window-parameters t)) (delete-window dock))
+      (let* ((reopened (mevedel-view-composer-display transcript))
+             (height (window-pixel-height reopened)))
+        (should (= height (/ pair-height 3)))
+        (should (eq (selected-window) transcript))
+        (mevedel-view-composer-graphical--settle)
+        (should (= (window-pixel-height reopened) height))))))
+
 (ert-deftest mevedel-view-composer-graphical/dock-chrome ()
   "The rule is above the rail and the pair's mode line is below the draft."
   :tags '(mevedel-docked-composer)
@@ -149,6 +169,36 @@
         (should (eq (selected-window) dock))
         (should (= (point) caret))))))
 
+(ert-deftest mevedel-view-composer-graphical/header-reuses-unchanged-transcript ()
+  "A dock header does not walk unchanged transcript rows on every format."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (queries 0)
+           (observe (lambda (original &optional position window partial)
+                      (when (and (eq window transcript) (integerp position)
+                                 (= position (with-current-buffer view-buf (point-max))))
+                        (cl-incf queries))
+                      (funcall original position window partial))))
+      (mevedel-view-test--insert-data
+       data-buf (mapconcat (lambda (n) (format "Earlier line %d." n))
+                           (number-sequence 1 180) "\n") 'response)
+      (with-current-buffer view-buf (mevedel-view--full-rerender))
+      (mevedel-view-transcript-show-end transcript)
+      (mevedel-view-composer-graphical--settle)
+      (unwind-protect
+          (progn
+            (advice-add 'pos-visible-in-window-p :around observe)
+            (dotimes (_ 3)
+              (should-not (string-search "Back to bottom"
+                                         (mevedel-view-composer-graphical--header dock))))
+            (should (<= queries 1))
+            (set-window-start transcript (with-current-buffer view-buf (point-min)))
+            (should (string-search "Back to bottom"
+                                   (mevedel-view-composer-graphical--header dock))))
+        (advice-remove 'pos-visible-in-window-p observe)))))
+
 (ert-deftest mevedel-view-composer-graphical/rail-at-top ()
   "Activity appears on the composer's first line without editing either buffer."
   :tags '(mevedel-docked-composer)
@@ -201,6 +251,65 @@
               (while (and (equal resting (sample)) (< (float-time) deadline))
                 (sit-for 0.04))
               (should-not (equal resting (sample))))))))))
+
+(ert-deftest mevedel-view-composer-graphical/rail-frame-does-not-dirty-transcript-chrome ()
+  "Portable rail animation does not force the transcript's mode line to update."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let ((mevedel-view-spinner-style 'ascii)
+          (mevedel-view-spinner-animate t)
+          (mevedel-view-spinner-power-policy 'full)
+          (mevedel-view-native-enabled nil)
+          (chat-frame (selected-frame))
+          (native-focus (symbol-function 'frame-focus-state))
+          (updates 0))
+      (cl-letf (((symbol-function 'frame-focus-state)
+                 (lambda (&optional frame)
+                   (or (and (display-graphic-p chat-frame)
+                            (eq (or frame (selected-frame)) chat-frame))
+                       (funcall native-focus frame)))))
+        (mevedel-view-stream-show-progress view-buf "Checking animation")
+        (redisplay t)
+        (let* ((deadline (+ (float-time) 2))
+               (before (mevedel-view-test--rail-text))
+               (column (string-search "Checking animation" before))
+               (observe (lambda (&rest _)
+                          (when (eq (current-buffer) view-buf) (cl-incf updates)))))
+          (should column)
+          (unwind-protect
+              (progn
+                (advice-add 'set-buffer-modified-p :before observe)
+                (while (and (eq t (compare-strings before 0 column
+                                                  (mevedel-view-test--rail-text) 0 column))
+                            (< (float-time) deadline))
+                  (sit-for 0.01))
+                (should-not (eq t (compare-strings before 0 column
+                                                   (mevedel-view-test--rail-text) 0 column)))
+                (should (zerop updates)))
+            (advice-remove 'set-buffer-modified-p observe)))))))
+
+(ert-deftest mevedel-view-composer-graphical/rail-presents-native-frames ()
+  "A Wayland surface fits the activity cell between the badge and elapsed time."
+  (mevedel-view-composer-graphical--with-chat
+    (when (mevedel-view-native-available-p (selected-frame))
+      (let* ((chat-frame (selected-frame))
+             (native-focus (symbol-function 'frame-focus-state))
+             (mevedel-view-spinner-style 'shimmer)
+             (mevedel-view-spinner-power-policy 'full)
+             (mevedel-view-spinner-animate t)
+             (before (mevedel-view-native--stats)))
+        (cl-letf (((symbol-function 'frame-focus-state)
+                   (lambda (&optional frame)
+                     (or (eq (or frame (selected-frame)) chat-frame)
+                         (funcall native-focus frame)))))
+          (mevedel-view-stream-show-progress view-buf "Working on the benchmark request")
+          (redisplay t)
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (<= (aref (mevedel-view-native--stats) 1) (1+ (aref before 1)))
+                        (< (float-time) deadline))
+              (sit-for 0.02)))
+          (should (= (aref (mevedel-view-native--stats) 0) (1+ (aref before 0))))
+          (should (> (aref (mevedel-view-native--stats) 1) (1+ (aref before 1)))))))))
 
 (ert-deftest mevedel-view-composer-graphical/rail-visits-card ()
   "A question announces itself in the dock without moving the transcript."

@@ -44,20 +44,22 @@
           (should (eq composer (mevedel-view-composer-window window))))))))
 
 (defun mevedel-view-pair-graphical--switch (buffer)
-  "Switch to BUFFER by typing the native switch command and minibuffer input."
+  "Switch to BUFFER with native keys and return its dock at command completion."
   (let* ((unread-command-events (append (kbd "C-x b") (buffer-name buffer) '(?\r)))
          (deadline (run-at-time 5 nil #'exit-recursive-edit))
-         finished
+         finished dock
          (hook (lambda ()
                  ;; The minibuffer and its caller can report the same command.
                  (when (and (not finished) (eq (window-buffer) buffer))
-                   (setq finished (run-at-time 0 nil #'exit-recursive-edit))))))
-    (add-hook 'post-command-hook hook)
+                   (setq dock (mevedel-view-composer-window)
+                         finished (run-at-time 0 nil #'exit-recursive-edit))))))
+    (add-hook 'post-command-hook hook 100)
     (unwind-protect (recursive-edit)
       (remove-hook 'post-command-hook hook)
       (cancel-timer deadline)
       (when finished (cancel-timer finished)))
-    (should (eq (window-buffer) buffer))))
+    (should (eq (window-buffer) buffer))
+    dock))
 
 (ert-deftest mevedel-view-pair-graphical/delete-other-windows ()
   "Keeping either half via the native command preserves the pair and draft caret."
@@ -103,7 +105,15 @@
                  (origin (if (eq from 'composer) composer transcript)))
             (mevedel-view-composer-graphical--type "One draft")
             (select-window origin)
-            (mevedel-view-composer-graphical--keys keys command)
+            (let* ((docks nil)
+                   (observe (lambda ()
+                              (when (eq this-command command)
+                                (setq docks (get-buffer-window-list draft nil (selected-frame)))))))
+              (add-hook 'post-command-hook observe 100)
+              (unwind-protect
+                  (mevedel-view-composer-graphical--keys keys command)
+                (remove-hook 'post-command-hook observe))
+              (should (= 2 (length docks))))
             (should (eq origin (selected-window)))
             (mevedel-view-pair-graphical--pairs view-buf 2)
             (should (= 4 (length (window-list nil 'nomini))))
@@ -126,6 +136,33 @@
               (should (equal "One draft in both windows"
                              (mevedel-view-composer-graphical--draft view-buf))))))))))
 
+(ert-deftest mevedel-view-pair-graphical/split-fits-wrapped-draft ()
+  "The split fits each dock once and grows the original before redisplay."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (fits 0)
+           (observe-fit (lambda (&rest _) (cl-incf fits)))
+           height after-split
+           (observe-split (lambda ()
+                            (when (eq this-command 'split-window-right)
+                              (setq after-split (window-pixel-height dock))))))
+      (setq-local truncate-partial-width-windows nil)
+      (insert (make-string (/ (* 3 (window-body-width dock)) 4) ?x))
+      (mevedel-view-composer-graphical--settle)
+      (setq height (window-pixel-height dock))
+      (advice-add 'mevedel-composer--fit :before observe-fit)
+      (add-hook 'post-command-hook observe-split 100)
+      (unwind-protect
+          (progn
+            (mevedel-view-composer-graphical--keys "C-x 3" 'split-window-right)
+            (mevedel-view-composer-graphical--settle)
+            (should (> after-split height))
+            (should (= after-split (window-pixel-height dock)))
+            (should (= 2 fits)))
+        (remove-hook 'post-command-hook observe-split)
+        (advice-remove 'mevedel-composer--fit observe-fit)))))
+
 (ert-deftest mevedel-view-pair-graphical/switch-buffer ()
   "Switching buffers replaces the transcript, undocks, and redocks on return."
   :tags '(mevedel-docked-composer)
@@ -142,7 +179,7 @@
           (should (eq scratch (window-buffer transcript)))
           (mevedel-view-pair-graphical--pairs view-buf 0)
           (should-not (window-live-p composer))
-          (mevedel-view-pair-graphical--switch view-buf)
+          (should (window-live-p (mevedel-view-pair-graphical--switch view-buf)))
           (should (eq transcript (selected-window)))
           (mevedel-view-pair-graphical--pairs view-buf 1)
           (should (equal "Saved while away" (mevedel-view-composer-graphical--draft view-buf))))))))
@@ -321,7 +358,15 @@
                 (should-not (eq session restored))
                 (should (equal (mevedel-session-session-id session)
                                (mevedel-session-session-id restored))))
-              (mevedel--display-chat-buffer reopened)
+              (let* ((fits 0)
+                     (observe (lambda (&rest _) (cl-incf fits))))
+                (advice-add 'mevedel-composer--fit :before observe)
+                (unwind-protect
+                    (progn
+                      (mevedel--display-chat-buffer reopened)
+                      (mevedel-view-composer-graphical--settle)
+                      (should (= 1 fits)))
+                  (advice-remove 'mevedel-composer--fit observe)))
               (let* ((composer (selected-window))
                      (transcript (mevedel-view-transcript-window composer))
                      (view (window-buffer transcript)))
@@ -349,7 +394,7 @@
       (delete-window side))))
 
 (ert-deftest mevedel-view-pair-graphical/no-steady-repair ()
-  "Typing in a stable dock does not run repairs; a real split does."
+  "Typing does not run repairs; a root split outside pair rules still does."
   :tags '(mevedel-docked-composer)
   (mevedel-view-composer-graphical--with-chat
     (redisplay t)
@@ -363,7 +408,8 @@
             (redisplay t)
             (sit-for 0.02)
             (should (zerop repairs))
-            (mevedel-view-composer-graphical--keys "C-x 3" 'split-window-right)
+            (select-window (mevedel-view-transcript-window))
+            (split-root-window-right)
             (mevedel-view-pair-graphical--pairs view-buf 2)
             (should (> repairs 0)))
         (advice-remove 'mevedel-view-pair--repair observe)))))

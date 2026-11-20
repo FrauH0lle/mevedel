@@ -197,6 +197,8 @@
 (declare-function mevedel-view-composer-kill "mevedel-view-composer" ())
 (declare-function mevedel-composer-refresh-transcript-position
                   "mevedel-view-composer" (transcript start))
+(declare-function mevedel-composer-invalidate-transcript-end
+                  "mevedel-view-composer" (window))
 (declare-function mevedel-view-pair-toggle-focus "mevedel-view-pair" ())
 (declare-function mevedel-view--install-dnd "mevedel-view-input-files" ())
 (declare-function mevedel-view-transcript-tail-initialize
@@ -808,6 +810,8 @@ and request progress row.  An editable view owns a separate composer buffer.
             #'mevedel-view--resume-on-window-scroll nil t)
   (add-hook 'window-scroll-functions
             #'mevedel-composer-refresh-transcript-position nil t)
+  ;; Overlay and font changes need not change the transcript's text tick.
+  (add-hook 'pre-redisplay-functions #'mevedel-composer-invalidate-transcript-end nil t)
   ;; Keep pixel scrolling a forced redisplay start would drop under the caret.
   (add-hook 'pre-redisplay-functions #'mevedel-view--note-redisplay-vscroll nil t)
   (add-hook 'window-scroll-functions #'mevedel-view--restore-redisplay-vscroll nil t)

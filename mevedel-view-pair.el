@@ -12,6 +12,8 @@
 (require 'mevedel-utilities)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-composer--fit "mevedel-view-composer"
+                  (dock transcript &optional fresh))
 (defvar mevedel-composer--view)
 (defvar mevedel-view--composer-buffer)
 
@@ -134,16 +136,22 @@ WINDOW defaults to the selected window and may be either pair member."
 (defun mevedel-view-pair--split (window size side &optional pixelwise)
   "Split WINDOW's pair using `split-window' SIZE, SIDE, and PIXELWISE."
   (let* ((transcript (mevedel-view-transcript-window window))
-         (parent (and transcript (mevedel-view-composer-window transcript)
-                      (window-parent transcript)))
-         (ignore-window-parameters t)
-         (new (split-window (or parent window) size side pixelwise)))
+         (dock (and transcript (mevedel-view-composer-window transcript)))
+         (parent (and dock (window-parent transcript)))
+         (new (let ((ignore-window-parameters t))
+                (split-window (or parent window) size side pixelwise))))
     (when parent
       ;; An internal-window split can inherit the selected composer's buffer.
       (set-window-buffer new (window-buffer transcript))
       (set-window-start new (window-start transcript))
       (set-window-point new (window-point transcript))
-      (mevedel-view-pair--schedule (window-frame transcript)))
+      ;; A display action can still replace NEW with its destination buffer.
+      (if (memq this-command '(split-window-below split-window-right))
+          (unless noninteractive
+            (with-current-buffer (window-buffer dock)
+              (mevedel-composer--fit dock transcript t))
+            (mevedel-view-composer-display new))
+        (mevedel-view-pair--schedule (window-frame transcript))))
     new))
 
 (defun mevedel-view-pair--delete (window)
@@ -183,6 +191,9 @@ WINDOW defaults to the selected window and may be either pair member."
                       (ignore-errors (split-window transcript -4 'below)))))
     (set-window-buffer dock draft)
     (mevedel-view-pair--bind transcript dock)
+    ;; Do not paint a provisional height only to resize and repaint it.
+    (unless noninteractive
+      (with-current-buffer draft (mevedel-composer--fit dock transcript t)))
     dock))
 
 (defun mevedel-view-composer-display (view-window)
@@ -333,8 +344,16 @@ whose rules need reinstalling), :add transcripts, and :remove docks."
   "Notice restored rules and retry docks previously too small to fit."
   (mevedel-view-pair--frame-change (selected-frame)))
 
+(defun mevedel-view-pair--after-switch ()
+  "Dock a switched-to transcript once the native display action has finished."
+  (when (and (memq this-command '(switch-to-buffer mevedel-view-pair-switch-buffer))
+             (eq (window-buffer) (current-buffer))
+             (not (mevedel-view-composer-window)))
+    (mevedel-view-composer-display (selected-window))))
+
 (defun mevedel-view-pair-watch (draft)
   "Observe layout changes for the current view and its DRAFT buffer."
+  (add-hook 'post-command-hook #'mevedel-view-pair--after-switch nil t)
   (add-hook 'window-buffer-change-functions #'mevedel-view-pair--buffer-change nil t)
   (with-current-buffer draft
     (add-hook 'window-buffer-change-functions #'mevedel-view-pair--buffer-change nil t)

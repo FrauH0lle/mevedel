@@ -1780,6 +1780,13 @@ same Lisp redisplay count, while native main motion ran at 30 fps instead of
 8 fps. The measurements and experiments were machine-local working material
 and are not retained.
 
+For the docked composer, the native surface spans only the activity cell.
+Measure between the actual glyph positions at the edges of a substituted
+cell: a text range query can include the neighboring display string and
+cause the native width check to reject the surface. The portable renderer
+still writes a display property but does not explicitly invalidate the
+transcript's chrome for an activity sample.
+
 The user's preview exposed a top-left flash on refocusing that lifecycle counts
 had missed. Wayland traces showed child images committed before their parent
 position: 17 premature commits in the reproduction. Synchronizing initial and

@@ -882,6 +882,14 @@ transcript paging. The layout scenarios check the resulting window tree after
 session. Pair repair count and elapsed repair time are separate from dock-fit
 counts and from total command latency.
 
+Both builds explicitly save the fixture's dirty session once after scrolling,
+before any layout commands. The report includes that checkpoint's duration
+separately; resume reads the same saved session. Automatic saving remains on.
+The checkpoint no longer lands inside whichever switch happens to service
+Emacs's auto-save event threshold first.
+The runner removes fixture directories after reaping its processes, so
+teardown cannot race a journal worker still writing in the workspace.
+
 Command latency includes deferred zero-delay work and Emacs redisplay, not
 display scanout. Stream latency times the production render function, not
 provider transport. CPU is Linux scheduler time for Emacs, private KWin and

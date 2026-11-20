@@ -712,12 +712,29 @@ their distinct labels."
               label)))
       "")))
 
+(defun mevedel-composer-invalidate-transcript-end (window)
+  "Discard the header's view of WINDOW before native transcript redisplay."
+  (set-window-parameter window 'mevedel-composer-transcript-end nil))
+
+(defun mevedel-composer--transcript-end-visible-p (window)
+  "Reuse WINDOW's exact end visibility across header formats until it changes."
+  (with-current-buffer (window-buffer window)
+    (let* ((key (list (current-buffer) (buffer-modified-tick) (point-min) (point-max)
+                      (window-start window) (window-vscroll window t) (window-hscroll window)
+                      (window-body-width window t) (window-pixel-height window)))
+           (cached (window-parameter window 'mevedel-composer-transcript-end)))
+      (if (equal key (car cached))
+          (cdr cached)
+        (let ((visible (mevedel-view-transcript-end-visible-p window)))
+          (set-window-parameter window 'mevedel-composer-transcript-end (cons key visible))
+          visible)))))
+
 (defun mevedel-composer--top-line ()
   "Draw the separator, hidden draft count, and transcript jump button."
   (let* ((window (selected-window))
          (more (mevedel-composer--hidden-label window))
          (transcript (mevedel-view-transcript-window window))
-         (button (if (and transcript (not (mevedel-view-transcript-end-visible-p transcript)))
+         (button (if (and transcript (not (mevedel-composer--transcript-end-visible-p transcript)))
                      mevedel-composer--bottom-button ""))
          (gap (- (window-total-width window) (string-width more) (string-width button))))
     (concat more
@@ -742,12 +759,26 @@ All heights use the same units; CHROME includes the rail.  A tiny pair
 can exceed the cap to keep the dock usable."
   (max (+ chrome line) (min (+ chrome draft) (/ pair 3))))
 
-(defun mevedel-composer--fit (dock transcript)
-  "Fit DOCK to its draft at its current width, taking space from TRANSCRIPT."
+(defvar-local mevedel-composer--fit-edits 0
+  "Count edits observed by the fit hook, excluding silent rail updates.")
+
+(defun mevedel-composer--fit-key (dock transcript)
+  "Identify the current draft and layout of DOCK and TRANSCRIPT."
+  (list (current-buffer) (buffer-chars-modified-tick) mevedel-composer--fit-edits
+        (copy-tree face-remapping-alist)
+        (frame-char-height (window-frame dock)) (window-body-width dock t)
+        (window-pixel-height dock) (window-pixel-height transcript)
+        (window-scroll-bar-height dock) (window-bottom-divider-width dock)))
+
+(defun mevedel-composer--fit (dock transcript &optional fresh)
+  "Fit DOCK to its draft at its current width, taking space from TRANSCRIPT.
+Use FRESH chrome geometry when fitting before redisplay."
   (let* ((height (window-pixel-height dock))
          (line (frame-char-height (window-frame dock)))
          (pair (+ height (window-pixel-height transcript)))
-         (frame-chrome (- height (window-body-height dock t)))
+         (frame-chrome (- height (if fresh
+                                    (cdr (mevedel-view--window-body-geometry dock))
+                                  (window-body-height dock t))))
          (chrome (+ frame-chrome line))
          ;; Measure one extra row to distinguish a full body from a capped one.
          (limit (+ line (max (* 2 line) (- (/ pair 3) frame-chrome))))
@@ -766,9 +797,11 @@ can exceed the cap to keep the dock usable."
                 (window-resize dock step nil nil t)))
           (window-preserve-size dock nil t))
         (when follow (mevedel-view-transcript-show-end transcript))))
-    (when (and (<= text (window-body-height dock t))
+    (when (and (<= text (- (window-pixel-height dock) frame-chrome))
                (> (window-start dock) (point-min)))
-      (set-window-start dock (point-min)))))
+      (set-window-start dock (point-min)))
+    (set-window-parameter dock 'mevedel-composer--fit-key
+                          (mevedel-composer--fit-key dock transcript))))
 
 (defun mevedel-composer--fit-displayed (buffer)
   "Fit BUFFER's surviving docks after edit and window hooks finish."
@@ -777,10 +810,15 @@ can exceed the cap to keep the dock usable."
       (setq mevedel-composer--fit-timer nil)
       (dolist (dock (get-buffer-window-list buffer nil t))
         (when-let* ((transcript (mevedel-view-transcript-window dock)))
-          (mevedel-composer--fit dock transcript))))))
+          ;; Our own layout notifies redisplay too, sometimes with stale chrome.
+          (unless (equal (window-parameter dock 'mevedel-composer--fit-key)
+                         (mevedel-composer--fit-key dock transcript))
+            (mevedel-composer--fit dock transcript)))))))
 
-(defun mevedel-composer--queue-fit (&rest _)
-  "Coalesce draft edits and size changes into one fit outside redisplay."
+(defun mevedel-composer--queue-fit (&optional _beg end _length)
+  "Coalesce edits and size changes into one fit outside redisplay.
+END distinguishes a draft edit from a one-argument window notification."
+  (when end (cl-incf mevedel-composer--fit-edits))
   (unless (or noninteractive mevedel-composer--fit-timer)
     (setq mevedel-composer--fit-timer
           (run-at-time 0 nil #'mevedel-composer--fit-displayed (current-buffer)))))

@@ -75,9 +75,9 @@ draft lines are hidden above. Its top rule (`─` in a terminal) offers
 `↓ Back to bottom` only while the paired transcript is off its end. The mode
 line is below the composer, not between the two windows.
 
-Popups normally open outside the pair. After a window layout changes, a
-deferred repair removes orphan docks and restores missing ones without
-selecting the repaired dock.
+Popups normally open outside the pair. A native split or a switch back can
+install its dock before redisplay. Deferred repair still removes orphan
+docks and restores missing ones in other layouts without selecting the dock.
 A transcript remains usable when its window is too short for a dock.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Resident retained agents use their live conversation buffer

@@ -204,7 +204,10 @@ CPU time."
 
 (defun mevedel-dc-bench--with-view (function)
   "Call FUNCTION with the data and view buffers of a displayed chat."
-  (let* ((root (file-name-as-directory (make-temp-file "mevedel-bench-" t)))
+  ;; The private runner deletes this root after reaping journal workers.
+  (let* ((root (file-name-as-directory
+                (make-temp-file (file-name-concat (getenv "XDG_STATE_HOME")
+                                                  "mevedel-bench-") t)))
          (mevedel-user-dir (file-name-concat root "user/"))
          (gptel-display-buffer-action
           '(display-buffer-same-window (body-function . select-window)))
@@ -239,8 +242,7 @@ CPU time."
           (mevedel-dc-bench--settle)
           (funcall function data view))
       (when (buffer-live-p data) (mevedel-chat-discard-buffers data t))
-      (when (buffer-live-p view) (kill-buffer view))
-      (delete-directory root t))))
+      (when (buffer-live-p view) (kill-buffer view)))))
 
 (defun mevedel-dc-bench--measure (scenario function)
   "Record SCENARIO, where FUNCTION returns latency samples."
@@ -371,7 +373,6 @@ CPU time."
             (lambda ()
               (setq reopened (mevedel-session-persistence-resume-id workspace id))
               (mevedel--display-chat-buffer reopened))))
-      (with-current-buffer data (mevedel-save-session))
       (mevedel-dc-bench--check (mevedel-session-save-path session) "a saved session")
       (mevedel-chat-discard-buffers data t)
       (mevedel-dc-bench--settle)
@@ -426,6 +427,15 @@ CPU time."
      (with-current-buffer view (mevedel-view--stop-spinner))
      (mevedel-dc-bench--measure "idle-quiet" (lambda () (mevedel-dc-bench--idle mevedel-dc-bench--idle-seconds)))
      (mevedel-dc-bench--measure "scrolling" (lambda () (mevedel-dc-bench--scroll view)))
+     ;; Pay for the dirty transcript at the same step in both builds, not
+     ;; whenever the command loop happens to service keystroke auto-save.
+     (mevedel-dc-bench--measure
+      "checkpoint"
+      (lambda ()
+        (let ((start (float-time)))
+          (with-current-buffer data (mevedel-save-session))
+          (list (* 1000 (- (float-time) start))))))
+     (mevedel-dc-bench--check (not (buffer-modified-p data)) "a checkpointed transcript")
      (mevedel-dc-bench--layout data view))))
 
 (defun mevedel-dc-bench--prepare (docked)

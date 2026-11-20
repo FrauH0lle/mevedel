@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = "mevedel-docked-composer-bench"
 BUILDS = ("inline", "docked")
 STEADY = ("typing", "wrapped-deletion", "stream", "idle-request", "idle-quiet", "scrolling")
-LAYOUT = ("split", "switch-away", "switch-back", "popup-open", "popup-close", "resume")
+LAYOUT = ("checkpoint", "split", "switch-away", "switch-back", "popup-open", "popup-close", "resume")
 MIN_CALLBACKS = 20
 
 
@@ -78,7 +78,7 @@ def run_session(temporary, revisions, grammars, rounds, smoke):
     for index in range(rounds + 2):
         measured = 1 <= index <= rounds
         if measured:
-            steps.append(f"printf 'pair {index} before load: '; cat /proc/loadavg")
+            steps.append(f"printf 'pair {index} before load: ' && cat /proc/loadavg")
         for build in BUILDS if index % 2 else reversed(BUILDS):
             docked = "t" if build == "docked" else "nil"
             if index in (0, rounds + 1):
@@ -93,7 +93,7 @@ def run_session(temporary, revisions, grammars, rounds, smoke):
                 steps.append(f"printf '%s\\n' 'round {index}: {build}' && {shlex.join(command)}")
                 runs.append((index, build, output))
         if measured:
-            steps.append(f"printf 'pair {index} after load: '; cat /proc/loadavg")
+            steps.append(f"printf 'pair {index} after load: ' && cat /proc/loadavg")
     status = load_kwin_runner().run_session(["sh", "-c", " && ".join(steps)], session_timeout=7200)
     evidence = []
     for build, phase, log in probes:
@@ -154,7 +154,8 @@ def report(data):
             raise ValueError(f"unpaired {scenario}")
         metrics = []
         if scenario not in ("idle-request", "idle-quiet"):
-            metric = "render latency" if scenario == "stream" else "command-to-redisplay latency"
+            metric = {"stream": "render latency", "checkpoint": "explicit save latency"}.get(
+                scenario, "command-to-redisplay latency")
             metrics.append((metric, "ms", lambda r: statistics.median(r["samples-ms"])))
         if scenario in STEADY:
             metrics.extend((metric, "ms/s", lambda r, field=field: r[field] / (1e6 * r["wall"]))

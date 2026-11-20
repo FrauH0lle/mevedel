@@ -1402,7 +1402,8 @@ animation or elapsed timer remains to notice the new colors."
                                frame (get-text-property start 'display))
                         (mevedel-view--put-decorative-display
                          start (marker-position (cdr target)) frame)))))))))
-      (set-buffer-modified-p was-modified))))
+      ;; Decorative frames do not invalidate the transcript's chrome.
+      (restore-buffer-modified-p was-modified))))
 
 (defun mevedel-view--start-spinner (&optional status)
   "Show request progress with STATUS text in the view buffer.

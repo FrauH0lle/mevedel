@@ -257,7 +257,18 @@ The placement is (FRAME GEOMETRY FONT BACKGROUND)."
         (let* ((edges (window-inside-pixel-edges window))
                (x (+ (car edges) (car xy)))
                (y (+ (cadr edges) (cdr xy)))
-               (width (car (window-text-pixel-size window start end)))
+               (width
+                (if (and (= end (1+ start))
+                         (stringp (get-char-property start 'display window)))
+                    ;; Adjacent display strings confuse the range width query.
+                    ;; Use the actual edges of this single substituted cell.
+                    (let* ((edge (posn-at-point end window))
+                           (end-xy (posn-x-y edge)))
+                      (if (and (eql (posn-point edge) end)
+                               (eql (cdr end-xy) (cdr xy)))
+                          (- (car end-xy) (car xy))
+                        0))
+                  (car (window-text-pixel-size window start end))))
                (height (cdr (posn-object-width-height first)))
                (ascent (mevedel-view-native--font-ascent font frame))
                (family (font-get font :family))
