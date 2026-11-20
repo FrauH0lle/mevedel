@@ -116,6 +116,27 @@
         (should (eq composer (selected-window)))
         (should (= caret (window-point composer)))))))
 
+(ert-deftest mevedel-view-pair-graphical/delete-neighbor ()
+  "The pair counts as one visible window when closing the window above it."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (other (split-window (frame-root-window) nil 'above)))
+      (set-window-buffer other (get-buffer-create "*scratch*"))
+      (insert "> keep this draft")
+      (select-window other)
+      ;; Workspace commands filter out dedicated windows unless marked visible.
+      (should (equal (list other transcript)
+                     (seq-filter (lambda (window)
+                                   (or (window-parameter window 'visible)
+                                       (not (window-dedicated-p window))))
+                                 (window-list nil 'nomini))))
+      (mevedel-view-composer-graphical--keys "C-x 0" 'delete-window)
+      (should-not (window-live-p other))
+      (mevedel-view-pair-graphical--pairs view-buf 1)
+      (should (equal "> keep this draft" (mevedel-view-composer-graphical--draft view-buf))))))
+
 (ert-deftest mevedel-view-pair-graphical/settlement-after-return ()
   "A settled card does not rewind a draft the user returned to edit."
   :tags '(mevedel-docked-composer)
@@ -517,6 +538,65 @@
         (should (= (window-start transcript) transcript-start))
         (should (= (window-point transcript) transcript-point))
         (should (equal draft (mevedel-view-composer-graphical--draft view-buf)))))))
+
+(ert-deftest mevedel-view-pair-graphical/page-fitting-draft ()
+  "Paging a draft that fits cannot leave the rail offscreen."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let ((dock (selected-window)))
+      (dolist (draft '("" "> short\nsecond line"))
+        (insert draft)
+        (mevedel-view-composer-graphical--settle)
+        (let ((inhibit-message t) (message-log-max nil))
+          (mevedel-view-composer-graphical--keys "C-v" 'scroll-up-command))
+        (mevedel-view-composer-graphical--settle)
+        (should (= (point-min) (window-start dock)))
+        (should (eq dock (selected-window)))
+        (should (equal draft (mevedel-view-composer-graphical--draft view-buf)))))))
+
+(ert-deftest mevedel-view-pair-graphical/composer-line-numbers ()
+  "The composer starts without line numbers even if enabled in `text-mode'."
+  :tags '(mevedel-docked-composer)
+  (let ((text-mode-hook (cons #'display-line-numbers-mode text-mode-hook)))
+    (mevedel-view-composer-graphical--with-chat
+      (should-not display-line-numbers))))
+
+(ert-deftest mevedel-view-pair-graphical/scroll-transcript-to-top ()
+  "Reaching the transcript top leaves the rail and end-of-draft caret alone."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (draft "> short draft")
+           (transcript-top (with-current-buffer view-buf (point-min)))
+           (scroll-preserve-screen-position t)
+           (mouse-wheel-follow-mouse t)
+           (mouse-wheel-progressive-speed nil)
+           (mouse-wheel-scroll-amount '(2)))
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list (* 2 (frame-height)) "More output.\n"))
+       'response)
+      (with-current-buffer view-buf (mevedel-view--full-rerender))
+      (mevedel-view-transcript-show-end transcript)
+      (insert draft)
+      (mevedel-view-composer-graphical--settle)
+      (should (> (window-start transcript) transcript-top))
+      (let ((limit (* 2 (frame-height)))
+            (inhibit-message t) (message-log-max nil))
+        (while (and (> (window-start transcript) transcript-top) (> (cl-decf limit) 0))
+          (if (display-graphic-p)
+              (mevedel-view-composer-graphical--events
+               (list (list 'wheel-up (posn-at-x-y 10 (/ (window-body-height transcript t) 2)
+                                                 transcript)))
+               'mwheel-scroll)
+            (mevedel-view-composer-graphical--keys "C-M-S-v" 'scroll-other-window-down))))
+      (mevedel-view-composer-graphical--settle)
+      (should (= (window-start transcript) transcript-top))
+      (should (= (window-start dock) (point-min)))
+      (should (zerop (window-vscroll dock t)))
+      (should (eq dock (selected-window)))
+      (should (= (point) (point-max)))
+      (should (equal draft (mevedel-view-composer-graphical--draft view-buf))))))
 
 (ert-deftest mevedel-view-pair-graphical/minibuffer-quit-returns-to-draft ()
   "Canceling the command prompt restores the dock's window and draft caret."

@@ -200,6 +200,7 @@
 (declare-function mevedel-composer-invalidate-transcript-end
                   "mevedel-view-composer" (window))
 (declare-function mevedel-view-pair-toggle-focus "mevedel-view-pair" ())
+(declare-function mevedel-view-transcript-window "mevedel-view-pair" (&optional window))
 (declare-function mevedel-view--install-dnd "mevedel-view-input-files" ())
 (declare-function mevedel-view-transcript-tail-initialize
                   "mevedel-view-composer" ())
@@ -1444,6 +1445,10 @@ text layout changes: size, wrapping, text scale, line spacing or font."
 (defun mevedel-view--sticky-prompt-line ()
   "Return the current window's pinned prompt on its own header line."
   (let* ((window (selected-window))
+         ;; A pixel-position query can format this header while the dock is
+         ;; selected, even though the transcript is the current buffer.
+         (window (if (eq (window-buffer window) (current-buffer)) window
+                   (or (mevedel-view-transcript-window window) window)))
          (local (mevedel-view--pinned-prompt window))
          (continuation (and (eq (window-buffer window) (current-buffer))
                             (not local) (mevedel-view--continuation-prompt)))

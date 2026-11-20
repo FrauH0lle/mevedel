@@ -32,6 +32,8 @@
 
 (defconst mevedel-view-pair--transcript-rules
   '((mode-line-format . none)
+    ;; Workspace commands count `visible' windows even when dedicated.
+    (visible . t)
     (split-window . mevedel-view-pair--split)
     (delete-window . mevedel-view-pair--delete)))
 

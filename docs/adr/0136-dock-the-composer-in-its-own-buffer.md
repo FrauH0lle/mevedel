@@ -40,7 +40,9 @@ where the two would meet; labelled request summaries remain visible.
 the two windows their own parent. The dock is dedicated to its buffer, preserves
 its height, and survives `delete-other-windows` in the transcript. The paired
 transcript is weakly dedicated: automatic popup display skips it, but explicit
-`C-x b` can still replace its buffer. Window parameters route split and delete
+`C-x b` can still replace its buffer. Its `visible` parameter lets workspace
+commands that filter out dedicated windows count the pair once. Window
+parameters route split and delete
 through the pair's parent and `delete-other-windows` in the dock through the
 transcript. The dock's
 `C-x b` switches the transcript's buffer instead of replacing the draft.

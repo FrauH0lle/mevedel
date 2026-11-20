@@ -634,6 +634,7 @@ Only activity is animated; FRAME selects its display palette."
                  (max 1 (- width (if attention (min 12 (/ width 2)) 0)))
                  nil nil "…"))
          (room (- width (string-width badge)))
+         (separator (propertize " · " 'face 'mevedel-view-spinner))
          (notice
           (when (and attention (> room 4))
             (let* ((available (- room 3))
@@ -657,10 +658,10 @@ Only activity is animated; FRAME selects its display palette."
                           'mevedel-view-zone-activate
                           #'mevedel-view-jump-to-interaction)))))
     (when notice
-      (setq badge (concat badge " · " notice)
+      (setq badge (concat badge separator notice)
             room (- width (string-width badge))))
     (if (and status (>= room 13))
-        (concat badge " · "
+        (concat badge separator
                 (mevedel-view--format-spinner-line
                  status nil display-status (- room 3) frame))
       (concat badge "\n"))))

@@ -767,17 +767,25 @@ their distinct labels."
          (transcript (mevedel-view-transcript-window window))
          (button (if (and transcript (not (mevedel-composer--transcript-end-visible-p transcript)))
                      mevedel-composer--bottom-button ""))
-         (button-width (string-width button)))
-    (concat pending more
-            (if (display-graphic-p)
-                (propertize " " 'display `(space :align-to (- right ,button-width)))
-              (make-string (max 0 (- (window-total-width window) (string-width more)
-                                     button-width (if pending (string-width pending) 0))) ?─))
-            button
-            ;; Emacs paints header lines across the body fringe.
-            (when (display-graphic-p)
-              (concat (propertize " " 'display '(space :align-to right-fringe))
-                      (propertize " " 'face 'fringe 'display '(space :width right-fringe)))))))
+         (button-width (string-width button))
+         (graphic (display-graphic-p))
+         (line (concat pending more
+                       (if graphic
+                           (propertize " " 'display `(space :align-to (- right ,button-width)))
+                         (make-string (max 0 (- (window-total-width window) (string-width more)
+                                                button-width (if pending (string-width pending) 0))) ?─))
+                       button)))
+    (if (not graphic) line
+      (let* ((frame (window-frame window))
+             (overline (face-attribute 'mevedel-composer-rule :overline frame t)))
+        ;; An overline of t uses each label's text color, not the rule's.
+        (when (eq overline t)
+          (add-face-text-property
+           0 (length line) (list :overline (face-foreground 'mevedel-composer-rule frame t))
+           nil line))
+        ;; Emacs paints header lines across the body fringe.
+        (concat line (propertize " " 'display '(space :align-to right-fringe))
+                (propertize " " 'face 'fringe 'display '(space :width right-fringe)))))))
 
 (defun mevedel-composer-refresh-transcript-position (transcript _start)
   "Refresh the dock's jump button after TRANSCRIPT scrolls."
@@ -801,6 +809,17 @@ can exceed the cap to keep the dock usable."
         (frame-char-height (window-frame dock)) (window-body-width dock t)
         (window-pixel-height dock) (window-pixel-height transcript)
         (window-scroll-bar-height dock) (window-bottom-divider-width dock)))
+
+(defun mevedel-composer--rail-clipped-p (dock start)
+  "Return non-nil if DOCK can show the whole draft but START clips its rail."
+  (and (window-parameter dock 'mevedel-composer--rail-fits)
+       (or (> start (point-min)) (> (window-vscroll dock t) 0))))
+
+(defun mevedel-composer--restore-rail (dock)
+  "Show DOCK's rail again if the whole draft fits."
+  (when (mevedel-composer--rail-clipped-p dock (window-start dock))
+    (set-window-vscroll dock 0 t)
+    (set-window-start dock (point-min))))
 
 (defun mevedel-composer--fit (dock transcript &optional fresh)
   "Fit DOCK to its draft at its current width, taking space from TRANSCRIPT.
@@ -829,9 +848,9 @@ Use FRESH chrome geometry when fitting before redisplay."
                 (window-resize dock step nil nil t)))
           (window-preserve-size dock nil t))
         (when follow (mevedel-view-transcript-show-end transcript))))
-    (when (and (<= text (- (window-pixel-height dock) frame-chrome))
-               (> (window-start dock) (point-min)))
-      (set-window-start dock (point-min)))
+    (set-window-parameter dock 'mevedel-composer--rail-fits
+                          (<= text (- (window-pixel-height dock) frame-chrome)))
+    (mevedel-composer--restore-rail dock)
     (set-window-parameter dock 'mevedel-composer--fit-key
                           (mevedel-composer--fit-key dock transcript))))
 
@@ -843,8 +862,9 @@ Use FRESH chrome geometry when fitting before redisplay."
       (dolist (dock (get-buffer-window-list buffer nil t))
         (when-let* ((transcript (mevedel-view-transcript-window dock)))
           ;; Our own layout notifies redisplay too, sometimes with stale chrome.
-          (unless (equal (window-parameter dock 'mevedel-composer--fit-key)
-                         (mevedel-composer--fit-key dock transcript))
+          (if (equal (window-parameter dock 'mevedel-composer--fit-key)
+                     (mevedel-composer--fit-key dock transcript))
+              (mevedel-composer--restore-rail dock)
             (mevedel-composer--fit dock transcript)))))))
 
 (defun mevedel-composer--queue-fit (&optional _beg end _length)
@@ -854,6 +874,11 @@ END distinguishes a draft edit from a one-argument window notification."
   (unless (or noninteractive mevedel-composer--fit-timer)
     (setq mevedel-composer--fit-timer
           (run-at-time 0 nil #'mevedel-composer--fit-displayed (current-buffer)))))
+
+(defun mevedel-composer--queue-rail-restore (dock start)
+  "Defer restoring DOCK's rail after a scroll to START."
+  (when (mevedel-composer--rail-clipped-p dock start)
+    (mevedel-composer--queue-fit)))
 
 (define-derived-mode mevedel-composer-mode text-mode "Composer"
   "Edit the draft of a mevedel conversation."
@@ -867,6 +892,7 @@ END distinguishes a draft edit from a one-argument window notification."
   (add-hook 'window-buffer-change-functions #'mevedel-view-stream-composer-window-change nil t)
   (add-hook 'window-size-change-functions #'mevedel-view-stream-composer-window-change nil t)
   (add-hook 'window-scroll-functions #'mevedel-view-stream-composer-window-change nil t)
+  (add-hook 'window-scroll-functions #'mevedel-composer--queue-rail-restore nil t)
   (add-hook 'window-buffer-change-functions #'mevedel-composer--queue-fit nil t)
   (add-hook 'window-size-change-functions #'mevedel-composer--queue-fit nil t)
   (add-hook 'after-change-functions #'mevedel-composer--queue-fit nil t)
@@ -901,6 +927,10 @@ END distinguishes a draft edit from a one-argument window notification."
       (add-hook 'kill-buffer-hook #'mevedel-view--cancel-pending-submission nil t)
       (with-current-buffer mevedel-view--composer-buffer
         (mevedel-composer-mode)
+        ;; Text-mode and global hooks may have enabled numbers during setup.
+        (when (bound-and-true-p display-line-numbers-mode)
+          (display-line-numbers-mode -1))
+        (setq-local display-line-numbers nil)
         (setq-local mevedel-composer--view view
                     mevedel--data-buffer data
                     mevedel-view--side-conversation-p side

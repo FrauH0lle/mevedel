@@ -80,19 +80,21 @@ authoritative transcript.
 | `C-M-v` / `C-M-S-v` in the composer | Pages the paired transcript forward or backward without leaving the draft. |
 | `C-c C-j` in the composer | Visits the next interaction card. If you are still visiting it when it settles, focus returns to the saved draft position. |
 
-Draft lines wrap in narrow windows. The composer grows from one draft line
-plus its rail and chrome up to a third of the pair. At the cap it scrolls with
-the caret and shows `↑ N more` when draft lines are hidden above. When the
-rail scrolls offscreen, its pending-action count appears in the header; click
-it or press `C-c C-j` to visit the next pending card. The top rule (`─` in a
+Draft lines wrap in narrow windows and have no line numbers by default.
+The composer grows from one draft line plus its rail and chrome up to a third
+of the pair. When the whole draft fits, scrolling keeps its rail in view.
+At the cap it scrolls with the caret and shows `↑ N more` when draft lines are
+hidden above. When the rail scrolls offscreen, its pending-action count appears
+in the header; click it or press `C-c C-j` to visit the next pending card. The top rule (`─` in a
 terminal) offers `↓ Back to bottom` only while the paired transcript is off
 its end. The composer displays its normal Emacs mode line below the draft;
 the paired transcript has no mode line of its own.
 
 Paired transcript windows are weakly dedicated: automatic popups skip them,
-but explicit `C-x b` can still replace the transcript buffer. When no ordinary
-window is available and a split does not fit, Emacs may open a new frame. A
-native split or a switch back can install its dock before redisplay. Deferred
+but explicit `C-x b` can still replace the transcript buffer. Workspace commands
+that check the `visible` window parameter count the transcript, not the dock.
+When no ordinary window is available and a split does not fit, Emacs may open
+a new frame. A native split or a switch back can install its dock before redisplay. Deferred
 repair removes orphan docks and restores missing ones without selecting them.
 A transcript remains usable when its window is too short to fit a dock or
 when a display rule puts it in a native side window. See

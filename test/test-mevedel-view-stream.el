@@ -7570,7 +7570,11 @@ turn's later text, live and after reconstruction."
     (let ((rail (mevedel-view--format-composer-rail
                  "[edits]" "2 permissions" 40 "Working..." "Working... · 2s")))
       (should (string-prefix-p "[edits] · ⚠ 2 permissions · C-c C-j" rail))
-      (should-not (string-match-p "Working" rail)))))
+      (should-not (string-match-p "Working" rail)))
+    (let ((rail (mevedel-view--format-composer-rail
+                 "[edits]" nil 80 "Working..." "Working... · 2s")))
+      (should (eq (get-text-property (string-search "·" rail) 'face rail)
+                  (get-text-property (string-search "·" rail 10) 'face rail))))))
 
 (mevedel-deftest mevedel-view--spinner-framerate ()
   (let ((mevedel-view-spinner-framerate 30)
