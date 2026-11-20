@@ -137,6 +137,46 @@ class StandardsTests(unittest.TestCase):
         _, errors = self.check(1)
         self.assertIn('missing link target', errors)
 
+    def test_adr_number_taken_on_target_since_branching(self):
+        self.git('checkout', '-qb', 'topic')
+        self.write('docs/adr/0001-topic.md', '# Topic\n')
+        self.write('docs/adr/README.md', '| 0001 | Topic | [current](0001-topic.md) |\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'docs(adr): Add topic\n\n* docs/adr/0001-topic.md: New file.')
+        self.check(0)
+        self.git('checkout', '-q', 'master')
+        self.write('docs/adr/0001-landed.md', '# Landed\n')
+        self.write('docs/adr/README.md', '| 0001 | Landed | [current](0001-landed.md) |\n')
+        self.commit()
+        self.git('checkout', '-q', 'topic')
+        _, errors = self.check(1)
+        self.assertIn('docs/adr/0001-topic.md: ADR 0001 is already taken on master '
+                      'by 0001-landed.md; renumber', errors)
+
+    def test_commit_msg_hook_rejects_bad_messages_before_commit(self):
+        hooks = self.root.parent / f'{self.root.name}-hooks'
+        hooks.mkdir()
+        self.addCleanup(lambda: (hooks / 'commit-msg').unlink() or hooks.rmdir())
+        (hooks / 'commit-msg').symlink_to(ROOT / '.githooks/commit-msg')
+        self.git('config', 'core.hooksPath', str(hooks))
+        head = self.git('rev-parse', 'HEAD')
+        self.write('demo.el', library(doc='Return another value.'))
+        self.git('add', '.')
+        bad = subprocess.run(['git', 'commit', '-qm', 'Add skill'], cwd=self.root,
+                             capture_output=True, text=True)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn('subject must be type(scope)', bad.stderr)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), head)
+        self.git('commit', '-qm', 'fix(demo): Change the value\n\n'
+                 '# A comment line Git strips.\n* demo.el (demo-value): Document it.')
+        self.git('checkout', '-qb', 'topic', 'HEAD~1')
+        self.write('other.el', library('other'))
+        self.git('add', '.')
+        self.git('commit', '-qm', 'feat(other): Add it\n\n* other.el: New file.')
+        self.git('checkout', '-q', 'master')
+        self.git('merge', '-q', '--no-ff', '--no-edit', 'topic')
+        self.assertEqual(self.git('rev-list', '--count', '--merges', 'HEAD'), '1')
+
     def test_checkdoc_real_diagnostics_and_line_shifts(self):
         old, good = standards.checkdoc(self.root, [('demo.el', library(doc='Return a value.')),
                                                  ('demo.el', library())])

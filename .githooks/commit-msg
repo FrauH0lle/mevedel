@@ -1,0 +1,10 @@
+#!/bin/sh
+# Check the message before the commit exists; merges are exempt, as in the
+# full standards check.  Enabled with the pre-commit hook (core.hooksPath).
+set -eu
+git_dir=$(git rev-parse --git-dir)
+if [ -e "$git_dir/MERGE_HEAD" ]; then
+    exit 0
+fi
+hooks=$(dirname "$(readlink -f "$0")")
+exec python3 "$hooks/../scripts/check-standards.py" --commit-message "$1"

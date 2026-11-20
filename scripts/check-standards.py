@@ -174,6 +174,21 @@ def adr_errors(root, names, previous=''):
     return errors
 
 
+def adr_number_conflicts(names, base_names, target, target_names):
+    """Report ADRs added since the merge base whose number TARGET took meanwhile."""
+    def numbered(paths):
+        return {Path(name).name: match[1] for name in paths
+                if (match := re.fullmatch(r'docs/adr/(\d{4})-[^/]+\.md', name))}
+    taken = {}
+    for name, number in numbered(target_names).items():
+        taken.setdefault(number, name)
+    old = numbered(base_names)
+    return [f'docs/adr/{name}: ADR {number} is already taken on {target} '
+            f'by {taken[number]}; renumber'
+            for name, number in sorted(numbered(names).items())
+            if name not in old and number in taken and taken[number] != name]
+
+
 def checkdoc(root, sources):
     """Run installed Emacs checkdoc on snapshots, never loading project code."""
     if not sources:
@@ -381,6 +396,9 @@ def run(root, base):
     index = 'docs/adr/README.md'
     previous = git(root, 'show', f'{revision}:{index}').decode() if index in base_names else ''
     errors.extend(adr_errors(root, names, previous))
+    errors.extend(adr_number_conflicts(
+        names, base_names, base,
+        git(root, 'ls-tree', '-r', '--name-only', base, '--', 'docs/adr').decode().splitlines()))
     # Rebuild both owner maps, including unchanged tests: a changed definition or
     # provide can change the required feature without changing any test source.
     old_stubs = test_stubs(root, [(name, git(root, 'show', f'{revision}:{name}').decode())
@@ -412,7 +430,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', default=os.environ.get('CHECK_BASE', 'master'),
                         help='compare with merge-base(BASE, HEAD); default CHECK_BASE or master')
+    parser.add_argument('--commit-message', metavar='FILE', type=Path,
+                        help='check only the commit message in FILE (the commit-msg hook)')
     args = parser.parse_args()
+    if args.commit_message:
+        # Git strips comment lines after the hook runs; GNU entries start with '*'.
+        message = ''.join(line for line in args.commit_message.read_text().splitlines(True)
+                          if not line.startswith('#'))
+        errors = commit_message_errors(message.lstrip('\n'))
+        for error in errors:
+            print(f'commit-message: {error}', file=sys.stderr)
+        return 1 if errors else 0
     try:
         return run(ROOT, args.base)
     except (subprocess.CalledProcessError, OSError, ValueError) as error:
