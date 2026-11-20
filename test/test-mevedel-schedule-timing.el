@@ -63,6 +63,16 @@
     (should (equal '(1769936400)
                    (mevedel-schedule-timing-test--runs "0 9 1 * */2" 1767268800 1))))
 
+  :doc "a rare date-and-weekday cron is found years ahead, even across a skipped leap day"
+  (mevedel-schedule-timing-test--in-zone "UTC"
+    ;; From 2027-02-02, February 1st on a Monday is next in 2038.
+    (should (equal '(2148595200)
+                   (mevedel-schedule-timing-test--runs "0 0 */31 2 1" 1801526400 1)))
+    ;; From 2088-03-01, February 29th on a Sunday is next in 2128: 2100 is
+    ;; no leap year.
+    (should (equal '(4991068800)
+                   (mevedel-schedule-timing-test--runs "0 0 29 2 */7" 3728937600 1))))
+
   :doc "a cron time in the skipped hour fires once at the first minute after the gap"
   (mevedel-schedule-timing-test--in-zone "Europe/Zurich"
     ;; 2027-03-28: 02:00 CET jumps to 03:00 CEST.  02:30 -> 03:00 CEST, then
@@ -143,6 +153,18 @@
                                  :type 'user-error)))
           (should (string-match-p (cdr case) (cadr err))))))))
 
+(mevedel-deftest mevedel-schedule-parse-expiry ()
+  ,test
+  (test)
+  :doc "an expiry is a duration or local time, or never for none"
+  (mevedel-schedule-timing-test--in-zone "Europe/Zurich"
+    (should (= 1795183200 (mevedel-schedule-parse-expiry "2h" 1795176000)))
+    (should (= 1795251600 (mevedel-schedule-parse-expiry "2026-11-21 10:00" 1795176000)))
+    (should-not (mevedel-schedule-parse-expiry " never " 1795176000))
+    (dolist (text '("every 1h" "0 9 * * 1-5"))
+      (ert-info (text)
+        (should-error (mevedel-schedule-parse-expiry text 1795176000) :type 'user-error)))))
+
 (mevedel-deftest mevedel-schedule-entry-p ()
   ,test
   (test)
@@ -162,7 +184,15 @@
                         (:kind cron :expression "0 0 31 2 *")
                         (:kind weekly)))
         (ert-info ((format "%S" timing))
-          (should-not (mevedel-schedule-entry-p (entry timing))))))))
+          (should-not (mevedel-schedule-entry-p (entry timing)))))))
+
+  :doc "a malformed creation time makes a cron entry invalid without signalling"
+  (dolist (created-at (list "1795176000" 1795176000.0 most-positive-fixnum (expt 10 30)))
+    (ert-info ((format "%S" created-at))
+      (should-not (mevedel-schedule-entry-p
+                   (list :id "w-1" :note "x" :timing '(:kind cron :expression "0 9 * * 1-5")
+                         :created-at created-at :due 1795177200 :expires-at nil
+                         :status 'pending))))))
 
 (provide 'test-mevedel-schedule-timing)
 ;;; test-mevedel-schedule-timing.el ends here

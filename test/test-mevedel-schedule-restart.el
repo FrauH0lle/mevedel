@@ -115,6 +115,43 @@ would; `live' returns the session's live root buffer, or nil."
   (mapcar (lambda (record) (plist-get record :type))
           (plist-get (mevedel-schedule-restart-test--stored session) :messages)))
 
+(mevedel-deftest mevedel-schedule-hand-over ()
+  ,test
+  (test)
+  :doc "the store and index lose the wake-ups while the session keeps them in memory"
+  (mevedel-schedule-restart-test--with-saved
+    (should-not (mevedel-schedule-hand-over session))
+    (mevedel-schedule-create session buffer "20m" "Check CI")
+    (let ((entries (mevedel-session-schedules session)))
+      (should (mevedel-schedule-hand-over session))
+      (should (equal entries (mevedel-session-schedules session)))
+      (should-not (plist-get (mevedel-schedule-restart-test--stored session) :schedules))
+      (should-not (mevedel-schedule-restart-test--index-files))))
+
+  :doc "a failed commit signals and leaves the store, index and memory as they were"
+  (mevedel-schedule-restart-test--with-saved
+    (mevedel-schedule-create session buffer "20m" "Check CI")
+    (let ((entries (mevedel-session-schedules session))
+          (index (mevedel-schedule-restart-test--snapshot-index)))
+      (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+                 (lambda (&rest _) (error "Injected storage failure"))))
+        (should-error (mevedel-schedule-hand-over session)))
+      (should (equal entries (mevedel-session-schedules session)))
+      (should (= 1 (length (plist-get (mevedel-schedule-restart-test--stored session) :schedules))))
+      (should (equal index (mevedel-schedule-restart-test--snapshot-index))))))
+
+(mevedel-deftest mevedel-schedule-hand-back ()
+  ,test
+  (test)
+  :doc "an abandoned hand-over commits and indexes the session's wake-ups again"
+  (mevedel-schedule-restart-test--with-saved
+    (mevedel-schedule-create session buffer "20m" "Check CI")
+    (let ((index (mevedel-schedule-restart-test--snapshot-index)))
+      (mevedel-schedule-hand-over session)
+      (mevedel-schedule-hand-back session)
+      (should (= 1 (length (plist-get (mevedel-schedule-restart-test--stored session) :schedules))))
+      (should (equal index (mevedel-schedule-restart-test--snapshot-index))))))
+
 (mevedel-deftest mevedel-schedule-restore ()
   ,test
   (test)

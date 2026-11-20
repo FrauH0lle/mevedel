@@ -585,6 +585,28 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
       (mevedel-model-current-label))
      (t "none"))))
 
+(defun mevedel-model-selection-delta (model effort)
+  "Return how MODEL and EFFORT would change the current buffer's selection.
+MODEL is a tier or BACKEND:MODEL text and EFFORT an effort name, either
+nil, as a wake-up stores them.  Return a plist of `:model', the resolved
+BACKEND:MODEL label, and `:effort', the resolved effort or \"default\", each
+only when it differs from the current one.  A choice that no longer resolves
+is returned as given."
+  (condition-case nil
+      ;; Without a session, an unsupported inherited effort is not reported
+      ;; as a recovery issue: this only describes the choice.
+      (let* ((policy (let ((mevedel--session nil))
+                       (mevedel-model-resolve-workload
+                        nil (mevedel-model-parse-selector model)
+                        (mevedel-model-parse-effort effort))))
+             (label (mevedel-model--provider-label policy))
+             (resolved (plist-get policy :effort)))
+        (append (unless (equal label (mevedel-model-current-provider-label))
+                  (list :model label))
+                (unless (equal resolved (bound-and-true-p gptel-reasoning-effort))
+                  (list :effort (if resolved (format "%s" resolved) "default")))))
+    (user-error (append (and model (list :model model)) (and effort (list :effort effort))))))
+
 
 ;;
 ;;; Agent tool description

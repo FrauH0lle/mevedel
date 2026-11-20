@@ -290,7 +290,7 @@
       (should-not (memq #'mevedel-sleep-update
                         mevedel-execution-state-change-hook))
       (should (= 1 stopped))))
-  :doc "restarts recorded lobbies, shared artifacts and wake-ups now, or once startup is done"
+  :doc "restarts recorded lobbies and shared artifacts now, or once startup is done; wake-ups once idle"
   (let ((after-focus-change-function #'ignore)
         (gptel--known-tools (copy-tree gptel--known-tools))
         (gptel--known-presets (copy-tree gptel--known-presets))
@@ -325,26 +325,37 @@
                (lambda () (cl-incf shared)))
               ((symbol-function 'mevedel-schedule-restore)
                (lambda () (cl-incf woken))))
-      ;; Installed after startup: the user's configuration is in place.
-      (let ((after-init-time (current-time)))
-        (mevedel-install)
-        (should (= 1 restored))
-        (should (= 1 shared))
-        (should (= 1 woken))
-        (should-not emacs-startup-hook)
-        (mevedel-uninstall))
-      ;; Installed from the init file: the relay settings may follow it.
-      (let ((after-init-time nil))
-        (mevedel-install)
-        (should (= 1 restored))
-        (should (= 1 shared))
-        (should (= 1 woken))
-        (should (equal '(mevedel-collaboration-lobby-restore
-                         mevedel-collaboration-artifact-room-restore
-                         mevedel-schedule-restore)
-                       emacs-startup-hook))
-        (mevedel-uninstall)
-        (should-not emacs-startup-hook)))))
+      (cl-flet ((restore-timer ()
+                  (cl-find #'mevedel-schedule-restore timer-idle-list :key #'timer--function)))
+        ;; Installed after startup: the user's configuration is in place.
+        ;; Wake-up restore reads every indexed session, so it waits for idle.
+        (let ((after-init-time (current-time)))
+          (mevedel-install)
+          (should (= 1 restored))
+          (should (= 1 shared))
+          (should (= 0 woken))
+          (let ((timer (restore-timer)))
+            (should timer)
+            (cancel-timer timer)
+            (funcall (timer--function timer)))
+          (should (= 1 woken))
+          (should-not emacs-startup-hook)
+          (mevedel-install)
+          (mevedel-uninstall)
+          (should-not (restore-timer)))
+        ;; Installed from the init file: the relay settings may follow it.
+        (let ((after-init-time nil))
+          (setq restored 0 shared 0)
+          (mevedel-install)
+          (should (= 0 restored))
+          (should (= 0 shared))
+          (should (equal '(mevedel-collaboration-lobby-restore
+                           mevedel-collaboration-artifact-room-restore
+                           mevedel--restore-schedules-when-idle)
+                         emacs-startup-hook))
+          (mevedel-uninstall)
+          (should-not emacs-startup-hook)
+          (should-not (restore-timer)))))))
 
 (mevedel-deftest mevedel-uninstall ()
   (let ((transport-enabled mevedel-transport--enabled-p))

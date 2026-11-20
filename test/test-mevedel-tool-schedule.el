@@ -145,6 +145,27 @@
           (should (string-search (cdr case) (plist-get outcome :result))))))
     (should (= 2 (length (mevedel-session-schedules session)))))
 
+  :doc "list shows a tier wake-up's resolved model and effort, only where they differ from the session's"
+  (mevedel-tool-schedule-test--with-request
+    (put 'schedule-test-cheap :reasoning-effort '(member low high))
+    (gptel-make-openai "schedule-models" :key "test"
+                       :models '(schedule-test-cheap schedule-test-main))
+    (setq-local gptel-backend (gptel-get-backend "schedule-models")
+                gptel-model 'schedule-test-main
+                gptel-reasoning-effort nil)
+    (let ((mevedel-model-tiers '((fast :provider "schedule-models:schedule-test-cheap" :effort low)
+                                 (strong))))
+      (mevedel-tool-schedule-test--call "(Schedule :action \"create\" :when \"20m\" :note \"cheap\" :model \"fast\")")
+      (mevedel-tool-schedule-test--call "(Schedule :action \"create\" :when \"1h\" :note \"same\" :model \"strong\")")
+      (let ((listed (plist-get (json-parse-string
+                                (plist-get (mevedel-tool-schedule-test--call "(Schedule :action \"list\")")
+                                           :result)
+                                :object-type 'plist :array-type 'list)
+                               :schedules)))
+        (should (equal '(("schedule-models:schedule-test-cheap" "low") (nil nil))
+                       (mapcar (lambda (entry) (list (plist-get entry :model) (plist-get entry :effort)))
+                               listed))))))
+
   :doc "accepts an absolute local time and an expiry after it"
   (mevedel-tool-schedule-test--with-request
     (let ((outcome (mevedel-tool-schedule-test--call
@@ -232,6 +253,82 @@
       (should (equal '("second")
                      (mapcar (lambda (entry) (plist-get entry :note))
                              (mevedel-tool-schedule-test--persisted root session)))))))
+
+(mevedel-deftest mevedel-schedule-change ()
+  ,test
+  (test)
+  :doc "change rewrites a pending wake-up's timing, note, expiry, model and effort, and persists it"
+  (mevedel-tool-schedule-test--with-request
+    (put 'schedule-test-cheap :reasoning-effort '(member low high))
+    (gptel-make-openai "schedule-models" :key "test"
+                       :models '(schedule-test-cheap schedule-test-main))
+    (setq-local gptel-backend (gptel-get-backend "schedule-models")
+                gptel-model 'schedule-test-main)
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :when \"20m\" :note \"first\" :expires \"1h\")")
+    (let* ((id (plist-get (car (mevedel-session-schedules session)) :id))
+           (outcome (mevedel-tool-schedule-test--call
+                     (format "(Schedule :action \"change\" :id %S :when \"1h\" :note \"second\" :expires \"2h\" :model \"schedule-models:schedule-test-cheap\" :effort \"low\")" id)))
+           (entry (car (mevedel-session-schedules session))))
+      (ert-info ((format "%S" outcome))
+        (should (eq 'success (plist-get outcome :status))))
+      (should (string-search "\"changed\"" (plist-get outcome :result)))
+      (should (equal (list id "second" (+ now 3600) (+ now 7200)
+                           "schedule-models:schedule-test-cheap" "low")
+                     (mapcar (lambda (key) (plist-get entry key))
+                             '(:id :note :due :expires-at :model :effort))))
+      (should (equal (list entry) (mevedel-tool-schedule-test--persisted root session)))
+      ;; Omitted fields stay; never removes a one-shot's expiry.
+      (mevedel-tool-schedule-test--call
+       (format "(Schedule :action \"change\" :id %S :expires \"never\")" id))
+      (let ((changed (car (mevedel-session-schedules session))))
+        (should (equal '("second" nil "low")
+                       (list (plist-get changed :note) (plist-get changed :expires-at)
+                             (plist-get changed :effort))))
+        (should (= (+ now 3600) (plist-get changed :due))))
+      ;; Turning it into a repeat applies the default recurring expiry.
+      (mevedel-tool-schedule-test--call
+       (format "(Schedule :action \"change\" :id %S :when \"every 20m\")" id))
+      (should (= (+ now (* 7 86400))
+                 (plist-get (car (mevedel-session-schedules session)) :expires-at)))))
+
+  :doc "a change is validated like a creation and leaves the wake-up as it was when refused"
+  (mevedel-tool-schedule-test--with-request
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :when \"every 20m\" :note \"poll\")")
+    (let* ((before (mevedel-session-schedules session))
+           (id (plist-get (car before) :id)))
+      (dolist (case `((,(format "(Schedule :action \"change\" :id %S :when \"every 30s\")" id) . "at least one minute")
+                      (,(format "(Schedule :action \"change\" :id %S :note \" \")" id) . "blank")
+                      (,(format "(Schedule :action \"change\" :id %S :expires \"31d\")" id) . "30 days")
+                      (,(format "(Schedule :action \"change\" :id %S :expires \"never\")" id) . "30 days")
+                      (,(format "(Schedule :action \"change\" :id %S :model \"nobody:none\")" id) . "not known")
+                      ("(Schedule :action \"change\" :id \"w-missing\" :note \"x\")" . "No pending wake-up")
+                      ("(Schedule :action \"change\" :note \"x\")" . "requires an id")))
+        (ert-info ((car case))
+          (let ((outcome (mevedel-tool-schedule-test--call (car case))))
+            (should-not (eq 'success (plist-get outcome :status)))
+            (should (string-search (cdr case) (plist-get outcome :result))))))
+      (should (equal before (mevedel-session-schedules session)))
+      (should (equal before (mevedel-tool-schedule-test--persisted root session)))))
+
+  :doc "the 30-day cap counts from creation, so changes cannot extend a recurring wake-up"
+  (mevedel-tool-schedule-test--with-request
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :when \"every 5d\" :note \"poll\" :expires \"30d\")")
+    (let* ((before (mevedel-session-schedules session))
+           (id (plist-get (car before) :id)))
+      (setq now (+ now 86400))
+      (let ((outcome (mevedel-tool-schedule-test--call
+                      (format "(Schedule :action \"change\" :id %S :expires \"30d\")" id))))
+        (should-not (eq 'success (plist-get outcome :status)))
+        (should (string-search "30 days" (plist-get outcome :result))))
+      (should (equal before (mevedel-session-schedules session)))
+      ;; A new timing without an expiry keeps the default within the cap.
+      (mevedel-tool-schedule-test--call
+       (format "(Schedule :action \"change\" :id %S :when \"every 1d\" :expires \"29d\")" id))
+      (should (= (+ now (* 29 86400))
+                 (plist-get (car (mevedel-session-schedules session)) :expires-at))))))
 
 (mevedel-deftest mevedel-tools-visibility/schedule ()
   ,test
@@ -334,6 +431,40 @@ presets are registered.  `workspace' is the session's workspace."
         (should (equal "2026-11-23T08:00:00+01:00"
                        (mevedel-schedule-format-time (plist-get after :due))))
         (should (equal (plist-get before :policy) (plist-get after :policy))))))
+
+  :doc "at capacity, a creation or a change reactivating a finished schedule fails before any card"
+  (mevedel-tool-schedule-test--with-workspace-card (lambda (_number _card) '(allow-once))
+    (let ((mevedel-workspace-schedule-max 1))
+      (mevedel-tool-schedule-test--call
+       "(Schedule :action \"create\" :target \"workspace\" :name \"Once\" :when \"30m\" :note \"Once.\")")
+      (let ((id (plist-get (car (mevedel-workspace-schedule-list workspace)) :id)))
+        (mevedel-workspace-schedule-update
+         workspace id (lambda (entry) (plist-put (plist-put entry :status 'finished) :due nil)))
+        (mevedel-tool-schedule-test--call
+         "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage.\")")
+        (should (= 2 (length mevedel-pq-test--driven)))
+        (dolist (expression (list (format "(Schedule :action \"change\" :id %S :when \"1h\")" id)
+                                  "(Schedule :action \"create\" :target \"workspace\" :name \"More\" :when \"1h\" :note \"More.\")"))
+          (ert-info (expression)
+            (let ((outcome (mevedel-tool-schedule-test--call expression)))
+              (should-not (eq 'success (plist-get outcome :status)))
+              (should (string-search "already has 1" (plist-get outcome :result))))))
+        (should (= 2 (length mevedel-pq-test--driven)))
+        (should (eq 'finished (plist-get (mevedel-workspace-schedule-get workspace id) :status))))))
+
+  :doc "a change can remove an expiry, and the card shows it"
+  (mevedel-tool-schedule-test--with-workspace-card (lambda (_number _card) '(allow-once))
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage.\" :expires \"30d\")")
+    (let ((id (plist-get (car (mevedel-workspace-schedule-list workspace)) :id)))
+      (should (plist-get (mevedel-workspace-schedule-get workspace id) :expires-at))
+      (should (eq 'success (plist-get (mevedel-tool-schedule-test--call
+                                       (format "(Schedule :action \"change\" :id %S :expires \"never\")" id))
+                                      :status)))
+      (let ((card (nth 1 (mevedel-tool-schedule-test--card-texts))))
+        (should (string-search "expires-at" card))
+        (should (string-search "never" card)))
+      (should-not (plist-get (mevedel-workspace-schedule-get workspace id) :expires-at))))
 
   :doc "list shows workspace schedules beside wake-ups, and cancel deletes one without a card"
   (mevedel-tool-schedule-test--with-workspace-card '(allow-once)

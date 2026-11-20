@@ -19,6 +19,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-schedule)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -272,6 +273,48 @@ sessions, as an Emacs restart would."
       (should (= 1 (length submitted)))
       (should (= 1 (length (mevedel-workspace-schedule-runs workspace (plist-get schedule :id)))))))
 
+  :doc "a firing whose schedule write fails backs off, then moves on and settles the unlaunched run"
+  (dolist (timing '("every 20m" "30m"))
+    (mevedel-workspace-schedule-test--with-workspace
+      (let* (notices warnings
+             (schedule (mevedel-workspace-schedule-test--create workspace :when timing))
+             (id (plist-get schedule :id))
+             (directory (mevedel-workspace-schedule--path workspace id))
+             (file (file-name-concat directory "schedule.el"))
+             (mevedel-notify-function (lambda (kind details)
+                                        (push (cons kind (plist-get details :text)) notices))))
+        (ert-info (timing)
+          (setq now (plist-get schedule :due))
+          ;; The run record lands in runs/, but the schedule cannot be rewritten.
+          (set-file-modes file #o444)
+          (set-file-modes directory #o555)
+          (unwind-protect
+              (mevedel-test--with-captured-diagnostics warnings
+                (mevedel-schedule-run-due))
+            (set-file-modes directory #o755)
+            (set-file-modes file #o644))
+          (should (string-search "did not fire" warnings))
+          (should (= 1 (length (mevedel-workspace-schedule-runs workspace id))))
+          (should (= now (plist-get (mevedel-workspace-schedule-get workspace id) :due)))
+          ;; The timer is not re-armed at the past due time.
+          (should (equal (list (+ now mevedel-schedule-retry-delay))
+                         (mapcar #'cdr mevedel-schedule--workspaces)))
+          (setq now (+ now mevedel-schedule-retry-delay))
+          (mevedel-schedule-run-due)
+          (should-not submitted)
+          (let ((runs (mevedel-workspace-schedule-runs workspace id))
+                (entry (mevedel-workspace-schedule-get workspace id)))
+            (should (= 1 (length runs)))
+            (should (equal '(failed "Run interrupted before launch")
+                           (list (plist-get (car runs) :outcome) (plist-get (car runs) :error))))
+            (should (= 1 (plist-get entry :failures)))
+            (if (equal timing "30m")
+                (progn (should (eq 'finished (plist-get entry :status)))
+                       (should-not mevedel-schedule--timer))
+              (should (= (+ now 1200) (plist-get entry :due)))))
+          (should (equal '(failure) (mapcar #'car notices)))
+          (should (string-search "interrupted before launch" (cdar notices)))))))
+
   :doc "a run that cannot start keeps its run key as a setup error"
   (mevedel-workspace-schedule-test--with-workspace
     (let* ((schedule (mevedel-workspace-schedule-test--create workspace :when "30m"))
@@ -287,6 +330,70 @@ sessions, as an Emacs restart would."
         (should (= (plist-get schedule :due) (plist-get run :scheduled-at))))
       ;; A one-shot schedule is finished either way.
       (should (eq 'finished (plist-get (mevedel-workspace-schedule-get workspace id) :status))))))
+
+(mevedel-deftest mevedel-workspace-schedule-create ()
+  ,test
+  (test)
+  :doc "a creation or a reactivating change past capacity fails, even when another writer takes the last slot meanwhile"
+  (mevedel-workspace-schedule-test--with-workspace
+    (let* ((mevedel-workspace-schedule-max 2)
+           (commit (symbol-function 'mevedel-workspace-schedule--commit))
+           (finish (lambda (entry) (plist-put (plist-put entry :status 'finished) :due nil)))
+           (reactivate (lambda (entry) (plist-put (plist-put entry :status 'active)
+                                                  :due (+ now 600))))
+           (active (plist-get (mevedel-workspace-schedule-test--create workspace) :id))
+           (finished (plist-get (mevedel-workspace-schedule-test--create workspace) :id))
+           raced)
+      (mevedel-workspace-schedule-update workspace finished finish)
+      ;; Another Emacs reactivates the finished schedule after this one counted.
+      (cl-letf (((symbol-function 'mevedel-workspace-schedule--commit)
+                 (lambda (&rest args)
+                   (unless raced
+                     (setq raced t)
+                     (mevedel-workspace-schedule-update workspace finished reactivate))
+                   (apply commit args))))
+        (should-error (mevedel-workspace-schedule-test--create workspace) :type 'user-error))
+      (should raced)
+      (should (= 2 (length (mevedel-workspace-schedule-list workspace))))
+      (mevedel-workspace-schedule-update workspace finished finish)
+      (should (mevedel-workspace-schedule-test--create workspace))
+      (should-error (mevedel-workspace-schedule-update workspace finished reactivate)
+                    :type 'user-error)
+      (should (eq 'finished (plist-get (mevedel-workspace-schedule-get workspace finished) :status)))
+      (should (= 2 (cl-count-if (lambda (entry) (eq 'active (plist-get entry :status)))
+                                (mevedel-workspace-schedule-list workspace))))
+      (should (eq 'active (plist-get (mevedel-workspace-schedule-get workspace active) :status)))))
+
+  :doc "a schedule published after its absence was read is counted, not proven by a later listing"
+  (mevedel-workspace-schedule-test--with-workspace
+    (let* ((mevedel-workspace-schedule-max 1)
+           (list-directory (symbol-function 'mevedel-session-control-fs-list-directory))
+           (other (plist-put (mevedel-workspace-schedule-propose
+                              (list :name "Other" :when "1h" :prompt "Other."
+                                    :policy mevedel-workspace-schedule-test--policy))
+                             :id "s-bbbbbb"))
+           (other-directory (mevedel-workspace-schedule--path workspace "s-bbbbbb"))
+           published)
+      ;; Another Emacs has made its schedule's directory but not its record...
+      (make-directory (file-name-concat other-directory "runs") t)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-list-directory)
+                 (lambda (directory regexp)
+                   ;; ...and publishes the record while this one inspects it.
+                   (when (and (not published)
+                              (equal (file-name-as-directory directory)
+                                     (file-name-as-directory other-directory)))
+                     (setq published t)
+                     (should-not (mevedel-workspace-schedule--commit
+                                  workspace
+                                  (list (list :op 'create
+                                              :path (file-name-concat other-directory "schedule.el")
+                                              :content (mevedel-workspace-schedule--bytes other))))))
+                   (funcall list-directory directory regexp))))
+        (should-error (mevedel-workspace-schedule-test--create workspace) :type 'user-error))
+      (should published)
+      (should (equal '("s-bbbbbb")
+                     (mapcar (lambda (entry) (plist-get entry :id))
+                             (mevedel-workspace-schedule-list workspace)))))))
 
 (mevedel-deftest mevedel-workspace-schedule-id-p ()
   ,test
@@ -429,6 +536,24 @@ sessions, as an Emacs restart would."
       (should created)
       (should (directory-files index nil "\\.el\\'"))
       (should (equal (list (plist-get created :due))
+                     (mapcar #'cdr mevedel-schedule--workspaces)))))
+
+  :doc "an index entry that cannot be read now is kept and restored once readable"
+  (mevedel-workspace-schedule-test--with-workspace
+    (let* ((schedule (mevedel-workspace-schedule-test--create workspace :when "30m"))
+           (file (car (directory-files (mevedel-schedule-workspace-index-directory) t "\\.el\\'")))
+           warnings)
+      (restart)
+      (set-file-modes file #o000)
+      (unwind-protect
+          (mevedel-test--with-captured-diagnostics warnings
+            (mevedel-schedule-restore))
+        (set-file-modes file #o644))
+      (should (string-search "not restored" warnings))
+      (should (file-exists-p file))
+      (should-not mevedel-schedule--workspaces)
+      (mevedel-schedule-restore)
+      (should (equal (list (plist-get schedule :due))
                      (mapcar #'cdr mevedel-schedule--workspaces)))))
 
   :doc "a workspace behind an unsearchable parent keeps its index entry"

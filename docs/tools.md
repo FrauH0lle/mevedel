@@ -1685,8 +1685,7 @@ hidden from retained agents, and rejected by
 the handler for any owner other than `/root`; a child agent asks the root to
 schedule. Wake-ups need no approval card.
 
-`action` is `create`, `list`, `change` or `cancel`; `change` applies to
-workspace schedules only. `create` requires `when` and a
+`action` is `create`, `list`, `change` or `cancel`. `create` requires `when` and a
 non-blank `note` of at most 4,000 characters. `when` is a duration (`20m`,
 `1h30m`; units `d`, `h`, `m`, `s`, optionally prefixed by `in`) or a local time
 `YYYY-MM-DD HH:MM[:SS]` for one wake-up; an ISO 8601 offset or `Z` selects
@@ -1699,11 +1698,16 @@ and when neither day field is, a day matching either fires. Cron names, `L`,
 `W` and `?` are rejected. The optional `expires` is a duration or local time and must
 be later than the wake-up's first time; a recurring wake-up expires 7 days
 after creation by default and an explicit expiry may be at most 30 days away.
+`expires` `never` means no expiry, which only a one-shot wake-up may have.
 Unparseable timing, an impossible date, a zero duration or sub-minute
 interval, a time not in the future, a cron expression that never fires, an
 expiry not after the time or beyond the recurring cap, and a 51st pending
 wake-up are tool errors. `cancel` removes one wake-up by `id`, pending or
-expired. Every result is JSON carrying the affected entry or the list, each
+expired. `change` takes a pending wake-up's `id` and only the fields to
+change (`when`, `note`, `expires`, `model`, `effort`), checked as at creation;
+a new `when` is timed from now, while the 30-day cap still counts from the
+wake-up's creation, so changes cannot extend it.
+Every result is JSON carrying the affected entry or the list, each
 with `id`, `time` (the next run), `repeat` (`every 20m 00s`, the cron
 expression, or null), `note`, `expires` and `status`, plus the current local
 time as `now`. `list` shows wake-ups (`target` `session`) followed by the
@@ -1719,7 +1723,8 @@ A polling wake-up can run cheaper: `create` also takes an optional `model` (a
 tier or `BACKEND:MODEL`, as for `Agent`) and `effort`. Both are
 checked at creation against the model that would run, so an unavailable model
 or an unsupported effort is a tool error, never a silent fallback. The entry
-keeps them, `list` shows them when they differ from the session's, and the
+keeps them, `list` shows the resolved `BACKEND:MODEL` and effort where they
+differ from the session's (a tier such as `fast` is not shown as written), and the
 woken turn runs on them as a request-local override: the session's saved
 selection, preset and current permission mode are untouched, and the next turn
 uses the session's model again. A turn answers its unread mail as one request,
@@ -1769,13 +1774,15 @@ Emacs restart; the index, startup restore and lease rule are described under
 `create` with `target` `workspace` makes a workspace schedule: each run starts
 a new session with `note` as its first message. It also requires a one-line
 `name` of at most 80 characters and takes the same `when` forms as a wake-up.
-There is no default expiry; an optional `expires` drops runs after it. The
+There is no default expiry; an optional `expires` drops runs after it, and
+`expires` `never` on a change removes it. The
 schedule stores a base `preset` (default `mevedel-implement`) and one
 implementation policy in the strict shape accepted plans and Goals use: the
 exact `BACKEND:MODEL` and effort resolved at creation from `model` and
 `effort` (default the session's selection) and `permission_mode` (default
 the session's current mode). A workspace holds at most 50 active or paused
-schedules.
+schedules, counting a change that reactivates a finished or expired one; the
+tool checks this before showing the card and the store again under its lock.
 
 Creating or changing one always asks the user through a
 [`schedule` card](permissions.md#prompt-queues), also in Full Access; the tool

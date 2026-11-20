@@ -337,6 +337,79 @@ after which the stub drains the pending request context like admission does."
                             :type 'user-error))))))
         (should-not (mevedel-session-schedules session))))))
 
+(mevedel-deftest mevedel-schedule-wake-request-context ()
+  ,test
+  (test)
+  :doc "unread mail of wake-ups all asking for one model and effort yields that override"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-test--with-woken-policies
+      (should-not (mevedel-schedule-wake-request-context session))
+      (with-current-buffer data-buf
+        (dotimes (_ 2)
+          (mevedel-schedule-create session data-buf "5m" "cheap" nil "sch:sch-cheap" "low")))
+      (setq now (+ now 300))
+      (mevedel-schedule-run-due)
+      (should (= 2 (length (mevedel-schedule-test--wake-ups session))))
+      (should (equal (list :model (mevedel-model-parse-selector "sch:sch-cheap") :effort 'low)
+                     (mevedel-schedule-wake-request-context session)))))
+
+  :doc "a wake-up without an override or with another one keeps the session's selection"
+  (dolist (other '((nil nil) ("sch:sch-cheap" "high")))
+    (mevedel-schedule-test--with-session
+      (mevedel-schedule-test--with-woken-policies
+        (with-current-buffer data-buf
+          (mevedel-schedule-create session data-buf "5m" "cheap" nil "sch:sch-cheap" "low")
+          (mevedel-schedule-create session data-buf "5m" "other" nil (car other) (cadr other)))
+        (setq now (+ now 300))
+        (mevedel-schedule-run-due)
+        (should (= 2 (length (mevedel-schedule-test--wake-ups session))))
+        (ert-info ((format "%S" other))
+          (should-not (mevedel-schedule-wake-request-context session)))))))
+
+(mevedel-deftest mevedel-schedule-settle-wake ()
+  ,test
+  (test)
+  :doc "each settled run is recorded and its mail retired; three consecutive failures pause"
+  (mevedel-schedule-test--with-session
+    (let* (notices
+           (mevedel-notify-function (lambda (kind details)
+                                      (push (cons kind (plist-get details :text)) notices)))
+           (id (plist-get (mevedel-schedule-create session data-buf "every 20m" "poll") :id)))
+      (dolist (step '((error 1) (error 2) (success 0) (error 1) (abort 1) (error 2) (error 3)))
+        (setq now (plist-get (car (mevedel-schedule-pending session)) :due))
+        (mevedel-schedule-run-due)
+        (let ((context (list :wake-runs (mevedel-schedule-test--wake-ups session))))
+          (mevedel-schedule-settle-wake session data-buf context (car step) "Login expired")
+          (should-not (plist-get context :wake-runs)))
+        (should-not (mevedel-schedule-test--wake-ups session))
+        (should (= (cadr step) (plist-get (mevedel-schedule--find id (mevedel-session-schedules session))
+                                          :failures))))
+      (let ((entry (mevedel-schedule--find id (mevedel-session-schedules session))))
+        (should (eq 'paused (plist-get entry :status)))
+        (should (string-search "Login expired" (plist-get entry :pause-reason)))
+        (should (equal '(failed failed skipped failed done failed failed)
+                       (mapcar (lambda (run) (plist-get run :outcome)) (plist-get entry :runs))))
+        (should (equal "Interrupted" (plist-get (nth 2 (plist-get entry :runs)) :reason))))
+      (should (equal '(failure failure failure failure failure) (mapcar #'car notices)))
+      (should (string-search "paused" (cdar notices)))
+      (should-not (mevedel-schedule-test--timers))))
+
+  :doc "a failed one-shot is retained as a failed entry; a turn without wake runs changes nothing"
+  (mevedel-schedule-test--with-session
+    (let ((mevedel-notify-function #'ignore))
+      (mevedel-schedule-create session data-buf "20m" "Check CI")
+      (setq now (+ now 1200))
+      (mevedel-schedule-run-due)
+      (let ((mail (mevedel-schedule-test--wake-ups session)))
+        (mevedel-schedule-settle-wake session data-buf nil 'error "Provider down")
+        (should (equal mail (mevedel-schedule-test--wake-ups session)))
+        (mevedel-schedule-settle-wake session data-buf (list :wake-runs mail) 'error "Provider down"))
+      (let ((entry (car (mevedel-session-schedules session))))
+        (should (eq 'failed (plist-get entry :status)))
+        (should (equal "Check CI" (plist-get entry :note)))
+        (should (equal "Provider down" (plist-get (car (plist-get entry :runs)) :reason))))
+      (should-not (mevedel-schedule-test--wake-ups session)))))
+
 (mevedel-deftest mevedel-schedule--rearm ()
   ,test
   (test)

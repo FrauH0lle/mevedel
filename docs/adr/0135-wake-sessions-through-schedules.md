@@ -11,11 +11,12 @@ the conversation continue itself when the time comes. A **workspace
 schedule** targets the workspace: "every weekday at 07:00, triage new issues"
 starts a fresh session for each run.
 
-- **Interface.** One `Schedule` model tool with an `action` of `create`, `list`
-  or `cancel`. `create` takes `when` (a duration such as `20m` or a local
+- **Interface.** One `Schedule` model tool with an `action` of `create`, `list`,
+  `change` or `cancel`. `create` takes `when` (a duration such as `20m` or a local
   time `YYYY-MM-DD HH:MM` for one wake-up, `every 20m` or a 5-field cron
   expression in local time to repeat), a note the woken turn receives, and an
-  optional `expires`. The tool is offered to root requests only; a child
+  optional `expires`; `change` takes the same fields for a pending wake-up or a
+  workspace schedule, validated the same way. The tool is offered to root requests only; a child
   agent asks the root, so ownership, cost and notification stay with the root
   conversation.
   Wake-ups need no approval card: a wake-up runs under the session's current
@@ -81,7 +82,7 @@ starts a fresh session for each run.
   indefinitely without sending two alerts for one failure.
 - **Sessions that are not open.** An Emacs-wide index under `mevedel-user-dir`
   names every saved session holding a pending wake-up, one file per session.
-  It is a cache: at startup `mevedel-schedule-restore` reads each indexed
+  It is a cache: once Emacs is idle after startup, `mevedel-schedule-restore` reads each indexed
   session's committed sidecar, drops only entries proven stale (session
   directory provably missing, or a readable sidecar with no pending wake-up),
   keeps unreadable ones for the next start, and schedules the rest. Closing a
@@ -131,6 +132,19 @@ starts a fresh session for each run.
   them and, like the wake-up index, prunes only entries proven stale: the
   workspace is provably gone, or its readable store holds no active schedule
   on a confirming re-read after the entry is deleted.
+- **Quiet outbox.** A turn's origin decides whether its completion pushes. A
+  user-started turn keeps its completion push to the session's subscribers,
+  and to the workspace lobby when the session is shared. Turns nobody started
+  (wake-ups, workspace schedule runs, Monitor and background-command wakes,
+  Goal continuations) finish without one. The agent reaches the user
+  deliberately through `Notify`: one line, recorded in the transcript and
+  delivered locally and as a content-free push. An identical line from the
+  same session, or from one schedule's runs, is dropped for 24 hours, and a
+  notice adds to a user turn's completion push rather than replacing it. A
+  failed or paused wake-up or run, a run that cannot start, and a terminal
+  Goal always notify. The workspace lobby takes push subscriptions from full
+  and owner links, keeps them across restarts, and wakes for these notices
+  from every session of the workspace, shared or not.
 
 ## Rationale and consequences
 
@@ -165,8 +179,12 @@ them makes a stale entry (a crash between the firing commit and the index
 update, a cancelled or deleted session) harmless. One file per session,
 rather than one shared list, lets two Emacs instances sharing a user
 directory update it without a read-modify-write race. Restore reads each
-indexed sidecar once at startup so stale entries never arm a timer; for a
-session on a remote target that read is a network round trip during startup.
+indexed sidecar once after startup so stale entries never arm a timer; for a
+session on a remote target that read is a network round trip, so restore
+waits for the first idle moment instead of lengthening startup. In a batch
+measurement with 20 local indexed sessions it took about 220 ms, which
+`mevedel-install` no longer spends; a wake-up already due fires at that idle
+moment.
 Pruning deletes an entry and then reads the store again, recreating the entry
 when a wake-up appeared: the lease holder commits before it checks its entry,
 so a wake-up added during pruning is never left without one. This needs no
@@ -200,6 +218,20 @@ user may deliberately want Full Access for unattended work from a cautious
 session; the card shows the mode and flags the escalation instead. Each run
 gets a new session rather than continuing one, so context stays lean and
 continuity comes from memory and the agent's notes.
+
+Pushing after every finished turn reached the user too often: thirty
+overnight Goal turns meant thirty pushes, and the agent had no way to stay
+quiet when nothing happened. Only the agent knows whether a result matters,
+so automatic turns are quiet and `Notify` is how the agent speaks up. The
+rule keys on who started the turn, which the harness knows, rather than on
+judging content. A user-started turn keeps its push because the user is
+waiting for that answer, and `Notify` in it adds rather than replaces so
+expectations for one's own turns do not change. Failures cannot rely on the
+agent, since a failed turn may never reach `Notify`, so the harness sends
+them itself. The 24-hour duplicate filter stops a polling loop from
+repeating "CI still red" while letting a changed message through. Lobby
+subscriptions outlive the session rooms whose subscriptions died with them,
+so a restarted server can still reach the user.
 
 Single firing for workspace schedules uses an exclusive run record instead of
 a renewable workspace holder lease. A holder lease must be renewed while idle

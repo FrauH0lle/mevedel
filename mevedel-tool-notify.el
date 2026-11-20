@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'mevedel-notify)
+(require 'mevedel-schedule)
 (require 'mevedel-tool-registry)
 (require 'mevedel-structs)
 (require 'mevedel-engine)
@@ -18,14 +19,14 @@
 (autoload 'mevedel-session-persistence-shallow-ensure-files "mevedel-session-persistence")
 
 ;; `mevedel-tools'
-(defvar mevedel-tools--current-engine)
 (declare-function mevedel-tools-visibility "mevedel-tools" (&optional owner))
+(defvar mevedel-tools--current-engine)
 
 ;; `mevedel-workspace-schedule'
-(defvar mevedel-workspace-schedule-run)
 (declare-function mevedel-workspace-schedule-notify-receipt-file
                   "mevedel-workspace-schedule" (session))
 (declare-function mevedel-workspace-schedule-record-notice "mevedel-workspace-schedule" ())
+(defvar mevedel-workspace-schedule-run)
 
 (defun mevedel-tool-notify--receipt-file (session)
   "Return the notice receipt file owned by SESSION.
@@ -46,7 +47,7 @@ An active workspace schedule run shares its schedule's file instead."
                        (with-temp-buffer (insert-file-contents file) (json-parse-buffer))
                      (file-missing (make-hash-table :test #'equal))))
          (key (secure-hash 'sha256 (encode-coding-string text 'utf-8)))
-         (now (float-time (current-time))))
+         (now (mevedel-schedule-now)))
     (maphash (lambda (digest sent)
                (when (>= (- now sent) 86400) (remhash digest receipts))) receipts)
     (unless (gethash key receipts)

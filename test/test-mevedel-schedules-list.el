@@ -6,7 +6,11 @@
 
 ;;; Code:
 
-(require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
 (require 'mevedel-menu)
 (require 'mevedel-schedules-list)
 (require 'mevedel-session-persistence)
@@ -15,8 +19,10 @@
 (require 'mevedel-workspace-schedule)
 (require 'mevedel-workspace-schedule-runs)
 
-(ert-deftest mevedel-schedules-list-shows-jobs-and-returns-to-draft ()
-  "Opening the jobs cockpit shows the workspace schedule without disturbing a draft."
+(mevedel-deftest mevedel-schedules-list-open ()
+  ,test
+  (test)
+  :doc "opening the jobs cockpit shows the workspace schedule without disturbing a draft"
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (let* ((ws (mevedel-workspace--create :type 'project :root default-directory
@@ -57,8 +63,10 @@
           (should (= (point) position))
           (should (equal "unfinished draft" (mevedel-view--input-text))))))))
 
-(ert-deftest mevedel-schedules-list-keys-act-on-selected-id ()
-  "Select, pause, resume, decline deletion, then delete a same-named job."
+(mevedel-deftest mevedel-schedules-list-pause ()
+  ,test
+  (test)
+  :doc "pause, resume and delete act on the selected id; a declined deletion keeps the job"
   (save-window-excursion
     (let* ((ws (mevedel-workspace--create :id "keys" :name "Keys" :root default-directory))
            (jobs (mapcar (lambda (id) (list :id id :name "Build" :status 'active
@@ -94,8 +102,10 @@
         (should (= 1 (length jobs)))
         (call-interactively (key-binding (kbd "q")))))))
 
-(ert-deftest mevedel-schedules-list-history-links-run-session ()
-  "History distinguishes quiet and notified runs and opens only an existing session."
+(mevedel-deftest mevedel-schedules-list--details ()
+  ,test
+  (test)
+  :doc "history distinguishes quiet and notified runs and opens only an existing session"
   (save-window-excursion
     (let* ((ws (mevedel-workspace--create :id "history" :name "History" :root default-directory))
            (job '(:id "s-build" :name "Build" :status paused :pause-reason "Three failed runs"

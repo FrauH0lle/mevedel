@@ -34,7 +34,8 @@ schedules.
 - A wake-up waits for a running turn and for the user's draft or pending
   decisions, and runs with the session's current permissions.
 - `list` shows pending and expired wake-ups; `cancel` removes one by `id`.
-  At most 50 may be pending.
+  `change` takes a pending wake-up's `id` and only the fields to change; a new
+  `when` is timed from now. At most 50 may be pending.
 - A frequent check can run cheaper: pass `model` (a tier such as `fast`, or
   `BACKEND:MODEL`) and `effort` to `create`. Only the model and effort change;
   an unavailable model or unsupported effort is an error. Omit both for the
@@ -46,7 +47,7 @@ schedules.
   first message of every run; write it for a fresh session that knows nothing
   of this conversation. Optional: `preset` (default `mevedel-implement`),
   `model`, `effort` and `permission_mode` (default this session's), and
-  `expires` (no default).
+  `expires` (no default; `never` on `change` removes it).
 - The user approves every creation and `change` on a card, even in Full
   Access; the result arrives after they answer. A declined card stores
   nothing. `change` takes the `id` and only the fields to change.

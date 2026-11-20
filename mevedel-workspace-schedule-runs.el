@@ -56,7 +56,8 @@ Return the committed schedule.  Repeating the same operation is harmless."
                                    (> at (or (plist-get job :last-counted-at) 0))))
                       (count (or (plist-get job :failures) 0))
                       (reason (or error-text (plist-get record :error) "request failed"))
-                      (pause (and counts failed (= count 2) (eq 'active (plist-get job :status))
+                      (pause (and counts failed (= (1+ count) mevedel-schedule-max-failures)
+                                  (eq 'active (plist-get job :status))
                                   (not (eq 'once (plist-get (plist-get job :timing) :kind))))))
                  (setf (plist-get record :outcome) outcome
                        (plist-get record :settled-at) (mevedel-schedule-now)
@@ -70,7 +71,8 @@ Return the committed schedule.  Repeating the same operation is harmless."
                          (plist-get job :last-counted-at) at))
                  (when pause
                    (setf (plist-get job :status) 'paused
-                         (plist-get job :pause-reason) (format "Three consecutive failures: %s" reason)))
+                         (plist-get job :pause-reason)
+                         (format "%d consecutive failures: %s" mevedel-schedule-max-failures reason)))
                  (unless (mevedel-workspace-schedule--commit
                           workspace (list (list :op 'verify :path job-path :content job-bytes)
                                           (list :op 'verify :path run-path :content run-bytes)
@@ -81,7 +83,10 @@ Return the committed schedule.  Repeating the same operation is harmless."
                    (when failed
                      (mevedel-notify (or session workspace) 'failure
                                      (format "Schedule %s failed: %s%s" (plist-get job :name) reason
-                                             (if pause "; paused after three consecutive failures" ""))))
+                                             (if pause
+                                                 (format "; paused after %d consecutive failures"
+                                                         mevedel-schedule-max-failures)
+                                               ""))))
                    (mevedel-workspace-schedule--refresh workspace)
                    (cl-return record))))
              finally (error "Schedule run %s@%d keeps changing" id at))))
@@ -94,10 +99,14 @@ Return the committed schedule.  Repeating the same operation is harmless."
    mevedel--session (bound-and-true-p mevedel-turn-settlement-reason)))
 
 (defun mevedel-workspace-schedule-run-fired (workspace run)
-  "Account for RUN in WORKSPACE if the firing itself was terminal."
+  "Account for RUN in WORKSPACE if the firing itself was terminal.
+A run still `claimed' was recorded by a firing that never launched it."
   (pcase (plist-get run :status)
     ((and status (or 'skipped 'expired))
      (mevedel-workspace-schedule--account workspace run status))
+    ('claimed
+     (mevedel-workspace-schedule--account workspace run 'failed nil
+                                          "Run interrupted before launch"))
     ('setup-error
      (let ((session (when-let* ((id (plist-get run :session-id)))
                       (cl-loop for (_ . buf) in (mevedel--workspace-sessions workspace)

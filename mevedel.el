@@ -495,6 +495,13 @@ always prompt for the session name."
   (when (featurep 'mevedel-view-stream)
     (apply #'mevedel-view--refresh-animation-on-face args)))
 
+(defun mevedel--restore-schedules-when-idle ()
+  "Restore saved wake-ups and workspace schedules once Emacs is idle.
+Restore reads every indexed session's store, a round trip each on a remote
+target, so it stays off the startup path."
+  (cancel-function-timers #'mevedel-schedule-restore)
+  (run-with-idle-timer 0 nil #'mevedel-schedule-restore))
+
 ;;;###autoload
 (defun mevedel-install ()
   "Register `mevedel' presets, tools, and hooks."
@@ -585,15 +592,15 @@ always prompt for the session name."
   ;; Restart the collaboration lobbies still running and the artifacts
   ;; still shared when Emacs last exited, once startup has applied the
   ;; user's relay configuration, and re-arm the pending wake-ups of saved
-  ;; sessions.
+  ;; sessions once Emacs is idle.
   (if after-init-time
       (progn
         (mevedel-collaboration-lobby-restore)
         (mevedel-collaboration-artifact-room-restore)
-        (mevedel-schedule-restore))
+        (mevedel--restore-schedules-when-idle))
     (add-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
     (add-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore 90)
-    (add-hook 'emacs-startup-hook #'mevedel-schedule-restore 90))
+    (add-hook 'emacs-startup-hook #'mevedel--restore-schedules-when-idle 90))
 
   (message "mevedel installed successfully"))
 
@@ -692,7 +699,8 @@ always prompt for the session name."
 
   (remove-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
   (remove-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore)
-  (remove-hook 'emacs-startup-hook #'mevedel-schedule-restore)
+  (remove-hook 'emacs-startup-hook #'mevedel--restore-schedules-when-idle)
+  (cancel-function-timers #'mevedel-schedule-restore)
 
   (message "mevedel uninstalled successfully"))
 

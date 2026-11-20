@@ -187,6 +187,45 @@ for an exclusive creation another writer won.  Other failures signal."
                         status
                       (mevedel-session-control-fs-program-value result)))))
 
+(defun mevedel-workspace-schedule--holds-slot-p (entry)
+  "Return non-nil when schedule ENTRY counts against the workspace's capacity."
+  (memq (plist-get entry :status) '(active paused)))
+
+(defun mevedel-workspace-schedule-admit (workspace &optional id)
+  "Return store operations admitting one more schedule slot in WORKSPACE.
+Signal `user-error' when WORKSPACE already holds
+`mevedel-workspace-schedule-max' active or paused schedules.  The operations
+prove the count under the store lock: they fail as `mismatch' once another
+writer added a schedule or changed one holding no slot, so a commit that
+starts with them cannot exceed the limit.  ID names a schedule being
+created, whose directory the same commit writes and so cannot prove."
+  (let* ((store (mevedel-workspace-schedule--path workspace))
+         (names (mevedel-session-control-fs-list-directory store ""))
+         (proof (list (mevedel-session-control-fs-listing-proof store names)))
+         (count 0))
+    (dolist (directory names)
+      (when (and (mevedel-workspace-schedule-id-p (file-name-nondirectory directory))
+                 (not (equal id (file-name-nondirectory directory))))
+        ;; List before reading: a record published after the listing makes
+        ;; the listing proof fail, while one read as absent and published
+        ;; before a later listing would pass it uncounted.
+        (let* ((file (file-name-concat directory "schedule.el"))
+               (entries (mevedel-session-control-fs-list-directory directory ""))
+               (stored (and (member file entries) (mevedel-workspace-schedule--read file))))
+          (cond
+           ;; A creation may have made its directory but not yet its record;
+           ;; a record that vanished after the listing fails this proof.
+           ((null stored)
+            (push (mevedel-session-control-fs-listing-proof directory entries) proof))
+           ((and (mevedel-workspace-schedule-entry-p (car stored))
+                 (mevedel-workspace-schedule--holds-slot-p (car stored)))
+            (cl-incf count))
+           (t (push (list :op 'verify :path file :content (cdr stored)) proof))))))
+    (when (>= count mevedel-workspace-schedule-max)
+      (user-error "This workspace already has %d workspace schedules; delete one first"
+                  mevedel-workspace-schedule-max))
+    proof))
+
 (defun mevedel-workspace-schedule-entry-p (entry)
   "Return non-nil when ENTRY is a well-formed stored workspace schedule.
 Keys this module does not own are allowed."
@@ -263,26 +302,32 @@ Signal for an ID that is not a canonical schedule id."
         (push run runs)))
     (sort runs (lambda (a b) (< (plist-get a :scheduled-at) (plist-get b :scheduled-at))))))
 
-(defun mevedel-workspace-schedule--update-file (workspace path valid-p function)
+(defun mevedel-workspace-schedule--update-file (workspace path valid-p function
+                                                          &optional slot-p)
   "Replace store file PATH of WORKSPACE with FUNCTION's result.
 FUNCTION receives a copy of the current value and returns the new one; an
 `equal' result writes nothing.  VALID-P must accept the result.  A value
 changed meanwhile by another writer is read again and FUNCTION called again.
-Return the committed value."
+When SLOT-P says a value counts against capacity and the new one does but
+the current one does not, the change is admitted within capacity.  Return
+the committed value."
   (cl-loop
    repeat 5
    do (pcase-let* ((`(,value . ,bytes)
                     (or (mevedel-workspace-schedule--read path)
                         (signal 'mevedel-workspace-schedule-missing (list path))))
-                   (new (funcall function (copy-tree value))))
+                   (new (funcall function (copy-tree value)))
+                   (operations (list (list :op 'verify :path path :content bytes)
+                                     (list :op 'write :path path
+                                           :content (mevedel-workspace-schedule--bytes new)))))
         (cond
          ((equal new value) (cl-return value))
          ((not (funcall valid-p new)) (error "Invalid schedule record: %S" new))
          ((not (mevedel-workspace-schedule--commit
                 workspace
-                (list (list :op 'verify :path path :content bytes)
-                      (list :op 'write :path path
-                            :content (mevedel-workspace-schedule--bytes new)))))
+                (if (and slot-p (funcall slot-p new) (not (funcall slot-p value)))
+                    (append (mevedel-workspace-schedule-admit workspace) operations)
+                  operations)))
           (mevedel-workspace-schedule--refresh workspace)
           (cl-return new))))
    finally (error "Schedule record %s keeps changing; try again" path)))
@@ -291,13 +336,15 @@ Return the committed value."
   "Replace WORKSPACE's schedule ID with FUNCTION's result and return it.
 FUNCTION receives the current schedule and returns the new one, and may be
 called again when another writer changed it meanwhile.  The scheduler and
-index follow the committed schedule; no session is needed."
+index follow the committed schedule; no session is needed.  A change that
+makes a finished or expired schedule active or paused again must fit
+within `mevedel-workspace-schedule-max'."
   (mevedel-workspace-schedule--update-file
    workspace (mevedel-workspace-schedule--path
               workspace (mevedel-workspace-schedule--id id) "schedule.el")
    (lambda (entry)
      (and (mevedel-workspace-schedule-entry-p entry) (equal id (plist-get entry :id))))
-   function))
+   function #'mevedel-workspace-schedule--holds-slot-p))
 
 (defun mevedel-workspace-schedule-update-run (workspace id scheduled-at function)
   "Replace the record of WORKSPACE's schedule ID run due at SCHEDULED-AT.
@@ -331,10 +378,12 @@ FUNCTION receives the current record and returns the new one, as for
 (defun mevedel-workspace-schedule-propose (args &optional previous)
   "Return the schedule ARGS describe, without storing it, or signal `user-error'.
 ARGS is a plist of `:name', `:prompt', `:when' and `:expires' (timing
-texts), `:preset' (a symbol, default `mevedel-implement') and `:policy' (an
-implementation policy).  For a change, PREVIOUS is the stored schedule and
-supplies whatever ARGS omits; it keeps its timing and next run unless ARGS
-gives `:when'.  Workspace schedules have no default expiry."
+texts; see `mevedel-schedule-parse-expiry'), `:preset' (a symbol, default
+`mevedel-implement') and `:policy' (an implementation policy).  For a
+change, PREVIOUS is the stored schedule and supplies whatever ARGS omits;
+it keeps its timing and next run unless ARGS gives `:when', and an
+`:expires' of \"never\" removes its expiry.  Workspace schedules have no
+default expiry."
   (let* ((now (mevedel-schedule-now))
          (field (lambda (key) (or (plist-get args key) (plist-get previous key))))
          (name (string-trim (or (funcall field :name) "")))
@@ -348,9 +397,7 @@ gives `:when'.  Workspace schedules have no default expiry."
                 (plist-get previous :due)))
          (expires (plist-get args :expires))
          (expires-at (if expires
-                         (or (plist-get (mevedel-schedule-parse-timing expires now) :at)
-                             (user-error "Schedule expiry must be a duration or local time: %s"
-                                         expires))
+                         (mevedel-schedule-parse-expiry expires now)
                        (plist-get previous :expires-at)))
          (preset (or (funcall field :preset) 'mevedel-implement))
          (policy (funcall field :policy))
@@ -401,12 +448,6 @@ gives `:when'.  Workspace schedules have no default expiry."
 ENTRY comes from `mevedel-workspace-schedule-propose'; the caller has had it
 approved.  A workspace holds at most `mevedel-workspace-schedule-max'
 active or paused schedules."
-  (when (>= (cl-count-if (lambda (schedule)
-                           (memq (plist-get schedule :status) '(active paused)))
-                         (mevedel-workspace-schedule-list workspace))
-            mevedel-workspace-schedule-max)
-    (user-error "This workspace already has %d workspace schedules; delete one first"
-                mevedel-workspace-schedule-max))
   (let ((entry (if (mevedel-workspace-schedule-get workspace (plist-get entry :id))
                    (plist-put (copy-sequence entry) :id
                               (mevedel-workspace-schedule--new-id workspace))
@@ -415,13 +456,19 @@ active or paused schedules."
       (error "Invalid workspace schedule: %S" entry))
     (mevedel-session-control-fs-make-directory
      (mevedel-workspace-schedule--path workspace (plist-get entry :id) "runs") t)
-    (when (mevedel-workspace-schedule--commit
-           workspace
-           (list (list :op 'create
-                       :path (mevedel-workspace-schedule--path
-                              workspace (plist-get entry :id) "schedule.el")
-                       :content (mevedel-workspace-schedule--bytes entry))))
-      (error "Workspace schedule %s already exists" (plist-get entry :id)))
+    (cl-loop
+     repeat 5
+     for status = (mevedel-workspace-schedule--commit
+                   workspace
+                   (append (mevedel-workspace-schedule-admit workspace (plist-get entry :id))
+                           (list (list :op 'create
+                                       :path (mevedel-workspace-schedule--path
+                                              workspace (plist-get entry :id) "schedule.el")
+                                       :content (mevedel-workspace-schedule--bytes entry)))))
+     until (null status)
+     when (eq status 'conflict)
+     do (error "Workspace schedule %s already exists" (plist-get entry :id))
+     finally (when status (error "Workspace schedules keep changing; try again")))
     (mevedel-workspace-schedule--refresh workspace)
     entry))
 
@@ -511,42 +558,52 @@ and those whose workspace is provably gone or whose readable store holds
 no active schedule.  An entry that cannot be read now is kept."
   (let ((inhibit-interaction t))
     (dolist (file (directory-files (mevedel-schedule-workspace-index-directory) t "\\.el\\'"))
-      (let ((root (ignore-errors
-                    (with-temp-buffer
-                      (insert-file-contents file)
-                      (read (current-buffer))))))
+      (let (root)
         (condition-case err
-            (cond
-             ((not (stringp root)) (delete-file file))
-             ((mevedel-schedule--absent-p root) (delete-file file))
-             ((not (file-accessible-directory-p root))
-              (error "%s is not reachable" root))
-             (t (let ((workspace (mevedel-workspace-schedule-workspace root)))
-                  (unless (mevedel-workspace-schedule--restore-workspace workspace)
-                    (mevedel-workspace-schedule--prune workspace file)))))
+            (progn
+              ;; An unreadable entry file signals here and is kept.
+              (setq root (with-temp-buffer
+                           (insert-file-contents file)
+                           (ignore-errors (read (current-buffer)))))
+              (cond
+               ((not (stringp root)) (delete-file file))
+               ((mevedel-schedule--absent-p root) (delete-file file))
+               ((not (file-accessible-directory-p root))
+                (error "%s is not reachable" root))
+               (t (let ((workspace (mevedel-workspace-schedule-workspace root)))
+                    (unless (mevedel-workspace-schedule--restore-workspace workspace)
+                      (mevedel-workspace-schedule--prune workspace file))))))
           (error
            (mevedel-diagnostic-warning
             'global 'mevedel
             (format "Workspace schedules of %s were not restored: %s"
-                    root (error-message-string err))
+                    (or root file) (error-message-string err))
             :warning)))))))
 
 (defun mevedel-workspace-schedule-run-due (root now)
-  "Fire workspace ROOT's schedules due by clock seconds NOW."
+  "Fire workspace ROOT's schedules due by clock seconds NOW.
+A schedule that fails to fire is retried after `mevedel-schedule-retry-delay'."
   (condition-case err
-      (let ((workspace (mevedel-workspace-schedule-workspace root)))
+      (let ((workspace (mevedel-workspace-schedule-workspace root))
+            failed)
         (dolist (schedule (mevedel-workspace-schedule-list workspace))
           (when (and (eq 'active (plist-get schedule :status))
                      (<= (plist-get schedule :due) now))
             (condition-case err
                 (mevedel-workspace-schedule--fire workspace (plist-get schedule :id) now)
               (error
+               (setq failed t)
                (mevedel-diagnostic-warning
                 root 'mevedel
-                (format "Workspace schedule %s did not fire: %s"
-                        (plist-get schedule :name) (error-message-string err))
+                (format "Workspace schedule %s did not fire: %s; retrying in %ds"
+                        (plist-get schedule :name) (error-message-string err)
+                        mevedel-schedule-retry-delay)
                 :warning)))))
-        (unless (mevedel-workspace-schedule--refresh workspace)
+        ;; The failed schedule is still due, so its past due time would
+        ;; re-arm the timer at once.
+        (when (and (mevedel-workspace-schedule--refresh workspace) failed)
+          (setf (alist-get root mevedel-schedule--workspaces nil nil #'equal)
+                (+ now mevedel-schedule-retry-delay))
           (mevedel-schedule--rearm)))
     (error
      (push (cons root (+ now mevedel-schedule-retry-delay)) mevedel-schedule--workspaces)
@@ -617,7 +674,23 @@ Emacs fired it."
                         (list :op 'write :path path
                               :content (mevedel-workspace-schedule--bytes updated))))
             ('mismatch nil)
-            ((or 'absent 'conflict) (cl-return nil))
+            ('absent (cl-return nil))
+            ;; This run was recorded by a firing whose schedule write never
+            ;; landed, so nobody launched it: move the schedule on and settle
+            ;; the run, which no later firing of a one-shot would retire.
+            ('conflict
+             (unless (eq 'mismatch (mevedel-workspace-schedule--commit
+                                    workspace
+                                    (list (list :op 'verify :path path :content bytes)
+                                          (list :op 'write :path path
+                                                :content (mevedel-workspace-schedule--bytes
+                                                          updated)))))
+               (when-let* ((recorded (car (mevedel-workspace-schedule--read
+                                           (mevedel-workspace-schedule--run-path workspace id due))))
+                           ((not (plist-get recorded :outcome))))
+                 (run-hook-with-args 'mevedel-workspace-schedule-fired-functions
+                                     workspace recorded))
+               (cl-return nil)))
             (_
              (when (eq 'claimed (plist-get run :status))
                (setq run (mevedel-workspace-schedule--launch workspace updated run)))

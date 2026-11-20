@@ -336,9 +336,9 @@ fired nor a cancelled one.
 Wake-ups also fire for sessions that are not open. An Emacs-wide index under
 `mevedel-user-dir` (`wake-ups/`, one file per session naming its directory)
 lists every saved session holding a pending wake-up; it is a cache of the
-sidecars. Closing such a session keeps its wake-ups scheduled. At startup,
-`mevedel-install` runs `mevedel-schedule-restore`, which reads each indexed
-session's committed sidecar. Only an entry proven stale is removed: a malformed
+sidecars. Closing such a session keeps its wake-ups scheduled. After startup,
+`mevedel-install` runs `mevedel-schedule-restore` once Emacs is first idle;
+it reads each indexed session's committed sidecar. Only an entry proven stale is removed: a malformed
 entry file, a session directory missing below an ancestor this Emacs can
 search, or a readable sidecar holding no pending wake-up. An entry file or
 session that cannot be read now (permissions, an unreachable host) keeps its

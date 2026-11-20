@@ -10,12 +10,16 @@
 (require 'mevedel-tools)
 (require 'mevedel-pipeline)
 (require 'mevedel-presets)
+(require 'mevedel-schedule)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-transport)
-(require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                                    "helpers"))
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
 
 (defmacro mevedel-tool-notify-test--with-request (&rest body)
   "Run BODY with a registered tool and an admitted root conversation."
@@ -168,27 +172,27 @@
   (test)
   :doc "reopening preserves suppression; other text, owners and the 24h boundary pass"
   (mevedel-tool-notify-test--with-request
-    (let ((now 1000000))
-      (cl-letf (((symbol-function 'current-time) (lambda () now)))
-        (call "CI red")
-        (call "Login expired")
-        (setq-local mevedel--session
-                    (mevedel-session-create "renamed" (mevedel-session-workspace session)
-                                            nil (mevedel-session-session-id session)))
-        (setf (mevedel-request-session mevedel--current-request) mevedel--session
-              (mevedel-session-save-path mevedel--session) (mevedel-session-save-path session))
-        (cl-incf now 86399)
-        (call "CI red")
-        (should (= 2 (length notices)))
-        (cl-incf now)
-        (call "CI red")
-        (should (= 3 (length notices)))
-        (setq-local mevedel--session (mevedel-skills-test--make-session "other" default-directory))
-        (make-directory (file-name-concat default-directory "other"))
-        (setf (mevedel-request-session mevedel--current-request) mevedel--session
-              (mevedel-session-save-path mevedel--session) (file-name-concat default-directory "other"))
-        (call "CI red")
-        (should (= 4 (length notices)))))))
+    (let* ((now 1000000)
+           (mevedel-schedule-clock (lambda () now)))
+      (call "CI red")
+      (call "Login expired")
+      (setq-local mevedel--session
+                  (mevedel-session-create "renamed" (mevedel-session-workspace session)
+                                          nil (mevedel-session-session-id session)))
+      (setf (mevedel-request-session mevedel--current-request) mevedel--session
+            (mevedel-session-save-path mevedel--session) (mevedel-session-save-path session))
+      (cl-incf now 86399)
+      (call "CI red")
+      (should (= 2 (length notices)))
+      (cl-incf now)
+      (call "CI red")
+      (should (= 3 (length notices)))
+      (setq-local mevedel--session (mevedel-skills-test--make-session "other" default-directory))
+      (make-directory (file-name-concat default-directory "other"))
+      (setf (mevedel-request-session mevedel--current-request) mevedel--session
+            (mevedel-session-save-path mevedel--session) (file-name-concat default-directory "other"))
+      (call "CI red")
+      (should (= 4 (length notices))))))
 
 (provide 'test-mevedel-tool-notify)
 ;;; test-mevedel-tool-notify.el ends here

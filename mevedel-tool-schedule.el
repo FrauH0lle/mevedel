@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; One model tool creates, lists and cancels the root conversation's one-shot
-;; and recurring wake-ups, and creates, changes, lists and deletes workspace
+;; One model tool creates, lists, changes and cancels the root conversation's
+;; one-shot and recurring wake-ups, and creates, changes, lists and deletes workspace
 ;; schedules.  It is visible to root requests only; a child agent asks the
 ;; root to schedule instead.  Creating or changing a workspace schedule
 ;; grants standing authority, so it always asks the person through a card,
@@ -17,10 +17,12 @@
 (require 'mevedel-workspace-schedule)
 
 ;; `mevedel-models'
+(declare-function mevedel-model--provider-label "mevedel-models" (provider))
 (declare-function mevedel-model-parse-effort "mevedel-models" (value))
 (declare-function mevedel-model-parse-selector "mevedel-models" (value))
 (declare-function mevedel-model-resolve-workload "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(declare-function mevedel-model-selection-delta "mevedel-models" (model effort))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-request "mevedel-permission-queue"
@@ -43,10 +45,9 @@
 
 (defun mevedel-tool-schedule--entry-json (entry)
   "Return wake-up ENTRY as a JSON-serializable plist.
-Its model and effort are listed only when they differ from the session's."
-  (let ((expires (plist-get entry :expires-at))
-        (model (plist-get entry :model))
-        (effort (plist-get entry :effort)))
+Its model and effort are listed resolved, only where they differ from the
+session's."
+  (let ((expires (plist-get entry :expires-at)))
     (append (list :id (plist-get entry :id)
                   :target "session"
                   :time (mevedel-schedule-format-time (plist-get entry :due))
@@ -54,15 +55,9 @@ Its model and effort are listed only when they differ from the session's."
                   :note (plist-get entry :note)
                   :expires (and expires (mevedel-schedule-format-time expires))
                   :status (symbol-name (plist-get entry :status)))
-            (and model
-                 (not (equal model (and gptel-backend gptel-model
-                                        (format "%s:%s" (gptel-backend-name gptel-backend)
-                                                (gptel--model-name gptel-model)))))
-                 (list :model model))
-            (and effort
-                 (not (equal effort (and (bound-and-true-p gptel-reasoning-effort)
-                                         (format "%s" gptel-reasoning-effort))))
-                 (list :effort effort)))))
+            (and (or (plist-get entry :model) (plist-get entry :effort))
+                 (mevedel-model-selection-delta (plist-get entry :model)
+                                                (plist-get entry :effort))))))
 
 (defun mevedel-tool-schedule--workspace-json (entry)
   "Return workspace schedule ENTRY as a JSON-serializable plist."
@@ -108,9 +103,7 @@ permission mode defaults to PREVIOUS's, else SESSION's current mode."
                              (mevedel-model-parse-selector
                               (or model (plist-get stored :model-provider)))
                              (mevedel-model-parse-effort effort))))
-              (list :model-provider (format "%s:%s"
-                                            (gptel-backend-name (plist-get resolved :backend))
-                                            (gptel--model-name (plist-get resolved :model)))
+              (list :model-provider (mevedel-model--provider-label resolved)
                     :reasoning-effort (plist-get resolved :effort))))))
     (list :model-provider (plist-get selection :model-provider)
           :reasoning-effort (plist-get selection :reasoning-effort)
@@ -168,6 +161,11 @@ tool result once the person answers; nothing is stored unless approved."
                        :policy (mevedel-tool-schedule--policy args previous session))
                  previous))
          (request mevedel--current-request))
+    ;; The store admits it again on approval; this spares the person a card
+    ;; that could only fail.
+    (when (and (mevedel-workspace-schedule--holds-slot-p entry)
+               (not (mevedel-workspace-schedule--holds-slot-p previous)))
+      (mevedel-workspace-schedule-admit workspace))
     (mevedel-permission-request
      (append
       (list :kind 'schedule :tool-name "Schedule" :origin "/root"
@@ -220,8 +218,18 @@ tool result once the person answers; nothing is stored unless approved."
     (pcase (plist-get args :action)
       ((and "create" (guard (equal "workspace" (plist-get args :target))))
        (mevedel-tool-schedule--ask callback session buffer args))
-      ("change"
+      ((and "change" (guard (and id (string-prefix-p "s-" id))))
        (mevedel-tool-schedule--ask callback session buffer args (funcall stored)))
+      ("change"
+       (unless id
+         (user-error "Schedule change requires an id"))
+       (funcall callback
+                (mevedel-tool-schedule--result
+                 :changed
+                 (mevedel-tool-schedule--entry-json
+                  (mevedel-schedule-change session buffer id (plist-get args :when)
+                                           (plist-get args :note) (plist-get args :expires)
+                                           (plist-get args :model) (plist-get args :effort))))))
       ("create"
        (funcall callback
                 (mevedel-tool-schedule--result
@@ -271,7 +279,7 @@ tool result once the person answers; nothing is stored unless approved."
           (note string :optional
                 "For create or change: what the woken turn should do, written for yourself; for a workspace schedule, each run's first message.")
           (expires string :optional
-                   "For create or change: optional duration or local time after which a run is dropped.")
+                   "For create or change: optional duration or local time after which a run is dropped; never removes it.")
           (name string :optional
                 "For a workspace schedule: a short name; runs are named after it.")
           (preset string :optional
@@ -284,6 +292,7 @@ tool result once the person answers; nothing is stored unless approved."
           (effort string :optional
                   "For create or change: reasoning effort. Omit for the session's.")
           (id string :optional "For change or cancel: the schedule id."))
+   ;; Keeps wake-ups card-free in Ask and Edits; workspace schedules ask themselves.
    :read-only-p t
    :groups (util)))
 
