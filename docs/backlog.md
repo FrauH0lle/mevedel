@@ -10,32 +10,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Defects
 
-### A failed background start consumes unread mail
-
-When a background-event turn (Monitor, background command, wake-up) fails to
-start after its prompt is built, for example on a network error while the native
-request starts, the unread mailbox records are acknowledged anyway
-(`mevedel-tools.el`, mail acknowledgement at admission). The waking mail, and
-with it a scheduled wake-up's note, is lost without a turn. Acknowledge only once
-the request is admitted, or restore the records when the start fails. Found
-while reviewing scheduled wake-ups, 2026-11-20; workspace schedule runs already
-record such failures.
-
-### Composer activity text can sit below the rail badge
-
-The reported rail showed `Working...` slightly lower than the badge and
-timer. The offset did not reproduce in the themed composer on a private
-Wayland display with native shimmer either on or off. If it recurs, capture
-the compositor scale and compare the same glyphs with native shimmer on and
-off before changing placement.
-
-### Reaching the transcript top can scroll the composer
-
-The reported one-line shift occurred with the caret at the end of a short
-draft. The graphical wheel-to-top test with the composer selected passes both
-with and without the rail fix. If the shift recurs, capture the mouse-scroll
-settings and both window starts before and after the final wheel event.
-
 ## Hook extensions
 
 ### Task transition events

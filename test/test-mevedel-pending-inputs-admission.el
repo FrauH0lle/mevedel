@@ -13,6 +13,7 @@
 (require 'gptel-openai)
 (require 'mevedel-agent-control)
 (require 'mevedel-auth)
+(require 'mevedel-chat)
 (require 'mevedel-claude-code)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-transport)
@@ -20,6 +21,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-presets)
 (require 'mevedel-schedule)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-view-composer)
 
 (mevedel-deftest mevedel-pending-inputs--wake-for-event/admission (:quiet t)
@@ -199,10 +201,17 @@
            (now (floor (float-time))) (mevedel-schedule-clock (lambda () now))
            (view (generate-new-buffer " *wake-run-view*"))
            (mevedel-claude-code-directory (file-name-concat root "claude"))
+           (curl (symbol-function 'gptel-curl-get-response))
+           (missing-curl (file-name-concat root "missing-curl"))
            notices machine settled release
+           (refuse-start (eq ,engine 'start-error))
            (receive (lambda (fsm)
-                      (setq machine fsm)
-                      (when (eq ,engine 'start-error) (error "Transport unavailable"))))
+                      (if refuse-start
+                          (let ((gptel-use-curl missing-curl)
+                                ;; A nonexistent executable cannot contact the provider.
+                                (mevedel-test-allow-provider-requests t))
+                            (funcall curl fsm))
+                        (setq machine fsm))))
            (mevedel-notify-function (lambda (kind details)
                                       (push (list kind (plist-get details :text)) notices))))
       (unwind-protect
@@ -235,7 +244,8 @@
               (cl-incf now 60)
               (mevedel-schedule-run-due)
               (mevedel-test--await 5 "Wake not delivered" (mevedel-agent-control-wake-pending-p session))
-              (mevedel-agent-control-enqueue-monitor-events session "mon" "CI" '(("ok")) t)
+              (mevedel-agent-control-enqueue-monitor-events
+               session "mon" "CI" '(("Monitor check finished")) t)
               (mevedel-view-composer-replace "" view)
               (pcase ,engine
                 ('async-preflight
@@ -250,7 +260,21 @@
                  (cl-letf (((symbol-function 'mevedel-auth-assert-ready)
                             (lambda (_) (error "Token expired"))))
                    (should-error (mevedel-pending-inputs--wake-for-event buffer))))
-                ('start-error (should-error (mevedel-pending-inputs--wake-for-event buffer)))
+                ('start-error
+                 (let ((unread (mevedel-agent-control-context-mailbox session)))
+                   (should-error (mevedel-pending-inputs--wake-for-event buffer)
+                                 :type 'file-missing)
+                   (setq refuse-start nil)
+                   (should-not machine)
+                   (should mevedel--current-request)
+                   (should-not (mevedel-agent-control-context-mailbox session))
+                   (mevedel-request-end)
+                   (mevedel-test--await 5 "Failed request teardown did not settle"
+                     (not (mevedel-turn-busy-p buffer)))
+                   (let ((receipts (mevedel-transcript-audit-buffer-spans 'mailbox-receipt)))
+                     (should (equal (mapcar (lambda (record) (plist-get record :id)) unread)
+                                    (mapcar (lambda (span) (plist-get (plist-get span :record) :id))
+                                            receipts))))))
                 (_ (mevedel-pending-inputs--wake-for-event buffer)))
               (when (memq ,engine '(native write-error))
                 (mevedel-test--await 5 "Provider not started" machine)
@@ -282,6 +306,20 @@
                          (should-not (plist-get (car (mevedel-schedule-pending session)) :runs)))
                 (should (equal '(failure) (mapcar #'car notices)))
                 (should (string-search (plist-get wake :id) (cadar notices))))
+              (when (eq ,engine 'start-error)
+                (let ((runs (plist-get (car (mevedel-session-schedules session)) :runs)))
+                  (should (equal '(failed) (mapcar (lambda (run) (plist-get run :outcome)) runs))))
+                (mevedel--submit-generated-turn "Continue after the failed start")
+                (mevedel-test--await 5 "Next request did not start" machine)
+                (let ((payload (prin1-to-string (plist-get (gptel-fsm-info machine) :data))))
+                  (dolist (text '("Check CI" "Monitor check finished"))
+                    (let ((start (string-search text payload)))
+                      (should start)
+                      (should-not (string-search text payload (+ start (length text)))))))
+                (should (= 2 (length (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))))
+                (gptel--fsm-transition machine 'DONE)
+                (mevedel-test--await 5 "Next request did not settle" (not (mevedel-turn-busy-p buffer)))
+                (should (= 1 (length notices))))
               (when (eq ,engine 'native)
                 ;; A user reading wake mail owns their failure.  A successful wake
                 ;; resets the streak; an interrupted wake and a skipped cadence do not.
@@ -327,7 +365,7 @@
   'native
   :doc "ACP error for a delivered wake in mixed mail produces one failure notice"
   'acp
-  :doc "synchronous provider start failure after mailbox acknowledgement produces one notice"
+  :doc "a failed Curl launch accounts the wake once and replays its mail only as history"
   'start-error
   :doc "a preflight failure records the one-shot and retires no unrelated mail"
   'preflight
