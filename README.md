@@ -1442,7 +1442,7 @@ A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
 `skills/` under `mevedel-user-dir` (default `~/.mevedel/`), `~/.agents/skills/`, and from the directories listed in
 `mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
-(for example `review`, `analyze-log`, `learn`, and `clean-work`); name conflicts are exposed with
+(for example `review`, `analyze-log`, `learn`, `clean-work`, and `schedule`); name conflicts are exposed with
 deterministic visible prefixes.
 
 A skill can:

@@ -159,6 +159,11 @@ Bundled skills currently include:
   and desktop.
 - `clean-work` — user-only housekeeping for confirmed obsolete shared working
   material, using normal ApplyPatch permissions and review.
+- `schedule` — `$schedule [workspace] [timing] prompt`: instructs the model to
+  use the `Schedule` tool for a wake-up or, with `workspace`, a workspace
+  schedule proposed on the approval card, and to chain one-shot wake-ups when
+  there is no fixed interval. It adds no command or behaviour beyond the tool;
+  see [Schedule](tools.md#schedule).
 - `pair` — user-only pairing workflow: prompts for a partner model and
   effort, then starts a general-purpose partner agent that works as an equal
   on the given instructions.
