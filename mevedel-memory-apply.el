@@ -95,8 +95,9 @@ ownership. The patch transaction rechecks each change's expected snapshot."
         (error "Proposal before-state differs from its captured scope")))
     (mevedel-memory-apply--changes root proposal (plist-get scope :new-file-mode))))
 
-(cl-defun mevedel-memory-apply--changes (root proposal new-mode)
-  "Derive exact changes for frozen ROOT and PROPOSAL with NEW-MODE, without IO."
+(cl-defun mevedel-memory-apply--changes (root proposal new-mode &optional date)
+  "Derive exact changes for frozen ROOT and PROPOSAL with NEW-MODE, without IO.
+DATE, a YYYY-MM-DD string, stamps a changed topic; it defaults to today."
   (let* (
          (action (plist-get proposal :action))
          (file (plist-get proposal :file))
@@ -145,7 +146,7 @@ ownership. The patch transaction rechecks each change's expected snapshot."
                                                    (regexp-quote tail) "\\'")
                                            old)
                              (match-string 1 old)
-                           (format-time-string "%Y-%m-%d"))))
+                           (or date (format-time-string "%Y-%m-%d")))))
               (emit file (concat head "modified: " date "\n" tail) t)))
           (dolist (source (plist-get proposal :merged-files))
             (unless (equal file source) (emit source nil nil)))

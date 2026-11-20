@@ -202,6 +202,21 @@ Verify the exact rebased index in MEMORY, including its trailing blank line."
       (should (equal (plist-get item :id) (plist-get (plist-get record :metadata) :decision-id)))
       (dolist (row (plist-get record :after))
         (should (equal (plist-get (cdr row) :bytes) (mevedel-session-control-fs-read-file (plist-get (cdr row) :path)))))))
+  :doc "an applied slot still validates when recovery reads it on a later day"
+  t
+  (progn
+    (mevedel-memory-decision-apply workspace pass (plist-get item :id))
+    (let* ((slot (car (mevedel-memory-decision--slots workspace (plist-get item :id))))
+           (now (format-time-string "%Y-%m-%d"))
+           (orig (symbol-function 'format-time-string)))
+      (cl-letf (((symbol-function 'format-time-string)
+                 (lambda (format &optional time zone)
+                   (if (and (equal format "%Y-%m-%d") (null time))
+                       (funcall orig format (time-add nil (* 2 86400)) zone)
+                     (funcall orig format time zone)))))
+        (should-not (equal now (format-time-string "%Y-%m-%d")))
+        (should (eq 'applied (plist-get (plist-get (mevedel-memory-decision--read workspace slot) :metadata)
+                                        :status))))))
   :doc "workspace owner dies before election; successor Accept completes and retains exact reversal"
   t (mevedel-test-memory-decision-owner-loss workspace pass item memory 'workspace 'apply)
   :doc "workspace owner dies before election; successor Reject restores exact rebased bytes"

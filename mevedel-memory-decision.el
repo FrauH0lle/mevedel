@@ -197,10 +197,15 @@ supplied, is the current pinned slot read from the same observation."
                             (secure-hash 'sha256 (mevedel-memory-store--print (list before after))))
                      (if before
                          (and (mevedel-memory-write--before-p item before)
-                              (let ((effective (copy-sequence item)))
+                              (let ((effective (copy-sequence item))
+                                    ;; Rederive with the slot's own stamp: recovery may run on a later day.
+                                    (date (let ((bytes (plist-get (cdr (assoc (plist-get item :file) after)) :bytes)))
+                                            (and (stringp bytes)
+                                                 (string-match "^modified: \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)$" bytes)
+                                                 (match-string 1 bytes)))))
                                 (setf (plist-get effective :before) before)
                                 (equal after (mevedel-memory-write--after
-                                              before (mevedel-memory-apply--changes root effective (plist-get scope :new-file-mode))))))
+                                              before (mevedel-memory-apply--changes root effective (plist-get scope :new-file-mode) date)))))
                        (and (not after) (memq (plist-get metadata :status) '(stale unavailable rejected)))))
           (error "Decision does not match accepted proposal"))
         (when (eq (plist-get metadata :status) 'reversed)
