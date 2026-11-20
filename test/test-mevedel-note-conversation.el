@@ -61,6 +61,9 @@
           (mevedel-instruction-store--failed nil)
           (mevedel-notes--unsaved-noticed nil)
           (mevedel-journal-enabled nil)
+          ;; `mevedel-install' re-registers tools; restoring only gptel's list
+          ;; would leave later tests' tools unknown to this registry.
+          (mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
           (gptel--known-tools (copy-tree gptel--known-tools))
           (gptel--known-presets (copy-tree gptel--known-presets))
           (mevedel-preset--registry (copy-tree mevedel-preset--registry))
