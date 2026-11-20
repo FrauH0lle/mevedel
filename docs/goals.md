@@ -295,6 +295,13 @@ remain held until the Goal resumes. Once a Goal is complete, the next queued
 follow-up is an ordinary non-Goal message. There is no maximum-turn or no-tool
 heuristic.
 
+A due [wake-up](tools.md#schedule), like agent mail, a Monitor event or a
+background command's completion, starts a background-event turn with fixed
+trigger text, never the continuation text. It does not resume a paused,
+blocked, or budget-limited Goal, which stays as it was, and its settlement
+schedules no continuation for one. While a Goal is active, that turn is
+captured and charged to it like every root turn.
+
 All mevedel-admitted native gptel backends first use
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery):
 10 retries plus the initial attempt per model sample, independently for root

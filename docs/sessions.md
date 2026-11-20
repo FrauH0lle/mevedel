@@ -294,10 +294,11 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.15`, including recovery issues, retained input and pause state,
+The closed sidecar schema is `v0.5.16`, including recovery issues, retained input and pause state,
 naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
-and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
+for an artifact's own conversation, that artifact's id (`:dedicated-artifact`),
+and the session's pending and expired [wake-ups](tools.md#schedule) (`:schedules`).
 Other schemas are rejected by the runtime loader; older sessions are converted
 only by the [explicit migration](#explicit-session-migration). Recovery records
 contain issue messages, never credentials.
@@ -315,6 +316,16 @@ reloads as requiring review, with automatic delivery paused; a restart never
 resurrects a submitted request. Ordinary steering deliberately detached by an
 interrupt remains pending, and its interrupt pause survives restore. The host
 can resume it with `C-c C-r` instead of converting it in the cockpit.
+
+Wake-ups are owned by the session that created them. The sidecar is their
+source of truth: creating or cancelling one commits it before the tool returns,
+and a firing removes it in the same commit that adds its `WAKE_UP` mailbox
+record. Resuming a session with this client holding its lease re-arms its
+pending wake-ups; a read-only buffer does not, and a buffer that becomes a
+read-only follower after control moves elsewhere stops firing them. Closing the session stops
+scheduling them, and they stay persisted until it is resumed. Save As carries
+them to the new session, while conversation and Worktree forks start with
+none, so one wake-up never fires in two conversations.
 
 
 ## Persistence flow
@@ -1033,7 +1044,7 @@ identity. Superseded sidecar shapes are not migrated during resume; the
 [explicit migration](#explicit-session-migration) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.15`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.16`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project and file-workspace sessions persist `portable`.  Portable sessions
@@ -2632,7 +2643,7 @@ failures, not successful skips. A live session or pending recovery aborts the
 whole run before any session is changed.
 
 Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12,
-v0.5.13, v0.5.14 and v0.5.15; the current target is v0.5.15. Versions v0.5.7 and v0.5.8 are not
+v0.5.13, v0.5.14, v0.5.15 and v0.5.16; the current target is v0.5.16. Versions v0.5.7 and v0.5.8 are not
 supported. Each source follows an ordered chain of version-to-next-version
 steps. The script checks that the chain ends at the runtime codec's current
 format. To retire old support, remove the oldest prefix of steps and their
@@ -2698,6 +2709,8 @@ v0.5.15 consolidates frozen `mode-constraints`, `full-auto-mode`, and
 recipe, preserving all other reminders and their order. Invalid legacy mode
 recipes refuse conversion. Runtime readers accept only the current recipe shape;
 close and explicitly migrate older sessions before reopening them.
+v0.5.16 adds an empty wake-up store (`:schedules nil`); a legacy sidecar that
+already names `:schedules` is refused instead of overwritten.
 Unsaved queues and earlier
 chat titles cannot be reconstructed. Retrying an old attempted title asks for
 a description rather than guessing from history. Migration makes no model

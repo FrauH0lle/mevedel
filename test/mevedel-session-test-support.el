@@ -392,7 +392,8 @@ The caller releases the lease, removes DIRECTORY and clears the workspace regist
                :goal nil
                :attached-artifacts nil
                :dedicated-artifact nil
-               :messages nil)))
+               :messages nil
+               :schedules nil)))
     (while plist
       (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
     sidecar))

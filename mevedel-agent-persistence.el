@@ -75,12 +75,13 @@ fields such as a record's wake mark are not part of the canonical form."
      for timestamp = (and type (plist-get entry :timestamp))
      when
      (and (stringp id) (not (string-empty-p id))
-          (memq type '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
+          (memq type '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER WAKE_UP))
           (equal target recipient)
           (stringp payload)
           (timestamp-p timestamp)
           (pcase type
             ('USER (and (equal sender "user") (equal recipient "/root")))
+            ('WAKE_UP (and (equal sender "/root") (equal recipient "/root")))
             ((or 'MONITOR 'MONITOR_TERMINAL)
              (and (equal sender "/root") (equal recipient "/root")
                   (stringp (plist-get entry :execution-id))

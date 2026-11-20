@@ -3060,11 +3060,14 @@ follow-up dispatch; closing the last one, including a child agent's card
 answered while the root session is idle, offers queued follow-ups again.
 
 Background work also produces idle work. When a yielded root command ends on
-its own, or a [Monitor](tools.md#monitor) reports, its mailbox record wakes the
-idle model (see terminal delivery in [tools](tools.md)). Idle work runs in a
-fixed order: queued follow-ups, then one background-event turn, then Goal
-continuation; the turn each starts continues an active Goal when it settles
-successfully, and a failed background-event turn does not wake again. A
+its own, a [Monitor](tools.md#monitor) reports, or a
+[wake-up](tools.md#schedule) comes due, its mailbox record wakes the idle model
+(see terminal delivery in [tools](tools.md)). Idle work runs in a fixed order:
+queued follow-ups, then one background-event turn, then Goal continuation,
+which is offered only after a turn settles successfully with nothing earlier
+waiting. A failed background-event turn does not wake again. Follow-up and
+background-event turns are not continuation turns, but while a Goal is active
+every root turn, these included, is charged to it ([Goals](goals.md)). A
 background-event turn waits for an idle transport and then rechecks every
 follow-up hold below, plus queued follow-ups and any pending permission, Ask,
 or Plan interaction, so it never replaces a draft or interrupts a decision;

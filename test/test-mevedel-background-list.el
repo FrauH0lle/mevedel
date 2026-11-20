@@ -15,7 +15,9 @@
 (require 'mevedel-background-list)
 (require 'mevedel-cockpit)
 (require 'mevedel-execution)
+(require 'mevedel-schedule)
 (require 'mevedel-structs)
+(require 'mevedel-view-agent)
 (require 'tabulated-list)
 (require 'helpers
          (file-name-concat
@@ -333,6 +335,41 @@
             (should-error (mevedel-background-list-stop) :type 'user-error)
             (should-not tabulated-list-entries)))
       (delete-file artifact))))
+
+(mevedel-deftest mevedel-background-list/wake-ups (:quiet t)
+  ,test
+  (test)
+  :doc "lists pending and expired wake-ups after agents and executions; k cancels one"
+  (let* ((now 1795176000)
+         (mevedel-schedule-clock (lambda () now))
+         (wake-up (lambda (id note due status)
+                    (append (list :id id :note note
+                                  :timing (list :kind 'once :at due)
+                                  :created-at now :due due :expires-at nil
+                                  :status status)
+                            (and (eq status 'expired) (list :expired-at now))))))
+    (mevedel-background-list-test--with-cockpit nil nil
+      (setf (mevedel-session-schedules session)
+            (list (funcall wake-up "w-000001" "Check CI; tell the user only if it failed"
+                           (+ now 1200) 'pending)
+                  (funcall wake-up "w-000002" "Old check" (- now 60) 'expired)))
+      (mevedel-cockpit-surface-refresh)
+      (should (equal '("w-000001" "w-000002") (mapcar #'car tabulated-list-entries)))
+      (let ((row (cadr (car tabulated-list-entries))))
+        (should (equal "wake-up" (aref row 0)))
+        (should (equal "Pending" (aref row 1)))
+        (should (equal "Check CI; tell the user only if it fail…" (aref row 2)))
+        (should (equal "in 20m 00s" (substring-no-properties (aref row 4)))))
+      (should (equal "Expired" (aref (cadr (cadr tabulated-list-entries)) 1)))
+      (should (string-match-p "0 agents · 0 executions · 2 wake-ups"
+                              (substring-no-properties
+                               (mevedel-cockpit-surface-header-line))))
+      (goto-char (point-min))
+      (mevedel-background-list-stop)
+      (should (equal '("w-000002")
+                     (mapcar (lambda (entry) (plist-get entry :id))
+                             (mevedel-session-schedules session))))
+      (should (equal '("w-000002") (mapcar #'car tabulated-list-entries))))))
 
 (provide 'test-mevedel-background-list)
 ;;; test-mevedel-background-list.el ends here

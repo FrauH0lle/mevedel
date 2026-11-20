@@ -275,7 +275,9 @@ workspace."
   ;; artifact's metadata names the session back; only when both agree is the
   ;; session hidden from lists, kept from expiry and deleted with it.
   dedicated-artifact
-  note-conversation) ; non-nil for an isolated note session, independent of preset
+  note-conversation ; non-nil for an isolated note session, independent of preset
+  ;; Durable wake-up plists owned by `mevedel-schedule', oldest first.
+  schedules)
 
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.

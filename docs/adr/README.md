@@ -208,3 +208,8 @@ to the decision bearing that ID.
 - [ADR 0134: Float the composer as a second window on the view buffer](0134-float-the-composer.md)
   shows the composer in a child frame over a view window scrolled away from
   it, and amends ADR 0126's scroll-away return for the selected window.
+
+- [ADR 0135: Wake sessions through schedules](0135-wake-sessions-through-schedules.md)
+  lets the root conversation wake itself later through one-shot wake-ups
+  stored with the session, armed by one timer and delivered as background
+  mailbox events.

@@ -1364,9 +1364,8 @@ mail delivery: the unread records remain available to the next turn."
 
 (defun mevedel-pending-inputs-offer-idle-work (data-buffer)
   "Offer DATA-BUFFER's queued idle work again after a hold on it cleared.
-Queued follow-ups go first, then a turn for background work that reported;
-the turn each one starts continues an active Goal when it settles.  With
-neither waiting, an active Goal continues directly.
+Queued follow-ups go first, then a turn for background work that reported.
+Only once neither is waiting does an active Goal get a continuation turn.
 The decision waits for the current command to finish, and the offered work
 re-checks its own gates when it runs, so an offer made while the session is
 still occupied does nothing."

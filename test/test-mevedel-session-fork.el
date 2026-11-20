@@ -50,7 +50,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 105
+    (should (= 106
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -152,7 +152,8 @@
            :goal goal
            :attached-artifacts (list "board")
            :dedicated-artifact "board"
-           :note-conversation t))
+           :note-conversation t
+           :schedules (list (list :id "w-000001" :note "Check CI" :status 'pending))))
          (fork
           (mevedel-session-fork-clone-session
            source 'fork
@@ -174,6 +175,11 @@
            :forked-from-session-id "source")))
     (should-not (mevedel-session-note-conversation fork))
     (should (mevedel-session-note-conversation save-as))
+    ;; One wake-up must never fire in two conversations.
+    (should-not (mevedel-session-schedules fork))
+    (should (equal (mevedel-session-schedules source) (mevedel-session-schedules save-as)))
+    (should-not (eq (car (mevedel-session-schedules source))
+                    (car (mevedel-session-schedules save-as))))
     (should (= 7 (mevedel-session-ownership-epoch source)))
     (dolist (candidate (list fork save-as))
       (should (= 0 (mevedel-session-ownership-epoch candidate)))

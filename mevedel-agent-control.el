@@ -1155,6 +1155,19 @@ together or not at all, so a retry cannot duplicate a partial batch."
     (when acknowledge (funcall acknowledge t nil))
     t))
 
+(defun mevedel-agent-control-enqueue-wake-up (session note meta acknowledge)
+  "Queue a due wake-up's NOTE for SESSION's root as one waking WAKE_UP record.
+META is a plist of structural facts carried as opening-tag attributes.
+ACKNOWLEDGE receives (SUCCESS ERROR) once after adoption or rollback; the
+record commits together with the caller's other pending session changes."
+  (unless (stringp note)
+    (error "Invalid wake-up note"))
+  (mevedel-agent-control--enqueue-records
+   session "/root"
+   (list (list :type 'WAKE_UP :sender "/root" :recipient "/root"
+               :payload note :timestamp (current-time) :meta meta :wake t))
+   nil acknowledge))
+
 (defun mevedel-agent-control-restore-lost-monitors (session monitors)
   "Add non-waking terminal mail for lost MONITORS to restored SESSION.
 MONITORS contains repaired execution facts.  The restore checkpoint publishes

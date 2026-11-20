@@ -60,6 +60,10 @@
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-entry-p "mevedel-schedule" (entry))
+(autoload 'mevedel-schedule-entry-p "mevedel-schedule")
+
 ;; `mevedel-session-checkpoint'
 (declare-function mevedel-session-checkpoint-seed "mevedel-session-checkpoint" (session sidecar))
 (autoload 'mevedel-session-checkpoint-seed "mevedel-session-checkpoint")
@@ -123,6 +127,7 @@
 (declare-function mevedel-session-ptc-checkpoints "mevedel-structs" (cl-x))
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x))
+(declare-function mevedel-session-schedules "mevedel-structs" (cl-x))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-task-status-notes "mevedel-structs" (cl-x))
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x))
@@ -164,7 +169,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.15"
+(defconst mevedel-session-codec-format-version "v0.5.16"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -196,7 +201,8 @@ add more, and we don't want to act on actions we don't understand).")
     :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
     :prompt-index :chapters :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
-    :agent-turn-capacity :plan-metadata :goal :attached-artifacts :dedicated-artifact :messages)
+    :agent-turn-capacity :plan-metadata :goal :attached-artifacts :dedicated-artifact :messages
+    :schedules)
   "Keys required in every current-version session sidecar.")
 
 (defun mevedel-session-codec-portable-authority-p (session)
@@ -639,6 +645,7 @@ The resulting plist is round-trippable via
    :attached-artifacts     (mevedel-session-attached-artifacts session)
    :dedicated-artifact     (mevedel-session-dedicated-artifact session)
    :note-conversation      (mevedel-session-note-conversation session)
+   :schedules              (copy-tree (mevedel-session-schedules session))
    ;; Root's reverse-order unread queue.  Child queues live on their explicit
    ;; registry records and all queues become FIFO only at delivery time.
    :messages
@@ -861,6 +868,10 @@ it had then, or nil, and when it closed."
   (let ((id (plist-get plist :dedicated-artifact)))
     (unless (or (null id) (stringp id))
       (error "Invalid dedicated artifact: %S" id)))
+  (let ((schedules (plist-get plist :schedules)))
+    (unless (and (proper-list-p schedules)
+                 (cl-every #'mevedel-schedule-entry-p schedules))
+      (error "Invalid session schedules: %S" schedules)))
   plist)
 
 (defun mevedel-session-codec-deserialize (plist workspace)
@@ -1055,6 +1066,7 @@ their hygiene filters."
                      :agent-registry agent-registry
                      :agent-turn-capacity
                      (plist-get plist :agent-turn-capacity)
+                     :schedules (copy-tree (plist-get plist :schedules))
                      :messages
                      (mevedel-agent-persistence-sanitize-mailbox
                       (plist-get plist :messages) "/root"))))

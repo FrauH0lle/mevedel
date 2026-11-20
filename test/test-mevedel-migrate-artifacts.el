@@ -29,6 +29,7 @@
     (cl-remf data :dedicated-artifact)
     (cl-remf data :naming-input)
     (cl-remf data :chapters)
+    (cl-remf data :schedules)
     data))
 
 (defconst mevedel-migrate-artifacts-test--board
@@ -380,6 +381,7 @@ Run SETUP before importing, with `root', `workspace', `store' and
                                              :target-native-root "/tmp/" :name "w")))))
           (cl-remf data :naming-input)
           (cl-remf data :chapters)
+          (cl-remf data :schedules)
           (mevedel-migrate-session--write sidecar data)
           (let* ((before (mevedel-migrate-artifacts-test--snapshot directory))
                  (report (mevedel-migrate-sessions root)))

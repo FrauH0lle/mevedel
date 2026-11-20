@@ -171,6 +171,7 @@
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x))
+(declare-function mevedel-session-schedules "mevedel-structs" (cl-x))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-task-status-notes "mevedel-structs" (cl-x))
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x))
@@ -285,7 +286,8 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     ptc-checkpoints durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
-    plan-metadata goal attached-artifacts dedicated-artifact note-conversation)
+    plan-metadata goal attached-artifacts dedicated-artifact note-conversation
+    schedules)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
 
 (defun mevedel-session-fork--assert-clone-slot-completeness ()
@@ -501,7 +503,10 @@ The identity and timestamp keywords describe the new materialized child."
            :attached-artifacts
            (copy-sequence (mevedel-session-attached-artifacts session))
            ;; A fork is the user's own chat, never the artifact's conversation.
-           :dedicated-artifact nil)))
+           :dedicated-artifact nil
+           ;; Wake-ups belong to one conversation: a fork would fire them twice.
+           :schedules (unless fork-p
+                        (copy-tree (mevedel-session-schedules session) t)))))
     (when (and fork-p turn)
       (setf (mevedel-session-agent-transcripts child)
             (mevedel-session-rewind-reduce-agent-transcripts

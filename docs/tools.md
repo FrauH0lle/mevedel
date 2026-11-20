@@ -1674,6 +1674,50 @@ notice identifying each lost monitor by execution ID and description. These
 notices and saved event mail are read on the next turn; neither starts a
 request after restart.
 
+## Schedule
+
+`Schedule` lets the root conversation wake itself later with a note for its
+future self ([ADR 0135](adr/0135-wake-sessions-through-schedules.md)). It is
+discoverable in the `util` group, hidden from retained agents, and rejected by
+the handler for any owner other than `/root`; a child agent asks the root to
+schedule. Wake-ups need no approval card.
+
+`action` is `create`, `list` or `cancel`. `create` requires `when` and a
+non-blank `note` of at most 4,000 characters. `when` is a duration (`20m`,
+`1h30m`; units `d`, `h`, `m`, `s`, optionally prefixed by `in`) or a local time
+`YYYY-MM-DD HH:MM[:SS]`; an ISO 8601 offset or `Z` selects another zone. The
+optional `expires` takes the same forms and must be later than the wake-up
+itself. Unparseable timing, a zero duration, a time not in the future, an
+expiry not after the time, and a 51st pending wake-up are tool errors. `cancel`
+removes one wake-up by `id`, pending or expired. Every result is JSON carrying
+the affected entry or the list, each with `id`, `time`, `note`, `expires` and
+`status`, plus the current local time as `now`.
+
+When a wake-up comes due, one `WAKE_UP` record enters the root mailbox:
+`<agent-message type="WAKE_UP" sender="/root" recipient="/root"
+schedule_id="..." scheduled_at="..." fired_at="...">` followed by the note,
+with `overdue_by` added when it fired at least a minute late, as after sleep.
+Like a background command's completion it wakes an idle root through the
+background-event path, holds for a running turn, a composer draft, pending
+decisions, queued or paused follow-ups and recovery blockers, coalesces with
+other unread mail, and dispatches under the session's current permissions. A
+woken turn finishes quietly like other turns the user did not start, so the
+Schedule prompt directs the model to use [Notify](#notify) when the user should
+hear the result. A
+wake-up past its expiry is not delivered: it stays in the session's store as
+`expired`, without a model turn, until cancelled; the 20 most recent expired
+wake-ups are kept. The background-work cockpit (`/ps`) lists pending and
+expired wake-ups after agents and executions, and `k` cancels the selected
+one.
+
+One Emacs-wide timer is armed for the earliest pending wake-up of the open
+root buffers that hold one and re-armed on every create, cancel, firing,
+resume and close; nothing polls while idle. A delivery whose mailbox commit
+fails keeps the wake-up pending, warns, and retries that session after a
+minute. Persistence and resume are described under
+[sessions](sessions.md#session-identity-and-display-names); a wake-up of a
+closed session waits until the session is resumed.
+
 ## Eval execution scope
 
 Use Eval for Emacs state inspection and Lisp computation, not as an alternative

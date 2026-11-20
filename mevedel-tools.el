@@ -31,6 +31,7 @@
 (require 'mevedel-tool-introspect)
 (require 'mevedel-tool-patch-registration)
 (require 'mevedel-tool-ptc)
+(require 'mevedel-tool-schedule)
 (require 'mevedel-goal)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-transcript-audit)
@@ -119,6 +120,7 @@
   (mevedel-tool-code--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-goal--register)
+  (mevedel-tool-schedule--register)
   (mevedel-tool-ui--register)
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
@@ -174,7 +176,8 @@ Keep them request-local across temporary removal of all callable tools."
 OWNER is a native gptel FSM or an external turn owner.  Plan sessions and
 requests carrying inherited Plan limits hide editing tools except ApplyPatch;
 Goal tools follow availability.
-Monitor and Notify are visible only to the root, never to an agent invocation.
+Monitor, Notify and Schedule are visible only to the root, never to an agent
+invocation.
 Without OWNER, use the current conversation, including before admission."
   (let* ((info (and owner (mevedel-engine-info owner)))
          (buffer (or (plist-get info :buffer) (current-buffer)))
@@ -198,7 +201,7 @@ Without OWNER, use the current conversation, including before admission."
                    (and invocation
                         (mevedel-agent-invocation-plan-read-only invocation))))))
     (lambda (name)
-      (and (not (and invocation (member name '("Monitor" "Notify"))))
+      (and (not (and invocation (member name '("Monitor" "Notify" "Schedule"))))
            (or (not (equal name "Notify"))
                (and session (not (mevedel-goal--context-summary-request-p info))
                     (or (null request)
@@ -593,7 +596,9 @@ META is a plist of structural facts; nil values are omitted."
      (:termination . "termination") (:outcome . "outcome")
      (:exit-code . "exit_code") (:omitted . "omitted")
      (:output-path . "output_path") (:output-bytes . "output_bytes")
-     (:omitted-output-bytes . "omitted_output_bytes"))
+     (:omitted-output-bytes . "omitted_output_bytes")
+     (:schedule-id . "schedule_id") (:scheduled-at . "scheduled_at")
+     (:fired-at . "fired_at") (:overdue-by . "overdue_by"))
    ""))
 
 (defun mevedel-tools--message-delivery-block (msg)
@@ -606,7 +611,7 @@ META is a plist of structural facts; nil values are omitted."
              (plist-get msg :outcome)
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
-    ((or 'EXECUTION 'MAIL)
+    ((or 'EXECUTION 'MAIL 'WAKE_UP)
      (format "<agent-message type=\"%s\" sender=\"%s\" recipient=\"%s\"%s>\n%s\n</agent-message>"
              (plist-get msg :type)
              (plist-get msg :sender)
@@ -638,7 +643,7 @@ their normal user-visible communication blocks."
           (mapconcat #'mevedel--format-hook-audit-record
                      (plist-get message :hook-audits) "")
           (when (memq (plist-get message :type)
-                      '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
+                      '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER WAKE_UP))
             (mevedel-agent-control-message-receipt message))))
 
 (defun mevedel-tools--mailbox-new-messages (context buffer)

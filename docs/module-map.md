@@ -246,6 +246,7 @@ Prompt / presets / agents
   mevedel-agent-persistence.el durable agent registry codec and cold hydration
   mevedel-agent-runtime.el    retained agent request lifecycle and settlement
   mevedel-goal.el             phase-free Goal continuation controller
+  mevedel-schedule.el         session wake-ups: timing, store, one-timer scheduler, mailbox firing
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Provider readiness and recovery (all providers)
@@ -294,6 +295,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskWrite/TaskList + overlay
   mevedel-tool-goal.el        CreateGoal/GetGoal/UpdateGoal tools and root-request authority checks
+  mevedel-tool-schedule.el    Schedule tool: root-only create, list and cancel of wake-ups
   mevedel-tool-editing.el     SharedCreate/Edit/SaveImage tools, shared:// views
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  EmacsDescribe/EmacsFind/EmacsManual introspection

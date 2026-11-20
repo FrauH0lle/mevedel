@@ -4,8 +4,9 @@
 
 ;; Tabulated user controls for one session's background work: every live
 ;; managed execution (Bash, including foreground work, and Monitor) and every
-;; active agent.  The execution and agent-control modules own process, turn
-;; and authority state; this module owns only the cockpit projection and its
+;; active agent, then the session's pending and expired wake-ups.  The
+;; execution, agent-control and schedule modules own process, turn, authority
+;; and wake-up state; this module owns only the cockpit projection and its
 ;; interactive actions.
 
 ;;; Code:
@@ -80,8 +81,18 @@
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (autoload 'mevedel-sandbox-status-text "mevedel-sandbox")
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-cancel "mevedel-schedule" (session buffer id))
+(declare-function mevedel-schedule-format-time "mevedel-schedule" (seconds))
+(declare-function mevedel-schedule-now "mevedel-schedule" ())
+(autoload 'mevedel-schedule-cancel "mevedel-schedule")
+(autoload 'mevedel-schedule-format-time "mevedel-schedule")
+(autoload 'mevedel-schedule-now "mevedel-schedule")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-schedules "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
@@ -127,8 +138,12 @@
   "Return non-nil when cockpit ITEM is an agent rather than an execution."
   (eq (plist-get item :kind) 'agent))
 
+(defun mevedel-background-list--wake-up-p (item)
+  "Return non-nil when cockpit ITEM is a wake-up."
+  (eq (plist-get item :kind) 'wake-up))
+
 (defun mevedel-background-list--collect (context)
-  "Collect active agents, then live executions, for CONTEXT."
+  "Collect active agents, live executions, then wake-ups, for CONTEXT."
   (let* ((session (mevedel-background-list--session context))
          (calls (mevedel-execution-list-user session)))
     (append
@@ -137,7 +152,9 @@
      (mapcar (lambda (item) (append (list :id (plist-get item :execution-id)) item))
              calls)
      (when (mevedel-eval-sandbox-any-live-p session)
-       (mevedel-eval-sandbox-list-idle session calls)))))
+       (mevedel-eval-sandbox-list-idle session calls))
+     (mapcar (lambda (entry) (cons :kind (cons 'wake-up entry)))
+             (mevedel-session-schedules session)))))
 
 (defun mevedel-background-list--agent-state (item)
   "Return the state label of agent ITEM."
@@ -161,6 +178,20 @@
 (defun mevedel-background-list--entry (item _context)
   "Return the tabulated row for background ITEM."
   (cond
+   ((mevedel-background-list--wake-up-p item)
+    (let ((seconds (max 0 (- (plist-get item :due) (mevedel-schedule-now))))
+          (pending (eq 'pending (plist-get item :status))))
+      (list (plist-get item :id)
+            (vector "wake-up" (if pending "Pending" "Expired")
+                    (mevedel--truncate-display
+                     (replace-regexp-in-string "[\n\r\t]+" " " (plist-get item :note))
+                     40 "…")
+                    "/root"
+                    (mevedel-cockpit-number-cell
+                     (if pending (concat "in " (mevedel--duration-label seconds)) "—")
+                     (if pending seconds 0))
+                    (format "%s · at %s" (plist-get item :id)
+                            (format-time-string "%F %H:%M" (plist-get item :due)))))))
    ((eq (plist-get item :kind) 'sandbox)
     (let ((age (- (float-time) (plist-get item :started-at))))
       (list (plist-get item :id)
@@ -214,14 +245,18 @@
 (defun mevedel-background-list--header (items context)
   "Return the cockpit header for background ITEMS and CONTEXT."
   (let* ((session (mevedel-cockpit-context-session context))
-         (agents (cl-count-if #'mevedel-background-list--agent-p items)))
+         (agents (cl-count-if #'mevedel-background-list--agent-p items))
+         (wake-ups (cl-count-if #'mevedel-background-list--wake-up-p items))
+         (executions (- (length items) agents wake-ups)))
     (mevedel-cockpit-format-header
      "background work"
      (if session (mevedel-session-name session) "")
-     (format "%d %s · %d %s"
+     (format "%d %s · %d %s%s"
              agents (if (= agents 1) "agent" "agents")
-             (- (length items) agents)
-             (if (= (- (length items) agents) 1) "execution" "executions")))))
+             executions (if (= executions 1) "execution" "executions")
+             (if (> wake-ups 0)
+                 (format " · %d %s" wake-ups (if (= wake-ups 1) "wake-up" "wake-ups"))
+               "")))))
 
 (defun mevedel-background-list--agent-details (item)
   "Return the information report for agent ITEM."
@@ -286,6 +321,18 @@
 (defun mevedel-background-list--details (item _context)
   "Return the information report for background ITEM."
   (cond
+   ((mevedel-background-list--wake-up-p item)
+    (list :title "Wake-up" :subtitle (plist-get item :id)
+          :identity (plist-get item :id)
+          :sections
+          (list (list :id 'wake-up :title "Wake-up"
+                      :body (concat
+                             (mevedel-report-fields
+                              (list "Status" (symbol-name (plist-get item :status)))
+                              (list "Time" (mevedel-schedule-format-time (plist-get item :due)))
+                              (when-let* ((expires (plist-get item :expires-at)))
+                                (list "Expires" (mevedel-schedule-format-time expires))))
+                             "\n" (plist-get item :note) "\n")))))
    ((eq (plist-get item :kind) 'sandbox)
     (list :title "Idle sandbox" :subtitle (plist-get item :owner)
           :sections (list (list :id 'sandbox :title "Persistent Eval"
@@ -298,7 +345,7 @@
 (defun mevedel-background-list--selected-execution ()
   "Return the selected item, signalling unless it is an execution."
   (let ((item (mevedel-cockpit-surface-selected)))
-    (when (memq (plist-get item :kind) '(agent sandbox))
+    (when (memq (plist-get item :kind) '(agent sandbox wake-up))
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope)
                                    "Selected item is not an execution"))
     item))
@@ -344,10 +391,20 @@
 
 (defun mevedel-background-list-stop ()
   "Stop the selected execution, or interrupt the selected agent's turn.
-An agent stays retained after its turn is interrupted."
+An agent stays retained after its turn is interrupted.  A selected wake-up
+is cancelled."
   (interactive)
   (let ((item (mevedel-cockpit-surface-selected)))
     (cond
+     ((mevedel-background-list--wake-up-p item)
+      (let ((session (mevedel-background-list--session)))
+        (mevedel-schedule-cancel
+         session
+         (or (mevedel-session-root-buffer session)
+             (plist-get (mevedel-cockpit-surface-context) :data-buffer))
+         (plist-get item :id))
+        (mevedel-cockpit-surface-refresh)
+        (message "mevedel: wake-up %s cancelled" (plist-get item :id))))
      ((eq (plist-get item :kind) 'sandbox)
       (mevedel-eval-sandbox-stop-user (mevedel-background-list--session) item))
      ((mevedel-background-list--agent-p item)
@@ -394,7 +451,7 @@ An agent stays retained after its turn is interrupted."
     :help-buffer ,mevedel-background-list-help-buffer-name
     :keys (("i" "Send a line to the selected PTY execution" mevedel-background-list-send-input)
            ("C-c C-c" "Interrupt the selected execution or agent turn" mevedel-background-list-interrupt)
-           ("k" "Stop the selected execution or interrupt the agent's turn" mevedel-background-list-stop)
+           ("k" "Stop the selected execution, interrupt the agent's turn, or cancel the wake-up" mevedel-background-list-stop)
            ("o" "Open the agent transcript or execution artifact" mevedel-background-list-visit)))
   "Cockpit surface spec for background work.")
 

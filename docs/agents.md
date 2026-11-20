@@ -509,7 +509,8 @@ the sender's Plan stamp.
 
 Agent-originated `MAIL` and ordinary terminal `RESULT` records addressed to
 `/root` use the same idle Background event scheduler as
-[Monitor](tools.md#monitor) and root-owned Bash completions. This is a background
+[Monitor](tools.md#monitor), root-owned Bash completions and due
+[wake-ups](tools.md#schedule). This is a background
 notification, not a user instruction or a new grant of authority. Queued user
 follow-ups run first, background events next, and Goal continuation last. The
 same holds apply: a composer draft, pending interactions, or a held follow-up
@@ -572,6 +573,13 @@ the view shows it as a `Monitor: DESCRIPTION` card. The transcript parser
 treats it like other agent mail, never as user input. Records are saved with
 the session; their wake mark is runtime state and is dropped, so after a
 restart unread records reach the model at its next turn without waking it.
+
+A due wake-up created through [Schedule](tools.md#schedule) is a root
+`WAKE_UP` record from `/root` to `/root` whose body is the note and whose
+opening tag carries `schedule_id`, `scheduled_at`, `fired_at` and, when late,
+`overdue_by`. It wakes an idle root and releases an active root `WaitAgent`
+like the records above, and its wake mark is likewise runtime-only. Only the
+root owns wake-ups; a child agent asks the root to schedule one.
 
 ## Review and verify commands
 

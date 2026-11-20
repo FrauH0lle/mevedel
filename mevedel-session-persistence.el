@@ -131,6 +131,10 @@
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-restore-session "mevedel-schedule" (session buffer))
+(autoload 'mevedel-schedule-restore-session "mevedel-schedule")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts--sidecar-artifact "mevedel-session-artifacts" (session buffer &optional checkpoint))
@@ -1534,6 +1538,8 @@ LOST-MONITORS contains the lost facts already repaired in older segments."
                   session "/root" (mevedel-session-artifacts--live-sidecar session buf))))
       (mevedel--chat-buffer-init-common
        buf workspace (or lifecycle-source "resume") (not acquired))
+      (when acquired
+        (mevedel-schedule-restore-session session buf))
       (+ ptc-consumptions
          (prog1
              (mevedel-agent-persistence-restore-tree

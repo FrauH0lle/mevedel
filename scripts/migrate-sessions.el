@@ -189,6 +189,12 @@ one sidecar.  DATA is the private copy owned by the converter."
         (setf (plist-get agent :reminders) (nreverse converted)))))
   data)
 
+(defun mevedel-migrate-session--v0.5.15-to-v0.5.16 (data _attached)
+  "Add the empty wake-up store to v0.5.15 DATA."
+  (when (plist-member data :schedules)
+    (error "Unexpected schedules in legacy sidecar"))
+  (plist-put data :schedules nil))
+
 (defconst mevedel-migrate-session--steps
   '(("v0.5.6" "v0.5.9" mevedel-migrate-session--v0.5.6-to-v0.5.9)
     ("v0.5.9" "v0.5.10" mevedel-migrate-session--v0.5.9-to-v0.5.10)
@@ -196,7 +202,8 @@ one sidecar.  DATA is the private copy owned by the converter."
     ("v0.5.11" "v0.5.12" mevedel-migrate-session--v0.5.11-to-v0.5.12)
     ("v0.5.12" "v0.5.13" mevedel-migrate-session--v0.5.12-to-v0.5.13)
     ("v0.5.13" "v0.5.14" mevedel-migrate-session--v0.5.13-to-v0.5.14)
-    ("v0.5.14" "v0.5.15" mevedel-migrate-session--v0.5.14-to-v0.5.15))
+    ("v0.5.14" "v0.5.15" mevedel-migrate-session--v0.5.14-to-v0.5.15)
+    ("v0.5.15" "v0.5.16" mevedel-migrate-session--v0.5.15-to-v0.5.16))
   "Ordered (SOURCE TARGET FUNCTION) format steps.
 Retire old formats by deleting a prefix and its unused step functions.
 Append a step whenever the runtime codec's current format changes.")

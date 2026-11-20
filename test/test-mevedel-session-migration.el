@@ -54,9 +54,12 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         ;; Strip exactly the fields VERSION predates.
-                        unless (or (and (not (member ,version '("v0.5.13" "v0.5.14" "v0.5.15")))
+                        unless (or (and (not (equal ,version "v0.5.16"))
+                                        (eq key :schedules))
+                                   (and (not (member ,version '("v0.5.13" "v0.5.14" "v0.5.15" "v0.5.16")))
                                         (eq key :chapters))
-                                   (and (not (member ,version '("v0.5.12" "v0.5.13" "v0.5.14" "v0.5.15")))
+                                   (and (not (member ,version '("v0.5.12" "v0.5.13" "v0.5.14" "v0.5.15"
+                                                                "v0.5.16")))
                                         (eq key :naming-input))
                                    (and (member ,version '("v0.5.6" "v0.5.9"))
                                         (memq key '(:recovery-issues :pending-follow-ups :pending-steering
@@ -133,12 +136,13 @@
          (data (test-mevedel-session-persistence--complete-sidecar
                 (list :version "v0.5.14" :agent-registry
                       (mapcar (lambda (entry) (plist-put entry :working-directory nil)) agents))))
+         (_ (cl-remf data :schedules))
          (converted (mevedel-migrate-session--sidecar data))
          (loaded (mevedel-agent-persistence-deserialize-registry
                   (plist-get converted :agent-registry)
                   (mevedel-execution-target-create "/"))))
     (should (equal recipes (plist-get agent :reminders)))
-    (should (equal "v0.5.15" (plist-get converted :version)))
+    (should (equal "v0.5.16" (plist-get converted :version)))
     (should (equal '(pending-events mode-constraints task-nudge)
                    (mapcar #'mevedel-reminder-type
                            (mevedel-agent-reminders
@@ -155,6 +159,24 @@
       (list :agent-registry
             (list (list :configuration (list :agent (list :reminders (list recipe)))))) nil))))
 
+(mevedel-deftest mevedel-migrate-session--v0.5.15-to-v0.5.16 ()
+  ,test
+  (test)
+  :doc "adds an empty wake-up store and the result loads as a current session"
+  (let* ((data (test-mevedel-session-persistence--complete-sidecar
+                (list :version "v0.5.15")))
+         (_ (cl-remf data :schedules))
+         (converted (mevedel-migrate-session--sidecar data)))
+    (should (equal "v0.5.16" (plist-get converted :version)))
+    (should (plist-member converted :schedules))
+    (should-not (plist-get converted :schedules))
+    (should-not (plist-member data :schedules))
+    (should (equal converted (mevedel-migrate-session--sidecar converted))))
+
+  :doc "refuses a legacy sidecar that already names schedules"
+  (should-error
+   (mevedel-migrate-session--v0.5.15-to-v0.5.16 (list :schedules nil) nil)))
+
 (mevedel-deftest mevedel-migrate-session--sidecar ()
   ,test
   (test)
@@ -167,7 +189,7 @@
     (dolist (key '(:external-conversations :recovery-issues :pending-follow-ups :pending-steering
                                            :pending-input-next-id :pending-input-paused :pending-input-failure-paused
                                            :attached-artifacts :dedicated-artifact :naming-input
-                                           :chapters))
+                                           :chapters :schedules))
       (cl-remf data key))
     (setq data (plist-put (plist-put data :version "v0.5.6") :goal goal))
     (let ((restored (mevedel-session-codec--goal-from-plist
@@ -233,6 +255,7 @@
     (cl-remf data :dedicated-artifact)
     (cl-remf data :naming-input)
     (cl-remf data :chapters)
+    (cl-remf data :schedules)
     (let ((converted (mevedel-migrate-session--sidecar data)))
       (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
       (should (= 4 (plist-get converted :pending-input-next-id)))
@@ -253,6 +276,7 @@
                                                :message "Naming failed" :blocking nil))))))
       (cl-remf data :naming-input)
       (cl-remf data :chapters)
+      (cl-remf data :schedules)
       (let ((converted (mevedel-migrate-session--sidecar data)))
         (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
         (should (plist-member converted :naming-input))
@@ -270,6 +294,7 @@
                (list :version "v0.5.12" :session-name "Kept title"
                      :naming-state 'attempted :naming-input "Fix this"))))
     (cl-remf data :chapters)
+    (cl-remf data :schedules)
     (let ((converted (mevedel-migrate-session--sidecar data)))
       (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
       (should (plist-member converted :chapters))
@@ -284,6 +309,7 @@
   (let* ((agents (mevedel-migration-test--legacy-agents))
          (data (test-mevedel-session-persistence--complete-sidecar
                 (list :version "v0.5.13" :agent-registry agents)))
+         (_ (cl-remf data :schedules))
          (converted (mevedel-migrate-session--sidecar data))
          (loaded (mevedel-agent-persistence-deserialize-registry
                   (plist-get converted :agent-registry)
@@ -370,7 +396,8 @@
   ,test
   (test)
   :doc "converts all retained heads, preserves bytes and loads through the current reader"
-  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12" "v0.5.13" "v0.5.14"))
+  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12" "v0.5.13" "v0.5.14"
+                     "v0.5.15"))
     (mevedel-migration-test--with-source version
       (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
                             (directory-files-recursively source "."))))
@@ -420,7 +447,7 @@
         (should (equal (cdr row) (mevedel-migrate-session--hash (car row)))))
       (let ((fixed (mevedel-migrate-session--read
                     (file-name-concat destination "session.meta.el"))))
-        (should (equal "v0.5.15" (plist-get fixed :version)))
+        (should (equal "v0.5.16" (plist-get fixed :version)))
         (dolist (entry (plist-get fixed :agent-registry))
           (should (equal '((pending-events) (mode-constraints))
                          (plist-get (plist-get (plist-get entry :configuration) :agent)
@@ -431,7 +458,7 @@
                (data (mevedel-session-codec-read (plist-get publication :sidecar)))
                (loaded (plist-get (mevedel-session-codec-deserialize data workspace) :session))
                (registry (mevedel-session-agent-registry loaded)))
-          (should (equal "v0.5.15" (plist-get data :version)))
+          (should (equal "v0.5.16" (plist-get data :version)))
           (should (= 2 (length registry)))
           (should (equal "Kept result" (mevedel-agent-record-settled-result (cdar registry))))
           (dolist (entry (plist-get data :agent-registry))

@@ -147,6 +147,7 @@ created as a side effect of registration and handles serialization."
      mevedel-tool-editing mevedel-tool-editing--register)
     ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
     ("CreateGoal" "GetGoal" "UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
+    ("Schedule" mevedel-tool-schedule mevedel-tool-schedule--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
