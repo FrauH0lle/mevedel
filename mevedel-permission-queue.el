@@ -496,6 +496,9 @@ live Eval and hook cards.  It is quoted explanation, never authorization."
      ((when-let* ((request (plist-get entry :request)))
         (mevedel-request-cancelled-p request))
       (mevedel-permission-queue--safe-settle entry 'aborted 'cancelled))
+     ;; Standing authority is never granted by a mode or a reviewer.
+     ((eq 'schedule (plist-get entry :kind))
+      (mevedel-permission-queue--admit entry session))
      ((and session (eq mode 'full-auto))
       (mevedel-permission-queue--safe-settle
        entry

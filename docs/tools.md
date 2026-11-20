@@ -1677,13 +1677,16 @@ request after restart.
 ## Schedule
 
 `Schedule` lets the root conversation wake itself later with a note for its
-future self ([ADR 0135](adr/0135-wake-sessions-through-schedules.md)). It is
+future self, or run a prompt unattended in new sessions on a
+[workspace schedule](#workspace-schedules)
+([ADR 0135](adr/0135-wake-sessions-through-schedules.md)). It is
 in the standard implementation preset's native roster and the `util` group,
 hidden from retained agents, and rejected by
 the handler for any owner other than `/root`; a child agent asks the root to
 schedule. Wake-ups need no approval card.
 
-`action` is `create`, `list` or `cancel`. `create` requires `when` and a
+`action` is `create`, `list`, `change` or `cancel`; `change` applies to
+workspace schedules only. `create` requires `when` and a
 non-blank `note` of at most 4,000 characters. `when` is a duration (`20m`,
 `1h30m`; units `d`, `h`, `m`, `s`, optionally prefixed by `in`) or a local time
 `YYYY-MM-DD HH:MM[:SS]` for one wake-up; an ISO 8601 offset or `Z` selects
@@ -1703,7 +1706,8 @@ wake-up are tool errors. `cancel` removes one wake-up by `id`, pending or
 expired. Every result is JSON carrying the affected entry or the list, each
 with `id`, `time` (the next run), `repeat` (`every 20m 00s`, the cron
 expression, or null), `note`, `expires` and `status`, plus the current local
-time as `now`.
+time as `now`. `list` shows wake-ups (`target` `session`) followed by the
+workspace's schedules (`target` `workspace`).
 
 Local times follow one daylight-saving rule for one-shot and cron timing: a
 time in an hour the clock skips fires at the first valid minute after the gap
@@ -1752,6 +1756,52 @@ commit fails keeps the wake-up pending, warns, and retries that session after a
 minute. A wake-up of a closed session reopens it without a window, also after an
 Emacs restart; the index, startup restore and lease rule are described under
 [sessions](sessions.md#session-identity-and-display-names).
+
+### Workspace schedules
+
+`create` with `target` `workspace` makes a workspace schedule: each run starts
+a new session with `note` as its first message. It also requires a one-line
+`name` of at most 80 characters and takes the same `when` forms as a wake-up.
+There is no default expiry; an optional `expires` drops runs after it. The
+schedule stores a base `preset` (default `mevedel-implement`) and one
+implementation policy in the strict shape accepted plans and Goals use: the
+exact `BACKEND:MODEL` and effort resolved at creation from `model` and
+`effort` (default the session's selection) and `permission_mode` (default
+the session's current mode). A workspace holds at most 50 active or paused
+schedules.
+
+Creating or changing one always asks the user through a
+[`schedule` card](permissions.md#prompt-queues), also in Full Access; the tool
+result arrives when they answer, and a declined or aborted card stores nothing.
+`change` takes the `id` and only the fields to change; a schedule keeps its
+timing and next run unless `when` is given, and a change that raced another
+one is refused. `cancel` with a workspace schedule's `id` deletes it and its
+run history without a card, since it removes authority.
+
+The workspace state holds the schedules
+(`.mevedel/schedules/ID/schedule.el`) and one record per run
+(`runs/SECONDS.el`, keyed by schedule and scheduled time). Every change is
+one target program under a lock on `.mevedel/schedules/` that proves the bytes
+it read before writing, so Emacs instances sharing the workspace never lose
+each other's updates. A firing exclusively creates its run record in the same
+program that moves the schedule to its next time: exactly one Emacs fires each
+run, and it is recorded before the session starts. A firing records
+`expired` past the expiry, `skipped` while the previous run is still working,
+and otherwise starts the run. A previous run open in this Emacs is working
+while its session is busy; one open elsewhere is working until its first
+request records `:settled-at` while another live Emacs holds its session
+lease. Otherwise the run starts: the session is
+created without a window, its own preset, model, effort and permission mode set
+to the approved ones, saved, and the prompt submitted as a quiet
+`workspace-schedule` turn (annotated when it starts at least a minute late).
+Every later turn in the session, such as a wake-up, Monitor or Goal turn,
+therefore runs under the approved policy too, until someone changes the
+selection in that session; global defaults and other sessions are untouched.
+The record then holds `launched` and the session id, or `setup-error` with the
+error when the session could not start. A one-shot schedule is `finished`
+after its run; one whose next run would pass its expiry is `expired`. While a
+run's first request is in flight, [Notify](#notify) receipts belong to the
+schedule, so identical text from consecutive runs is suppressed for 24 hours.
 
 ## Eval execution scope
 

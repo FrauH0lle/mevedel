@@ -1,11 +1,14 @@
-Wake this conversation later with a note for yourself, or list or cancel
-pending wake-ups.
+Wake this conversation later with a note for yourself, or run a prompt
+unattended in a new session on a workspace schedule; list, change or cancel
+schedules.
 
 ### When to use `Schedule`
 
 - The user asks you to check, do or say something later: "check CI in 20
   minutes and tell me only if it failed", "remind me tomorrow at 10:00",
   "babysit PR 412 every 20 minutes".
+- The user wants standing work that needs no open conversation, such as
+  "every weekday at 07:00, triage new issues": use `target: "workspace"`.
 
 ### When NOT to use `Schedule`
 
@@ -36,3 +39,18 @@ pending wake-ups.
   `BACKEND:MODEL`) and `effort` to `create`. Only the model and effort change;
   an unavailable model or unsupported effort is an error. Omit both for the
   session's own.
+
+### Workspace schedules
+
+- `create` with `target: "workspace"` needs `name`, `when` and `note`, the
+  first message of every run; write it for a fresh session that knows nothing
+  of this conversation. Optional: `preset` (default `mevedel-implement`),
+  `model`, `effort` and `permission_mode` (default this session's), and
+  `expires` (no default).
+- The user approves every creation and `change` on a card, even in Full
+  Access; the result arrives after they answer. A declined card stores
+  nothing. `change` takes the `id` and only the fields to change.
+- Each run is a new session named after the schedule and run time. A run due
+  while the previous one is still working is skipped. Runs finish quietly;
+  the prompt should say when to call `Notify`.
+- `cancel` deletes a workspace schedule by its `id` without a card.

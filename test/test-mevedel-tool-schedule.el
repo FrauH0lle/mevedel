@@ -14,11 +14,19 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-session-codec)
 (require 'mevedel-workspace-identity)
+(require 'mevedel-workspace-schedule)
+(require 'mevedel-permission-mode)
+(require 'mevedel-presets)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-permission-queue-test-support"))
 
 (defconst mevedel-tool-schedule-test--now 1795176000
   "2026-11-20 13:00:00 in Europe/Zurich (12:00 UTC).")
@@ -238,8 +246,140 @@
       (should-not (funcall (mevedel-tools-visibility mevedel--agent-invocation)
                            "Schedule"))
       (should-error (mevedel-tool-schedule--handle
-                     '(:action "create" :when "20m" :note "x")))
+                     #'ignore '(:action "create" :when "20m" :note "x")))
       (should-not (mevedel-session-schedules session)))))
+
+(defmacro mevedel-tool-schedule-test--with-workspace-card (steps &rest body)
+  "Run BODY in a root request whose cards a person answers with STEPS.
+The session runs on `ws-models:ws-main' at effort `low'; the standard
+presets are registered.  `workspace' is the session's workspace."
+  (declare (indent 1) (debug t))
+  `(mevedel-tool-schedule-test--with-request
+     (let ((mevedel-preset--registry mevedel-preset--registry)
+           (gptel--known-presets gptel--known-presets)
+           (workspace (mevedel-session-workspace session)))
+       (mevedel-tools-register)
+       (mevedel--define-presets)
+       (put 'ws-main :reasoning-effort '(member low high))
+       (gptel-make-openai "ws-models" :key "test" :models '(ws-main ws-cheap))
+       (setq-local gptel-backend (gptel-get-backend "ws-models")
+                   gptel-model 'ws-main
+                   gptel-reasoning-effort 'low)
+       (unwind-protect
+           (mevedel-pq-test--answering (,steps :here t)
+             ,@body)
+         (setq mevedel-schedule--workspaces nil)))))
+
+(defun mevedel-tool-schedule-test--card-texts ()
+  "Return the texts of the cards answered so far, oldest first."
+  (mapcar (lambda (card) (plist-get card :text)) (reverse mevedel-pq-test--driven)))
+
+(mevedel-deftest mevedel-tool-schedule--handle/workspace ()
+  ,test
+  (test)
+  :doc "creating a workspace schedule in Full Access still shows the card, and approving stores it"
+  (mevedel-tool-schedule-test--with-workspace-card '(allow-once)
+    (setf (mevedel-session-permission-mode session) 'full-auto)
+    (let* ((outcome (mevedel-tool-schedule-test--call
+                     "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage new issues; Notify only release blockers.\")"))
+           (stored (car (mevedel-workspace-schedule-list workspace)))
+           (card (car (mevedel-tool-schedule-test--card-texts))))
+      (should (eq 'success (plist-get outcome :status)))
+      (should (= 1 (length mevedel-pq-test--driven)))
+      (dolist (text '("Triage" "0 7 * * 1-5" "2026-11-23T07:00:00+01:00" "mevedel-implement"
+                      "ws-models:ws-main" "low" "full-auto"
+                      "Triage new issues; Notify only release blockers."
+                      "previous run" "never"))
+        (ert-info (text) (should (string-search text card))))
+      (should-not (string-search "Escalation" card))
+      (should (equal '(:model-provider "ws-models:ws-main" :reasoning-effort low
+                                       :permission-mode full-auto)
+                     (plist-get stored :policy)))
+      (should (eq 'mevedel-implement (plist-get stored :preset)))
+      (should-not (plist-get stored :expires-at))
+      (should (string-search (plist-get stored :id) (plist-get outcome :result)))))
+
+  :doc "a mode above the creating session's is flagged, and denying creates nothing"
+  (mevedel-tool-schedule-test--with-workspace-card '(deny-once)
+    (let ((outcome (mevedel-tool-schedule-test--call
+                    "(Schedule :action \"create\" :target \"workspace\" :name \"Nightly\" :when \"every 1d\" :note \"Run the slow suite.\" :permission_mode \"full-auto\" :model \"ws-models:ws-cheap\")")))
+      (should-not (eq 'success (plist-get outcome :status)))
+      (should (string-search "declined" (plist-get outcome :result)))
+      (should (string-search "Escalation: ask -> full-auto"
+                             (car (mevedel-tool-schedule-test--card-texts))))
+      (should-not (mevedel-workspace-schedule-list workspace))
+      (should-not mevedel-schedule--workspaces)))
+
+  :doc "every change shows a new card that flags an escalation; denial leaves the schedule unchanged"
+  (mevedel-tool-schedule-test--with-workspace-card
+      (lambda (number _card) (if (= number 2) '(deny-once) '(allow-once)))
+    (let* ((created (mevedel-tool-schedule-test--call
+                     "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage.\")"))
+           (id (plist-get (car (mevedel-workspace-schedule-list workspace)) :id))
+           (before (mevedel-workspace-schedule-get workspace id)))
+      (should (eq 'success (plist-get created :status)))
+      (let ((denied (mevedel-tool-schedule-test--call
+                     (format "(Schedule :action \"change\" :id %S :permission_mode \"full-auto\")" id))))
+        (should-not (eq 'success (plist-get denied :status)))
+        (should (string-search "Escalation: ask -> full-auto"
+                               (nth 1 (mevedel-tool-schedule-test--card-texts))))
+        (should (equal before (mevedel-workspace-schedule-get workspace id))))
+      (let ((changed (mevedel-tool-schedule-test--call
+                      (format "(Schedule :action \"change\" :id %S :note \"Triage and label.\" :when \"0 8 * * 1-5\")" id)))
+            (after (mevedel-workspace-schedule-get workspace id)))
+        (should (eq 'success (plist-get changed :status)))
+        (should (= 3 (length mevedel-pq-test--driven)))
+        (should (string-search "Triage and label." (nth 2 (mevedel-tool-schedule-test--card-texts))))
+        (should (equal "Triage and label." (plist-get after :prompt)))
+        (should (equal "2026-11-23T08:00:00+01:00"
+                       (mevedel-schedule-format-time (plist-get after :due))))
+        (should (equal (plist-get before :policy) (plist-get after :policy))))))
+
+  :doc "list shows workspace schedules beside wake-ups, and cancel deletes one without a card"
+  (mevedel-tool-schedule-test--with-workspace-card '(allow-once)
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :when \"20m\" :note \"wake-up\")")
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage.\")")
+    (let* ((listed (json-parse-string
+                    (plist-get (mevedel-tool-schedule-test--call "(Schedule :action \"list\")")
+                               :result)
+                    :object-type 'plist :array-type 'list))
+           (entries (plist-get listed :schedules))
+           (workspace-entry (cadr entries)))
+      (should (equal '("session" "workspace")
+                     (mapcar (lambda (entry) (plist-get entry :target)) entries)))
+      (should (equal "Triage" (plist-get workspace-entry :name)))
+      (should (equal "ask" (plist-get workspace-entry :permission_mode)))
+      (should (eq 'success
+                  (plist-get (mevedel-tool-schedule-test--call
+                              (format "(Schedule :action \"cancel\" :id %S)"
+                                      (plist-get workspace-entry :id)))
+                             :status)))
+      (should (= 1 (length mevedel-pq-test--driven)))
+      (should-not (mevedel-workspace-schedule-list workspace))))
+
+  :doc "an id that is not a canonical workspace schedule key never reaches the store"
+  (mevedel-tool-schedule-test--with-workspace-card '(allow-once)
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :target \"workspace\" :name \"Triage\" :when \"0 7 * * 1-5\" :note \"Triage.\")")
+    (let* ((stored (car (mevedel-workspace-schedule-list workspace)))
+           (store (mevedel-workspace-schedule--path workspace))
+           (decoy (file-name-concat (mevedel-workspace-state-dir workspace) "decoy"))
+           (alias (file-name-concat store "s-aaaaaa")))
+      ;; A schedule record outside the store, and one filed under another id.
+      (copy-directory (file-name-concat store (plist-get stored :id)) decoy)
+      (copy-directory (file-name-concat store (plist-get stored :id)) alias)
+      (dolist (id (list "s-123456/../../decoy" "../decoy" "s-ABCDEF"))
+        (ert-info (id)
+          (dolist (action '("cancel" "change"))
+            (let ((outcome (mevedel-tool-schedule-test--call
+                            (format "(Schedule :action %S :id %S :note \"x\")" action id))))
+              (should-not (eq 'success (plist-get outcome :status)))))))
+      (should (file-directory-p decoy))
+      (should-not (mevedel-workspace-schedule-get workspace "s-aaaaaa"))
+      (should (equal (list stored) (mevedel-workspace-schedule-list workspace)))
+      (should (= 1 (length mevedel-pq-test--driven))))))
 
 (provide 'test-mevedel-tool-schedule)
 ;;; test-mevedel-tool-schedule.el ends here

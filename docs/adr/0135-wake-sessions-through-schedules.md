@@ -5,9 +5,11 @@ Status: accepted.
 ## Decision
 
 mevedel can act later through one concept, the **schedule**: a due time plus a
-note or prompt with exactly one target. The implemented target is the session
-that created it, a **wake-up**: "check CI in 20 minutes and tell me only if it
-failed" makes the conversation continue itself when the time comes.
+note or prompt with exactly one target. A **wake-up** targets the session
+that created it: "check CI in 20 minutes and tell me only if it failed" makes
+the conversation continue itself when the time comes. A **workspace
+schedule** targets the workspace: "every weekday at 07:00, triage new issues"
+starts a fresh session for each run.
 
 - **Interface.** One `Schedule` model tool with an `action` of `create`, `list`
   or `cancel`. `create` takes `when` (a duration such as `20m` or a local
@@ -91,6 +93,37 @@ failed" makes the conversation continue itself when the time comes.
   gives them back), and Rewind and Restore keep the live session's wake-ups
   rather than an earlier head's. Every handover is at most once: a crash can
   lose a wake-up, never duplicate it, as the firing commit already ensures.
+- **Workspace schedules.** `create` with `target` `workspace` stores a name,
+  the run prompt, the same timing forms, an optional expiry (no default), a
+  base preset (default `mevedel-implement`) and one implementation policy in
+  the strict shape of accepted plans and Goals. At most 50 are active or
+  paused per workspace. Creating or changing one always goes through a
+  `schedule` permission card, also in Full Access and never settled by
+  automatic review, showing everything a run will use and flagging a mode
+  above the creating session's (or, for a change, the stored one). The
+  approved mode is not capped by the creating session's mode. Deleting needs
+  no card.
+- **Workspace store and runs.** The workspace state holds each schedule and
+  one record per run, keyed by schedule and scheduled time. Every change runs
+  as one target program under a lock on the store directory that proves the
+  bytes it read before writing. A firing exclusively creates its run record
+  in the program that moves the schedule to its next time, so exactly one
+  Emacs fires each run and records it before the session starts. A run past
+  the expiry is recorded `expired`; one due while the previous run still works
+  is recorded `skipped`; otherwise a new saved session named after the
+  schedule and run time starts with the approved preset, model, effort and
+  permission mode as its own selection, so every turn in it runs under them
+  until someone changes them there, and gets the prompt as a quiet first
+  turn, without a window. A request-local override was rejected because later
+  background turns in the same session (wake-ups, Monitor and Goal turns)
+  fell back to whatever the session had selected. A session that cannot
+  start is recorded as a setup error under the
+  same key. Run sessions are ordinary sessions under automatic cleanup.
+- **Workspace restore.** An index under `mevedel-user-dir`, separate from the
+  wake-up index, names workspaces with active schedules; startup restore arms
+  them and, like the wake-up index, prunes only entries proven stale: the
+  workspace is provably gone, or its readable store holds no active schedule
+  on a confirming re-read after the entry is deleted.
 
 ## Rationale and consequences
 
@@ -152,4 +185,20 @@ and its day, at the cost of running half an hour "early" in wall terms on one
 night a year. Firing a repeated wall time only once matches what a calendar
 entry means; firing twice would duplicate work with no request for it.
 
-Workspace targets are outside this decision.
+A workspace schedule grants standing authority to work nobody watches, so its
+card cannot be skipped by a permissive session: Full Access means the user
+trusts this conversation's actions, not that it may create unattended jobs.
+Capping a schedule's mode at the creating session's was rejected because the
+user may deliberately want Full Access for unattended work from a cautious
+session; the card shows the mode and flags the escalation instead. Each run
+gets a new session rather than continuing one, so context stays lean and
+continuity comes from memory and the agent's notes.
+
+Single firing for workspace schedules uses an exclusive run record instead of
+a renewable workspace holder lease. A holder lease must be renewed while idle
+and taken over when its holder sleeps; the run record has no holder, so
+nothing goes stale, and it is the "recorded before it runs" fact itself. The
+same store lock serializes edits from tools and future management surfaces
+with firings. Overlap across Emacs instances relies on the run's recorded
+first-request settlement and the run session's own lease, since a busy
+request is only visible in the Emacs that runs it.

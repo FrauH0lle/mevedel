@@ -794,6 +794,8 @@ CONT receives the user's outcome; the caller owns queue settlement."
      (mevedel-permission--prompt-async-sandbox
       (plist-get entry :tool-name) (plist-get entry :detail)
       (plist-get entry :justification) origin cont count entry))
+    ('schedule
+     (mevedel-permission--prompt-async-schedule origin cont count entry))
     (_ (error "Unknown permission card kind: %s" (plist-get entry :kind)))))
 
 (defun mevedel-permission--prompt-async-card
@@ -1038,6 +1040,28 @@ ENTRY follow the shared permission prompt contract."
      (or once-only
          (and (not full-p)
               (not (plist-get entry :remember-authority-cell)))))))
+
+(defun mevedel-permission--prompt-async-schedule (origin cont count entry)
+  "Display ENTRY's workspace schedule for one-time approval.
+ENTRY carries `:card-title', `:card-fields' as (LABEL . VALUE) pairs, the
+run prompt as `:card-text' and an optional `:card-warning'.  ORIGIN, CONT and
+COUNT follow the shared permission prompt contract.  Standing authority is
+approved once per creation or change, so nothing is offered to remember."
+  (mevedel-permission--prompt-async-card
+   (lambda (_remote-p)
+     (concat
+      (mevedel-permission--card-title (plist-get entry :card-title))
+      (mevedel--prompt-attribution-line origin)
+      "\n"
+      (when-let* ((warning (plist-get entry :card-warning)))
+        (mevedel-permission--warning warning))
+      (mapconcat (lambda (field)
+                   (mevedel-permission--card-field (concat (car field) ": ") (cdr field)))
+                 (plist-get entry :card-fields) "")
+      (propertize "Prompt:\n" 'font-lock-face 'font-lock-escape-face)
+      (propertize (plist-get entry :card-text) 'font-lock-face 'font-lock-string-face)
+      "\n\n"))
+   nil cont count entry t t))
 
 (provide 'mevedel-permission-prompt)
 

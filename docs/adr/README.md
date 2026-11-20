@@ -210,6 +210,6 @@ to the decision bearing that ID.
   it, and amends ADR 0126's scroll-away return for the selected window.
 
 - [ADR 0135: Wake sessions through schedules](0135-wake-sessions-through-schedules.md)
-  lets the root conversation wake itself later through one-shot wake-ups
-  stored with the session, armed by one timer and delivered as background
-  mailbox events.
+  lets the root conversation wake itself later through wake-ups stored with
+  the session and delivered as background mailbox events, and runs approved
+  workspace schedules in new sessions, all armed by one timer.

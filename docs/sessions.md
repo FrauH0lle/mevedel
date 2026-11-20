@@ -351,6 +351,22 @@ retried after a minute with a warning. Exactly one Emacs fires: when another
 client holds the lease, the reopened read-only buffer is closed again and that
 holder fires; a later restore finds the firing recorded and does nothing.
 
+[Workspace schedules](tools.md#workspace-schedules) are not stored with any
+session. Each run creates an ordinary session in the workspace, named after the
+schedule and the run's scheduled local time (`Triage 2026-11-23 07:00`), saved
+before its first message is submitted and never displayed; when an open
+session already has that name, as for a same-named schedule due at the same
+time, a ` (2)`-style suffix keeps the run in a new session. Automatic cleanup
+treats it like any other session. A second index under `mevedel-user-dir`
+(`workspace-schedules/`, one file per workspace naming its root) lists the
+workspaces holding an active workspace schedule, kept apart from `wake-ups/`
+because that restore drops entries it cannot read. `mevedel-schedule-restore`
+also reads it and arms the same timer, by the same proven-stale rule: an entry
+goes only when its workspace is provably gone, or when its readable store holds
+no active schedule on a re-read made after the entry is deleted; an
+unreachable workspace keeps its entry. While Emacs runs, entries are only
+added.
+
 
 ## Persistence flow
 

@@ -21,13 +21,21 @@
 (defvar mevedel-tools--current-engine)
 (declare-function mevedel-tools-visibility "mevedel-tools" (&optional owner))
 
+;; `mevedel-workspace-schedule'
+(defvar mevedel-workspace-schedule-run)
+(declare-function mevedel-workspace-schedule-notify-receipt-file
+                  "mevedel-workspace-schedule" (session))
+
 (defun mevedel-tool-notify--receipt-file (session)
-  "Return the notice receipt file owned by SESSION."
-  (file-name-concat
-   (or (mevedel-session-save-path session)
-       (mevedel-session-persistence-shallow-ensure-files session (current-buffer))
-       (error "Cannot record a notice for an unsaved session"))
-   "notify-receipts.json"))
+  "Return the notice receipt file owned by SESSION.
+An active workspace schedule run shares its schedule's file instead."
+  (or (and (featurep 'mevedel-workspace-schedule)
+           (mevedel-workspace-schedule-notify-receipt-file session))
+      (file-name-concat
+       (or (mevedel-session-save-path session)
+           (mevedel-session-persistence-shallow-ensure-files session (current-buffer))
+           (error "Cannot record a notice for an unsaved session"))
+       "notify-receipts.json")))
 
 (defun mevedel-tool-notify--claim (session text)
   "Record a receipt and return non-nil if SESSION may deliver TEXT now."

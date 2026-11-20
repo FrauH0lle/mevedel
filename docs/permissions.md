@@ -650,12 +650,22 @@ complete tree are therefore queued on the root session, not displayed as
 independent blocking overlays, and carry the requesting agent's canonical path
 for attribution. Nested ToolCall asks instead show their envelope and child
 tool-use identities, including for root-owned requests.
-`mevedel-permission-queue.el` owns a heterogeneous FIFO with four entry kinds:
+`mevedel-permission-queue.el` owns a heterogeneous FIFO with five entry kinds:
 
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation
 - `eval` for Eval expression confirmation
 - `sandbox` for additive network, exact filesystem, or full execution authority
+- `schedule` for creating or changing a [workspace schedule](tools.md#workspace-schedules)
+
+A `schedule` card grants standing authority to unattended runs, so it is
+admitted straight to a person: neither Full Access nor automatic approval review
+settles it, and re-running policy never releases it. It offers approve once,
+deny and feedback only, and shows the schedule's name, timing with the next
+run, preset, model, effort, permission mode, overlap rule, expiry and prompt.
+A permission mode above the creating session's current mode, or for a change
+above the schedule's stored mode, is flagged as an escalation. The approved
+mode is not capped by the creating session's mode.
 
 Only the head is visible in the view interaction zone. The permission UI
 registers that head with `mevedel-view-interaction.el`, which owns ordering,

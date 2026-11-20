@@ -23,6 +23,10 @@
 ;; `mevedel-schedule-restore' reconciles it against the committed stores and
 ;; schedules the sessions that are not open; when one is due, it is reopened
 ;; without a window.  The session lease decides which Emacs fires.
+;;
+;; The same timer serves workspace schedules, whose store and runs
+;; `mevedel-workspace-schedule' owns; this module only knows when each
+;; workspace next needs it.
 
 ;;; Code:
 
@@ -87,6 +91,12 @@
 (autoload 'mevedel-diagnostic-scope "mevedel-utilities")
 (autoload 'mevedel-diagnostic-warning "mevedel-utilities")
 
+;; `mevedel-workspace-schedule'
+(declare-function mevedel-workspace-schedule-restore "mevedel-workspace-schedule" ())
+(declare-function mevedel-workspace-schedule-run-due "mevedel-workspace-schedule" (root now))
+(autoload 'mevedel-workspace-schedule-restore "mevedel-workspace-schedule")
+(autoload 'mevedel-workspace-schedule-run-due "mevedel-workspace-schedule")
+
 (defconst mevedel-schedule-max-pending 50
   "Most pending wake-ups one session may hold.")
 
@@ -118,6 +128,10 @@ Every scheduling decision reads this one clock.")
 (defvar mevedel-schedule--closed nil
   "Saved sessions that are not open, as (DIRECTORY . DUE) pairs.
 DUE is the clock second their earliest pending wake-up needs attention.")
+
+(defvar mevedel-schedule--workspaces nil
+  "Workspaces holding active workspace schedules, as (ROOT . DUE) pairs.
+DUE is the clock second their earliest schedule needs attention.")
 
 (defvar mevedel-schedule--timer nil
   "The one timer armed for the earliest pending wake-up, or nil.")
@@ -305,6 +319,13 @@ An interval is timed from AFTER, so runs missed in between never catch up."
     ('cron (mevedel-schedule--cron-next (plist-get timing :expression) after))
     (kind (error "Unknown schedule timing: %S" kind))))
 
+(defun mevedel-schedule-repeat-label (timing)
+  "Return how TIMING repeats, such as \"every 20m 00s\" or its cron text.
+Return nil for a one-shot timing."
+  (pcase (plist-get timing :kind)
+    ('interval (concat "every " (mevedel--duration-label (plist-get timing :seconds))))
+    ('cron (plist-get timing :expression))))
+
 
 ;;
 ;;; Store
@@ -315,18 +336,7 @@ An interval is timed from AFTER, so runs missed in between never catch up."
        (cl-evenp (length entry))
        (stringp (plist-get entry :id))
        (stringp (plist-get entry :note))
-       (let ((timing (plist-get entry :timing)))
-         (pcase (plist-get timing :kind)
-           ('once (integerp (plist-get timing :at)))
-           ('interval (let ((seconds (plist-get timing :seconds)))
-                        (and (integerp seconds) (>= seconds 60))))
-           ;; The checks creation applies: supported syntax that ever fires.
-           ('cron (let ((expression (plist-get timing :expression)))
-                    (and (stringp expression)
-                         (condition-case nil
-                             (mevedel-schedule--cron-next
-                              expression (or (plist-get entry :created-at) 0))
-                           (user-error nil)))))))
+       (mevedel-schedule-timing-p (plist-get entry :timing) (plist-get entry :created-at))
        (integerp (plist-get entry :created-at))
        (integerp (plist-get entry :due))
        (let ((model (plist-get entry :model)) (effort (plist-get entry :effort)))
@@ -336,6 +346,19 @@ An interval is timed from AFTER, so runs missed in between never catch up."
        (pcase (plist-get entry :status)
          ('pending t)
          ('expired (integerp (plist-get entry :expired-at))))))
+
+(defun mevedel-schedule-timing-p (timing created-at)
+  "Return non-nil when TIMING, stored at CREATED-AT, is one creation accepts."
+  (pcase (plist-get timing :kind)
+    ('once (integerp (plist-get timing :at)))
+    ('interval (let ((seconds (plist-get timing :seconds)))
+                 (and (integerp seconds) (>= seconds 60))))
+    ;; Supported syntax that ever fires.
+    ('cron (let ((expression (plist-get timing :expression)))
+             (and (stringp expression)
+                  (condition-case nil
+                      (mevedel-schedule--cron-next expression (or created-at 0))
+                    (user-error nil)))))))
 
 (defun mevedel-schedule-pending (session)
   "Return SESSION's pending wake-ups, oldest first."
@@ -469,6 +492,11 @@ there was something to hand over."
   (file-name-concat mevedel-user-dir "wake-ups"
                     (concat (md5 (mevedel-schedule--directory-key directory)) ".el")))
 
+(defun mevedel-schedule-workspace-index-directory ()
+  "Return the index directory naming workspaces with active schedules.
+It is not under the wake-up index, whose restore drops entries it cannot read."
+  (file-name-concat mevedel-user-dir "workspace-schedules"))
+
 (defun mevedel-schedule--index-directory (directory pending)
   "Record in the index whether session DIRECTORY holds PENDING wake-ups."
   (let ((file (mevedel-schedule--index-file directory)))
@@ -568,7 +596,8 @@ propagates."
   "Schedule the pending wake-ups of saved sessions that are not open.
 Run at startup.  Only entries proven stale are removed: malformed ones,
 and those whose session is gone or whose readable store holds no pending
-wake-up.  An entry that cannot be read now is kept for the next restore."
+wake-up.  An entry that cannot be read now is kept for the next restore.
+Indexed workspaces' schedules are restored by the same rule."
   (let ((inhibit-interaction t)
         (index (file-name-concat mevedel-user-dir "wake-ups")))
     (dolist (file (and (file-directory-p index)
@@ -594,6 +623,8 @@ wake-up.  An entry that cannot be read now is kept for the next restore."
             (format "Wake-ups of %s were not restored: %s"
                     (or directory file) (error-message-string err))
             :warning))))))
+  (when (file-directory-p (mevedel-schedule-workspace-index-directory))
+    (mevedel-workspace-schedule-restore))
   (mevedel-schedule--rearm))
 
 (defun mevedel-schedule--wake-closed (directory now)
@@ -685,6 +716,7 @@ A buffer following a session whose lease another client holds never fires."
         mevedel-schedule--buffers
         (cl-remove-if-not #'mevedel-schedule--earliest mevedel-schedule--buffers))
   (when-let* ((dues (append (mapcar #'cdr mevedel-schedule--closed)
+                            (mapcar #'cdr mevedel-schedule--workspaces)
                             (mapcar #'mevedel-schedule--earliest
                                     mevedel-schedule--buffers))))
     (let ((due (apply #'min dues)))
@@ -693,8 +725,13 @@ A buffer following a session whose lease another client holds never fires."
                          nil #'mevedel-schedule-run-due)))))
 
 (defun mevedel-schedule-run-due ()
-  "Fire every wake-up due by `mevedel-schedule-clock', then re-arm."
+  "Fire every wake-up and workspace schedule due by `mevedel-schedule-clock'.
+Then re-arm."
   (let ((now (mevedel-schedule-now)))
+    (dolist (workspace (copy-sequence mevedel-schedule--workspaces))
+      (when (<= (cdr workspace) now)
+        (setq mevedel-schedule--workspaces (delq workspace mevedel-schedule--workspaces))
+        (mevedel-workspace-schedule-run-due (car workspace) now)))
     ;; A reopened session registers its buffer, which the loop below fires.
     (dolist (closed (copy-sequence mevedel-schedule--closed))
       (when (<= (cdr closed) now)
