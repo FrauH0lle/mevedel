@@ -14,6 +14,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-history)
 (require 'mevedel-structs)
 (require 'mevedel-mention-bindings)
@@ -244,23 +245,31 @@ Binds `data-buf' and `view-buf'."
         (should (equal "draft" (mevedel-view-history--input-text)))))))
 
 (mevedel-deftest mevedel-view-history--browse-picker
-  (:doc "C-c C-l restores the stored binding behind a plain picker choice")
+  (:doc "C-c C-l restores the stored binding in a detached draft")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
-      (mevedel-view-history-add
-       (mevedel-view-history-test--bound-input
-        "use $alpha" "alpha" "/tmp/browse/SKILL.md"))
-      (cl-letf (((symbol-function 'completing-read)
-                 (lambda (&rest _) "use $alpha")))
-        (mevedel-view-history-browse))
-      (let* ((input (mevedel-view-history--input-text))
-             (start (string-match "\\$alpha" input)))
-        (should (equal "use $alpha" input))
-        (should (equal "/tmp/browse/SKILL.md"
-                       (plist-get
-                        (get-text-property
-                         start 'mevedel-mention-binding input)
-                        :source-file)))))))
+    (with-temp-buffer
+      (let ((draft-buf (current-buffer)))
+        (mevedel-view--setup draft-buf data-buf)
+        (with-current-buffer view-buf
+          (mevedel-view-history-add
+           (mevedel-view-history-test--bound-input
+            "use $alpha" "alpha" "/tmp/browse/SKILL.md"))
+          (goto-char (point-min))
+          (let ((transcript (buffer-string))
+                (reader-point (point)))
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (&rest _) "use $alpha"))
+                      ((symbol-function 'mevedel-view-composer-buffer)
+                       (lambda (&optional _view) draft-buf)))
+              (mevedel-view-history-browse)
+              (let ((input (mevedel-view-composer-draft-text)))
+                (should (equal "use $alpha" input))
+                (should (equal "/tmp/browse/SKILL.md"
+                               (plist-get (get-text-property
+                                           4 'mevedel-mention-binding input)
+                                          :source-file)))))
+            (should (= reader-point (point)))
+            (should (equal transcript (buffer-string)))))))))
 
 (mevedel-deftest mevedel-view-history--ret-dispatch
   (:doc "plain RET inserts input newline; display and descriptors keep RET actions")

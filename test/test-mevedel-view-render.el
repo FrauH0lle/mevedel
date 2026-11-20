@@ -3781,6 +3781,22 @@
         (mevedel-view-prev-turn)
         (should (equal first-source
                        (get-text-property (point) 'mevedel-view-source))))))
+  :doc "next turn stops at the prompt even if the view boundary drifted into a draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((prompt (text-property-any (point-min) (point-max)
+                                       'mevedel-view-prompt t))
+            (draft "> copied source\nsecond line"))
+        (mevedel-view-test--insert-composer-draft draft)
+        (let ((start (mevedel-view-composer-draft-start))
+              (end (mevedel-view-composer-draft-end)))
+          (with-silent-modifications
+            (put-text-property start end 'mevedel-view-source '(1 . 2)))
+          (set-marker mevedel-view--input-marker end)
+          (goto-char (point-min))
+          (mevedel-view-next-turn)
+          (should (= prompt (point)))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))))))
   :doc "transcript toggle selects the authoritative data buffer"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)

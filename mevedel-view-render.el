@@ -264,20 +264,18 @@
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
-(declare-function mevedel-view--input-marker-position
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start
-                  "mevedel-view-composer" ())
 (declare-function mevedel-view--position-render-anchor
                   "mevedel-view-composer" (pos &optional window region))
-(declare-function mevedel-view--prompt-start-position
-                  "mevedel-view-composer" ())
 (declare-function mevedel-view--render-anchor-position
                   "mevedel-view-composer" (anchor &optional strict))
-
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-start
+                  "mevedel-view-composer" (&optional view observe))
+(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
-(defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure--toggle-mailbox
@@ -664,7 +662,7 @@ Text-local fontification in SUMMARY is preserved."
 
 (defvar-local mevedel-view--render-insertion-marker nil
   "Temporary marker used by render helpers as their insertion point.
-Nil means render at `mevedel-view--input-marker'.  Incremental history
+Nil means render at the view's prompt/zone boundary.  Incremental history
 rebuilds bind this to `mevedel-view--status-marker' so the in-flight
 assistant turn is inserted into the history region above status and
 interaction zones instead of inside them.")
@@ -1009,12 +1007,10 @@ With prefix argument CLEAR, erase the trace buffer first."
 DATA-BUF, START, and END describe the data-buffer range being rendered."
   (when mevedel-view-render-debug
     (let* ((input (mevedel-view--debug-marker-position
-                   mevedel-view--input-marker))
-           (prompt-start (mevedel-view--prompt-start-position))
-           (composer-start
-            (and prompt-start
-		 (next-single-property-change
-                  prompt-start 'mevedel-view-prompt nil (point-max))))
+                   (mevedel-view-prompt-boundary-marker)))
+           (inline (eq (mevedel-view-composer-buffer) (current-buffer)))
+           (composer-start (and inline (mevedel-view-composer-draft-start nil t)))
+           (composer-end (and inline (mevedel-view-composer-draft-end)))
            (window (and (eq (window-buffer (selected-window))
                             (current-buffer))
 			(selected-window)))
@@ -1037,9 +1033,9 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
             :point-input-offset (and input (>= (point) input)
                                      (- (point) input))
             :point-in-composer (and composer-start
-                                    (>= (point) composer-start))
+                                    (<= composer-start (point) composer-end))
             :point-composer-offset (and composer-start
-					(>= (point) composer-start)
+						(<= composer-start (point) composer-end)
 					(- (point) composer-start))
             :point-fragment (mevedel-view--debug-fragment-position (point))
             :window-point window-point
@@ -1047,9 +1043,9 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
                                       (>= window-point input)
                                       (- window-point input))
             :window-point-in-composer (and composer-start window-point
-                                           (>= window-point composer-start))
+                                           (<= composer-start window-point composer-end))
             :window-composer-offset (and composer-start window-point
-					 (>= window-point composer-start)
+						 (<= composer-start window-point composer-end)
 					 (- window-point composer-start))
             :window-point-fragment
             (mevedel-view--debug-fragment-position window-point)
@@ -3273,7 +3269,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
               ;; never a refresh target, even if grouping hides the original row.
               (limit (if mevedel-view--agent-transcript-p
                          (point-max)
-                       (or (mevedel-view--input-marker-position) (point-max))))
+                       (or (mevedel-view-prompt-boundary) (point-max))))
               (pos (mevedel-view--tool-row-start tool-use-id limit)))
     (let ((source (get-text-property pos 'mevedel-view-source))
           (next (or (next-single-property-change
@@ -3818,7 +3814,7 @@ stay hidden on later full rerenders without session-global hash history."
   (or (and (markerp mevedel-view--render-insertion-marker)
            (marker-position mevedel-view--render-insertion-marker)
            mevedel-view--render-insertion-marker)
-      mevedel-view--input-marker))
+      (mevedel-view-prompt-boundary-marker)))
 
 (defun mevedel-view--history-insertion-marker ()
   "Return the boundary where transcript/live-tail text should be inserted.
@@ -3883,7 +3879,7 @@ transcript has been rendered yet, return the position after the header."
          ;; not turn user-owned draft text into rendered history.
          (limit (if mevedel-view--agent-transcript-p
                     (point-max)
-                  (or (mevedel-view--input-marker-position) (point-max))))
+                  (or (mevedel-view-prompt-boundary) (point-max))))
          (pos limit))
     (while (and (> pos after-header)
                 (not
@@ -3903,8 +3899,8 @@ render insertion marker that still points above the composer.  If marker
 teardown detached the status marker, recover to the current rendered
 history tail so text placed there stays above status/interaction content
 without moving ahead of prior transcript turns."
-  (let* ((input-pos (and (markerp mevedel-view--input-marker)
-                         (marker-position mevedel-view--input-marker)))
+  (let* ((boundary (mevedel-view-prompt-boundary-marker))
+         (input-pos (and boundary (marker-position boundary)))
          (render-pos (and (markerp mevedel-view--render-insertion-marker)
                           (marker-position
                            mevedel-view--render-insertion-marker)))
@@ -4177,11 +4173,8 @@ loses its running count.  Return non-nil when anything changed."
 Request progress lives after status and interaction rows, directly
 before the input zone.  Fall back to the history boundary only when the
 input boundary cannot be recovered."
-  (or (let ((input-pos (and (markerp mevedel-view--input-marker)
-                            (marker-buffer mevedel-view--input-marker)
-                            (eq (marker-buffer mevedel-view--input-marker)
-                                (current-buffer))
-                            (mevedel-view--input-marker-position))))
+  (or (let ((input-pos (and (mevedel-view-prompt-boundary-marker)
+                            (mevedel-view-prompt-boundary))))
         (and input-pos
              (<= (point-min) input-pos)
              (<= input-pos (point-max))
@@ -4363,9 +4356,9 @@ the render so user toggles survive streaming ticks."
     (mevedel-view-call-preserving-user-view-state
       (lambda ()
         ;; rebuild region stops at status-marker (top of zone
-        ;; 2) rather than input-marker, so any future status- or
+        ;; 2) rather than the prompt boundary, so any future status- or
         ;; interaction-zone overlay anchors survive the re-render.
-        ;; status-marker == input-marker today (zones empty), so this
+        ;; both boundaries coincide when the zones are empty, so this
         ;; is a no-op for current behavior; setting it correctly now
         ;; prevents a phase-8 regression when zone overlays land.
         (let ((inhibit-read-only t)
@@ -4404,9 +4397,7 @@ the render so user toggles survive streaming ticks."
                  (rebuild-end
                   (or (and status-valid-p mevedel-view--status-marker)
                       (copy-marker history-tail t)
-                      (and (markerp mevedel-view--input-marker)
-                           (marker-position mevedel-view--input-marker)
-                           mevedel-view--input-marker)))
+                      (mevedel-view-prompt-boundary-marker)))
                  (rebuild-end-pos (marker-position rebuild-end))
                  ;; A retained tail already knows where to delete from.
                  (recovered-start
@@ -7538,7 +7529,7 @@ restore the turn with all inner section state intact.  Signals a
           (goto-char turn-start)
           ;; Let the input marker ride forward across our delete+insert
           ;; so it keeps spanning the rendered content afterwards.
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (progn
                 (delete-region turn-start turn-end)
@@ -7564,7 +7555,7 @@ restore the turn with all inner section state intact.  Signals a
                   (remove-text-properties
                    (- (point) 2) (point)
                    '(mevedel-view-prompt-preview nil))))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))))))
 
 (defun mevedel-view--expand-turn ()
   "Restore a collapsed turn at point from its stashed content."
@@ -7577,12 +7568,12 @@ restore the turn with all inner section state intact.  Signals a
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (car bounds))
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (unwind-protect
             (progn
               (delete-region (car bounds) (cdr bounds))
               (insert stash))
-          (set-marker-insertion-type mevedel-view--input-marker nil))))))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))))))
 
 (defun mevedel-view-render-toggle-turn (collapsed)
   "Expand the current turn when COLLAPSED, otherwise collapse it."
@@ -7615,7 +7606,7 @@ restore the turn with all inner section state intact.  Signals a
 
 (defun mevedel-view-goto-conversation-variant (fork-point-id)
   "Move point to the assistant header for FORK-POINT-ID."
-  (let ((limit (or (mevedel-view--input-marker-position) (point-max)))
+  (let ((limit (or (mevedel-view-prompt-boundary) (point-max)))
         (pos (point-min))
         found)
     (while (and (< pos limit) (not found))
@@ -7720,7 +7711,7 @@ returns to just before it."
 (defun mevedel-view--rendered-turn-starts ()
   "Return rendered turn starts before the input zone."
   (let ((pos (point-min))
-        (limit (mevedel-view--input-marker-position))
+        (limit (mevedel-view-prompt-boundary))
         starts)
     (while (< pos limit)
       (let ((id (get-text-property pos 'mevedel-view-turn-id)))
@@ -7737,16 +7728,16 @@ returns to just before it."
 Point and the window start are kept as semantic render anchors as well:
 the segment is projected again on return, and deferred formatting such as
 table layout makes that projection differ in length from this one."
-  (let* ((input-start (mevedel-view--input-marker-position))
+  (let* ((boundary (mevedel-view-prompt-boundary))
          (turn-starts (mevedel-view--rendered-turn-starts))
          (window (get-buffer-window (current-buffer) t)))
     (list
      :point (point)
      :point-anchor (mevedel-view--position-render-anchor (point))
      :input-offset
-     (and input-start
-          (>= (point) input-start)
-          (- (point) (mevedel-view--input-start)))
+     (and boundary (>= (point) boundary)
+          (eq (mevedel-view-composer-buffer) (current-buffer))
+          (- (point) (mevedel-view-composer-draft-start)))
      :window-start (and window (window-start window))
      :window-start-anchor
      (and window (mevedel-view--position-render-anchor (window-start window)))
@@ -7757,15 +7748,15 @@ table layout makes that projection differ in length from this one."
       when (get-text-property pos 'mevedel-view-collapsed)
       collect index)
      :collapse-states
-     (and input-start
+     (and boundary
           (mevedel-view-disclosure-capture-state
-           (point-min) input-start)))))
+           (point-min) boundary)))))
 
 (defun mevedel-view-render--restore-segment-state (state direction)
   "Restore segment view STATE, using DIRECTION for a first visit."
   (when-let* ((collapse-states (plist-get state :collapse-states)))
     (mevedel-view-disclosure-restore-state
-     (point-min) (mevedel-view--input-marker-position) collapse-states))
+     (point-min) (mevedel-view-prompt-boundary) collapse-states))
   (let ((turn-starts (mevedel-view--rendered-turn-starts)))
     (dolist (pos
              (sort
@@ -7779,10 +7770,11 @@ table layout makes that projection differ in length from this one."
       (goto-char pos)
       (mevedel-view--collapse-turn)))
   (cond
-   ((plist-get state :input-offset)
+   ((and (plist-get state :input-offset)
+         (eq (mevedel-view-composer-buffer) (current-buffer)))
     (goto-char
-     (min (point-max)
-          (+ (mevedel-view--input-start)
+     (min (mevedel-view-composer-draft-end)
+          (+ (mevedel-view-composer-draft-start)
              (plist-get state :input-offset)))))
    ((plist-get state :point)
     (goto-char
@@ -7790,10 +7782,10 @@ table layout makes that projection differ in length from this one."
           (min (or (mevedel-view--render-anchor-position
                     (plist-get state :point-anchor))
                    (plist-get state :point))
-               (mevedel-view--input-marker-position)))))
+               (mevedel-view-prompt-boundary)))))
    ((eq direction 'backward)
     (let ((pos (point-min))
-          (limit (mevedel-view--input-marker-position))
+          (limit (mevedel-view-prompt-boundary))
           target)
       (while (< pos limit)
         (when (get-text-property pos 'mevedel-view-turn-role)
@@ -7824,7 +7816,7 @@ The segment owner holds projection ownership across source replacement."
 
 (defun mevedel-view--display-navigation-limit ()
   "Return the upper bound for display/chrome navigation."
-  (or (mevedel-view--input-marker-position) (point-max)))
+  (or (mevedel-view-prompt-boundary) (point-max)))
 
 (defun mevedel-view--next-fragment-position (limit)
   "Return the next navigatable fragment position before LIMIT."
@@ -7922,23 +7914,21 @@ The segment owner holds projection ownership across source replacement."
   "Move point to the next turn header."
   (interactive)
   (let ((pos (point))
+        (limit (or (mevedel-view-prompt-boundary) (point-max)))
         (cur-source (get-text-property (point) 'mevedel-view-source)))
     ;; Move past the current turn (skip all positions with the same source)
     (when cur-source
-      (while (and (< pos mevedel-view--input-marker)
+      (while (and (< pos limit)
                   (equal (get-text-property pos 'mevedel-view-source)
                          cur-source))
-        (setq pos (or (next-single-property-change pos 'mevedel-view-source)
-                       mevedel-view--input-marker))))
+        (setq pos (next-single-property-change
+                   pos 'mevedel-view-source nil limit))))
     ;; Find next position that has a source (skip separators)
-    (while (and (< pos mevedel-view--input-marker)
+    (while (and (< pos limit)
                 (not (get-text-property pos 'mevedel-view-source)))
-      (setq pos (or (next-single-property-change pos 'mevedel-view-source)
-                     mevedel-view--input-marker)))
-    (if (< pos mevedel-view--input-marker)
-        (goto-char pos)
-      ;; No more turns; go to the input zone.
-      (goto-char mevedel-view--input-marker))))
+      (setq pos (next-single-property-change
+                 pos 'mevedel-view-source nil limit)))
+    (goto-char (min pos limit))))
 
 (defun mevedel-view-prev-turn ()
   "Move point to the previous turn header."
@@ -8072,8 +8062,8 @@ summary the model received.  HOOK-AUDITS are audit records attached to it."
   (when (buffer-live-p view-buf)
     (with-current-buffer view-buf
       (save-excursion
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (goto-char (mevedel-view-prompt-boundary-marker))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (unwind-protect
             (let* ((source (mevedel-view-disclosure-source-range
                             data-buf (car source) (cdr source)))
@@ -8095,7 +8085,7 @@ summary the model received.  HOOK-AUDITS are audit records attached to it."
                source)
               (mevedel-view-render-add-display-properties
                start (point) 'compaction-summary))
-          (set-marker-insertion-type mevedel-view--input-marker nil))))))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))))))
 
 (defun mevedel-view--summary-hook-audits (data-buf start end)
   "Return hook audit records stored in DATA-BUF summary START..END."
@@ -8125,9 +8115,9 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
      'full-rerender-delete-display
      :region (mevedel-view--debug-region
               (point-min)
-              (marker-position mevedel-view--input-marker))
+              (marker-position (mevedel-view-prompt-boundary-marker)))
      :state (mevedel-view--debug-state data-buf))
-    (delete-region (point-min) mevedel-view--input-marker)
+    (delete-region (point-min) (mevedel-view-prompt-boundary-marker))
     (mevedel-view--forget-request-progress-region)
     (goto-char (point-min))
     (insert (mevedel-view--header-string session-data-buf))
@@ -8135,7 +8125,7 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
         (insert (mevedel-view-segments-banner))
       (when-let* ((line (mevedel-view-segments-chats-line)))
         (insert line))))
-  (set-marker mevedel-view--input-marker (point))
+  (set-marker (mevedel-view-prompt-boundary-marker) (point))
   (when (markerp mevedel-view--status-marker)
     (set-marker mevedel-view--status-marker (point)))
   (when (markerp mevedel-view--interaction-marker)
@@ -8444,7 +8434,8 @@ turn.  SAVED-STATES restores matching disclosure state."
           (dolist (turn (plist-get plan :turns))
             (setq last-turn-role (plist-get turn :role))
             (when (eq last-turn-role 'assistant)
-              (let ((view-turn-start (copy-marker mevedel-view--input-marker nil)))
+              (let ((view-turn-start
+                     (copy-marker (mevedel-view-prompt-boundary-marker) nil)))
                 (setq last-assistant-turn-start view-turn-start
                       last-assistant-turn-data-start (plist-get turn :start))
                 (when (and data-turn-start-pos (plist-get turn :end)
@@ -8453,10 +8444,11 @@ turn.  SAVED-STATES restores matching disclosure state."
                         last-current-assistant-turn-data-start (plist-get turn :start)))))
             (mevedel-view--render-turn turn data-buf t (plist-get plan :session))
             (when (eq last-turn-role 'assistant)
-              (setq last-assistant-turn-end (copy-marker mevedel-view--input-marker nil))))
+              (setq last-assistant-turn-end
+                    (copy-marker (mevedel-view-prompt-boundary-marker) nil))))
           (when saved-states
             (mevedel-view-disclosure-restore-state
-             (point-min) (marker-position mevedel-view--input-marker) saved-states)))))
+             (point-min) (mevedel-view-prompt-boundary-marker) saved-states)))))
     (list :view-buffer view-buf
           :last-assistant-turn-start last-assistant-turn-start
           :last-assistant-turn-end last-assistant-turn-end
@@ -8633,7 +8625,7 @@ change or missing context leaves the existing full-history fallback in charge."
   (when (and (buffer-live-p data)
              (eq data (mevedel-view-segments-display-buffer)))
     (let ((pos (point-min))
-          (limit (mevedel-view--input-marker-position))
+          (limit (mevedel-view-prompt-boundary))
           (tick (with-current-buffer data (buffer-modified-tick))))
       (catch 'refreshed
         (while (< pos limit)
@@ -8650,7 +8642,7 @@ change or missing context leaves the existing full-history fallback in charge."
 
 (defun mevedel-view-render--last-turn-position ()
   "Return the start of the last rendered turn before the composer, or nil."
-  (let ((pos (mevedel-view--input-marker-position))
+  (let ((pos (mevedel-view-prompt-boundary))
         found)
     (while (and (not found) pos (> pos (point-min)))
       (setq pos (previous-single-property-change
@@ -8851,7 +8843,7 @@ Until the complete plan is ready, keep the previous view in place."
                             (mevedel-view-render--priority-turns
                              (plist-get plan :turns) t)))
            (states (mevedel-view-disclosure-capture-state
-                    (point-min) (mevedel-view--input-marker-position)))
+                    (point-min) (mevedel-view-prompt-boundary)))
            installed)
       ;; The projection removes running rows; their next live render
       ;; restores the phase they displayed.
@@ -8888,7 +8880,7 @@ Until the complete plan is ready, keep the previous view in place."
                      (mevedel-view--insert-compaction-indicator
                       view data summary (plist-get plan :summary-audits)))
                    (dolist (turn (plist-get plan :turns))
-                     (goto-char mevedel-view--input-marker)
+                     (goto-char (mevedel-view-prompt-boundary-marker))
                      (let ((start (copy-marker (point) nil)))
                        (mevedel-view-render--with-boundaries-advancing
                          (insert (propertize
@@ -8954,7 +8946,7 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
         (let ((tail-start
                (and preserved-live-tail
                     (mevedel-view--live-tail-rendered-position
-                     preserved-live-tail mevedel-view--input-marker
+                     preserved-live-tail (mevedel-view-prompt-boundary-marker)
                      last-assistant last-assistant-end))))
           (cond
            (last-current-assistant
@@ -8993,7 +8985,7 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              :state (mevedel-view--debug-state data-buf))
             (mevedel-view-stream-set-in-flight-turn-start tail-start))
            (preserved-live-tail
-            (goto-char mevedel-view--input-marker)
+            (goto-char (mevedel-view-prompt-boundary-marker))
             (mevedel-view-render--with-boundaries-advancing
               (let ((tail-start (point)))
                 (insert preserved-live-tail)
@@ -9007,11 +8999,11 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
            (t
             (mevedel-view--debug-log
              'full-rerender-reanchor
-             :decision 'input-marker
+             :decision 'prompt-boundary
              :last-turn-role last-role
              :state (mevedel-view--debug-state data-buf))
             (mevedel-view-stream-set-in-flight-turn-start
-             mevedel-view--input-marker)))
+             (mevedel-view-prompt-boundary-marker))))
           ;; The projection just rendered everything up to the data
           ;; buffer's end as settled history.  When no assistant turn
           ;; anchored the data marker above, park it at that end so the
@@ -9112,11 +9104,10 @@ view chrome."
              (inhibit-redisplay t)
              (saved-states
               (and (not source-changed-p)
-                   (markerp mevedel-view--input-marker)
-                   (marker-position mevedel-view--input-marker)
+                   (mevedel-view-prompt-boundary-marker)
                    (mevedel-view-disclosure-capture-state
                     (point-min)
-                    (marker-position mevedel-view--input-marker))))
+                    (mevedel-view-prompt-boundary-marker))))
              (data-turn-start-pos
               (and (not historical-p)
                    (markerp mevedel-view--data-turn-start)

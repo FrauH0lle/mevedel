@@ -1310,8 +1310,7 @@ STATUS is the completion exit status.  Ghost argument hints render after point,
 so without an inserted space a user can visually see `$skill [arg]' while the
 buffer still contains `$skill'."
   (when (and (memq status '(finished exact sole))
-             (or (eobp)
-                 (not (memq (char-after) '(?\s ?\t ?\n)))))
+             (not (memq (char-after) '(?\s ?\t ?\n))))
     (insert " ")))
 
 (defun mevedel-skills--skill-completion-exit-function
@@ -1340,8 +1339,8 @@ completion exit status."
 (defun mevedel-skills--slash-command-start (&optional input-start)
   "Return slash command start position on this line, or nil.
 
-INPUT-START, when non-nil, is the first editable input position in a
-view buffer; without it, a command starts at the beginning of the line."
+INPUT-START, when non-nil, is the first editable position in the
+composer; without it, a command starts at the beginning of the line."
   (let ((line-start (line-beginning-position)))
     (if input-start
         (when (and (<= input-start (point))
@@ -1459,8 +1458,7 @@ return value is a plist with :kind `root', :start, :end, and
 Slash completion offers local slash commands and command arguments.
 Dollar completion offers user-invocable skills.  BUFFER and SESSION are
 used for skill discovery.  LOCAL-COMMANDS is the current slash command
-alist.  INPUT-START constrains completion to the first view-composer
-line when called from the view buffer."
+alist.  INPUT-START gives the editable origin in a composer buffer."
   (when session
     (let ((slash-context (mevedel-skills-slash-capf-context input-start))
           (skill-context (mevedel-skills--skill-capf-context input-start)))

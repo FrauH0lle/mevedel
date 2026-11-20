@@ -170,7 +170,8 @@ CPU time."
   (unless condition
     (error "Benchmark state broken: expected %s; option %s, shown %s, window %s, point %d, input %d, start %d, end %d"
            what mevedel-floating-composer (mevedel-fc-bench--shown-p) (selected-window)
-           (point) (mevedel-view--input-start) (window-start) (point-max))))
+           (point) (mevedel-view-composer-draft-start) (window-start)
+           (mevedel-view-composer-draft-end))))
 
 (defun mevedel-fc-bench--away ()
   "Scroll away notch by notch with the draft cursor until it crosses.
@@ -182,7 +183,7 @@ that crossed, in ms."
                      (if mevedel-floating-composer
                          (and (mevedel-fc-bench--shown-p)
                               (eq (selected-window) (mevedel-floating-composer--window)))
-                       (not (mevedel-view--position-in-input-region-p (point))))))
+                       (not (mevedel-view-composer-in-draft-p (point))))))
       (mevedel-fc-bench--check (< (cl-incf notches) 6)
                                (if mevedel-floating-composer
                                    "the floating composer shown and selected"
@@ -198,7 +199,7 @@ Return the latency of the notch that crossed, in ms."
     (while (not (and latency
                      (not (mevedel-fc-bench--shown-p))
                      (not (frame-parent (selected-frame)))
-                     (mevedel-view--position-in-input-region-p (point))))
+                     (mevedel-view-composer-in-draft-p (point))))
       (mevedel-fc-bench--check (< (cl-incf notches) 6)
                                "the cursor inline with no floating composer")
       (when latency (mevedel-fc-bench--settle))
@@ -231,14 +232,12 @@ Return the latency of the notch that crossed, in ms."
             (setq-local mevedel--session session)
             (with-current-buffer data-buf (setq-local mevedel--session session)))
           (mevedel-view--full-rerender)
-          (let ((start (mevedel-view--input-start))
-                (inhibit-read-only t))
-            (goto-char start)
-            (insert mevedel-fc-bench--draft)
-            (remove-text-properties start (point) '(read-only nil mevedel-view-prompt nil
-                                                    font-lock-face nil face nil
-                                                    front-sticky nil rear-nonsticky nil)))
-          (goto-char (point-max))
+          (let* ((start (mevedel-view-composer-draft-start view-buf))
+                 (end (mevedel-view-composer-insert mevedel-fc-bench--draft nil view-buf)))
+            (with-current-buffer (mevedel-view-composer-buffer view-buf)
+              (remove-text-properties start end '(read-only nil mevedel-view-prompt nil
+                                                  font-lock-face nil face nil
+                                                  front-sticky nil rear-nonsticky nil))))
           (recenter -1)
           (mevedel-fc-bench--settle 0.2)
           (funcall function data-buf))
@@ -365,7 +364,7 @@ Counters cover only the crossing commands, not the pauses between them."
            ((or 'off-away 'on-visible) (mevedel-fc-bench--away)))
          (unless (eq scenario 'off-away)
            (measure 'typing (lambda () (mevedel-fc-bench--repeat 40 '(?a))))
-           (goto-char (point-max))
+           (goto-char (mevedel-view-composer-draft-end))
            (measure 'wrapped-deletion (lambda () (mevedel-fc-bench--repeat 30 '(127)))))
          (mevedel-view-stream-begin-turn (mevedel-view--history-insertion-marker)
                                          (with-current-buffer data-buf (point-max)))
@@ -393,7 +392,7 @@ Counters cover only the crossing commands, not the pauses between them."
          (mevedel-view--stop-spinner)
          (when (memq scenario '(off-inline on-never))
            (mevedel-fc-bench--settle 0.2)
-           (unless (mevedel-view--position-in-input-region-p (point))
+           (unless (mevedel-view-composer-in-draft-p (point))
              (mevedel-fc-bench--back))
            (when mevedel-floating-composer
              (measure 'first-show

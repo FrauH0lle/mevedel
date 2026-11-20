@@ -123,13 +123,6 @@
                   "mevedel-utilities"
                   (source-color-name tint-color-name &optional intensity))
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--input-marker-position
-                  "mevedel-view-composer" ())
-
-(autoload 'mevedel-view--input-marker-position "mevedel-view-composer")
-
-
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 

@@ -62,12 +62,13 @@
 (mevedel-deftest mevedel-view--dnd-handle-files ()
   ,test
   (test)
-  :doc "accepts the single-URI protocol-handler shape"
+  :doc "routes a single-URI drop from the transcript to a detached draft"
   (let* ((dir (make-temp-file "mevedel-dnd-" t))
          (path (expand-file-name "single.txt" dir))
          (uri (concat "file://" path))
          (data-buf (generate-new-buffer " *test-data-dnd-single*"))
          (view-buf (generate-new-buffer " *test-view-dnd-single*"))
+         (draft-buf (generate-new-buffer " *test-draft-dnd-single*"))
          (ws (mevedel-workspace--create :type 'project :id "dnd-single"
                                         :root dir :name "dnd-single"))
          (session (mevedel-session-create "main" ws)))
@@ -79,14 +80,22 @@
             (setq-local gptel-response-separator "\n\n")
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
+          (mevedel-view--setup draft-buf data-buf)
           (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer draft-buf
+            (mevedel-view-composer-replace "look at"))
           (with-current-buffer view-buf
-            (goto-char (point-max))
-            (should (eq 'copy
-                        (mevedel-view--dnd-handle-files uri 'copy)))
-            (should (equal (format "@file:%s" path)
-                           (mevedel-view--input-text)))))
+            (goto-char (point-min))
+            (let ((transcript (buffer-string)))
+              (cl-letf (((symbol-function 'mevedel-view-composer-buffer)
+                         (lambda (&optional _view) draft-buf)))
+                (should (eq 'copy
+                            (mevedel-view--dnd-handle-files uri 'copy)))
+                (should (equal (format "look at @file:%s" path)
+                               (mevedel-view-composer-draft-text nil t))))
+              (should (equal transcript (buffer-string))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p draft-buf) (kill-buffer draft-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))
       (delete-directory dir t))))
 

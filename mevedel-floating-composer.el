@@ -55,10 +55,10 @@
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(declare-function mevedel-view--position-in-input-region-p
-                  "mevedel-view-composer" (position))
+(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--scroll-command-p "mevedel-view-composer" (command))
@@ -146,7 +146,7 @@ half the host's text height but at least one line."
 (defun mevedel-floating-composer--start ()
   "Return where the floating composer starts: the rail, else the prompt."
   (when-let* ((pos (or (mevedel-view--request-progress-region-start)
-                       (mevedel-view--input-marker-position))))
+                       (mevedel-view-prompt-boundary))))
     (save-excursion
       (goto-char pos)
       (skip-chars-forward "\n")
@@ -164,7 +164,7 @@ layouts keep, which also count global text scaling."
             values))
 
 (defun mevedel-floating-composer--natural-height (window start limit)
-  "Return WINDOW's pixel height of START to the buffer end, up to LIMIT.
+  "Return WINDOW's pixel height from START to draft end, up to LIMIT.
 Cached until its `mevedel-floating-composer--layout-key' changes, so
 scrolling the host measures nothing.
 Measuring fontifies the draft, which modifies the buffer, so the cache
@@ -174,7 +174,8 @@ twice."
         (cache (window-parameter window 'mevedel-floating-composer-height)))
     (if (equal (funcall key) (car cache))
         (cdr cache)
-      (let ((height (cdr (window-text-pixel-size window start (point-max) nil limit))))
+      (let ((height (cdr (window-text-pixel-size
+                          window start (mevedel-view-composer-draft-end) nil limit))))
         ;; Copied: `face-remap-add-relative' edits the remapping in place.
         (set-window-parameter window 'mevedel-floating-composer-height
                               (cons (copy-tree (funcall key)) height))
@@ -244,7 +245,7 @@ the rail: redisplay alone would recenter it onto transcript rows."
         (set-window-parameter window 'mevedel-floating-composer t)
         (set-window-parameter window 'no-other-window t)
         (set-window-parameter window 'split-window #'mevedel-floating-composer--split-host)
-        (set-window-point window (point-max)))
+        (set-window-point window (mevedel-view-composer-draft-end)))
       (add-hook 'window-buffer-change-functions #'mevedel-floating-composer--check-hosts)
       (setq mevedel-floating-composer--frame frame))
     frame))
@@ -327,7 +328,7 @@ composer hides after this command."
                          host position
                          (- (cdr (mevedel-view--window-body-geometry host))
                             (save-excursion (goto-char position) (line-pixel-height)))))))
-        (to-bottom (point-max))
+        (to-bottom (mevedel-view-composer-draft-end))
         ;; A draft taller than the window shows the cursor's line instead.
         (unless (mevedel-view--position-screen-y (point) host t)
           (to-bottom (point)))))))
@@ -375,7 +376,7 @@ composer hides after this command."
         (apply #'set-frame-size-and-position-pixelwise frame geometry)))
     (mevedel-floating-composer--pin window)
     (when (< (window-point window) start)
-      (set-window-point window (point-max)))
+      (set-window-point window (mevedel-view-composer-draft-end)))
     (unless (frame-visible-p frame)
       (make-frame-visible frame))))
 
@@ -477,16 +478,17 @@ draft.  Inline, each toggle returns to where the previous one left."
      ((and window (eq host (selected-window)) (frame-visible-p (window-frame window)))
       (let ((point (window-point window)))
         (mevedel-floating-composer--select
-         window (if (mevedel-view--position-in-input-region-p point) point (point-max)))))
+         window (if (mevedel-view-composer-in-draft-p point) point
+                  (mevedel-view-composer-draft-end)))))
      (t
       (let ((back (window-parameter nil 'mevedel-floating-composer-back))
-            (draft (mevedel-view--position-in-input-region-p (point))))
+            (draft (mevedel-view-composer-in-draft-p (point))))
         (set-window-parameter nil 'mevedel-floating-composer-back (point))
         (goto-char (cond ((and back (<= back (point-max))
-                               (xor draft (mevedel-view--position-in-input-region-p back)))
+                               (xor draft (mevedel-view-composer-in-draft-p back)))
                           back)
                          (draft (window-start))
-                         (t (point-max)))))))))
+                         (t (or (mevedel-view-composer-draft-end) (point-max))))))))))
 
 ;;
 ;;; Update
@@ -502,12 +504,12 @@ Note-frame windows and historical segments have none."
 
 (defun mevedel-floating-composer--needed-p (host)
   "Return non-nil when HOST shows neither its cursor's draft nor the composer.
-The composer runs to the buffer end, so HOST shows a full row of it when
-its start is fully visible.  When the composer covers HOST's top, that is
+HOST shows a full row of the composer when its start is fully visible.
+When the composer covers HOST's top, that is
 HOST's first displayed row, or, if only that row's top is clipped, the
 next one.  A cursor in the draft costs no visibility query; a HOST
 starting above the composer costs one."
-  (and (not (mevedel-view--position-in-input-region-p (window-point host)))
+  (and (not (mevedel-view-composer-in-draft-p (window-point host)))
        (when-let* ((start (mevedel-floating-composer--start)))
          (let ((top (window-start host)))
            (not (if (< top start)
@@ -560,7 +562,8 @@ off, remove every floating composer, however it was turned off."
           (set-window-parameter selected 'mevedel-view-scroll-return nil)
           (mevedel-floating-composer--select
            (mevedel-floating-composer--window)
-           (min (point-max) (+ (mevedel-view--input-start) offset)))))
+           (min (mevedel-view-composer-draft-end)
+                (+ (mevedel-view-composer-draft-start) offset)))))
        (t (mevedel-floating-composer--hide))))))
 
 (defun mevedel-floating-composer--run (buffer)
@@ -582,7 +585,7 @@ has its cursor in this view's draft or shows another buffer."
                    (and (frame-live-p frame) (frame-visible-p frame)))
                  (let ((window (selected-window)))
                    (and (eq (window-buffer window) (current-buffer))
-                        (not (mevedel-view--position-in-input-region-p
+                        (not (mevedel-view-composer-in-draft-p
                               (window-point window)))))))
     (setq mevedel-floating-composer--timer
           (run-at-time 0 nil #'mevedel-floating-composer--run (current-buffer)))))

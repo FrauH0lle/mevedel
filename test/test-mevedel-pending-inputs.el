@@ -70,11 +70,8 @@
 
 (defun mevedel-pending-inputs-test--replace-composer (view text)
   "Replace VIEW's editable composer with TEXT."
-  (with-current-buffer view
-    (let ((inhibit-read-only t))
-      (delete-region (mevedel-view--input-start) (point-max))
-      (goto-char (mevedel-view--input-start))
-      (insert text))))
+  (let ((inhibit-read-only t))
+    (mevedel-view-composer-replace text view)))
 
 (mevedel-deftest mevedel-pending-inputs--set-queues ()
   ,test
@@ -1977,35 +1974,40 @@
           (delete-region (mevedel-view--input-start) (point-max))))
       (should-not timers)))
 
-  :doc "a background event held by a draft is offered once the draft is deleted"
+  :doc "a background event held by a detached draft is offered once it is cleared"
   (mevedel-pending-inputs-test--with-session
     (let (timers woken continued)
       (setf (mevedel-session-goal session)
             (mevedel-goal--create :id "g" :status 'active))
       (mevedel-agent-control-enqueue-execution-result
        session "/root" "done" "exec-1" t)
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_time _repeat function &rest args)
-                   (push (cons function args) timers)))
-                ((symbol-function 'mevedel-pending-inputs--run-event-wake)
-                 (lambda (buffer) (push buffer woken)))
-                ((symbol-function 'mevedel-goal-schedule-continuation)
-                 (lambda (&rest args) (push args continued))))
-        (with-current-buffer view-buf
-          (mevedel-view-test--insert-composer-draft "draft")
-          (should-not (mevedel-pending-inputs--event-wake-view data-buf))
-          (should-not timers)
-          (delete-region (mevedel-view--input-start) (point-max)))
-        (should (= 1 (length timers)))
-        (apply (caar timers) (cdar timers))
-        (should (equal (list data-buf) woken))
-        ;; A wake consumed before the timer fires leaves the Goal alone:
-        ;; a draft never held it.
-        (setq woken nil)
-        (mevedel-agent-control-clear-context-mailbox session)
-        (apply (caar timers) (cdar timers))
-        (should-not woken)
-        (should-not continued)))))
+      (with-temp-buffer
+        (let ((draft-buf (current-buffer)))
+          (mevedel-view--setup draft-buf data-buf)
+          (mevedel-view--setup view-buf data-buf)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest args)
+                       (push (cons function args) timers)))
+                    ((symbol-function 'mevedel-pending-inputs--run-event-wake)
+                     (lambda (buffer) (push buffer woken)))
+                    ((symbol-function 'mevedel-goal-schedule-continuation)
+                     (lambda (&rest args) (push args continued))))
+            (with-current-buffer view-buf
+              (cl-letf (((symbol-function 'mevedel-view-composer-buffer)
+                         (lambda (&optional _view) draft-buf)))
+                (mevedel-view-composer-replace "draft")
+                (should-not (mevedel-pending-inputs--event-wake-view data-buf))
+                (should-not timers)
+                (mevedel-view-composer-replace " \n ")
+                (should (= 1 (length timers)))
+                (apply (caar timers) (cdar timers))
+                (should (equal (list data-buf) woken))
+                ;; A wake consumed before the timer fires leaves the Goal alone.
+                (setq woken nil)
+                (mevedel-agent-control-clear-context-mailbox session)
+                (apply (caar timers) (cdar timers))
+                (should-not woken)
+                (should-not continued)))))))))
 
 (defmacro mevedel-pending-inputs-test--with-event (&rest body)
   "Run BODY in a session holding one waking result, capturing submissions.

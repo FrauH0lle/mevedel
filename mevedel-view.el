@@ -188,25 +188,22 @@
                   "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--effective-permission-mode
                   "mevedel-view-composer" ())
-(declare-function mevedel-view--input-marker-position
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view--input-prompt-string
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view--propertize-input-prompt
-                  "mevedel-view-composer" (start end))
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
 
-(declare-function mevedel-view--position-in-input-region-p
-                  "mevedel-view-composer" (position))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-in-draft-p
+                  "mevedel-view-composer" (position &optional view))
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-initialize-prompt
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
 (defvar mevedel-view--composer-display-overlay)
-
-(defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-control-transfer'
 (declare-function mevedel-view-control-transfer-stop-polling
@@ -703,7 +700,7 @@ the normal frame rate; `save' always applies the battery ceiling."
 (defvar-keymap mevedel-view--display-map
   :doc "Keymap active in the read-only history/status/interaction area.
 Applied via the `keymap' text property so these bindings only fire
-above `mevedel-view--input-marker'."
+above the prompt boundary."
   "TAB" #'mevedel-view-toggle-section
   "RET" #'mevedel-view-activate-at-point
   "<mouse-1>" #'mevedel-view-activate-at-point
@@ -775,9 +772,8 @@ navigation and activation fallbacks."
 
 Displays a compact rendering of the gptel data buffer.  Interactive view
 buffers are ordered as history region, status zone, interaction zone,
-request progress row, and input zone.  The input zone starts at
-`mevedel-view--input-marker' with a read-only prompt prefix followed by
-the editable composer body.
+request progress row, and input zone.  The input zone starts at the
+prompt boundary with a read-only prefix followed by the editable draft.
 
 \\{mevedel-view-mode-map}"
   :after-hook
@@ -856,7 +852,7 @@ in read-only enforcement and section navigation."
 (defun mevedel-view--setup (view-buf data-buf &optional options)
   "Initialize VIEW-BUF as the view buffer for DATA-BUF.
 Activates `mevedel-view-mode', wires the cross-references, and
-inserts the initial separator with input marker.
+inserts the initial header and prompt.
 
 OPTIONS is a plist.  When `:agent-transcript-p' is non-nil, create
 a read-only transcript inspection view instead of an interactive chat
@@ -893,25 +889,12 @@ existing `mevedel--view-buffer' binding untouched.  A
                 (buffer-local-value 'default-directory data-buf))
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (if mevedel-view--agent-transcript-p
-          (let ((start (point)))
-            (setq mevedel-view--status-marker (copy-marker start t))
-            (setq mevedel-view--interaction-marker (copy-marker start t))
-            (setq mevedel-view--input-marker (copy-marker start nil)))
-        ;; Insert session header and set up zone markers.
-        ;;
-        ;; Three markers carve the buffer above the input prompt into
-        ;; four zones (history / status / interaction / input).
-        (insert (mevedel-view--header-string data-buf))
-        ;; Insert the prompt first, then place all three zone markers
-        ;; at start-of-prompt.  Order matters because the status and
-        ;; interaction markers have insertion-type t.
-        (let ((start (point)))
-          (insert (mevedel-view--input-prompt-string))
-          (mevedel-view--propertize-input-prompt start (point))
-          (setq mevedel-view--status-marker (copy-marker start t))
-          (setq mevedel-view--interaction-marker (copy-marker start t))
-          (setq mevedel-view--input-marker (copy-marker start nil)))))
+      (unless mevedel-view--agent-transcript-p
+        (insert (mevedel-view--header-string data-buf)))
+      ;; Place the advancing zone markers after inserting the prompt.
+      (let ((boundary (mevedel-view-composer-initialize-prompt)))
+        (setq mevedel-view--status-marker (copy-marker boundary t)
+              mevedel-view--interaction-marker (copy-marker boundary t))))
     (mevedel-view-composer-initialize)
     (mevedel-view--ensure-request-progress data-buf)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
@@ -1330,8 +1313,7 @@ changes properties and does not invalidate the cache."
   "Return the first visible position at or after WINDOW's start.
 A start inside hidden text displays the next visible text at the top."
   (let ((top (window-start window))
-        (limit (or (and (markerp mevedel-view--input-marker)
-                        (marker-position mevedel-view--input-marker))
+        (limit (or (mevedel-view-prompt-boundary-marker)
                    (point-max))))
     (while (and (< top limit) (invisible-p top))
       (setq top (next-single-char-property-change top 'invisible nil limit)))
@@ -1432,14 +1414,14 @@ text layout changes: size, wrapping, text scale, line spacing or font."
                    buffer-invisibility-spec (window-start window)
                    (window-hscroll window) (window-vscroll window t)
                    (mevedel--window-text-layout window)
-                   (mevedel-view--input-marker-position)))
+                   (mevedel-view-prompt-boundary)))
         (cached (window-parameter window 'mevedel-view--prompt-on-screen)))
     (if (equal key (car cached))
         (cdr cached)
       (let* ((next (next-single-property-change
                     (window-start window)
                     'mevedel-view-prompt-preview nil
-                    (mevedel-view--input-marker-position)))
+                    (mevedel-view-prompt-boundary)))
              (visible (and next
                            (get-text-property next 'mevedel-view-prompt-preview)
                            (if (display-graphic-p (window-frame window))
@@ -1936,7 +1918,8 @@ the editable composer signal instead of settling queued interactions."
   (let* ((pos (point))
          (activate (get-text-property pos 'mevedel-view-zone-activate)))
     (cond
-     ((mevedel-view--position-in-input-region-p pos)
+     ((and (eq (mevedel-view-composer-buffer) (current-buffer))
+           (mevedel-view-composer-in-draft-p pos))
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No actionable fragment at point"))
      ((get-text-property pos 'mevedel-view-agent-path)
       (mevedel-view-open-agent-transcript-at-point event))
@@ -1970,7 +1953,7 @@ the editable composer signal instead of settling queued interactions."
 
 (defun mevedel-view--status-anchor ()
   "Return the recovered start of fragment-managed status text."
-  (let* ((input-pos (mevedel-view--input-marker-position))
+  (let* ((input-pos (mevedel-view-prompt-boundary))
          (status-pos (mevedel-view--current-buffer-marker-position
                       mevedel-view--status-marker))
          (history-tail (mevedel-view--history-tail-position))
@@ -2104,7 +2087,7 @@ idle status redraws remain immediate."
     (let* ((model (mevedel-view--status-model data-buf))
            (fragments (mevedel-view--status-fragments model))
            (start (mevedel-view--status-anchor))
-           (input-pos (mevedel-view--input-marker-position))
+           (input-pos (mevedel-view-prompt-boundary))
            (interaction-pos (mevedel-view--current-buffer-marker-position
                              mevedel-view--interaction-marker))
            (end (if (and interaction-pos

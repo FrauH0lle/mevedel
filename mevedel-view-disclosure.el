@@ -39,7 +39,7 @@
 (autoload 'mevedel-view-audit-toggle-hook-audit "mevedel-view-audit")
 
 ;; `mevedel-view-composer'
-(defvar mevedel-view--input-marker)
+(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-mutate
@@ -138,10 +138,8 @@
 (defun mevedel-view-disclosure-compaction-tool-states ()
   "Capture tool disclosure states before the current transcript rotates.
 Include remembered children hidden inside collapsed parent rows."
-  (when (and (markerp mevedel-view--input-marker)
-             (marker-position mevedel-view--input-marker))
-    (mevedel-view-disclosure-capture-state
-     (point-min) (marker-position mevedel-view--input-marker)))
+  (when-let* ((boundary (mevedel-view-prompt-boundary-marker)))
+    (mevedel-view-disclosure-capture-state (point-min) boundary))
   (let (states)
     (when (hash-table-p mevedel-view-disclosure--source-states)
       (maphash
@@ -926,7 +924,7 @@ from signalling `args-out-of-range' on stale source coordinates."
               (mevedel-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (atomic-change-group
                 (delete-region view-start view-end)
@@ -959,7 +957,7 @@ from signalling `args-out-of-range' on stale source coordinates."
                 (when (and in-flight-pos
                            (= in-flight-pos view-end))
                   (mevedel-view-stream-set-in-flight-turn-start (point))))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))))))
 
 (defun mevedel-view-disclosure--collapse-now (source vtype)
   "Collapse SOURCE of VTYPE while holding projection ownership."
@@ -985,7 +983,7 @@ from signalling `args-out-of-range' on stale source coordinates."
               (mevedel-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (progn
                 (delete-region view-start view-end)
@@ -1018,6 +1016,6 @@ from signalling `args-out-of-range' on stale source coordinates."
                   (when (and in-flight-pos
                              (= in-flight-pos view-end))
                     (mevedel-view-stream-set-in-flight-turn-start (point)))))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))))))
 (provide 'mevedel-view-disclosure)
 ;;; mevedel-view-disclosure.el ends here

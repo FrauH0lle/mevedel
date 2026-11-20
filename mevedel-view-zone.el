@@ -41,7 +41,6 @@
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--keep-native-vscroll "mevedel-view-composer" ())
 (declare-function mevedel-view--history-reader-windows "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--restore-composer-anchors
@@ -53,7 +52,13 @@
 (declare-function mevedel-view--viewport-at-y "mevedel-view-composer" (window position y))
 (declare-function mevedel-view--window-blank-pixels "mevedel-view-composer" (window))
 (declare-function mevedel-view--window-tail-lengths "mevedel-view-composer" ())
-(defvar mevedel-view--input-marker)
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
+(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
+(declare-function mevedel-view-composer-replace "mevedel-view-composer" (text &optional view))
+(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
@@ -613,7 +618,7 @@ the zone or losing the table discards the proof."
   "Call THUNK with lower view markers advancing appropriately for ZONE."
   (let* ((markers (list (bound-and-true-p mevedel-view--status-marker)
                         (bound-and-true-p mevedel-view--interaction-marker)
-                        (bound-and-true-p mevedel-view--input-marker)))
+                        (mevedel-view-prompt-boundary-marker)))
          (old-types (mapcar (lambda (marker)
                               (and (markerp marker)
                                    (marker-insertion-type marker)))
@@ -631,70 +636,54 @@ the zone or losing the table discards the proof."
                    (set-marker-insertion-type marker type)))
                markers old-types))))
 
-(defun mevedel-view-zone--composer-live-p ()
-  "Return non-nil when the current view has an editable composer."
-  (and (not mevedel-view--agent-transcript-p)
-       (boundp 'mevedel-view--input-marker)
-       (markerp mevedel-view--input-marker)
-       (eq (marker-buffer mevedel-view--input-marker) (current-buffer))))
-
-(defun mevedel-view-zone--input-start ()
-  "Return the first editable composer position."
-  (when (mevedel-view-zone--composer-live-p)
-    (mevedel-view--input-start)))
-
-(defun mevedel-view-zone--input-offset (position)
-  "Return POSITION's composer-relative offset, or nil."
-  (when-let* ((start (mevedel-view-zone--input-start)))
-    (and (>= position start) (- position start))))
+(defun mevedel-view-zone--draft-offset (position start end)
+  "Return POSITION's offset in the inline draft from START to END, or nil."
+  (and start (<= start position end) (- position start)))
 
 (defun mevedel-view-zone--capture-view-state ()
   "Capture composer text, point, and displayed-window state."
-  (let ((input-start (mevedel-view-zone--input-start)))
+  (let* ((inline (eq (mevedel-view-composer-buffer) (current-buffer)))
+         (start (and inline (mevedel-view-composer-draft-start)))
+         (end (and inline (mevedel-view-composer-draft-end))))
     (list
-     :input (and input-start
-                 (buffer-substring-no-properties input-start (point-max)))
+     :input (mevedel-view-composer-draft-text nil t)
      :point (copy-marker (point) t)
      :mark (and (mark t) (copy-marker (mark t) t))
      :mark-active mark-active
      :deactivate-mark deactivate-mark
-     :point-offset (mevedel-view-zone--input-offset (point))
+     :point-offset (mevedel-view-zone--draft-offset (point) start end)
      :selected-window (selected-window)
      :windows
-     (mapcar
-      (lambda (window)
-        (let ((window-point (window-point window)))
-          (list window (copy-marker window-point t)
-                (copy-marker (window-start window) t)
-                (mevedel-view-zone--input-offset window-point))))
-      (mevedel-view--windows 'geometry)))))
+     (cl-loop for window in (mevedel-view--windows 'geometry)
+              for window-point = (window-point window)
+              collect (list window (copy-marker window-point t)
+                            (copy-marker (window-start window) t)
+                            (mevedel-view-zone--draft-offset
+                             window-point start end))))))
 
 (defun mevedel-view-zone--restore-view-state (state)
   "Restore composer text, point, and displayed windows from STATE."
   (when-let* ((input (plist-get state :input))
-              (start (mevedel-view-zone--input-start)))
-    (unless (equal input (buffer-substring-no-properties start (point-max)))
+              (current (mevedel-view-composer-draft-text nil t)))
+    (unless (equal input current)
       (mevedel-view-zone--call-mutating
-       (lambda ()
-         (delete-region start (point-max))
-         (goto-char start)
-         (insert input)))))
-  (let ((input-start (mevedel-view-zone--input-start)))
+       (lambda () (mevedel-view-composer-replace input)))))
+  (let* ((inline (eq (mevedel-view-composer-buffer) (current-buffer)))
+         (start (and inline (mevedel-view-composer-draft-start)))
+         (end (and inline (mevedel-view-composer-draft-end))))
     (goto-char
-     (min (point-max)
-          (if (and input-start (plist-get state :point-offset))
-              (+ input-start (plist-get state :point-offset))
-            (plist-get state :point))))
+     (if (and start (plist-get state :point-offset))
+         (min end (+ start (plist-get state :point-offset)))
+       (min (point-max) (plist-get state :point))))
     (dolist (entry (plist-get state :windows))
       (pcase-let ((`(,window ,window-point ,window-start ,input-offset) entry))
         (when (and (window-live-p window)
                    (eq (window-buffer window) (current-buffer)))
           (set-window-point
            window
-           (min (point-max)
-                (if (and input-start input-offset)
-                    (+ input-start input-offset)
-                  window-point)))
+           (if (and start input-offset)
+               (min end (+ start input-offset))
+             (min (point-max) window-point)))
           (when (and window-start (<= window-start (point-max)))
             (set-window-start window window-start t))
           (when (eq window (plist-get state :selected-window))
@@ -940,7 +929,8 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
     (lambda (window)
       (let* ((position (window-point window))
              (composer (assq window composer-anchors))
-             (visit (and (not (mevedel-view-zone--input-offset position))
+             (visit (and (not (and (eq (mevedel-view-composer-buffer) (current-buffer))
+                                   (mevedel-view-composer-in-draft-p position)))
                          (mevedel-view-zone-visit-anchor position)))
              (y (and visit (mevedel-view--position-screen-y position window))))
         (list window
@@ -1020,7 +1010,7 @@ live zone text keeps its current bounds until reconciliation finishes."
         (if (or (mevedel-view-zone--absent-p zone region fragments)
                 (and region (mevedel-view-zone--unchanged-p region zone text)))
             region
-          (let* ((composer-anchors (and (mevedel-view-zone--composer-live-p)
+          (let* ((composer-anchors (and (eq (mevedel-view-composer-buffer) (current-buffer))
 					(mevedel-view--composer-anchors)))
 		 (readers (mevedel-view--history-reader-windows))
 		 (logical-state (mevedel-view-zone--capture-logical-state

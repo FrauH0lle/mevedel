@@ -230,7 +230,6 @@
                   "mevedel-view-composer" (submission data-buffer &rest keys))
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
 (declare-function mevedel-view--occupied-root-workflow
                   "mevedel-view-composer" (session))
@@ -245,8 +244,10 @@
                   (input &optional before-send on-block dispatch after-insert
                          inert-skills selected-skills))
 
-(declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
-
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-run-invocation
@@ -254,7 +255,6 @@
 (declare-function mevedel-view-send "mevedel-view-composer" ())
 
 
-(defvar mevedel-view--input-marker)
 (defvar mevedel-view--pending-skill-submission)
 (defvar mevedel-view--prompt-hook-pending)
 
@@ -823,7 +823,7 @@ Call VALIDATE, when non-nil, immediately before removal, after yielding checks."
   (when (or mevedel-view--pending-input-edit
             mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission)
     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Finish the current composer submission or edit first"))
-  (unless (string-empty-p (or (mevedel-view--visible-draft) ""))
+  (unless (string-empty-p (or (mevedel-view-composer-draft-text nil t) ""))
     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Composer holds a draft; clear or send it before retracting")))
 
 ;;;###autoload
@@ -964,7 +964,7 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
             mevedel-view--pending-input-edit
             (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer))
     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Wait for or interrupt the active turn or composer submission first"))
-  (unless (string-empty-p (or (mevedel-view--visible-draft) ""))
+  (unless (string-empty-p (or (mevedel-view-composer-draft-text nil t) ""))
     (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Composer holds a draft; clear or send it before resuming"))
   (let* ((session (mevedel-view--session))
          (steering (mevedel-session-pending-steering session))
@@ -976,7 +976,7 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
     (mevedel-recovery-assert-ready session)
     ;; Authority checks can process callbacks or new composer input.
     (when (or (mevedel-turn-busy-p mevedel--data-buffer)
-              (not (string-empty-p (or (mevedel-view--visible-draft) "")))
+              (not (string-empty-p (or (mevedel-view-composer-draft-text nil t) "")))
               mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission
               mevedel-view--pending-input-edit)
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Session or composer changed before Resume; pending input remains queued"))
@@ -1044,7 +1044,9 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
          (when (mevedel-skills-parse-slash-line input)
            (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "Slash commands cannot be queued as follow-ups"))
          (mevedel-view--queue-follow-up input)))))
-  (goto-char (point-max)))
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (goto-char (mevedel-view-composer-draft-end view)))))
 
 
 ;;
@@ -1441,7 +1443,7 @@ VIEW-BUFFER is the live root view.  Gates are checked in admission order."
    ((mevedel-pending-inputs--interaction-pending-p session view-buffer)
     'interaction)
    ((not (string-empty-p
-          (with-current-buffer view-buffer (mevedel-view--input-text))))
+          (string-trim (or (mevedel-view-composer-draft-text view-buffer t) ""))))
     'composer-draft)))
 
 (defun mevedel-pending-inputs--note-wake-refusal (session data-buffer reason)
@@ -1540,33 +1542,41 @@ failing wake cannot loop."
 (defvar-local mevedel-view--removing-draft-text nil
   "Whether the current edit removes nonblank composer text.")
 
+(defun mevedel-pending-inputs--root-view-for-draft-edit ()
+  "Return the owning root view when current buffer holds its draft."
+  (when-let* (((buffer-live-p mevedel--data-buffer))
+              (view (buffer-local-value 'mevedel--view-buffer mevedel--data-buffer))
+              ((eq (current-buffer) (mevedel-view-composer-buffer view))))
+    view))
+
 (defun mevedel-view--note-draft-deletion (start end)
   "Record whether START to END removes any nonblank composer text."
   (setq mevedel-view--removing-draft-text
-        (and (< start end)
-             (markerp mevedel-view--input-marker)
-             (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
-             (>= start (mevedel-view--input-start))
-             (save-excursion
-               (goto-char start)
-               (skip-chars-forward " \t\n\r" end)
-               (< (point) end)))))
+        (when-let* (((< start end))
+                    (view (mevedel-pending-inputs--root-view-for-draft-edit))
+                    ((<= (mevedel-view-composer-draft-start view) start end
+                         (mevedel-view-composer-draft-end view))))
+          (save-excursion
+            (goto-char start)
+            (skip-chars-forward " \t\n\r" end)
+            (< (point) end)))))
 
 (defun mevedel-view--offer-follow-up-after-draft-change (&rest _)
   "Offer held follow-ups or wakes when an edit empties the root composer."
   (when mevedel-view--removing-draft-text
     (setq mevedel-view--removing-draft-text nil)
-    (when (and (buffer-live-p mevedel--data-buffer)
-               (eq (current-buffer)
-                   (buffer-local-value 'mevedel--view-buffer mevedel--data-buffer))
-               (save-excursion
-                 (goto-char (mevedel-view--input-start))
-                 (skip-chars-forward " \t\n\r")
-                 (= (point) (point-max)))
-               (or (mevedel-view--pending-follow-ups)
-                   (eq 'composer-draft
-                       (buffer-local-value 'mevedel-pending-inputs--wake-refusal
-                                           mevedel--data-buffer))))
+    (when-let* ((view (mevedel-pending-inputs--root-view-for-draft-edit))
+                (end (mevedel-view-composer-draft-end view))
+                ((save-excursion
+                   (save-restriction
+                     (widen)
+                     (goto-char (mevedel-view-composer-draft-start view))
+                     (skip-chars-forward " \t\n\r" end)
+                     (= (point) end))))
+                ((or (with-current-buffer view (mevedel-view--pending-follow-ups))
+                     (eq 'composer-draft
+                         (buffer-local-value 'mevedel-pending-inputs--wake-refusal
+                                             mevedel--data-buffer)))))
       (mevedel-pending-inputs-schedule-held-input-delivery))))
 
 (defun mevedel-view--schedule-follow-up-drain (fsm)

@@ -261,6 +261,11 @@ Enforced invariants:
   here` footer (optional final period) in root Lisp libraries and immediate
   `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
   executable fixtures are not libraries and are outside this layout check.
+- Only `mevedel-view-composer.el` may reference the inline input marker
+  (`mevedel-view--input-marker` or `mevedel-view--input-marker-position`).
+  Other Lisp code uses the composer draft or view prompt boundary interface.
+  This checks literal references across the working tree, except under `test/`
+  directories.
 - Local inline/image and explicit reference Markdown links in `docs/` resolve
   to files/directories and, for Markdown fragments, heading or explicit HTML
   anchors. Fenced and inline code examples are ignored. This is not a full

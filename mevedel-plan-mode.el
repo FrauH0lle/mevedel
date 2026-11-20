@@ -143,8 +143,14 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer"
 		  nil)
-(declare-function mevedel-view--input-start "mevedel-view-composer"
-		  nil)
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer"
+                  (&optional view))
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer"
+                  (&optional view))
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer"
+                  (&optional view without-properties))
+(declare-function mevedel-view-composer-insert "mevedel-view-composer"
+                  (text &optional position view))
 
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify"
@@ -346,23 +352,22 @@ it -- the feedback template must not silently destroy unsubmitted
 text."
   (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
     (with-current-buffer target
-      (let ((draft (string-trim
-                    (buffer-substring-no-properties
-                     (mevedel-view--input-start) (point-max)))))
+      (let ((draft (string-trim (mevedel-view-composer-draft-text target t))))
         (unless (string-empty-p draft)
           (mevedel-view-history-add draft)
           (message
            "mevedel: composer draft stashed in input history, not deleted; M-p recalls it")))
       (mevedel-view--clear-input)
-      (goto-char (mevedel-view--input-start))
-      (let ((start (point)))
-        (insert
+      (let ((start (mevedel-view-composer-draft-start target)))
+        (mevedel-view-composer-insert
          (format
           "Plan feedback:\n\n\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
           (mevedel-plan-resource-address
-           mevedel-plan--relative-current-path)))
-        (goto-char start)
-        (forward-line 2)))))
+           mevedel-plan--relative-current-path))
+         start target)
+        (with-current-buffer (mevedel-view-composer-buffer target)
+          (goto-char start)
+          (forward-line 2))))))
 
 (defun mevedel-plan-mode--remote-feedback (chat-buffer text)
   "Queue TEXT as a revision request for CHAT-BUFFER's demoted proposal.

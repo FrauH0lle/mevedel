@@ -5,6 +5,16 @@
 ;; Owns editable composer geometry, prompt submission, root dispatch, and
 ;; fork/send coordination with the authoritative gptel data buffer.
 ;;
+;; The only supported access to the draft is the `mevedel-view-composer-'
+;; interface: `mevedel-view-composer-buffer' and `mevedel-view-composer-window'
+;; find the editing surface; `mevedel-view-composer-draft-start',
+;; `mevedel-view-composer-draft-end', and `mevedel-view-composer-in-draft-p'
+;; locate the editable body; `mevedel-view-composer-draft-text',
+;; `mevedel-view-composer-insert', and `mevedel-view-composer-replace' read
+;; and edit it.  Draft positions belong to the composer buffer, not
+;; necessarily to the view.  The inline prompt and its marker are not
+;; part of this interface.
+;;
 ;; It also owns user view-state preservation.  Asynchronous view writers
 ;; call `mevedel-view-call-preserving-user-view-state'; the partial
 ;; preservers it composes (window state, composer text, composer point) are
@@ -609,6 +619,49 @@ chrome; everything at or below it belongs to the input zone.  The input
 zone starts with the read-only prompt prefix, followed by the editable
 composer body.")
 
+(defun mevedel-view-prompt-boundary-marker ()
+  "Return the current view's live zone boundary marker, or nil.
+Use this for marker choreography during writes, not to locate the draft.
+Unlike `mevedel-view-prompt-boundary', this does not recover drift."
+  (let ((marker mevedel-view--input-marker))
+    (when (and (markerp marker) (eq (marker-buffer marker) (current-buffer)))
+      marker)))
+
+(defun mevedel-view-prompt-boundary ()
+  "Return the current view's prompt/zone boundary position, or nil.
+Recover the layout boundary if it drifted.  The boundary is in the view,
+not at the editable start or end of the draft."
+  (mevedel-view--input-marker-position))
+
+(defun mevedel-view-composer-initialize-prompt ()
+  "Insert the inline prompt and return the new view zone boundary.
+Read-only agent views need the boundary but have no prompt."
+  (let ((start (point)))
+    (unless mevedel-view--agent-transcript-p
+      (insert (mevedel-view--input-prompt-string))
+      (mevedel-view--propertize-input-prompt start (point)))
+    (setq mevedel-view--input-marker (copy-marker start nil))
+    start))
+
+(defun mevedel-view-composer-buffer (&optional view)
+  "Return the buffer holding VIEW's draft, or nil if it has no composer.
+VIEW defaults to the current buffer.  This does not display the composer."
+  (let ((view (or view (current-buffer))))
+    (when (buffer-live-p view)
+      (with-current-buffer view
+        (when (and (not mevedel-view--agent-transcript-p)
+                   (markerp mevedel-view--input-marker)
+                   (eq (marker-buffer mevedel-view--input-marker) view))
+          view)))))
+
+(defun mevedel-view-composer-window (&optional view-window)
+  "Return the composer window for VIEW-WINDOW, defaulting to the selected one.
+Return nil if there is no corresponding window.  Do not change selection."
+  (let ((window (or view-window (selected-window))))
+    (when (and (window-live-p window)
+               (mevedel-view-composer-buffer (window-buffer window)))
+      window)))
+
 (defvar-local mevedel-view--armed-session-fork nil
   "Stable fork-point target armed for the next model-bound submission.")
 
@@ -851,7 +904,7 @@ The prefix is display-only: the draft text, submission, and kills never
 contain it.  The first draft line starts inside the read-only prompt, so
 only explicit and soft-wrapped continuation lines receive it."
   (when (overlayp mevedel-view--composer-display-overlay)
-    (let* ((start (mevedel-view--input-start))
+    (let* ((start (mevedel-view-composer-draft-start))
            (indent (make-string
                     (string-width
                      (buffer-substring-no-properties
@@ -870,7 +923,7 @@ that prefix as display text only after a trailing newline; an ordinary
 nonempty final line needs no extra display characters that could wrap."
   (when (overlayp mevedel-view--composer-display-overlay)
     (overlay-put mevedel-view--composer-display-overlay 'after-string
-                 (when (eq (char-before (point-max)) ?\n)
+                 (when (eq (char-before (mevedel-view-composer-draft-end)) ?\n)
                    (concat
                     (overlay-get mevedel-view--composer-display-overlay 'line-prefix)
                     (propertize " " 'cursor t))))))
@@ -903,12 +956,8 @@ This covers the interval before the prompt has been accepted and before
 
 (defun mevedel-view--position-in-input-region-p (position)
   "Return non-nil when POSITION is in the editable composer."
-  (and (boundp 'mevedel-view--input-marker)
-       (markerp mevedel-view--input-marker)
-       (marker-buffer mevedel-view--input-marker)
-       (not mevedel-view--agent-transcript-p)
-       (ignore-errors
-         (>= position (mevedel-view--input-start)))))
+  (and (eq (current-buffer) (mevedel-view-composer-buffer))
+       (mevedel-view-composer-in-draft-p position)))
 
 (defun mevedel-view--point-in-input-region-p ()
   "Return non-nil when point is in the editable composer."
@@ -1997,24 +2046,26 @@ can no longer be trusted."
 Fontify the whole draft so multiline syntax updates across edited lines.
 Copy only faces: markup stays visible and editable, and mention bindings
 and other input properties remain untouched."
-  (when (and (markerp mevedel-view--input-marker)
-             (marker-buffer mevedel-view--input-marker))
-    (let ((start (mevedel-view--input-start)))
-      (when (> end start)
-        (let* ((text (buffer-substring-no-properties start (point-max)))
-               (fontified (mevedel-view--fontify-as text 'markdown-mode))
-               (pos 0)
-               (limit (length text)))
-          (with-silent-modifications
-            (remove-text-properties start (point-max) '(font-lock-face nil))
-            (while (< pos limit)
-              (let ((next (next-single-property-change
-                           pos 'font-lock-face fontified limit))
-                    (face (get-text-property pos 'font-lock-face fontified)))
-                (when face
-                  (put-text-property (+ start pos) (+ start next)
-                                     'font-lock-face face))
-                (setq pos next)))))))))
+  (when-let* (((eq (current-buffer) (mevedel-view-composer-buffer)))
+              (start (mevedel-view-composer-draft-start))
+              ((> end start)))
+    (save-restriction
+      (widen)
+      (let* ((draft-end (mevedel-view-composer-draft-end))
+             (text (buffer-substring-no-properties start draft-end))
+             (fontified (mevedel-view--fontify-as text 'markdown-mode))
+             (pos 0)
+             (limit (length text)))
+        (with-silent-modifications
+          (remove-text-properties start draft-end '(font-lock-face nil))
+          (while (< pos limit)
+            (let ((next (next-single-property-change
+                         pos 'font-lock-face fontified limit))
+                  (face (get-text-property pos 'font-lock-face fontified)))
+              (when face
+                (put-text-property (+ start pos) (+ start next)
+                                   'font-lock-face face))
+              (setq pos next))))))))
 
 (defun mevedel-view-composer-initialize ()
   "Initialize composer editing support in the current chat view."
@@ -2046,14 +2097,14 @@ and other input properties remain untouched."
       ;; Bound the $skill matcher to the draft: it runs per
       ;; refontification, and scanning the transcript prefix cost
       ;; hundreds of milliseconds per keystroke on a long session.
-      (mevedel-skills-install-font-lock #'mevedel-view--input-start)
+      (mevedel-skills-install-font-lock #'mevedel-view-composer-draft-start)
       (add-hook 'post-command-hook
                 #'mevedel-view--refresh-skill-argument-hint nil t))
     (add-hook 'kill-buffer-hook
               #'mevedel-view--cancel-pending-submission nil t)
     (setq mevedel-view--composer-display-overlay
           (make-overlay
-           (mevedel-view--input-start) (point-max)
+           (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)
            (current-buffer) nil t))
     (add-hook 'after-change-functions #'mevedel-view--update-composer-end nil t)
     (add-hook 'before-change-functions
@@ -2164,16 +2215,101 @@ changes land in the data buffer, and the prompt lives in the view."
       (with-current-buffer view-buf
         (mevedel-view-refresh-input-prompt)))))
 
-(defun mevedel-view--input-start ()
+(defun mevedel-view--input-start (&optional observe)
   "Return the buffer position where the user's editable input begins.
 This is the position immediately after the read-only `> ' prompt that
-follows `mevedel-view--input-marker'."
+follows `mevedel-view--input-marker'.  OBSERVE leaves zone markers alone."
   (save-excursion
-    (goto-char (or (mevedel-view--input-marker-position)
+    (goto-char (or (if observe
+                       (mevedel-view--prompt-start-position)
+                     (mevedel-view--input-marker-position))
                    mevedel-view--input-marker))
     (while (get-text-property (point) 'mevedel-view-prompt)
       (forward-char 1))
     (point)))
+
+(defun mevedel-view-composer-draft-start (&optional view observe)
+  "Return the first editable position of VIEW's draft, or nil if absent.
+VIEW defaults to the current buffer.  Ignore narrowing.
+If OBSERVE is non-nil, leave view-side layout markers unchanged."
+  (when-let* ((buffer (mevedel-view-composer-buffer view)))
+    (with-current-buffer buffer
+      (if (buffer-narrowed-p)
+          (save-restriction
+            (widen)
+            (mevedel-view--input-start observe))
+        (mevedel-view--input-start observe)))))
+
+(defun mevedel-view-composer-draft-end (&optional view)
+  "Return the position just after VIEW's draft, or nil if absent.
+VIEW defaults to the current buffer.  Ignore narrowing."
+  (when-let* ((buffer (mevedel-view-composer-buffer view)))
+    (1+ (buffer-size buffer))))
+
+(defun mevedel-view-composer-draft-text (&optional view without-properties)
+  "Return VIEW's whole draft as a string, or nil if there is no composer.
+Keep whitespace and text properties unless WITHOUT-PROPERTIES is non-nil,
+in which case omit properties only.  VIEW defaults to the current buffer."
+  (when-let* ((buffer (mevedel-view-composer-buffer view)))
+    (with-current-buffer buffer
+      (let ((substring (if without-properties
+                           #'buffer-substring-no-properties
+                         #'buffer-substring)))
+        (if (buffer-narrowed-p)
+            (save-restriction
+              (widen)
+              (funcall substring (mevedel-view--input-start) (point-max)))
+          (funcall substring (mevedel-view--input-start) (point-max)))))))
+
+(defun mevedel-view-composer-in-draft-p (position &optional view)
+  "Return non-nil if POSITION is a valid caret position in VIEW's draft.
+Include both boundaries.  A marker must belong to the composer buffer;
+an integer is interpreted in that buffer.  VIEW defaults to the current
+buffer."
+  (when-let* ((buffer (mevedel-view-composer-buffer view))
+              (position (if (markerp position)
+                            (and (eq (marker-buffer position) buffer)
+                                 (marker-position position))
+                          position)))
+    (and (integerp position)
+         (<= (mevedel-view-composer-draft-start view) position
+             (mevedel-view-composer-draft-end view)))))
+
+(defun mevedel-view-composer-insert (text &optional position view)
+  "Insert TEXT at POSITION in VIEW's draft and return point after the edit.
+POSITION defaults to draft end and must be a draft caret position.
+VIEW defaults to the current buffer.  This moves point in the composer
+buffer without selecting a window or overriding read-only protections."
+  (let* ((buffer (or (mevedel-view-composer-buffer view)
+                     (error "No composer for view")))
+         (position (or position (mevedel-view-composer-draft-end view))))
+    (unless (mevedel-view-composer-in-draft-p position view)
+      (error "Insertion position is outside the composer draft"))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (goto-char position)
+        (insert text)
+        (point)))))
+
+(defun mevedel-view-composer-replace (text &optional view)
+  "Replace VIEW's whole draft with TEXT and return point after the edit.
+Use an empty string to clear the draft.  VIEW defaults to the current buffer.
+This moves point in the composer buffer without selecting a window or
+overriding read-only protections."
+  (let ((buffer (or (mevedel-view-composer-buffer view)
+                    (error "No composer for view"))))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (mevedel-view--call-preserving-draft-window-state
+         (lambda ()
+           (atomic-change-group
+             (let ((start (mevedel-view--input-start)))
+               (delete-region start (point-max))
+               (goto-char start)
+               (insert text)
+               (point)))))))))
 
 (defun mevedel-view-refresh-input-prompt ()
   "Refresh the input prompt to reflect the current permission mode."
@@ -2282,82 +2418,87 @@ This is the text a submission captures and the text a later clear
 decision compares against, so it must not be trimmed or normalized.
 Returns nil in a buffer with no editable composer, because a submission
 raised from one has no draft to protect."
-  (when (and (markerp mevedel-view--input-marker)
-             (marker-buffer mevedel-view--input-marker))
-    (buffer-substring-no-properties (mevedel-view--input-start) (point-max))))
+  (mevedel-view-composer-draft-text nil t))
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
-  (let ((text (mevedel-mention-bindings-copy-text
-               (buffer-substring
-                (mevedel-view--input-start) (point-max)))))
-    (string-trim text)))
+  (string-trim (mevedel-mention-bindings-copy-text
+                (or (mevedel-view-composer-draft-text) ""))))
 
 (defun mevedel-view--bind-input-mentions (session)
   "Bind known mentions in the live composer for SESSION and return input.
 The visible text is unchanged.  Binding before asynchronous preparation
 means a failed attempt leaves the exact source attached for a retry."
-  (let* ((input-start (mevedel-view--input-start))
+  (let* ((view (current-buffer))
          (raw-input
           (mevedel-mention-bindings-copy-text
-           (buffer-substring input-start (point-max))))
+           (mevedel-view-composer-draft-text view)))
          (bound-input
           (with-current-buffer mevedel--data-buffer
             (mevedel-mentions-prepare-user-input
              (mevedel-skills-input-prepare-user-input raw-input session)
              session))))
-    (with-silent-modifications
-      (remove-text-properties
-       input-start (point-max)
-       '(mevedel-mention-binding nil rear-nonsticky nil))
-      (dolist (range (mevedel-mention-bindings-ranges bound-input))
-        (mevedel-mention-bindings-set
-         (+ input-start (plist-get range :start))
-         (+ input-start (plist-get range :end))
-         (plist-get range :binding))))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (save-restriction
+        (widen)
+        (let ((start (mevedel-view-composer-draft-start view))
+              (end (mevedel-view-composer-draft-end view)))
+          (with-silent-modifications
+            (remove-text-properties
+             start end '(mevedel-mention-binding nil rear-nonsticky nil))
+            (dolist (range (mevedel-mention-bindings-ranges bound-input))
+              (mevedel-mention-bindings-set
+               (+ start (plist-get range :start))
+               (+ start (plist-get range :end))
+               (plist-get range :binding)))))))
     (string-trim bound-input)))
 
 (defun mevedel-view--composer-snapshot (session)
   "Capture the editable composer and pending grants for SESSION."
-  (let ((start (mevedel-view--input-start)))
-    (list :text (buffer-substring start (point-max))
-          :point-offset (- (point) start)
+  (let ((start (mevedel-view-composer-draft-start)))
+    (list :text (mevedel-view-composer-draft-text)
+          :point-offset (- (with-current-buffer (mevedel-view-composer-buffer)
+                             (point))
+                           start)
           :dropped-file-grants
           (copy-sequence (mevedel-session-dropped-file-grants session)))))
 
 (defun mevedel-view--restore-composer-snapshot (snapshot session &optional force)
   "Restore SNAPSHOT for SESSION when its visible draft is still current.
 When FORCE is non-nil, replace the current draft unconditionally."
-  (let* ((start (mevedel-view--input-start))
-         (text (plist-get snapshot :text)))
+  (let ((view (current-buffer))
+        (text (plist-get snapshot :text)))
     (when (or force
-              (equal (buffer-substring-no-properties start (point-max))
+              (equal (mevedel-view-composer-draft-text view t)
                      (substring-no-properties text)))
-      (mevedel-view--call-preserving-draft-window-state
-       (lambda ()
-         (let ((inhibit-read-only t))
-           (with-silent-modifications
-             (delete-region start (point-max))
-             (goto-char start)
-             (insert text)))
-         (mevedel-view--update-composer-end)))
+      (with-current-buffer (mevedel-view-composer-buffer view)
+        (mevedel-view--call-preserving-draft-window-state
+         (lambda ()
+           (let ((inhibit-read-only t))
+             (with-silent-modifications
+               (mevedel-view-composer-replace text view)))
+           (mevedel-view--update-composer-end)))
+        (goto-char
+         (min (mevedel-view-composer-draft-end view)
+              (+ (mevedel-view-composer-draft-start view)
+                 (plist-get snapshot :point-offset)))))
       (mevedel-session--set-dropped-file-grants
        session
        (copy-sequence
         (plist-get snapshot :dropped-file-grants)))
-      (goto-char
-       (min (point-max)
-            (+ start (plist-get snapshot :point-offset))))
       t)))
 
 
 (defun mevedel-view--clear-input ()
   "Clear the user's composer text, leaving the prompt in place."
   (mevedel-view--ensure-interactive-chat-view)
-  (when-let* ((session (mevedel-view--session)))
-    (mevedel-session-clear-dropped-file-grants session))
-  (delete-region (mevedel-view--input-start) (point-max))
-  (mevedel-view--delete-skill-argument-hint))
+  (when-let* ((view (current-buffer))
+              (composer (mevedel-view-composer-buffer view)))
+    (with-current-buffer composer
+      (save-excursion (mevedel-view-composer-replace "" view))
+      (mevedel-view--delete-skill-argument-hint))
+    (when-let* ((session (mevedel-view--session)))
+      (mevedel-session-clear-dropped-file-grants session))))
 
 (defun mevedel-view--session ()
   "Return the session associated with the current view buffer."
@@ -2411,10 +2552,7 @@ Non-nil means later input is a follow-up.  The symbol is one of
 (defun mevedel-view--skill-argument-hint ()
   "Return display-only skill argument hint for the current composer."
   (when-let* ((session (mevedel-view--session))
-              (input-start (and (markerp mevedel-view--input-marker)
-                                (marker-buffer mevedel-view--input-marker)
-                                (mevedel-view--input-start)))
-              (text (buffer-substring-no-properties input-start (point-max)))
+              (text (mevedel-view-composer-draft-text nil t))
               (parsed (mevedel-skills-input-parse-skill-line text))
               (name (nth 0 parsed))
               (skill (mevedel-session-get-skill session name))
@@ -2430,19 +2568,19 @@ any motion command, returns without work."
   (let ((tick (buffer-chars-modified-tick)))
     (unless (eql tick mevedel-view--skill-argument-hint-tick)
       (setq mevedel-view--skill-argument-hint-tick tick)
-      (let ((hint (and (not mevedel-view--agent-transcript-p)
+      (let ((hint (and (eq (current-buffer) (mevedel-view-composer-buffer))
                        (mevedel-view--skill-argument-hint))))
         (if (and hint (not (string-empty-p hint)))
-            (let ((string (propertize (concat " " hint)
+            (let ((end (mevedel-view-composer-draft-end))
+                  (string (propertize (concat " " hint)
                                       'font-lock-face 'shadow)))
               (unless (overlayp mevedel-view--skill-argument-hint-overlay)
                 (setq mevedel-view--skill-argument-hint-overlay
-                      (make-overlay (point-max) (point-max) (current-buffer)
-                                    nil t))
+                      (make-overlay end end (current-buffer) nil t))
                 (overlay-put mevedel-view--skill-argument-hint-overlay
                              'priority 10))
               (move-overlay mevedel-view--skill-argument-hint-overlay
-                            (point-max) (point-max) (current-buffer))
+                            end end (current-buffer))
               (unless (equal-including-properties
                        string
                        (overlay-get mevedel-view--skill-argument-hint-overlay
@@ -2454,25 +2592,26 @@ any motion command, returns without work."
 (defun mevedel-view--refresh-skill-argument-hint-after-change
     (start end _old-length)
   "Invalidate edited bindings and refresh the composer skill hint."
-  (when (and (markerp mevedel-view--input-marker)
-             (marker-buffer mevedel-view--input-marker)
-             (>= start (mevedel-view--input-start)))
+  (when-let* (((eq (current-buffer) (mevedel-view-composer-buffer)))
+              (draft-start (mevedel-view-composer-draft-start))
+              ((>= start draft-start))
+              (draft-end (mevedel-view-composer-draft-end))
+              ((<= end draft-end)))
     (mevedel-mention-bindings-invalidate-edit
-     start end (mevedel-view--input-start) (point-max)))
+     start end draft-start draft-end))
   (mevedel-view--refresh-skill-argument-hint))
 
 (defun mevedel-view-slash-capf ()
   "Completion-at-point for slash commands and `$' skills in the composer.
 Offers local slash commands at `/name', session skills at `$name',
 and command argument completion for commands with finite choices."
-  (when (and mevedel--data-buffer
-             (buffer-live-p mevedel--data-buffer)
-             (>= (point) (mevedel-view--input-start)))
+  (when (and (buffer-live-p mevedel--data-buffer)
+             (mevedel-view--point-in-input-region-p))
     (let ((session (buffer-local-value 'mevedel--session
                                        mevedel--data-buffer)))
       (mevedel-skills-slash-capf
        mevedel--data-buffer session mevedel-slash-commands
-       (mevedel-view--input-start)))))
+       (mevedel-view-composer-draft-start)))))
 
 (defun mevedel-view--start-fork-skill-turn
     (input display-text &optional hook-context submitted-draft dispatch)
@@ -3077,8 +3216,10 @@ instead of the composer, preserving its draft."
 	                   (mevedel-view-history-add input))))))))))
   ;; Accepted sends clear the submitted draft and land at the composer end.
   ;; Rejected sends preserve the exact input-relative point.
-  (unless (mevedel-view--point-in-input-region-p)
-    (goto-char (point-max))))
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (unless (mevedel-view-composer-in-draft-p (point) view)
+        (goto-char (mevedel-view-composer-draft-end view))))))
 
 (defun mevedel-view-invocation-kind (name &optional session)
   "Return how NAME is invoked: `command\=', `skill\=', or nil.

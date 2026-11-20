@@ -88,9 +88,8 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
        (lambda (data view)
          (with-current-buffer view
            (mevedel-benchmark--insert-history (* 1024 1024))
-           (goto-char (mevedel-view--input-start))
-           (insert mevedel-gate--draft)
-           (goto-char (+ (mevedel-view--input-start) 4))
+           (mevedel-view-composer-insert mevedel-gate--draft)
+           (goto-char (+ (mevedel-view-composer-draft-start) 4))
            (set-window-point (selected-window) (point))
            (let ((offset 4)
                  (chunk " fixed stream chunk.")
@@ -138,7 +137,7 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
              (set-window-start
               (selected-window)
               (save-excursion
-                (goto-char (mevedel-view--input-start))
+                (goto-char (mevedel-view-prompt-boundary))
                 (forward-line -4)
                 (point)))
              (redisplay t)
@@ -163,8 +162,8 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                    (setq result (funcall consumer update))))
                (unless (> (buffer-modified-tick) tick)
                  (error "Scenario did not modify the view: %s" scenario)))
-             (unless (and (= (point) (+ (mevedel-view--input-start) offset))
-                          (equal (mevedel-view--input-text)
+             (unless (and (= (point) (+ (mevedel-view-composer-draft-start) offset))
+                          (equal (mevedel-view-composer-draft-text nil t)
                                  (if (eq scenario 'composer-keystroke)
                                      "> bexnchmark draft\nsecond line"
                                    mevedel-gate--draft)))
@@ -179,8 +178,9 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                ('zone-tick
                 (unless (and (> reconciles 0)
                              (save-excursion
-                               (goto-char (- (mevedel-view--input-start) 100))
-                               (search-forward "13s" (mevedel-view--input-start) t)))
+                               (let ((boundary (mevedel-view-prompt-boundary)))
+                                 (goto-char (- boundary 100))
+                                 (search-forward "13s" boundary t))))
                   (error "Zone tick skipped elapsed metadata reconciliation"))))
              result)))))))
 

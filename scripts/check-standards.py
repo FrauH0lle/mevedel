@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 COLLECTOR = Path(__file__).with_name('checkdoc-collect.el')
 STUB_COLLECTOR = Path(__file__).with_name('test-stubs-collect.el')
 TEST_COLLECTOR = Path(__file__).with_name('test-inventory-collect.el')
+INPUT_MARKER = re.compile(r'(?<![\w-])mevedel-view--input-marker(?:-position)?(?![\w-])')
 
 
 def git(root, *args):
@@ -49,6 +50,16 @@ def lisp_boundaries(name, text):
                                    r' ends here\.?', last[-1]):
         errors.append(f'{name}: missing matching final ends-here footer')
     return errors
+
+
+def composer_marker_errors(name, text):
+    """Reserve literal inline marker references for the composer core."""
+    if name == 'mevedel-view-composer.el' or 'test' in Path(name).parts[:-1]:
+        return []
+    return [f'{name}:{number}: composer-marker: {match[0]} belongs to the composer core; '
+            'use the composer draft or view prompt boundary interface'
+            for number, line in enumerate(text.splitlines(), 1)
+            for match in INPUT_MARKER.finditer(line)]
 
 
 def prose(text):
@@ -357,6 +368,7 @@ def run(root, base):
         text = (root / name).read_text()
         if name.endswith('.el'):
             errors.extend(lisp_boundaries(name, text))
+            errors.extend(composer_marker_errors(name, text))
             if name in origins or name not in base_names:
                 origin = origins.get(name, name)
                 old = (git(root, 'show', f'{revision}:{origin}').decode()

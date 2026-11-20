@@ -211,11 +211,14 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
-(declare-function mevedel-view--composer-snapshot
-                  "mevedel-view-composer" (session))
 (declare-function mevedel-view--forward-input "mevedel-view-composer" t)
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer"
+                  (&optional view))
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer"
+                  (&optional view without-properties))
+(declare-function mevedel-view-composer-insert "mevedel-view-composer"
+                  (text &optional position view))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender
@@ -972,11 +975,9 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (mevedel-side-conversation--validate-input prompt))
   (let* ((parent-data (current-buffer))
          (parent-view mevedel--view-buffer)
-         (parent-session mevedel--session)
-         (parent-composer
+         (parent-draft
           (and (buffer-live-p parent-view)
-               (with-current-buffer parent-view
-                 (mevedel-view--composer-snapshot parent-session))))
+               (mevedel-view-composer-draft-text parent-view)))
          (side-data
           (and (buffer-live-p mevedel-side-conversation--side-buffer)
                mevedel-side-conversation--side-buffer))
@@ -992,19 +993,17 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                  (pop-to-buffer view)
                  (user-error "The /btw response is still active"))
                (with-current-buffer view
-                 (unless (string-empty-p (mevedel-view--input-text))
+                 (unless (string-blank-p (mevedel-view-composer-draft-text view t))
                    (pop-to-buffer view)
                    (user-error "The /btw composer already has a draft"))
-                 (goto-char (mevedel-view--input-start))
-                 (insert prompt)
+                 (mevedel-view-composer-insert
+                  prompt (mevedel-view-composer-draft-start view) view)
                  (mevedel-side-conversation-send)))
-             (when (and parent-composer (buffer-live-p parent-view))
+             (when (and parent-draft (buffer-live-p parent-view)
+                        (equal-including-properties
+                         parent-draft (mevedel-view-composer-draft-text parent-view)))
                (with-current-buffer parent-view
-                 (when (equal-including-properties
-                        (plist-get parent-composer :text)
-                        (buffer-substring
-                         (mevedel-view--input-start) (point-max)))
-                   (mevedel-view--clear-input))))
+                 (mevedel-view--clear-input)))
              (pop-to-buffer view)
              view)))
       (cond

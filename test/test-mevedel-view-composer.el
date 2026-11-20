@@ -3037,7 +3037,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((inside (1+ (mevedel-view--input-start)))
+      (let ((inside (mevedel-view-composer-insert "draft"))
             (outside (point-min)))
         (should (= outside (mevedel-view--transcript-position-backstop outside)))
         (let ((moved (mevedel-view--transcript-position-backstop inside)))
@@ -7585,7 +7585,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should (= send-count 1)))))
       (delete-directory root t)))
 
-  :doc "a draft typed while UserPromptSubmit runs survives the send"
+  :doc "a detached draft typed while UserPromptSubmit runs survives the send"
   (let* ((root (make-temp-file "mevedel-view-hooks-redraft" t))
          (workspace (mevedel-workspace-get-or-create
                      'project "view-hooks-redraft" root
@@ -7604,33 +7604,33 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
             (mevedel-session-set-root-buffer session data-buf))
-          (cl-letf (((symbol-function 'gptel-send)
-                     (lambda (&rest _) (cl-incf send-count))))
-            (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "submitted prompt")
-              (mevedel-view-send)
-              (should mevedel-view--prompt-hook-pending)
-              ;; The user keeps typing while the hook runs.
-              (delete-region (mevedel-view--input-start) (point-max))
-              (goto-char (point-max))
-              (insert "> quoted\nsecond line")
-              (mevedel-session--set-dropped-file-grants
-               session (list (file-name-concat root "later.png")))
-              (let ((draft-offset (- (point) (mevedel-view--input-start)))
-                    (deadline (+ (float-time) 10)))
-                (while (and mevedel-view--prompt-hook-pending
-                            (< (float-time) deadline))
-                  (accept-process-output nil 0.05))
-                (should-not mevedel-view--prompt-hook-pending)
-                (should (= send-count 1))
-                (should (equal (list (file-name-concat root "later.png"))
-                               (mevedel-session-dropped-file-grants
-                                session)))
-                (should (equal "> quoted\nsecond line"
-                               (mevedel-view--input-text)))
-                (should (= draft-offset
-                           (- (point) (mevedel-view--input-start))))))))
+          (with-temp-buffer
+            (let ((draft-buf (current-buffer)))
+              (mevedel-view--setup draft-buf data-buf)
+              (mevedel-view--setup view-buf data-buf)
+              (with-current-buffer view-buf
+                (cl-letf (((symbol-function 'mevedel-view-composer-buffer)
+                           (lambda (&optional _view) draft-buf))
+                          ((symbol-function 'gptel-send)
+                           (lambda (&rest _) (cl-incf send-count))))
+                  (mevedel-view-composer-replace "submitted prompt")
+                  (mevedel-view-send)
+                  (should mevedel-view--prompt-hook-pending)
+                  (let ((draft-point
+                         (mevedel-view-composer-replace "> quoted\nsecond line"))
+                        (deadline (+ (float-time) 10)))
+                    (mevedel-session--set-dropped-file-grants
+                     session (list (file-name-concat root "later.png")))
+                    (while (and mevedel-view--prompt-hook-pending
+                                (< (float-time) deadline))
+                      (accept-process-output nil 0.05))
+                    (should-not mevedel-view--prompt-hook-pending)
+                    (should (= send-count 1))
+                    (should (equal (list (file-name-concat root "later.png"))
+                                   (mevedel-session-dropped-file-grants session)))
+                    (should (equal "> quoted\nsecond line"
+                                   (mevedel-view-composer-draft-text nil t)))
+                    (should (= draft-point (with-current-buffer draft-buf (point))))))))))
       (delete-directory root t)))
 
   :doc "abort makes a late UserPromptSubmit callback inert"

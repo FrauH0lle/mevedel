@@ -94,7 +94,6 @@
 ;; `mevedel-view-composer'
 (autoload 'mevedel-view-call-preserving-window-configuration
   "mevedel-view-composer")
-(defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--markdown-fontify-mode "mevedel-view-fontify" ())

@@ -914,19 +914,20 @@ handler chain would, so staged reminder entries reach the data."
 
 (defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
   "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
-  (let ((start (mevedel-view--input-start))
+  (require 'mevedel-view-composer)
+  (let ((view (current-buffer))
+        (start (mevedel-view-composer-draft-start))
         (inhibit-read-only t))
-    (goto-char start)
-    (insert draft)
-    (remove-text-properties
-     start (point)
-     '(read-only nil
-       mevedel-view-prompt nil
-       font-lock-face nil
-       face nil
-       front-sticky nil
-       rear-nonsticky nil))
-    (goto-char (+ start (or point-offset (length draft))))))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (remove-text-properties
+       start (mevedel-view-composer-insert draft start view)
+       '(read-only nil
+         mevedel-view-prompt nil
+         font-lock-face nil
+         face nil
+         front-sticky nil
+         rear-nonsticky nil))
+      (goto-char (+ start (or point-offset (length draft)))))))
 
 (defun mevedel-view-test--abort-interactions (data-buffer)
   "Abort DATA-BUFFER's queued interactions without saving its session.

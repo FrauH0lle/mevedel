@@ -149,7 +149,6 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
 (declare-function mevedel-view--restore-composer-anchors
@@ -158,7 +157,11 @@
                   "mevedel-view-composer" (&optional arg))
 (declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
-(defvar mevedel-view--input-marker)
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
+(declare-function mevedel-view-composer-window "mevedel-view-composer" (&optional view-window))
+(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-apply-rendering-state
@@ -638,12 +641,10 @@ qualifies: it returns to PARENT when closed."
            (and (window-live-p window)
                 (or (eq (window-buffer window) view-buffer)
                     (and (eq (window-buffer window) parent)
-                         (markerp mevedel-view--input-marker)
-                         (eq (marker-buffer mevedel-view--input-marker) parent)
-                         (mevedel-view--position-screen-y
-                          (mevedel-view--input-start) window)
-                         (>= (window-point window)
-                             (mevedel-view--input-start)))))))
+                         (when-let* ((composer (mevedel-view-composer-window window)))
+                           (and (mevedel-view-composer-in-draft-p (window-point composer))
+                                (mevedel-view--position-screen-y
+                                 (mevedel-view-composer-draft-start) composer))))))))
        anchors))))
 
 (defun mevedel-view--kill-agent-transcript-view
@@ -763,7 +764,8 @@ window the user moved into history meanwhile keeps its start."
                 (with-current-buffer mevedel--data-buffer
                   (copy-marker (car source) nil))))))
     (unless (mevedel-view-stream-in-flight-turn-start-position)
-      (mevedel-view-stream-set-in-flight-turn-start mevedel-view--input-marker)
+      (mevedel-view-stream-set-in-flight-turn-start
+       (mevedel-view-prompt-boundary-marker))
       (setq mevedel-view--data-turn-start
             (with-current-buffer mevedel--data-buffer
               (copy-marker (point-max) nil))))))
@@ -1267,9 +1269,10 @@ does not search the transcript."
 The return value is (POINTS . STALE-P), where STALE-P means a visible
 non-status handle existed but lacked usable source metadata."
   (let ((pos (point-min))
+        (limit (or (mevedel-view-prompt-boundary) (point-max)))
         points
         stale-p)
-    (while (< pos (point-max))
+    (while (< pos limit)
       (let* ((path (get-text-property pos 'mevedel-view-agent-path))
              (handle-p (get-text-property pos 'mevedel-view-agent-handle-p))
              (source (get-text-property pos 'mevedel-view-source)))
@@ -1285,9 +1288,8 @@ non-status handle existed but lacked usable source metadata."
                        points)
                 (push pos points))
             (setq stale-p t))))
-      (setq pos (or (next-single-property-change
-                     pos 'mevedel-view-agent-path nil (point-max))
-                    (point-max))))
+      (setq pos (next-single-property-change
+                 pos 'mevedel-view-agent-path nil limit)))
     (cons (sort points #'>) stale-p)))
 
 (defun mevedel-view--refresh-agent-handle-at (pos _agent-path)
@@ -1352,7 +1354,7 @@ Return non-nil on success."
           ;; Preserve those rows and their fold state when replacing the handle.
           (setq rendering (plist-put rendering :hook-audits nil))
           (goto-char view-start)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (let ((ins-start (point)))
                 (delete-region view-start view-end)
@@ -1364,7 +1366,7 @@ Return non-nil on success."
                                      'mevedel-view-turn-id turn-id))
                 (when in-flight-after-section-p
                   (set-marker mevedel-view--in-flight-turn-start ins-start)))
-            (set-marker-insertion-type mevedel-view--input-marker nil))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
           t)))))
 
 (defun mevedel-view--refresh-agent-rendering-now (agent-path)

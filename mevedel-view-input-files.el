@@ -58,8 +58,12 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--session "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
+(declare-function mevedel-view-composer-insert "mevedel-view-composer" (text &optional position view))
 
 ;; `mevedel-view-markdown'
 (declare-function mevedel-view--normalize-local-file-uri-path
@@ -151,17 +155,27 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
          token)
         (push token tokens)
         (mevedel-session-add-dropped-file-grant session expanded)))
-    (setq tokens (nreverse tokens))
     (when tokens
-      (when (< (point) (mevedel-view--input-start))
-        (goto-char (point-max)))
-      (unless (or (= (point) (mevedel-view--input-start))
-                  (memq (char-before) '(?\s ?\t ?\n)))
-        (insert " "))
-      (insert (string-join tokens " "))
-      (unless (or (eobp) (memq (char-after) '(?\s ?\t ?\n)))
-        (insert " "))
-      (font-lock-flush (mevedel-view--input-start) (point-max)))))
+      (let* ((view (current-buffer))
+             (composer (mevedel-view-composer-buffer view))
+             (start (mevedel-view-composer-draft-start view))
+             (end (mevedel-view-composer-draft-end view))
+             (pos (if (and (eq view composer)
+                           (mevedel-view-composer-in-draft-p (point) view))
+                      (point) end)))
+        (with-current-buffer composer
+          (save-restriction
+            (widen)
+            (mevedel-view-composer-insert
+             (concat (unless (or (= pos start)
+                                 (memq (char-before pos) '(?\s ?\t ?\n)))
+                       " ")
+                     (string-join (nreverse tokens) " ")
+                     (unless (or (= pos end)
+                                 (memq (char-after pos) '(?\s ?\t ?\n)))
+                       " "))
+             pos view)
+            (font-lock-flush start (mevedel-view-composer-draft-end view))))))))
 
 (defun mevedel-view--pop-dropped-file-grants-for-input (input session)
   "Consume SESSION's pending drag/drop grants referenced by INPUT."

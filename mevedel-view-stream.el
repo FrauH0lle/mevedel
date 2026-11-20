@@ -113,7 +113,8 @@
 (declare-function mevedel-view--composer-mode-badge
                   "mevedel-view-composer" (&optional mode))
 (autoload 'mevedel-view--composer-mode-badge "mevedel-view-composer")
-(defvar mevedel-view--input-marker)
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+(autoload 'mevedel-view-composer-buffer "mevedel-view-composer")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-count-label
@@ -467,9 +468,7 @@ a reader position: keep it, and let the projection restore reader state.
 Elsewhere, reconciliation's semantic restoration is authoritative."
   (let ((cursor (and mevedel-view-render--owner (point-marker))))
     (unwind-protect
-        (when (and (not mevedel-view--agent-transcript-p)
-                   (markerp mevedel-view--input-marker)
-                   (marker-position mevedel-view--input-marker))
+        (when (mevedel-view-composer-buffer)
           (let* ((display-status
                   (and mevedel-view--spinner-status
                        (mevedel-view--spinner-display-status

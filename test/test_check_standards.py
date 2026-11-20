@@ -68,6 +68,22 @@ class StandardsTests(unittest.TestCase):
         self.assertEqual(standards.lisp_boundaries('test/fixtures/demo.el', '(foo)'), [])
         self.assertEqual(standards.lisp_boundaries('.dir-locals.el', '((nil))'), [])
 
+    def test_only_composer_core_can_access_input_marker(self):
+        owner = library('mevedel-view-composer').replace(
+            '(provide', '(defvar mevedel-view--input-marker nil "Inline input marker.")\n(provide')
+        self.write('mevedel-view-composer.el', owner)
+        self.commit()
+        self.check(0)
+
+        for name, symbol in [('demo', 'mevedel-view--input-marker'),
+                             ('benchmark/demo', 'mevedel-view--input-marker-position')]:
+            source = library('demo').replace('  value)', f'  (ignore value)\n  {symbol})')
+            self.write(f'{name}.el', source)
+        _, errors = self.check(1)
+        self.assertIn('demo.el:8: composer-marker: mevedel-view--input-marker ', errors)
+        self.assertIn('benchmark/demo.el:8: composer-marker: '
+                      'mevedel-view--input-marker-position ', errors)
+
     def test_markdown_links(self):
         self.write('docs/target.md', '# A `code` heading\n# Duplicate\n# Duplicate\n'
                    '<a id="custom"></a>\n')

@@ -53,9 +53,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
-
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--rendered-turn-starts "mevedel-view-render" ())

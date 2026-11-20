@@ -45,6 +45,8 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-clear-dropped-file-grants
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
@@ -52,11 +54,15 @@
 (defvar mevedel--session)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-draft-window-state
-                  "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view--ensure-interactive-chat-view
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view--session "mevedel-view-composer" ())
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
+(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
+(declare-function mevedel-view-composer-replace "mevedel-view-composer" (text &optional view))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -113,23 +119,20 @@
        (not mevedel-view--agent-transcript-p)
        (boundp 'mevedel--data-buffer)
        mevedel--data-buffer
-       (ignore-errors
-         (>= (point) (mevedel-view--input-start)))))
+       (mevedel-view-composer-in-draft-p (point-marker))))
 
 (defun mevedel-view-history--input-text ()
   "Return current view input text, untrimmed."
   (mevedel-mention-bindings-copy-text
-   (buffer-substring (mevedel-view--input-start) (point-max))))
+   (mevedel-view-composer-draft-text)))
 
 (defun mevedel-view-history--replace-input (text)
   "Replace the current view input with TEXT."
-  (mevedel-view--call-preserving-draft-window-state
-   (lambda ()
-     (let ((inhibit-read-only t))
-       (mevedel-view--clear-input)
-       (goto-char (mevedel-view--input-start))
-       (insert text)
-       (goto-char (point-max))))))
+  (mevedel-view--ensure-interactive-chat-view)
+  (let ((inhibit-read-only t))
+    (mevedel-view-composer-replace text))
+  (when-let* ((session (mevedel-view--session)))
+    (mevedel-session-clear-dropped-file-grants session)))
 
 (defun mevedel-view-history-add (input)
   "Add INPUT to the current view buffer's input history.
@@ -501,27 +504,23 @@ request."
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
     (let* ((choice (completing-read "Input history: " entries nil t))
            (entry (cl-find choice entries :test #'string=)))
-      (goto-char (mevedel-view--input-start))
       (mevedel-view-history--replace-input (or entry choice)))))
 
 (defun mevedel-view-history-clear-input ()
   "Clear current input when point is in the composer."
   (interactive)
   (when (mevedel-view-history--input-active-p)
-    (mevedel-view--clear-input)
-    (goto-char (mevedel-view--input-start))))
+    (mevedel-view--clear-input)))
 
 (defun mevedel-view-history-beginning-of-line (&optional arg)
   "Move to input start on the prompt line, otherwise run normal BOL.
 ARG is forwarded to `move-beginning-of-line' on the normal path."
   (interactive "^p")
-  (if (and (mevedel-view-history--input-active-p)
-           (save-excursion
-             (let ((input-start (mevedel-view--input-start)))
-               (and (> (point) input-start)
-                    (<= (line-beginning-position) input-start)
-                    (<= input-start (line-end-position))))))
-      (goto-char (mevedel-view--input-start))
+  (if-let* (((mevedel-view-history--input-active-p))
+            (start (mevedel-view-composer-draft-start))
+            ((> (point) start))
+            ((<= (line-beginning-position) start (line-end-position))))
+      (goto-char start)
     (move-beginning-of-line arg)))
 
 (provide 'mevedel-view-history)
