@@ -27,6 +27,15 @@
         (kill-buffer view-buf)
         (should-not (buffer-live-p composer))))))
 
+(ert-deftest mevedel-composer-mode/refuses-adaptive-wrap ()
+  "A `text-mode-hook' enabling adaptive wrap leaves the composer's prefixes alone."
+  (unless (fboundp 'adaptive-wrap-prefix-mode)
+    (define-minor-mode adaptive-wrap-prefix-mode "Stand-in." :lighter nil))
+  (let ((text-mode-hook (list #'adaptive-wrap-prefix-mode)))
+    (with-temp-buffer
+      (mevedel-composer-mode)
+      (should-not (bound-and-true-p adaptive-wrap-prefix-mode)))))
+
 (mevedel-deftest mevedel-view-composer-buffer ()
   ,test
   (test)

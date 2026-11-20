@@ -880,9 +880,21 @@ END distinguishes a draft edit from a one-argument window notification."
   (when (mevedel-composer--rail-clipped-p dock start)
     (mevedel-composer--queue-fit)))
 
+(declare-function adaptive-wrap-prefix-mode "ext:adaptive-wrap" (&optional arg))
+
+(defun mevedel-composer--refuse-adaptive-wrap ()
+  "Keep `adaptive-wrap-prefix-mode' off; the composer owns its wrap prefixes.
+A user's `text-mode-hook' may enable it, and its fontifier signals on the
+rail's displayed first line besides overwriting the prompt's prefix."
+  (when (bound-and-true-p adaptive-wrap-prefix-mode)
+    (adaptive-wrap-prefix-mode -1)))
+
 (define-derived-mode mevedel-composer-mode text-mode "Composer"
   "Edit the draft of a mevedel conversation."
   (visual-line-mode 1)
+  ;; Parent mode hooks run after this body, so refuse from the mode's hook.
+  (add-hook 'adaptive-wrap-prefix-mode-hook
+            #'mevedel-composer--refuse-adaptive-wrap nil t)
   ;; Geometry queries can evaluate the header without selecting its window.
   (setq-local header-line-format
               '(:eval (when (eq (window-buffer) (current-buffer))
