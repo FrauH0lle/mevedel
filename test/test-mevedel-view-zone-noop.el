@@ -222,14 +222,8 @@ The current buffer is the owning view."
         (stale)
         (should-not (reconcile))
         (should (stale-p))
-        ;; Forgetting the zone discards the proof, so the stale text goes.
-        (mevedel-view-zone-forget 'status)
-        (should-not (reconcile))
-        (should-not (stale-p))
-        ;; So does losing the region table, as `kill-all-local-variables' would.
-        (should-not (reconcile))
+        ;; Losing the table discards the proof, so the stale text goes.
         (setq mevedel-view-zone--regions nil)
-        (stale)
         (should-not (reconcile))
         (should-not (stale-p))
         ;; A live region replaces the proof; clearing it leaves no zone text.
@@ -238,12 +232,10 @@ The current buffer is the owning view."
                  'status mevedel-view--status-marker mevedel-view--status-marker
                  '((:namespace status :id live :body "Live status"))))
         (should (string-search "Live status" (buffer-string)))
+        (stale)
         (should-not (reconcile))
         (should-not (mevedel-view-zone-region 'status))
         (should-not (string-search "Live status" (buffer-string)))
-        (stale)
-        (mevedel-view-zone-forget 'status)
-        (should-not (reconcile))
         (should-not (stale-p)))
       (should (string-search "Then word" (buffer-string)))
       (should (equal "> draft" (mevedel-view-composer-draft-text)))

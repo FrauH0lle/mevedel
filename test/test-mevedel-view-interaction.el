@@ -188,7 +188,7 @@
         (should (= (window-point other-view) (point-min)))
         (mevedel--prompt-dismiss-all))))
 
-  :doc "two explicit visitors return independently to their own draft offsets"
+  :doc "only the selected visitor returns; the other draft caret stays put"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
     (let* ((other-view (split-window-right))
@@ -206,7 +206,7 @@
       (call-interactively (key-binding (kbd "RET")))
       (should (eq first (selected-window)))
       (should (= (window-point first) (+ start 3)))
-      (should (= (window-point other) (+ start 1)))
+      (should (= (window-point other) (+ start 2)))
       (should-not (buffer-local-value 'mevedel-view--interaction-focus-return view-buf))))
 
   :doc "the first visit takes the card nearest the composer, then cycles outward"
@@ -1263,7 +1263,6 @@
              :body "old permission prompt\n" :keymap (make-sparse-keymap)
              :entry 'old-entry :activate #'ignore))
       (delete-overlay (mevedel-view-zone-region 'interaction))
-      (mevedel-view-zone-forget 'interaction)
       (mevedel-view--interaction-clear-for-rebuild)
       (mevedel-view--interaction-register
        (list :kind 'permission :id 'new-permission :count 1

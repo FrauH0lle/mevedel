@@ -84,7 +84,7 @@
         (princ (format "Terminal check FAILED (%s)\n" status))
         (kill-emacs 1))
       (with-current-buffer screen
-        (dolist (drawn '("An earlier response." "unsent draft" "──────────"))
+        (dolist (drawn '("An earlier response." "unsent draft" "──────────" "↓ Back to bottom"))
           (goto-char (point-min))
           (unless (search-forward drawn nil t)
             (princ (format "Terminal check FAILED: %S never drawn\n" drawn))

@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-view-composer-test-helpers"))
+(require 'mevedel-interaction-prompt)
 (require 'mevedel-session-persistence)
 (require 'mevedel-view-pair)
 (require 'which-key)
@@ -91,6 +92,36 @@
         (should (eq composer (selected-window)))
         (should (= caret (window-point composer)))))))
 
+(ert-deftest mevedel-view-pair-graphical/settlement-after-return ()
+  "A settled card does not rewind a draft the user returned to edit."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           outcome)
+      (mevedel-view-composer-graphical--type "> draft")
+      (mevedel-view-composer-graphical--keys "RET" 'newline)
+      (mevedel-view-composer-graphical--type "next")
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay
+         "Confirm" "Do the thing" "Proceed?" nil (lambda (value) (setq outcome value))))
+      (mevedel-view-composer-graphical--keys "C-c C-j" 'mevedel-view-jump-to-interaction)
+      (should (eq transcript (selected-window)))
+      (should (get-text-property (point) 'mevedel-prompt-focus))
+      (mevedel-view-composer-graphical--keys "C-c C-SPC" 'mevedel-view-pair-toggle-focus)
+      (should (eq dock (selected-window)))
+      (mevedel-view-composer-graphical--type " line")
+      (let ((caret (point)) (start (window-start dock)))
+        (with-current-buffer view-buf
+          (should (get-text-property (window-point transcript) 'mevedel-prompt-focus))
+          (mevedel--prompt-dismiss-all))
+        (mevedel-view-composer-graphical--settle)
+        (should (eq outcome 'aborted))
+        (should (eq dock (selected-window)))
+        (should (equal "> draft\nnext line" (mevedel-view-composer-graphical--draft view-buf)))
+        (should (= start (window-start dock)))
+        (should (= caret (point)))))))
+
 (ert-deftest mevedel-view-pair-graphical/split-and-delete ()
   "Splitting either member makes two pairs on one draft; deleting removes both halves."
   :tags '(mevedel-docked-composer)
@@ -147,7 +178,6 @@
            (observe-split (lambda ()
                             (when (eq this-command 'split-window-right)
                               (setq after-split (window-pixel-height dock))))))
-      (setq-local truncate-partial-width-windows nil)
       (insert (make-string (/ (* 3 (window-body-width dock)) 4) ?x))
       (mevedel-view-composer-graphical--settle)
       (setq height (window-pixel-height dock))
@@ -268,6 +298,32 @@
             (should-not (window-live-p composer))
             (mevedel-view-pair-graphical--pairs view-buf 1))
         (kill-buffer replacement)))))
+
+(ert-deftest mevedel-view-pair-graphical/help-with-two-small-pairs ()
+  "Stock Help display leaves both pairs intact when no leaf can split."
+  (mevedel-view-composer-graphical--with-chat
+    (let ((frame (selected-frame))
+          (frames (frame-list))
+          (dock (selected-window))
+          (help-window-select nil))
+      (unwind-protect
+          (progn
+            (mevedel-view-composer-graphical--type "Keep this draft")
+            (mevedel-view-composer-graphical--keys "C-x 3" 'split-window-right)
+            (mevedel-view-pair-graphical--pairs view-buf 2)
+            (dolist (window (window-list frame 'nomini))
+              (should-not (window-splittable-p window))
+              (should-not (window-splittable-p window t)))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-view-composer-graphical--keys "C-h k C-c RET" 'describe-key))
+            (let ((popup (get-buffer-window "*Help*" t)))
+              (should (window-live-p popup))
+              (should-not (mevedel-view-transcript-window popup)))
+            (with-selected-frame frame
+              (should (eq dock (selected-window)))
+              (mevedel-view-pair-graphical--pairs view-buf 2))
+            (should (equal "Keep this draft" (mevedel-view-composer-graphical--draft view-buf))))
+        (mapc #'delete-frame (seq-difference (frame-list) frames))))))
 
 (ert-deftest mevedel-view-pair-graphical/resize ()
   "Growing another window shrinks the transcript, not the composer."
@@ -413,6 +469,76 @@
             (mevedel-view-pair-graphical--pairs view-buf 2)
             (should (> repairs 0)))
         (advice-remove 'mevedel-view-pair--repair observe)))))
+
+(ert-deftest mevedel-view-pair-graphical/page-capped-draft ()
+  "Paging scrolls the draft, not the transcript, up to the draft's top."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (draft (concat "> first line\n" (make-string (* 2 (frame-height)) ?\n) "Last line")))
+      (insert draft)
+      (mevedel-view-composer-graphical--keys "M-<" 'beginning-of-buffer)
+      (let ((top (window-start dock))
+            (transcript-start (window-start transcript))
+            (transcript-point (window-point transcript)))
+        (should (< (window-end dock) (point-max)))
+        (mevedel-view-composer-graphical--keys "C-v" 'scroll-up-command)
+        (should (> (window-start dock) top))
+        (mevedel-view-composer-graphical--keys "M-v" 'scroll-down-command)
+        (should (= (window-start dock) top))
+        (should (eq dock (selected-window)))
+        (should (pos-visible-in-window-p (point) dock))
+        (should (>= (point) (mevedel-view-composer-draft-start)))
+        (should (= (window-start transcript) transcript-start))
+        (should (= (window-point transcript) transcript-point))
+        (should (equal draft (mevedel-view-composer-graphical--draft view-buf)))))))
+
+(ert-deftest mevedel-view-pair-graphical/minibuffer-quit-returns-to-draft ()
+  "Canceling the command prompt restores the dock's window and draft caret."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let ((dock (selected-window)) entered)
+      (mevedel-view-composer-graphical--type "Keep this draft")
+      (backward-char 5)
+      (let ((offset (- (point) (mevedel-view-composer-draft-start)))
+            (minibuffer-setup-hook (cons (lambda () (setq entered t)) minibuffer-setup-hook)))
+        (let ((inhibit-message t) (message-log-max nil))
+          (mevedel-view-composer-graphical--keys "M-x C-g" 'execute-extended-command))
+        (should entered)
+        (should-not (active-minibuffer-window))
+        (should (eq dock (selected-window)))
+        (mevedel-view-pair-graphical--pairs view-buf 1)
+        (should (= offset (- (point) (mevedel-view-composer-draft-start))))
+        (should (equal "Keep this draft" (mevedel-view-composer-graphical--draft view-buf)))))))
+
+(ert-deftest mevedel-view-pair-graphical/text-scale-preserves-draft ()
+  "Local and global text scaling refit the dock without changing its draft."
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (draft "> keep\nthis draft"))
+      (insert draft)
+      (backward-char 5)
+      (mevedel-view-composer-graphical--settle)
+      (let ((offset (- (point) (mevedel-view-composer-draft-start)))
+            (height (window-pixel-height dock)))
+        (unwind-protect
+            (pcase-dolist (`(,grow ,reset ,command)
+                          '(("C-x C-+" "C-x C-0" text-scale-adjust)
+                            ("C-x C-M-+" "C-x C-M-0" global-text-scale-adjust)))
+              (mevedel-view-composer-graphical--keys grow command)
+              (mevedel-view-composer-graphical--settle)
+              (should (> (window-pixel-height dock) height))
+              (should (eq dock (selected-window)))
+              (should (= offset (- (point) (mevedel-view-composer-draft-start))))
+              (mevedel-view-composer-graphical--keys reset command)
+              (mevedel-view-composer-graphical--settle)
+              (should (= (window-pixel-height dock) height))
+              (mevedel-view-pair-graphical--pairs view-buf 1)
+              (should (eq dock (selected-window)))
+              (should (= offset (- (point) (mevedel-view-composer-draft-start))))
+              (should (equal draft (mevedel-view-composer-graphical--draft view-buf))))
+          (global-text-scale-adjust 0))))))
 
 (provide 'test-mevedel-view-pair-graphical)
 ;;; test-mevedel-view-pair-graphical.el ends here

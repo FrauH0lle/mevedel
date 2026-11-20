@@ -427,6 +427,15 @@
                             (file-name-concat (mevedel-session-save-path session) "note-input")
                             nil "\\.json\\'")))))))
 
+(defun mevedel-note-conversation-test--displayed-prompt ()
+  "Return the note composer's hint and prompt from their display cell."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 1)
+    (concat (get-text-property (point) 'display)
+            (buffer-substring (1+ (point))
+                              (mevedel-view-composer-draft-start)))))
+
 (mevedel-deftest mevedel-note-send/composer-hints
   (:quiet t :doc "state changes update dimmed hints without moving or editing the composer")
   (mevedel-note-conversation-test--with-source
@@ -437,12 +446,21 @@
            (draft "> active draft\nsecond line"))
       (mevedel-note-conversation-test--answer (car sent) "An answer.")
       (with-current-buffer composer
-        (should (string-search "C-c C-z close\n> " (buffer-string)))
+        (should (equal "C-c C-z close\n> "
+                       (mevedel-note-conversation-test--displayed-prompt)))
         (mevedel-view-test--insert-composer-draft draft))
       (when (display-graphic-p)
         (redisplay t)
         (sit-for 0.02)
         (redisplay t))
+      (when-let* ((window (and (display-graphic-p) (get-buffer-window composer t))))
+        (with-current-buffer composer
+          (let ((rail (posn-at-point (point-min) window))
+                (draft (posn-at-point (mevedel-view-composer-draft-start) window)))
+            (should rail)
+            (should draft)
+            (should (>= (- (cdr (posn-x-y draft)) (cdr (posn-x-y rail)))
+                        (* 2 (frame-char-height (window-frame window))))))))
       (let ((selected (selected-window))
             (position (mevedel-view-test--composer-point-offset view))
             (start (window-start (selected-window))))
@@ -451,16 +469,16 @@
            #'ignore
            '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+improved code\n*** End Patch")))
         (with-current-buffer composer
-          (should (string-search "C-c C-z close · C-c C-a apply · C-c C-g merge\n> "
-                                 (buffer-string)))
+          (should (equal "C-c C-z close · C-c C-a apply · C-c C-g merge\n> "
+                         (mevedel-note-conversation-test--displayed-prompt)))
           (should (equal draft (mevedel-view-composer-draft-text)))
           (should (= position (mevedel-view-test--composer-point-offset view))))
         (should (eq selected (selected-window)))
         (should (= start (window-start selected))))
       (mevedel-note-apply-change note)
       (with-current-buffer composer
-        (should (string-search "C-c C-z close\n> " (buffer-string)))
-        (should-not (string-search "C-c C-a apply" (buffer-string)))
+        (should (equal "C-c C-z close\n> "
+                       (mevedel-note-conversation-test--displayed-prompt)))
         (should (equal draft (mevedel-view-composer-draft-text)))))))
 
 (mevedel-deftest mevedel-note-send/saved-settings
@@ -602,8 +620,8 @@
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
       (with-current-buffer (mevedel-view-composer-buffer view)
-        (should (string-search "C-c C-z close\n> " (buffer-string)))
-        (should-not (string-search "C-c C-a apply" (buffer-string))))
+        (should (equal "C-c C-z close\n> "
+                       (mevedel-note-conversation-test--displayed-prompt))))
       (mevedel--clear-instruction-state workspace)
       (mevedel-instruction-store-observe workspace)
       (with-current-buffer source
@@ -1757,6 +1775,21 @@
         (mevedel-note-record-applied record nil workspace)
         (should (equal "C-c C-z close" (hint)))
         (should-not (string-search "change ready" (or (label) "")))))))
+
+(ert-deftest mevedel-note-conversation-hint-preserves-draft-undo ()
+  (mevedel-note-conversation-test--with-source
+    (let* ((note (mevedel-note-create "Suggest a change"))
+           (view (mevedel-note-send note))
+           (record (list :id "r" :session-id
+                         (overlay-get note 'mevedel-note-session-id) :turn 1)))
+      (with-current-buffer (mevedel-view-composer-buffer view)
+        (goto-char (point-max))
+        (insert "draft")
+        (undo-boundary))
+      (mevedel-note-hold-change (list note) record)
+      (with-current-buffer (mevedel-view-composer-buffer view)
+        (undo-only))
+      (should (equal "" (mevedel-view-composer-draft-text view t))))))
 
 (defmacro mevedel-note-conversation-test--with-tree (&rest body)
   "Run BODY with three nested notes in the ordinary send fixture."

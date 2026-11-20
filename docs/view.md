@@ -59,7 +59,9 @@ authoritative transcript.
   and completion. Each eligible window showing an editable view gets a composer
   directly below it; splits share one draft, not one caret. Submitting it
   routes through the owning view to the data buffer. Closing the view kills
-  its composer. Agent transcripts and historical segments have no dock.
+  its composer. Agent transcripts have no dock. Historical segments hide it
+  except while a fork is armed (see
+  [history actions](#status-strip-and-cockpit-routing)).
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Resident retained agents use their live conversation buffer
   whether running or idle; cold and historical agents use the saved transcript
@@ -78,15 +80,19 @@ authoritative transcript.
 | `C-M-v` / `C-M-S-v` in the composer | Pages the paired transcript forward or backward without leaving the draft. |
 | `C-c C-j` in the composer | Visits the next interaction card. If you are still visiting it when it settles, focus returns to the saved draft position. |
 
-The composer grows from one draft line plus its rail and chrome up to a third
-of the pair. At the cap it scrolls with the caret and shows `↑ N more` when
-draft lines are hidden above. Its top rule (`─` in a terminal) offers
-`↓ Back to bottom` only while the paired transcript is off its end. The mode
-line is below the composer, not between the two windows.
+Draft lines wrap in narrow windows. The composer grows from one draft line
+plus its rail and chrome up to a third of the pair. At the cap it scrolls with
+the caret and shows `↑ N more` when draft lines are hidden above. When the
+rail scrolls offscreen, its pending-action count appears in the header; click
+it or press `C-c C-j` to visit the next pending card. The top rule (`─` in a
+terminal) offers `↓ Back to bottom` only while the paired transcript is off
+its end. The mode line is below the composer, not between the two windows.
 
-Popups normally open outside the pair. A native split or a switch back can
-install its dock before redisplay. Deferred repair still removes orphan
-docks and restores missing ones in other layouts without selecting the dock.
+Paired transcript windows are weakly dedicated: automatic popups skip them,
+but explicit `C-x b` can still replace the transcript buffer. When no ordinary
+window is available and a split does not fit, Emacs may open a new frame. A
+native split or a switch back can install its dock before redisplay. Deferred
+repair removes orphan docks and restores missing ones without selecting them.
 A transcript remains usable when its window is too short to fit a dock or
 when a display rule puts it in a native side window. See
 [ADR 0136](adr/0136-dock-the-composer-in-its-own-buffer.md) for the design.
@@ -1041,31 +1047,30 @@ the complete diff. Unreviewed edits/full-auto applications stay collapsed.
 
 ## Zones
 
-The view buffer is split into vertically ordered regions. The data buffer
-remains the model-visible source of truth; view zones are display and
-interaction chrome around that transcript.
+The transcript buffer has vertically ordered regions; the dock below it shows
+a separate composer buffer. The data buffer remains the model-visible source
+of truth. The zones and rail are display and interaction chrome.
 
 ```text
-+--------------------------------------------------------------+
-| Header / mode line chrome                                    |
++------------------------- transcript window ------------------+
+| Header                                                       |
 +--------------------------------------------------------------+
 | History region                                               |
 |   Rendered user turns, assistant turns, tool summaries,      |
-|   inline agent/tool handles, and any in-flight live tail.     |
+|   inline agent/tool handles, and any in-flight live tail.    |
 +------------------------- status marker ----------------------+
 | Status zone                                                  |
-|   Active child confinement, tasks, and aggregate agent rows.  |
+|   Active child confinement, tasks, and aggregate agent rows. |
 +---------------------- interaction marker --------------------+
 | Interaction zone                                             |
-|   Permission prompts, plan approvals, Ask,                    |
+|   Permission prompts, plan approvals, Ask,                   |
 |   pending input, approvals, and preview controls.            |
-+--------------------------------------------------------------+
-| Permanent rail                                               |
-|   Mode badge, pending-action shortcut, and live turn activity.|
 +-------------------------- transcript tail -------------------+
 
 +-------------------------- composer window -------------------+
+| Permanent rail: mode, pending actions, and live activity     |
 | Read-only input prompt, then editable draft                  |
+| Mode line                                                    |
 +--------------------------------------------------------------+
 ```
 
@@ -1085,20 +1090,16 @@ Terminology:
   even when its launch handle also appears earlier in the transcript. Opening
   an agent transcript or folding history does not change roster membership.
 - **Interaction zone**: user-action chrome between
-  `mevedel-view--interaction-marker` and the request progress row; it is for
+  `mevedel-view--interaction-marker` and the transcript tail; it is for
   pending input and controls that require user response.
-- **Rail**: the permanent, fragment-backed line at the end of the
-  transcript. It shows the mode badge at
-  rest, pending-action counts with an actionable `C-c C-j` hint, and foreground
+- **Rail**: the permanent first line of the composer buffer. It shows the mode
+  badge, pending-action counts with an actionable `C-c C-j` hint, and foreground
   activity while a request runs. It does not start an animation timer while
-  idle. The rail fits the narrowest window showing the view: activity yields
-  space before the mode and pending-action hint. It is not part of the history,
-  status, or interaction zones; its internal zone name remains `progress`.
+  idle. The rail fits the narrowest composer window: activity yields space
+  before the mode and pending-action hint.
   A window resize refits the rail from `window-size-change-functions`, which
-  run before windows redisplay. Scrolling never rewrites it:
-  `window-scroll-functions` run inside a window's redisplay, which then
-  restores point to its earlier buffer position, so text changed above the
-  composer there would move the cursor within or out of the draft. A label
+  run before windows redisplay. A scroll notification only queues a visibility
+  check for animation; it does not rewrite the rail during redisplay. A label
   that went stale while offscreen waits for the next once-a-second refresh.
   Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
@@ -1145,10 +1146,10 @@ retain their position. Equal-length reflow alone does not trigger that fallback.
 Reader ownership is captured before mutation, so removing a visited interaction
 does not mistake its fallback point for a surviving history reader.
 
-The rail fits the narrowest composer window. Status and interaction chrome fit
-the narrowest transcript window, not the dock. Rail updates change display
-properties on fixed cells, so activity and pending-count changes never shift
-the draft, its undo positions, or the transcript's insertion cursor.
+Status and interaction chrome fit the narrowest transcript window, not the
+dock. Rail updates change display properties on fixed cells, so activity and
+pending-count changes never shift the draft, its undo positions, or the
+transcript's insertion cursor.
 
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
@@ -1173,7 +1174,7 @@ anew.
 `C-c C-j` from the composer visits the longest-waiting pending interaction
 in the paired transcript window. Repeated presses cycle through pending
 cards. Settlement returns to the invoking composer's draft offset if the
-transcript window is still visiting that card.
+user is still in the transcript window visiting that card.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.
 A descriptor whose UI holds live editable state supplies `:body` as a
@@ -1594,7 +1595,8 @@ status, interactions, and progress, but transcript redraws do not replace the
 archived projection. Send, follow-up, Compact, Review, Verify, and slash
 commands require returning to the latest segment. Fork and Rewind still target
 the settled assistant response at point; arming a Fork temporarily reveals the
-composer, while cancelling hides it and stays on the archived segment.
+dock for the new prompt. Cancelling hides it again, keeps the draft, and
+returns to the prior position in the archived segment.
 
 `mevedel-view-segments.el` owns this ephemeral inspection lifecycle and consumes
 the segment descriptors and verified bytes from `mevedel-session-artifacts.el`;

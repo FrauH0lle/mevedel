@@ -692,19 +692,19 @@ may already have been deleted."
 
 (defun mevedel-view--interaction-sync-focus (pairs visits)
   "Restore settled explicit VISITS after rendering live PAIRS.
-Never move a window that left its visited card or focus a newly arriving one."
+Only the selected visitor can return to its saved draft caret."
   (setq mevedel-view--interaction-focus-return nil)
   (dolist (visit visits)
     (pcase-let ((`(,window ,id ,offset) visit))
       (if (assoc id pairs)
           (push visit mevedel-view--interaction-focus-return)
-        (when-let* ((composer (mevedel-view-composer-window window))
+        (when-let* (((eq window (selected-window)))
+                    (composer (mevedel-view-composer-window window))
                     (position (min (mevedel-view-composer-draft-end)
                                    (+ (mevedel-view-composer-draft-start) offset))))
           (set-window-point composer position)
-          (when (eq window (selected-window))
-            ;; The renderer still has work to do in the transcript buffer.
-            (save-current-buffer (select-window composer))))))))
+          ;; The renderer still has work to do in the transcript buffer.
+          (save-current-buffer (select-window composer)))))))
 
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays.

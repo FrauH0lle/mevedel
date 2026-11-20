@@ -211,7 +211,8 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
-(defvar mevedel-composer--view)
+(declare-function mevedel-view-composer-owner "mevedel-view-composer" ())
+(autoload 'mevedel-view-composer-owner "mevedel-view-composer")
 (declare-function mevedel-view--forward-input "mevedel-view-composer" t)
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-draft-start "mevedel-view-composer"
@@ -933,7 +934,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
 (defun mevedel-side-conversation-close ()
   "Close the current ephemeral /btw side conversation."
   (interactive)
-  (with-current-buffer (or (bound-and-true-p mevedel-composer--view) (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (unless (bound-and-true-p mevedel-view--side-conversation-p)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
     ;; Settle remote mutation authority before the ordinary close guard runs.
@@ -944,7 +945,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
 (defun mevedel-side-conversation-send ()
   "Send the current side-composer prompt as an independent turn."
   (interactive)
-  (with-current-buffer (or (bound-and-true-p mevedel-composer--view) (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (unless (bound-and-true-p mevedel-view--side-conversation-p)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
     (unless (buffer-live-p mevedel--data-buffer)

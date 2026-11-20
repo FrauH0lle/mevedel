@@ -531,8 +531,8 @@ label, takes that path anyway, without scanning the whole buffer here."
 Such a zone has nothing to reconcile, so it needs no viewport transaction.
 Stale text, such as text that outlived lost local state, still needs one.
 One whole-buffer scan proves absence until the region table entry changes:
-only zone rendering writes zone text, and creating a region, forgetting
-the zone or losing the table discards the proof."
+only zone rendering writes zone text, and creating a region or losing the
+table discards the proof."
   (and (null fragments)
        (null region)
        (or (memq zone mevedel-view-zone--absent-zones)
@@ -1041,11 +1041,6 @@ live zone text keeps its current bounds until reconciliation finishes."
     (error "Unknown managed zone: %S" zone))
   (mevedel-view-zone--live-region zone))
 
-(defun mevedel-view-zone-start (zone)
-  "Return the start of live ZONE, or nil."
-  (when-let* ((region (mevedel-view-zone-region zone)))
-    (overlay-start region)))
-
 (defun mevedel-view-zone-fragment-bounds (zone id)
   "Return bounds for fragment ID in live ZONE, or nil."
   (when-let* ((region (mevedel-view-zone-region zone)))
@@ -1063,23 +1058,6 @@ live zone text keeps its current bounds until reconciliation finishes."
      (if region (overlay-start region) (point-min))
      (if region (overlay-end region) (point-min))
      nil)))
-
-(defun mevedel-view-zone-forget (&optional zone)
-  "Forget disposable region state for ZONE, or every zone when nil.
-Use after a larger redraw has already removed the managed text."
-  (let ((table (mevedel-view-zone--region-table)))
-    (if zone
-        (progn
-          (unless (memq zone mevedel-view-zone--names)
-            (error "Unknown managed zone: %S" zone))
-          (when-let* ((region (gethash zone table)))
-            (delete-overlay region))
-          (setq mevedel-view-zone--absent-zones
-                (delq zone mevedel-view-zone--absent-zones))
-          (remhash zone table))
-      (maphash (lambda (_name region) (delete-overlay region)) table)
-      (clrhash table)
-      (setq mevedel-view-zone--absent-zones nil))))
 
 (provide 'mevedel-view-zone)
 ;;; mevedel-view-zone.el ends here

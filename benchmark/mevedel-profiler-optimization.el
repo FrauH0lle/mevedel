@@ -24,6 +24,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-pair)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
@@ -47,6 +48,7 @@
 
 (defconst mevedel-benchmark--warmups 2)
 (defconst mevedel-benchmark--rounds 5)
+(defconst mevedel-benchmark--draft "> benchmark draft\nsecond line")
 (defconst mevedel-benchmark--harness-file
   (or load-file-name buffer-file-name))
 (defconst mevedel-benchmark--repository-directory
@@ -174,6 +176,20 @@ returns additional counters from one unprofiled workload run."
          (list :gap-bytes size :iterations iterations)
          workload directory)))))
 
+(defun mevedel-benchmark--place-draft ()
+  "Populate the selected transcript's dock and return its window."
+  (let ((dock (or (mevedel-view-composer-display (selected-window))
+                  (error "Benchmark could not display the composer"))))
+    (mevedel-view-composer-insert mevedel-benchmark--draft)
+    (set-window-point dock (+ (mevedel-view-composer-draft-start) 4))
+    dock))
+
+(defun mevedel-benchmark--draft-intact-p (dock)
+  "Return non-nil if DOCK still shows the expected draft and caret."
+  (and (eq dock (mevedel-view-composer-window))
+       (= (window-point dock) (+ (mevedel-view-composer-draft-start) 4))
+       (equal (mevedel-view-composer-draft-text nil t) mevedel-benchmark--draft)))
+
 (defun mevedel-benchmark--prompt-redraw (directory)
   "Run large-view prompt lookup and redraw workload below DIRECTORY."
   (let ((transcript-bytes (* 5 1024 1024))
@@ -186,10 +202,8 @@ returns additional counters from one unprofiled workload run."
             (lambda ()
               (goto-char (mevedel-view--history-insertion-marker))
               (insert (make-string transcript-bytes ?x)))))
-         (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-         (goto-char (+ (mevedel-view-composer-draft-start) 4))
-         (set-window-point (selected-window) (point))
-         (let ((workload
+         (let ((dock (mevedel-benchmark--place-draft))
+               (workload
                 (lambda ()
                   (dotimes (_ iterations)
                     (unless (mevedel-view-transcript-tail)
@@ -219,10 +233,7 @@ returns additional counters from one unprofiled workload run."
              (mevedel-view--render-status)
              (mevedel-view--interaction-register
               (list :id 'benchmark :kind 'ask :body "benchmark\n"))
-             (unless (and (= (point) (+ (mevedel-view-composer-draft-start) 4))
-                          (= (window-point (selected-window)) (point))
-                          (equal (mevedel-view-composer-draft-text nil t)
-                                 "> benchmark draft\nsecond line"))
+             (unless (mevedel-benchmark--draft-intact-p dock)
                (error "Prompt benchmark moved the composer"))
              metrics)))))))
 
@@ -250,10 +261,8 @@ returns additional counters from one unprofiled workload run."
                 (+ start 46) (+ start 92) 'gptel
                 (cons 'tool (format "benchmark-%d" index)))))))
        (with-current-buffer view-buf
-         (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-         (goto-char (+ (mevedel-view-composer-draft-start) 4))
-         (set-window-point (selected-window) (point))
-         (let ((workload
+         (let ((dock (mevedel-benchmark--place-draft))
+               (workload
                 (lambda ()
                   (dotimes (_ iterations)
                     (mevedel-view--full-rerender data-buf t)))))
@@ -299,10 +308,7 @@ returns additional counters from one unprofiled workload run."
              (unless (and (save-excursion
                             (goto-char (point-min))
                             (search-forward "Bash" nil t))
-                          (= (window-point (selected-window))
-                             (+ (mevedel-view-composer-draft-start) 4))
-                          (equal (mevedel-view-composer-draft-text nil t)
-                                 "> benchmark draft\nsecond line"))
+                          (mevedel-benchmark--draft-intact-p dock))
                (error "Tool benchmark lost its row or composer"))
              metrics)))))))
 
@@ -365,10 +371,8 @@ returns additional counters from one unprofiled workload run."
      (lambda (_data-buf view-buf)
        (with-current-buffer view-buf
          (mevedel-benchmark--insert-history transcript-bytes)
-         (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-         (goto-char (+ (mevedel-view-composer-draft-start) 4))
-         (set-window-point (selected-window) (point))
-         (let ((status
+         (let ((dock (mevedel-benchmark--place-draft))
+               (status
                 (mevedel-benchmark--measure
                  'status-refresh
                  (list :transcript-bytes transcript-bytes
@@ -415,10 +419,7 @@ returns additional counters from one unprofiled workload run."
                        (dotimes (_ history-iterations)
                          (mevedel-view--history-tail-position)))
                      (list :history-position-checks checks))))))
-           (unless (and (= (point) (+ (mevedel-view-composer-draft-start) 4))
-                        (= (window-point (selected-window)) (point))
-                        (equal (mevedel-view-composer-draft-text nil t)
-                               "> benchmark draft\nsecond line"))
+           (unless (mevedel-benchmark--draft-intact-p dock)
              (error "Status/history benchmark moved the composer"))
            (mevedel-benchmark--write-metrics
             directory (list :status status :history history))
@@ -447,10 +448,8 @@ returns additional counters from one unprofiled workload run."
                   mevedel-view--pending-tool-calls)
                  (mevedel-view--adopt-tool-animation-targets
                   start (point) nil)))))
-         (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-         (goto-char (+ (mevedel-view-composer-draft-start) 4))
-         (set-window-point (selected-window) (point))
-         (let* ((workload
+         (let* ((dock (mevedel-benchmark--place-draft))
+                (workload
                  (lambda ()
                    (dotimes (_ iterations)
                      (mevedel-view--spinner-tick))))
@@ -478,10 +477,7 @@ returns additional counters from one unprofiled workload run."
                         (funcall workload))
                       (list :inline-refresh-calls calls
                             :inline-refresh-characters characters))))))
-           (unless (and (= (point) (+ (mevedel-view-composer-draft-start) 4))
-                        (= (window-point (selected-window)) (point))
-                        (equal (mevedel-view-composer-draft-text nil t)
-                               "> benchmark draft\nsecond line"))
+           (unless (mevedel-benchmark--draft-intact-p dock)
              (error "Spinner benchmark moved the composer"))
            metrics))))))
 
@@ -563,11 +559,9 @@ A 1 MiB transcript precedes the turn and the composer holds a draft."
               (let ((start (point)))
                 (insert (make-string transcript-bytes ?x) "\n")
                 (put-text-property start (point)
-                                   'mevedel-view-type 'response)))))
-         (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-         (goto-char (+ (mevedel-view-composer-draft-start) 4))
-         (set-window-point (selected-window) (point)))
-       (let* ((workload
+                                   'mevedel-view-type 'response))))))
+       (let* ((dock (mevedel-benchmark--place-draft))
+              (workload
                (lambda ()
                  (mevedel-benchmark--tool-burst-round
                   data-buf view-buf batches width)))
@@ -600,9 +594,7 @@ A 1 MiB transcript precedes the turn and the composer holds a draft."
                                (buffer-modified-tick))
                              tick)))))))
          (with-current-buffer view-buf
-           (unless (and (= (point) (+ (mevedel-view-composer-draft-start) 4))
-                        (equal (mevedel-view-composer-draft-text nil t)
-                               "> benchmark draft\nsecond line"))
+           (unless (mevedel-benchmark--draft-intact-p dock)
              (error "Tool burst benchmark moved the composer")))
          metrics)))))
 
@@ -737,10 +729,8 @@ unattributed remainder, including preservation, reset, and batch bookkeeping."
                             (maphash (lambda (key value)
                                        (push (cons key value) result)) counts)
                             result)))))
-    (mevedel-view-composer-insert "> benchmark draft\nsecond line")
-    (goto-char (+ (mevedel-view-composer-draft-start) 4))
-    (set-window-point (selected-window) (point))
-    (let ((mevedel-benchmark--rounds 7) results reference)
+    (let ((dock (mevedel-benchmark--place-draft))
+          (mevedel-benchmark--rounds 7) results reference)
       (dolist (path '(synchronous batched))
         (let* ((workload (if (eq path 'synchronous)
                              (lambda () (mevedel-view--full-rerender data))
@@ -756,9 +746,7 @@ unattributed remainder, including preservation, reset, and batch bookkeeping."
                        (push (mevedel-benchmark--projection-attribution workload)
                              rounds))
                      (list :attribution-rounds (nreverse rounds)))))))
-          (unless (and (equal (mevedel-view-composer-draft-text nil t)
-                              "> benchmark draft\nsecond line")
-                       (= (point) (+ (mevedel-view-composer-draft-start) 4)))
+          (unless (mevedel-benchmark--draft-intact-p dock)
             (error "Projection benchmark moved the composer"))
           (let ((text (buffer-substring-no-properties
                        (point-min) (mevedel-view-transcript-tail))))

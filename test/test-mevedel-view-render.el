@@ -9832,14 +9832,6 @@
 ;;
 ;;; In-flight tool calls
 
-(defun mevedel-view-render-test--insert-at-history-end (thunk)
-  "Call THUNK at the current view's history boundary as a render would."
-  (let ((inhibit-read-only t))
-    (save-excursion
-      (goto-char (mevedel-view--history-insertion-marker))
-      (mevedel-view--with-render-boundaries-advancing
-        (funcall thunk)))))
-
 (mevedel-deftest mevedel-view--take-render-pending ()
   ,test
   (test)
@@ -10080,23 +10072,6 @@
             (should (mevedel-view--live-turn-needs-header-p
                      (point-min) (point-max) data)))
         (kill-buffer data)))))
-
-(mevedel-deftest mevedel-view--history-boundary-target ()
-  ,test
-  (test)
-  :doc "uses the live status boundary when it ends history"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (should (eq mevedel-view--status-marker
-                  (mevedel-view--history-boundary-target)))))
-  :doc "recovers the history tail when the status marker detached"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view-render-test--insert-at-history-end
-       (lambda () (insert (propertize "Answer\n" 'mevedel-view-type 'response))))
-      (let ((tail (marker-position mevedel-view--status-marker)))
-        (set-marker mevedel-view--status-marker nil)
-        (should (= tail (mevedel-view--history-boundary-target)))))))
 
 
 ;;

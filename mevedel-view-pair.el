@@ -112,6 +112,8 @@ WINDOW defaults to the selected window and may be either pair member."
         (when (eq (window-parameter window (car entry))
                   (alist-get (car entry) rules))
           (set-window-parameter window (car entry) (cdr entry)))))
+    (when (eq (window-dedicated-p window) 'mevedel-view-pair)
+      (set-window-dedicated-p window nil))
     (when (and (eq role 'composer)
                (buffer-local-value 'mevedel-composer--view (window-buffer window)))
       (window-preserve-size window nil nil)
@@ -127,6 +129,9 @@ WINDOW defaults to the selected window and may be either pair member."
   (unless (eq (window-parameter transcript 'mevedel-view-pair--role) 'transcript)
     (mevedel-view-pair--install-rules transcript mevedel-view-pair--transcript-rules)
     (set-window-parameter transcript 'mevedel-view-pair--role 'transcript))
+  ;; Weak dedication excludes popup reuse but still lets C-x b switch buffers.
+  (unless (window-dedicated-p transcript)
+    (set-window-dedicated-p transcript 'mevedel-view-pair))
   (unless (eq (window-parameter dock 'mevedel-view-pair--role) 'composer)
     (mevedel-view-pair--install-rules dock mevedel-view-pair--composer-rules)
     (set-window-parameter dock 'mevedel-view-pair--role 'composer)
@@ -315,7 +320,9 @@ whose rules need reinstalling), :add transcripts, and :remove docks."
      ((buffer-local-value 'mevedel-composer--view (window-buffer window))
       (not (and (eq role 'composer) (mevedel-view-transcript-window window))))
      ((mevedel-view-pair--draft window)
-      (not (and (eq role 'transcript) (mevedel-view-composer-window window))))
+      (not (and (eq role 'transcript)
+                (window-dedicated-p window)
+                (mevedel-view-composer-window window))))
      (role))))
 
 (defun mevedel-view-pair--buffer-change (window)
@@ -351,9 +358,14 @@ whose rules need reinstalling), :add transcripts, and :remove docks."
              (not (mevedel-view-composer-window)))
     (mevedel-view-composer-display (selected-window))))
 
+(defun mevedel-view-pair--window-deletable-p (window _frame)
+  "Keep native buffer teardown from deleting a weakly dedicated WINDOW."
+  (not (eq (window-dedicated-p window) 'mevedel-view-pair)))
+
 (defun mevedel-view-pair-watch (draft)
   "Observe layout changes for the current view and its DRAFT buffer."
   (add-hook 'post-command-hook #'mevedel-view-pair--after-switch nil t)
+  (add-hook 'window-deletable-functions #'mevedel-view-pair--window-deletable-p nil t)
   (add-hook 'window-buffer-change-functions #'mevedel-view-pair--buffer-change nil t)
   (with-current-buffer draft
     (add-hook 'window-buffer-change-functions #'mevedel-view-pair--buffer-change nil t)

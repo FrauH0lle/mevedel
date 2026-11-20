@@ -389,27 +389,15 @@ the settling around them. Their latencies time only the crossing notch.
 - **Docked window below the transcript.** Covers nothing, but shrinks the
   transcript window whenever it appears, reflowing the transcript and firing
   size hooks across the view; it costs the same extra window redisplay.
-  Rejected; the child frame is the user's chosen presentation.
+  The child frame was chosen then; [ADR 0136](0136-dock-the-composer-in-its-own-buffer.md)
+  later adopted an ordinary split with a separate composer buffer.
 - **Inline composer with a jump key.** No extra cost, but the user cannot see
   the draft and the passage being looked up together. Rejected.
-- **Separate composer buffer.** The only variant expected to reduce
-  redisplay work: typing would no longer flag the transcript window and
-  streaming would no longer flag the composer window (other redisplay
-  triggers remain). About half of ADR 0126 exists only because draft and
-  streamed text share a buffer (composer anchoring, draft blank-space repair,
-  return-to-draft on scroll, composer-only growth repair, draft guards) and
-  would go away; reader and visited-row anchors, last-page fill, vscroll
-  preservation and panel stability remain. The composer is built around
-  `mevedel-view--input-marker`; composer-related symbols have about 270
-  source and 2,200 test text matches (unaudited, tests mostly through one
-  helper); the estimate (2026-11-18) was roughly 20 source files and
-  2,500-4,000 changed lines plus an ADR 0126 rewrite. Open problems: a new rule for which windows
-  follow output (today "caret in the composer"), where the rail and mode
-  badge live (ADR 0126 requires real text), `C-c C-j` across buffers, and
-  composer placement in the note frame, `/btw` and historical segments.
-  Deferred: it is the escalation path if the floating composer measurably
-  regresses typing, scrolling or streaming, and a separate architecture item
-  regardless.
+- **Separate composer buffer.** Initially deferred because migrating the inline
+  input marker and viewport rules was a larger change. It was the only variant
+  expected to stop draft edits and streamed output from invalidating the same
+  buffer's windows. [ADR 0136](0136-dock-the-composer-in-its-own-buffer.md) adopted
+  it after the child frame could not reliably host native editing popups.
 
 ## Decision history
 

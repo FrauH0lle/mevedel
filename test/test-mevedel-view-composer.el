@@ -4855,6 +4855,35 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (eq 'steering (plist-get entry :category)))
         (should-not (mevedel-session-pending-follow-ups session)))))
 
+  :doc "steering accepted after another keystroke preserves the edited draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :authority-mode 'portable :name "main"))
+           (request (mevedel-request--create
+                     :id "request-1" :session session
+                     :fsm (gptel-make-fsm :state 'TOOL)))
+           accept)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request request))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event _payload callback &rest _)
+                   (if (eq event 'UserPromptSubmit)
+                       (setq accept callback)
+                     (funcall callback nil)))))
+        (with-current-buffer (mevedel-view-composer-buffer view-buf)
+          (goto-char (point-max))
+          (insert "steer this turn")
+          (mevedel-view-send)
+          (should accept)
+          (should-not (mevedel-session-pending-steering session))
+          (newline))
+        (funcall accept nil))
+      (should (equal "steer this turn"
+                     (plist-get (car (mevedel-session-pending-steering session))
+                                :input)))
+      (should (equal "steer this turn\n"
+                     (mevedel-view-composer-draft-text view-buf t)))))
+
   :doc "ordinary steering binds a file and reads its latest contents at delivery"
   (let* ((root (make-temp-file "mevedel-steering-file-" t))
          (file (file-name-concat root "target.txt"))

@@ -111,11 +111,11 @@ The current buffer is the owning view."
         (goto-char (point-min))
         (mevedel-view--call-with-render-boundaries-advancing
          (lambda () (insert "New transcript\n"))))
-      (should (= (mevedel-view-zone-start zone)
-                 (1+ (length "New transcript\n"))))
-      (should (= (mevedel-view-zone-start zone)
-                 (plist-get (mevedel-view-zone-fragment-bounds zone 'test)
-                            :start)))))
+      (let ((start (overlay-start (mevedel-view-zone-region zone))))
+        (should (= start (1+ (length "New transcript\n"))))
+        (should (= start
+                   (plist-get (mevedel-view-zone-fragment-bounds zone 'test)
+                              :start))))))
 
   :doc "rejects unknown zones as programming errors"
   (with-temp-buffer
@@ -849,15 +849,6 @@ The current buffer is the owning view."
             '((:namespace progress :id request :body "Working")))))
       (should (eq region (mevedel-view-zone-region 'progress))))))
 
-(mevedel-deftest mevedel-view-zone-start
-  (:doc "returns the live zone start")
-  (with-temp-buffer
-    (mevedel-view-zone-test--setup-markers)
-    (mevedel-view-zone-reconcile
-     'status (point-min) (point-min)
-     '((:namespace status :id tasks :body "Tasks")))
-    (should (= (point-min) (mevedel-view-zone-start 'status)))))
-
 (mevedel-deftest mevedel-view-zone-fragment-bounds
   (:doc "finds a fragment through the managed-zone interface")
   (with-temp-buffer
@@ -895,18 +886,6 @@ The current buffer is the owning view."
     (mevedel-view-zone-clear 'status)
     (should (equal "" (buffer-string)))
     (should-not (mevedel-view-zone-region 'status))))
-
-(mevedel-deftest mevedel-view-zone-forget
-  (:doc "drops disposable region state after a larger redraw")
-  (with-temp-buffer
-    (mevedel-view-zone-test--setup-markers)
-    (mevedel-view-zone-reconcile
-     'progress (point-min) (point-min)
-     '((:namespace progress :id request :body "Working")))
-    (let ((inhibit-read-only t))
-      (erase-buffer))
-    (mevedel-view-zone-forget 'progress)
-    (should-not (mevedel-view-zone-region 'progress))))
 
 (provide 'test-mevedel-view-zone)
 ;;; test-mevedel-view-zone.el ends here

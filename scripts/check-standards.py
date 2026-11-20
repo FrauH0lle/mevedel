@@ -53,11 +53,11 @@ def lisp_boundaries(name, text):
 
 
 def composer_marker_errors(name, text):
-    """Reserve literal inline marker references for the composer core."""
+    """Reject references to the former inline input marker outside exemptions."""
     if name == 'mevedel-view-composer.el' or 'test' in Path(name).parts[:-1]:
         return []
-    return [f'{name}:{number}: composer-marker: {match[0]} belongs to the composer core; '
-            'use the composer draft or view prompt boundary interface'
+    return [f'{name}:{number}: composer-marker: {match[0]} is retired; '
+            'use the composer draft or transcript tail interface'
             for number, line in enumerate(text.splitlines(), 1)
             for match in INPUT_MARKER.finditer(line)]
 

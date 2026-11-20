@@ -115,6 +115,7 @@
 (autoload 'mevedel-view--composer-mode-badge "mevedel-view-composer")
 (declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
 (autoload 'mevedel-view-composer-buffer "mevedel-view-composer")
+(declare-function mevedel-composer-set-attention "mevedel-view-composer" (attention))
 (defvar mevedel-composer--view)
 
 ;; `mevedel-view-interaction'
@@ -172,10 +173,8 @@
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-clear "mevedel-view-zone" (namespace))
-(declare-function mevedel-view-zone-forget "mevedel-view-zone" (&optional namespace))
 (declare-function mevedel-view-zone-reconcile "mevedel-view-zone" (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone" (namespace))
-(declare-function mevedel-view-zone-start "mevedel-view-zone" (namespace))
 
 (defvar-local mevedel-view--spinner-status nil
   "Current base status text shown by the request-progress row.")
@@ -451,12 +450,12 @@ the view has already inserted the in-flight markers."
         (let* ((frame (mevedel-view--animation-buffer-frame composer))
                (line (mevedel-view--format-composer-rail
                       badge attention width status display-status frame)))
-          (mevedel-view--write-request-rail composer line)
+          (mevedel-view--write-request-rail composer line attention)
           (setq mevedel-view--spinner-sample-frame frame
                 mevedel-view--spinner-rendered-state state))))))
 
-(defun mevedel-view--write-request-rail (composer line)
-  "Paint LINE on COMPOSER's fixed badge, activity and metadata cells."
+(defun mevedel-view--write-request-rail (composer line attention)
+  "Paint LINE on COMPOSER's fixed cells and cache its ATTENTION label."
   (let* ((end (1- (length line)))
          (label (text-property-any 0 end 'mevedel-view-spinner-frame t line))
          (suffix (and label (next-single-property-change
@@ -465,6 +464,7 @@ the view has already inserted the in-flight markers."
          (new-targets (and label (not mevedel-view--spinner-label-target)))
          label-target metadata-target)
     (with-current-buffer composer
+      (mevedel-composer-set-attention attention)
       (save-restriction
         (widen)
         (let ((start (point-min)))
@@ -621,7 +621,9 @@ FRAME selects the display palette for the animated label."
 
 (defvar-keymap mevedel-view--rail-attention-map
   "<mouse-1>" #'mevedel-view--click-rail-attention
-  "<mouse-2>" #'mevedel-view--click-rail-attention)
+  "<mouse-2>" #'mevedel-view--click-rail-attention
+  "<header-line> <mouse-1>" #'mevedel-view--click-rail-attention
+  "<header-line> <mouse-2>" #'mevedel-view--click-rail-attention)
 
 (defun mevedel-view--format-composer-rail (badge attention width status display-status &optional frame)
   "Format a one-line rail within WIDTH columns.

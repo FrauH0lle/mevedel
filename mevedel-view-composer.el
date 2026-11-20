@@ -153,7 +153,7 @@
                   "mevedel-pending-inputs" ())
 (declare-function mevedel-view--queue-prepared-steering
                   "mevedel-pending-inputs"
-                  (submission request &optional preserve-draft))
+                  (submission request &optional submitted-draft))
 (defvar mevedel-view--pending-guest-attribution)
 (defvar mevedel-view--pending-input-edit)
 (defvar mevedel-view--turn-guest-attribution)
@@ -508,6 +508,7 @@
 (autoload 'mevedel-view-stream-in-flight-turn-start-position "mevedel-view-stream")
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
+(defvar mevedel-view--rail-attention-map)
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-anchor-position "mevedel-view-zone"
@@ -607,12 +608,20 @@ their distinct labels."
 (defvar-local mevedel-view--input-hint nil
   "Cached hint line above the composer prompt, or nil.")
 
+(defun mevedel-view--input-hint-display ()
+  "Return the hint and first prompt glyph for the fixed prompt cell."
+  (when mevedel-view--input-hint
+    (concat mevedel-view--input-hint "\n"
+            (propertize (substring mevedel-view--input-prompt 0 1)
+                        'face 'mevedel-view-input-prompt))))
+
 (defun mevedel-view--input-prompt-string ()
   "Return the read-only input prompt below the permanent composer rail."
-  (propertize (if mevedel-view--input-hint
-                 (concat mevedel-view--input-hint "\n" mevedel-view--input-prompt)
-               mevedel-view--input-prompt)
-              'font-lock-face 'mevedel-view-input-prompt))
+  (let ((prompt (propertize mevedel-view--input-prompt
+                            'font-lock-face 'mevedel-view-input-prompt)))
+    (when-let* ((hint (mevedel-view--input-hint-display)))
+      (put-text-property 0 1 'display hint prompt))
+    prompt))
 
 
 ;;
@@ -684,6 +693,24 @@ their distinct labels."
                            "<header-line> <mouse-1>" #'mevedel-composer-back-to-bottom))
   "Right-aligned button used when the paired transcript is scrolled up.")
 
+(defvar-local mevedel-composer--attention nil
+  "Actionable count label last supplied by this composer's rail.")
+
+(defvar-local mevedel-composer--attention-button nil
+  "Cached header button for the pending count when the rail is hidden.")
+
+(defun mevedel-composer-set-attention (attention)
+  "Cache ATTENTION and its header button during a semantic rail update."
+  (unless (equal attention mevedel-composer--attention)
+    (setq mevedel-composer--attention attention
+          mevedel-composer--attention-button
+          (when attention
+            (propertize (concat " ⚠ " attention " ")
+                        'face 'warning
+                        'mouse-face 'highlight
+                        'help-echo "mouse-1 or C-c C-j: visit the next pending card"
+                        'local-map mevedel-view--rail-attention-map)))))
+
 (defvar mevedel-view-table--font-generation)
 (defvar mevedel-view-table--fontset-generation)
 
@@ -730,17 +757,22 @@ their distinct labels."
           visible)))))
 
 (defun mevedel-composer--top-line ()
-  "Draw the separator, hidden draft count, and transcript jump button."
+  "Draw the separator and the buttons and counts for this window."
   (let* ((window (selected-window))
+         (pending (when-let* ((button mevedel-composer--attention-button)
+                              (start (window-start window))
+                              ((> start (point-min))))
+                    button))
          (more (mevedel-composer--hidden-label window))
          (transcript (mevedel-view-transcript-window window))
          (button (if (and transcript (not (mevedel-composer--transcript-end-visible-p transcript)))
                      mevedel-composer--bottom-button ""))
-         (gap (- (window-total-width window) (string-width more) (string-width button))))
-    (concat more
+         (button-width (string-width button)))
+    (concat pending more
             (if (display-graphic-p)
-                (propertize " " 'display `(space :align-to (- right ,(string-width button))))
-              (make-string (max 0 gap) ?─))
+                (propertize " " 'display `(space :align-to (- right ,button-width)))
+              (make-string (max 0 (- (window-total-width window) (string-width more)
+                                     button-width (if pending (string-width pending) 0))) ?─))
             button
             ;; Emacs paints header lines across the body fringe.
             (when (display-graphic-p)
@@ -825,7 +857,11 @@ END distinguishes a draft edit from a one-argument window notification."
 
 (define-derived-mode mevedel-composer-mode text-mode "Composer"
   "Edit the draft of a mevedel conversation."
-  (setq-local header-line-format '(:eval (mevedel-composer--top-line)))
+  (visual-line-mode 1)
+  ;; Geometry queries can evaluate the header without selecting its window.
+  (setq-local header-line-format
+              '(:eval (when (eq (window-buffer) (current-buffer))
+                        (mevedel-composer--top-line))))
   (dolist (face '(header-line header-line-inactive))
     (face-remap-add-relative face 'mevedel-composer-rule))
   (add-hook 'window-buffer-change-functions #'mevedel-view-stream-composer-window-change nil t)
@@ -847,6 +883,10 @@ END distinguishes a draft edit from a one-argument window notification."
   "Kill the composer belonging to the current view."
   (when (buffer-live-p mevedel-view--composer-buffer)
     (kill-buffer mevedel-view--composer-buffer)))
+
+(defun mevedel-view-composer-owner ()
+  "Return the current composer's transcript, or the current buffer."
+  (or mevedel-composer--view (current-buffer)))
 
 (defun mevedel-view-composer-create ()
   "Create the current editable view's composer without displaying it."
@@ -972,7 +1012,7 @@ calls this again to place the overlay on the new text."
 (defun mevedel-view-cancel-composer-state ()
   "Cancel the active composer edit or fork."
   (interactive)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (cond
      (mevedel-view--armed-session-fork
       (mevedel-view-cancel-session-fork))
@@ -1896,29 +1936,18 @@ overriding read-only protections."
 (defun mevedel-view-refresh-input-prompt ()
   "Refresh the composer prefix and its request rail."
   (interactive)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (when-let* ((composer (mevedel-view-composer-buffer)))
-      (let ((prefix (mevedel-view--input-prompt-string)))
+      (let ((hint (mevedel-view--input-hint-display)))
         (with-current-buffer composer
           (save-restriction
             (widen)
             (let ((start (save-excursion (goto-char (point-min))
                                          (line-beginning-position 2))))
-              (unless (equal prefix (buffer-substring-no-properties
-                                     start mevedel-composer--draft-start))
-                (let ((inhibit-read-only t)
-                      (offset (- (point) mevedel-composer--draft-start)))
+              (unless (equal hint (get-text-property start 'display))
+                (let ((inhibit-read-only t))
                   (with-silent-modifications
-                    (delete-region start mevedel-composer--draft-start)
-                    (goto-char start)
-                    (insert prefix)
-                    (mevedel-view--propertize-input-prompt start (point))
-                    (set-marker mevedel-composer--draft-start (point))
-                    (move-overlay mevedel-view--composer-display-overlay
-                                  (point) (point-max))
-                    (mevedel-view--update-composer-indent))
-                  (goto-char (max (point-min)
-                                  (+ offset mevedel-composer--draft-start))))))))))
+                    (put-text-property start (1+ start) 'display hint)))))))))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view--render-request-progress))))
 
@@ -2629,7 +2658,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
 (defun mevedel-view-send ()
   "Send the current root or ephemeral side-conversation composer text."
   (interactive)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
       (if mevedel-view--side-conversation-p
           (mevedel-side-conversation-send)
@@ -2689,6 +2718,9 @@ instead of the composer, preserving its draft."
              (active-request
               (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer))
+             (submitted-draft
+              (when (and active-request (not steering-input))
+                (mevedel-view--visible-draft)))
              (settling
               (buffer-local-value 'mevedel--turn-settlements-pending
                                   mevedel--data-buffer))
@@ -2747,7 +2779,7 @@ instead of the composer, preserving its draft."
                      (lambda (submission)
                        (unless
                            (mevedel-view--queue-prepared-steering
-                            submission active-request steering-input)
+                            submission active-request submitted-draft)
 			 (funcall restore))))
                   (error
                    (funcall restore)
@@ -3225,7 +3257,7 @@ asynchronous preparation ran is left alone instead of cleared."
 (defun mevedel-view-abort ()
   "Abort the active request from the view buffer."
   (interactive)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-view--ensure-interactive-chat-view)
     (mevedel-view--cancel-pending-submission)
     (mevedel-view--stop-request-progress)

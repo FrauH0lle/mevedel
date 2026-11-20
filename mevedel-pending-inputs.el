@@ -225,6 +225,9 @@
 (declare-function mevedel-view--bind-input-mentions
                   "mevedel-view-composer" (session))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view--clear-submitted-input "mevedel-view-composer"
+                  (submitted-draft))
+(declare-function mevedel-view-composer-owner "mevedel-view-composer" ())
 (declare-function mevedel-view--composer-snapshot
                   "mevedel-view-composer" (session))
 
@@ -742,9 +745,9 @@ longer accepts the prepared input."
          (or (mevedel-session-turn-count session) 0)))))))
 
 (defun mevedel-view--queue-prepared-steering
-    (submission request &optional preserve-draft)
+    (submission request &optional submitted-draft)
   "Queue accepted prompt SUBMISSION as steering for REQUEST.
-When PRESERVE-DRAFT is non-nil, leave the composer untouched."
+Clear SUBMITTED-DRAFT only if the composer still holds that exact text."
   (when-let* ((prepared
                (mevedel-view--prepare-steering-entry submission request))
               (session (mevedel-view--session))
@@ -756,10 +759,8 @@ When PRESERVE-DRAFT is non-nil, leave the composer untouched."
     (mevedel-permission-absence-clear session)
     (let ((input (plist-get entry :input)))
       (mevedel-view-history-add input)
-      (when (and (not preserve-draft)
-                 (equal-including-properties
-                  (mevedel-view--input-text) input))
-        (mevedel-view--clear-input))
+      (when submitted-draft
+        (mevedel-view--clear-submitted-input submitted-draft))
       (mevedel-view--interaction-rebuild)
       (when (mevedel-agent-control-root-waiting-p session)
         (mevedel-agent-control-wake-root-user session))
@@ -835,7 +836,7 @@ Restore its bound mentions, attachment grants, scope and reserved context.
 Delivery is not paused; an entry already being dispatched cannot be withdrawn."
   (interactive)
   (require 'mevedel-view-composer)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-pending-inputs--retract)))
 
 (defun mevedel-pending-inputs--retract ()
@@ -962,7 +963,7 @@ interrupt and failure holds, then let ordinary queued follow-ups drain.
 An unaccepted dispatch retains the combined entry for retry or retraction."
   (interactive)
   (require 'mevedel-view-composer)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-pending-inputs--resume)))
 
 (defun mevedel-pending-inputs--resume ()
@@ -1025,7 +1026,7 @@ An unaccepted dispatch retains the combined entry for retry or retraction."
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
   (require 'mevedel-view-composer)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-pending-inputs--send-follow-up)))
 
 (defun mevedel-pending-inputs--send-follow-up ()
@@ -1897,7 +1898,7 @@ failing wake cannot loop."
   "Validate and save the active pending-input composer edit."
   (interactive)
   (require 'mevedel-view-composer)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (mevedel-pending-inputs--save-edit)))
 
 (defun mevedel-pending-inputs--save-edit ()
@@ -1947,7 +1948,7 @@ failing wake cannot loop."
   "Cancel the active pending-input composer edit."
   (interactive)
   (require 'mevedel-view-composer)
-  (with-current-buffer (or mevedel-composer--view (current-buffer))
+  (with-current-buffer (mevedel-view-composer-owner)
     (unless mevedel-view--pending-input-edit
       (mevedel-diagnostic-user-error (mevedel-cockpit-diagnostic-scope) "No pending-input edit is active"))
     (mevedel-pending-inputs--return-to-cockpit mevedel-view--pending-input-edit)

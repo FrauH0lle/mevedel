@@ -20,6 +20,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-interaction)
 (require 'mevedel-view-native)
 (require 'mevedel-view-render)
 
@@ -93,6 +94,20 @@
         (mevedel-view-composer-graphical--type "Short again")
         (should (= (window-pixel-height dock) short))
         (should (= (window-start dock) (point-min)))))))
+
+(ert-deftest mevedel-view-composer-graphical/wrap-in-narrow-split ()
+  "Native splitting wraps a single logical line and grows the dock."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let ((dock (selected-window)))
+      (insert (string-join (make-list 8 "abcde") " "))
+      (mevedel-view-composer-graphical--settle)
+      (let ((height (window-pixel-height dock)))
+        (mevedel-view-composer-graphical--keys "C-u 3 2 C-x 3" 'split-window-right)
+        (should (< (window-total-width dock) 50))
+        (should (= (window-hscroll dock) 0))
+        (should (> (window-pixel-height dock) height))
+        (should (pos-visible-in-window-p (point-max) dock))))))
 
 (ert-deftest mevedel-view-composer-graphical/reopen-dock-at-draft-height ()
   "Restoring a dock for a long draft does not start at a placeholder height."
@@ -216,6 +231,55 @@
         (should (equal view-text (with-current-buffer view-buf (buffer-string))))
         (should (= draft-start (mevedel-view-composer-draft-start)))
         (should (= draft-point (point)))))))
+
+(defun mevedel-view-composer-graphical--header-hit (window text)
+  "Return a native position for the header control showing TEXT in WINDOW."
+  (cl-loop for x below (window-pixel-width window)
+           for pos = (posn-at-x-y x 1 window)
+           for (string . index) = (posn-string pos)
+           when (and string (string-search text string)
+                     (get-text-property index 'local-map string))
+           return pos))
+
+(ert-deftest mevedel-view-composer-graphical/pending-count-with-rail-offscreen ()
+  "An arriving card has a clickable count even when the draft hides the rail."
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock))
+           (draft (concat "> unfinished prompt\n"
+                          (make-string (frame-height) ?\n) "Last line")))
+      (insert draft)
+      (mevedel-view-composer-graphical--keys "M->" 'end-of-buffer)
+      (let ((caret (point)) (start (window-start dock)))
+        (should-not (pos-visible-in-window-p (point-min) dock))
+        (should (pos-visible-in-window-p caret dock))
+        (with-current-buffer view-buf
+          (mevedel-view--interaction-register
+           '(:kind ask :id test-question :count 1 :body "A pending question.\n")))
+        (redisplay)
+        (should (eq dock (selected-window)))
+        (should (= caret (point)))
+        (should (= start (window-start dock)))
+        (should (equal draft (mevedel-view-composer-graphical--draft view-buf)))
+        (should (mevedel-view-composer-graphical--header-hit dock "1 question"))
+        (mevedel-view-composer-graphical--keys "M-<" 'beginning-of-buffer)
+        (should (pos-visible-in-window-p (point-min) dock))
+        (should (string-search "1 question" (mevedel-view-test--rail-text)))
+        (should-not (mevedel-view-composer-graphical--header-hit dock "1 question"))
+        (mevedel-view-composer-graphical--keys "M->" 'end-of-buffer)
+        (let ((pos (mevedel-view-composer-graphical--header-hit dock "1 question")))
+          (should pos)
+          (mevedel-view-composer-graphical--events
+           (list (list 'mouse-1 pos)) 'mevedel-view--click-rail-attention))
+        (should (eq transcript (selected-window)))
+        (should (eq 'test-question (get-text-property (point) 'mevedel-view-interaction-id)))
+        (mevedel-view-composer-graphical--keys "C-c C-SPC" 'mevedel-view-pair-toggle-focus)
+        (with-current-buffer view-buf
+          (mevedel-view--interaction-unregister 'test-question))
+        (redisplay)
+        (should (eq dock (selected-window)))
+        (should (= caret (point)))
+        (should-not (mevedel-view-composer-graphical--header-hit dock "1 question"))))))
 
 (ert-deftest mevedel-view-composer-graphical/rail-power-policy ()
   "The activity animates under full power and holds under a zero battery cap."

@@ -33,9 +33,11 @@ Frame
 
 `mevedel-view-pair.el` owns lookup and layout. `window-combination-limit` gives
 the two windows their own parent. The dock is dedicated to its buffer, preserves
-its height, and survives `delete-other-windows` in the transcript. Window
-parameters route split and delete through the pair's parent and route
-`delete-other-windows` in the dock through the transcript. The dock's
+its height, and survives `delete-other-windows` in the transcript. The paired
+transcript is weakly dedicated: automatic popup display skips it, but explicit
+`C-x b` can still replace its buffer. Window parameters route split and delete
+through the pair's parent and `delete-other-windows` in the dock through the
+transcript. The dock's
 `C-x b` switches the transcript's buffer instead of replacing the draft.
 Native split and switch-back can install and fit the dock before the first
 paint. See [window commands](../view.md#docked-composer) for the user contract.
@@ -74,7 +76,10 @@ owns the viewport rules and their exceptions.
 The same pair works in GUI and terminal Emacs, in `/btw`, and inside the
 note conversation's child frame. The note frame contains the whole conversation,
 not a separate frame overlaying just the draft. Its fallback is an ordinary
-right-hand split. Agent transcripts and historical segments have no dock.
+right-hand split. Agent transcripts have no dock. Historical session segments
+normally hide the dock and preserve the live draft. Arming a fork shows that
+dock for the new prompt; cancelling hides it again without leaving the segment
+or changing the draft.
 
 ## Performance verdict
 

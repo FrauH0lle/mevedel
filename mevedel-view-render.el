@@ -3834,31 +3834,6 @@ transcript has been rendered yet, return the position after the header."
         pos
       after-header)))
 
-(defun mevedel-view--history-boundary-target ()
-  "Return the live end of rendered history.
-
-The normal target is the live history/status boundary, or a dynamic
-render insertion marker that still points above the composer.  If marker
-teardown detached the status marker, recover to the current rendered
-history tail so text placed there stays above status/interaction content
-without moving ahead of prior transcript turns."
-  (let* ((boundary (mevedel-view-transcript-tail-marker))
-         (input-pos (and boundary (marker-position boundary)))
-         (render-pos (and (markerp mevedel-view--render-insertion-marker)
-                          (marker-position
-                           mevedel-view--render-insertion-marker)))
-         (status-pos (and (markerp mevedel-view--status-marker)
-                          (marker-position mevedel-view--status-marker)))
-         (history-tail (mevedel-view--history-tail-position)))
-    (or (and status-pos
-             (= status-pos history-tail)
-             mevedel-view--status-marker)
-        (and render-pos
-             (= render-pos history-tail)
-             (or (not input-pos) (< render-pos input-pos))
-             mevedel-view--render-insertion-marker)
-        history-tail)))
-
 ;;;; Turn assembly
 ;;
 ;; Live-region rendering, mutation and settling, and the assembly of user,

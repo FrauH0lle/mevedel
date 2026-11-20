@@ -91,6 +91,19 @@
       (delete-directory temporary t))))
 
 
+(mevedel-deftest mevedel-benchmark--draft-intact-p ()
+  ,test
+  (test)
+  :doc "checks the dock's caret, not point in the transcript"
+  (mevedel-benchmark--with-view
+   (lambda (_data _view)
+     (let ((dock (mevedel-benchmark--place-draft)))
+       (goto-char (point-min))
+       (should (mevedel-benchmark--draft-intact-p dock))
+       (set-window-point dock (mevedel-view-composer-draft-end))
+       (should-not (mevedel-benchmark--draft-intact-p dock))))))
+
+
 (mevedel-deftest mevedel-benchmark--projection-history ()
   ,test
   (test)
