@@ -8,6 +8,7 @@
 
 (require 'mevedel-execution-target)
 (require 'mevedel-artifact-store)
+(require 'gptel-openai)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -444,6 +445,37 @@
           (should-not (memq process (mevedel-test--live-connections))))
       (when server (delete-process server))
       (when process (delete-process process)))))
+
+(mevedel-deftest mevedel-test--refuse-provider-request
+  (:doc "fails a real provider request on either gptel transport, naming the test")
+  (let* ((gptel--known-backends nil)
+         ;; A dead local port keeps a missing guard from reaching a provider.
+         (gptel-backend (gptel-make-openai "guard" :host "127.0.0.1:9"
+                          :protocol "http" :key "unused" :models '(m)))
+         (gptel-model 'm)
+         (name (symbol-name (ert-test-name (ert-running-test)))))
+    (dolist (gptel-use-curl '(t nil))
+      (with-temp-buffer
+        (let ((err (should-error (gptel-request "hi" :callback #'ignore))))
+          (should (string-match-p "real provider request"
+                                  (error-message-string err)))
+          (should (string-search name (error-message-string err))))))
+    (should-error (gptel--url-retrieve "http://127.0.0.1:9/token" :method 'get))))
+
+(mevedel-deftest mevedel-test--refuse-provider-process
+  (:doc "refuses an installed provider CLI but launches a test-owned fake")
+  (let ((mevedel-test--provider-programs '("true")))
+    (should (string-search
+             (symbol-name (ert-test-name (ert-running-test)))
+             (error-message-string
+              (should-error (make-process :name "real" :command '("true"))))))
+    (let ((fake (expand-file-name "true")))
+      (write-region "#!/bin/sh\n" nil fake nil 'silent)
+      (set-file-modes fake #o700)
+      (let ((process (make-process :name "fake" :command (list fake)
+                                   :noquery t :sentinel #'ignore)))
+        (while (process-live-p process) (accept-process-output process 0.05))
+        (should (zerop (process-exit-status process)))))))
 
 (mevedel-deftest mevedel-test--call-with-isolation ()
   ,test

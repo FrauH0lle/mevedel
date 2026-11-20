@@ -36,7 +36,8 @@ Later attempts use real curl against the fixture's local server."
                      "cat >/dev/null\ncat " (shell-quote-argument payload) "\nexit 92\nfi\n"
                      "exec " (shell-quote-argument curl) " \"$@\"\n"))
            (set-file-modes script #o700)
-           (let ((gptel-use-curl script))
+           (let ((gptel-use-curl script)
+                 (mevedel-test-allow-provider-requests t))
              ,@body))
        (delete-directory directory t))))
 

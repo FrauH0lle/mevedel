@@ -518,6 +518,12 @@ boundary, not an OS sandbox: an external subprocess using an arbitrary absolute
 path is not intercepted. Shared temporary-root Git/workspace contamination is
 still an error and is preserved rather than deleting potentially foreign state.
 
+The helpers also fail a case that sends a real provider request: gptel's curl or
+`url-retrieve` launch, or an installed `claude`/`claude-agent-acp` outside the
+case's owned roots. Stub the transport, or copy a fake CLI into the case root.
+A test that drives the real transport against a local fake server binds
+`mevedel-test-allow-provider-requests` around it.
+
 The Eask startup hook also redirects the native compilation cache into that
 temporary HOME before loading test files or their dependencies.  ERT's own
 cache redirection happens after test-file loading and is not sufficient:

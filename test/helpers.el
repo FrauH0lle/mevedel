@@ -627,6 +627,58 @@ be safely replaced by an entry-changing operation."
                                (car entry) (cdr entry))))
 (advice-add 'make-temp-file :before #'mevedel-test--guard-temp-file)
 
+(defvar mevedel-test-allow-provider-requests nil
+  "Non-nil lets a test send gptel requests through the real transport.
+Bind it only around a request to a local fake server.")
+
+(defvar mevedel-test--provider-programs '("claude" "claude-agent-acp")
+  "Provider CLIs a test may launch only as a copy under its owned roots.")
+
+(defvar mevedel-test--in-provider-transport nil
+  "Non-nil while gptel's transport is starting a request.")
+
+(defun mevedel-test--mark-provider-transport (function &rest args)
+  "Call FUNCTION with ARGS, marking gptel's request launch."
+  (let ((mevedel-test--in-provider-transport t))
+    (apply function args)))
+
+(defun mevedel-test--refuse-provider-request (&rest _)
+  "Fail the running test when gptel's transport reaches the network.
+Stubs installed with `cl-letf' replace the advised launch and bypass this."
+  (when (and mevedel-test--in-provider-transport (ert-running-test)
+             (not mevedel-test-allow-provider-requests))
+    (error "Test %S attempted a real provider request; stub the transport or \
+bind `mevedel-test-allow-provider-requests' around a local fake server"
+           (ert-test-name (ert-running-test)))))
+
+(defun mevedel-test--refuse-provider-process (&rest args)
+  "Fail the running test when ARGS launch gptel's curl or a provider CLI.
+Fake CLIs copied below the case's owned roots still launch."
+  (when-let* ((program (car (plist-get args :command))))
+    (when (equal "curl" (file-name-nondirectory program))
+      (mevedel-test--refuse-provider-request)))
+  (when-let* (((ert-running-test))
+              (program (car (plist-get args :command)))
+              ((member (file-name-nondirectory program)
+                       mevedel-test--provider-programs))
+              (path (executable-find program))
+              ((not (cl-some (lambda (root)
+                               (string-prefix-p (file-name-as-directory root)
+                                                (mevedel-test--truename path)))
+                             mevedel-test--write-roots))))
+    (error "Test %S attempted to launch the real provider CLI %s; use a fake"
+           (ert-test-name (ert-running-test)) path)))
+
+;; gptel's async curl and url-retrieve dispatch, and its synchronous token calls;
+;; the refusal sits at the launch so tests stubbing it below gptel still run.
+(dolist (function '(gptel-curl-get-response gptel--url-get-response
+                    gptel--url-retrieve))
+  (advice-add function :around #'mevedel-test--mark-provider-transport))
+(dolist (function '(url-retrieve url-retrieve-synchronously))
+  (advice-add function :before #'mevedel-test--refuse-provider-request))
+;; Curl, Claude Code status checks and the ACP adapter start through make-process.
+(advice-add 'make-process :before #'mevedel-test--refuse-provider-process)
+
 (defun mevedel-test--live-connections ()
   "Return live network processes and TRAMP connection processes."
   (delete-dups

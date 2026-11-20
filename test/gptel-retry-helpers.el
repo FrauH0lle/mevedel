@@ -39,6 +39,7 @@
           (gptel--request-alist nil)
           (mevedel-gptel-retry--states nil)
           (gptel-use-curl t)
+          (mevedel-test-allow-provider-requests t)
           (gptel-log-level nil)
           (gptel-post-request-hook
            (list (lambda ()

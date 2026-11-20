@@ -789,6 +789,7 @@
          (gptel--known-backends nil)
          (gptel-confirm-tool-calls t)
          (gptel-use-curl t)
+         (mevedel-test-allow-provider-requests t)
          (gptel-stream nil)
          (model (make-symbol "review-http"))
          (responses
