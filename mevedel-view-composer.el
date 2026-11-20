@@ -1610,6 +1610,7 @@ found without scanning the rest of the buffer."
                (unwind-protect
 		   (when (buffer-live-p mevedel-view--pww-current-buffer)
 		     (with-current-buffer mevedel-view--pww-current-buffer
+                               (mevedel-view-pair-refresh-turn-rule)
 		       (unless positions-preserved
 			 (let ((restored-current-point
 				(resolve-position mevedel-view--pww-current-point

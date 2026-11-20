@@ -789,19 +789,22 @@ retains the accepted 8-fps compromise. No Emacs patch or rebuild is required.
         mevedel-view-spinner-battery-framerate 0)
 ```
 
-The view shows session status in its tab line, so it does not need a mode
-line. Consider hiding it in views, especially with an elaborate mode line
-such as doom-modeline. Emacs formats the mode line inside every pixel-position
-query, and the view makes many of those while a request runs; a doom-modeline
-added about 1 ms and 95 KB of allocation to each one, which shows up as more
-frequent garbage collection pauses while scrolling or typing. Set it after
-other packages have installed their mode line, for example with
-`hide-mode-line-mode` or:
+The transcript and composer share one visible mode line: the composer's
+normal Emacs mode line, below the draft. Emacs formats it during pixel-position
+queries. These costs were measured in an isolated setup:
+
+| Mode line | Time per pixel-position query | Allocation per query | Added Emacs CPU while typing in the composer |
+| --- | ---: | ---: | ---: |
+| Stock Emacs | 24–25 µs | 2.3–2.6 KiB | No measurable change |
+| doom-modeline | 106–202 µs | 28–34 KiB | About 54 ms/s |
+
+The stock mode line added about 0.2 ms of latency per keystroke. If you want to
+hide the mode line, set it to `nil` for the composer after mode setup:
 
 ```emacs-lisp
 (add-hook 'after-change-major-mode-hook
           (lambda ()
-            (when (derived-mode-p 'mevedel-view-mode)
+            (when (derived-mode-p 'mevedel-composer-mode)
               (setq-local mode-line-format nil)))
           90)
 ```

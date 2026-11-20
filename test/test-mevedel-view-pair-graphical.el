@@ -62,6 +62,30 @@
     (should (eq (window-buffer) buffer))
     dock))
 
+(ert-deftest mevedel-view-pair-graphical/final-turn-rule ()
+  "Show the plain closing rule only after another turn follows it."
+  :tags '(mevedel-docked-composer)
+  (mevedel-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (mevedel-view-transcript-window dock)))
+      (insert "> draft\nsecond line")
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "An earlier response.")
+        (let ((answer (line-beginning-position)))
+          ;; Count the response and the native end-of-buffer row, no chrome.
+          (should (= 2 (count-screen-lines
+                        answer (mevedel-view-transcript-tail) t transcript)))
+          (mevedel-view-test--insert-data data-buf "A new prompt.\n" nil)
+          (mevedel-view--full-rerender)
+          (goto-char answer)
+          (search-forward "You\nA new prompt.")
+          (should (= 3 (count-screen-lines
+                        answer (match-beginning 0) nil transcript)))))
+      (should (eq dock (selected-window)))
+      (should (equal "> draft\nsecond line"
+                     (mevedel-view-composer-graphical--draft view-buf))))))
+
 (ert-deftest mevedel-view-pair-graphical/delete-other-windows ()
   "Keeping either half via the native command preserves the pair and draft caret."
   :tags '(mevedel-docked-composer)

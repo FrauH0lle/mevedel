@@ -86,7 +86,8 @@ the caret and shows `↑ N more` when draft lines are hidden above. When the
 rail scrolls offscreen, its pending-action count appears in the header; click
 it or press `C-c C-j` to visit the next pending card. The top rule (`─` in a
 terminal) offers `↓ Back to bottom` only while the paired transcript is off
-its end. The mode line is below the composer, not between the two windows.
+its end. The composer displays its normal Emacs mode line below the draft;
+the paired transcript has no mode line of its own.
 
 Paired transcript windows are weakly dedicated: automatic popups skip them,
 but explicit `C-x b` can still replace the transcript buffer. When no ordinary
@@ -839,8 +840,10 @@ rule carries it, as in `── Worked for 2m 37s · Thu 29 Oct 14:32 ───�
 (`mevedel-view-request-summary-rule`) continues it to the window edge, so split
 and narrow windows need no width calculation. One blank row separates it from
 the next heading. A turn without a summary line, such as a running turn,
-closes with the plain overlined `mevedel-view-turn-rule` row after a blank line;
-that empty row leaves the same space above the next heading. A user turn that
+closes with the plain overlined `mevedel-view-turn-rule` row after a blank line.
+When those two rows would sit directly above the composer, the paired
+transcript window hides them. They reappear when another turn follows; a
+labelled request summary remains visible. A user turn that
 renders nothing visible, such as a harness-started background-event wake,
 contributes no rows, so the space after a closing rule does not depend on
 which kind of turn follows.
@@ -1266,16 +1269,16 @@ follow hooks and close restoration before display. Teardown runs from
 `delete-frame-functions`, so dismissing the frame, deleting it with ordinary
 frame commands, or exiting Emacs all restore point.
 
-`C-c C-z` dismisses the frame. Single-letter bindings are impossible because the
-view buffer holds an editable composer, and `C-g` keeps its view meaning of
+`C-c C-z` dismisses the frame. Single-letter bindings are unavailable because the
+frame has an editable composer, and `C-g` keeps its view meaning of
 aborting the request.
 
 ### Frame chrome
 
-The frame carries its own chrome through **window parameters**, not buffer-local
-settings, because the view buffer is shared with the main view: the main view
-keeps its mode line and its full-width status strip. In the frame the mode line
-is suppressed, fringes are zero, and the tab line is a condensed variant of the
+The note frame's transcript uses **window parameters**, not buffer-local
+settings, so the same buffer keeps its full-width status strip in the main
+view. In the note frame the transcript has no mode line, fringes are zero, and
+the tab line is a condensed variant of the
 status strip leading with note identity, then request state, model, and tool
 count. Session facts the parent already
 shows — session name, workspace root, execution target, preset — are

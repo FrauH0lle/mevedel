@@ -14,6 +14,7 @@
 (require 'mevedel-plan)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view-fontify)
+(require 'mevedel-view-pair)
 (require 'mevedel-utilities)
 (require 'mevedel-view-prepare)
 
@@ -9139,6 +9140,7 @@ marker at the end of the inserted block."
         (when fold-start
           (put-text-property fold-start user-end
                              'mevedel-view-type 'user-input-summary))
+        (mevedel-view-pair-refresh-turn-rule)
         (setq mevedel-view--user-pre-rendered t)
         (copy-marker (point) nil)))))
 

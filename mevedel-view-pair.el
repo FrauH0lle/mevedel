@@ -14,6 +14,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-composer--fit "mevedel-view-composer"
                   (dock transcript &optional fresh))
+(declare-function mevedel-view-transcript-tail "mevedel-view-composer" ())
 (defvar mevedel-composer--view)
 (defvar mevedel-view--composer-buffer)
 
@@ -22,6 +23,12 @@
 
 (defvar mevedel-view-pair--timer nil
   "Timer coalescing pending frame repairs.")
+
+(defvar-local mevedel-view-pair--hidden-rules nil
+  "Window-local overlays hiding this transcript's redundant closing rule.")
+
+(defconst mevedel-view-pair--closing-newline (propertize "\n" 'face 'default)
+  "Plain line break replacing the paired transcript's closing chrome.")
 
 (defconst mevedel-view-pair--transcript-rules
   '((mode-line-format . none)
@@ -81,6 +88,39 @@ WINDOW defaults to the selected window and may be either pair member."
               ((mevedel-view-pair--matches-p transcript dock)))
     dock))
 
+(defun mevedel-view-pair-refresh-turn-rule ()
+  "Hide the plain rule at the current transcript's end in paired windows.
+Use overlays so source anchors and unpaired windows keep the original text."
+  (let* ((end (mevedel-view-transcript-tail))
+         (start (when (and end (> (1- end) (point-min)) (<= end (point-max))
+                           (eq (char-before (1- end)) ?\n)
+                           (eq (get-text-property (1- end) 'font-lock-face)
+                               'mevedel-view-turn-rule))
+                  (- end (if (eq (char-before (- end 2)) ?\n) 3 2)))))
+    (when (or start mevedel-view-pair--hidden-rules)
+      (let ((windows (and start (get-buffer-window-list (current-buffer) nil t))))
+        (dolist (overlay mevedel-view-pair--hidden-rules)
+          (let ((window (overlay-get overlay 'window)))
+            (if (and (memq window windows)
+                     (eq (window-parameter window 'mevedel-view-pair--role) 'transcript)
+                     (mevedel-view-composer-window window))
+                (progn
+                  (setq windows (delq window windows))
+                  (unless (and (eql start (overlay-start overlay))
+                               (eql end (overlay-end overlay)))
+                    (move-overlay overlay start end)))
+              (delete-overlay overlay)
+              (setq mevedel-view-pair--hidden-rules
+                    (delq overlay mevedel-view-pair--hidden-rules)))))
+        (dolist (window windows)
+          (when (and (eq (window-parameter window 'mevedel-view-pair--role) 'transcript)
+                     (mevedel-view-composer-window window))
+            (let ((overlay (make-overlay start end)))
+              (overlay-put overlay 'window window)
+              ;; Keep a displayed newline for native last-page traversal.
+              (overlay-put overlay 'display mevedel-view-pair--closing-newline)
+              (push overlay mevedel-view-pair--hidden-rules))))))))
+
 (defun mevedel-view-pair-toggle-focus ()
   "Move focus between this transcript and its composer."
   (interactive)
@@ -122,6 +162,8 @@ WINDOW defaults to the selected window and may be either pair member."
     (set-window-parameter window 'mevedel-view-pair--role nil)
     (set-window-parameter window 'mevedel-view-pair--previous nil)
     (with-current-buffer (window-buffer window)
+      (when (eq role 'transcript)
+        (mevedel-view-pair-refresh-turn-rule))
       (force-mode-line-update))))
 
 (defun mevedel-view-pair--bind (transcript dock)
@@ -136,7 +178,9 @@ WINDOW defaults to the selected window and may be either pair member."
     (mevedel-view-pair--install-rules dock mevedel-view-pair--composer-rules)
     (set-window-parameter dock 'mevedel-view-pair--role 'composer)
     (set-window-dedicated-p dock t)
-    (window-preserve-size dock nil t)))
+    (window-preserve-size dock nil t))
+  (with-current-buffer (window-buffer transcript)
+    (mevedel-view-pair-refresh-turn-rule)))
 
 (defun mevedel-view-pair--split (window size side &optional pixelwise)
   "Split WINDOW's pair using `split-window' SIZE, SIDE, and PIXELWISE."
