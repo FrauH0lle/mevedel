@@ -8,49 +8,18 @@ Use the inbox for ideas that have not been investigated yet. Promote an
 item to a detailed entry when its scope and current status are understood.
 Remove items when they are implemented, obsolete, or no longer valuable.
 
-## Proactive sessions
+## Defects
 
-Source: the 2026-11-16 review of Anthropic's "Building always-on agents"
-(https://claude.com/resources/articles/building-always-on-agents). It breaks
-always-on agents into five primitives: event inbox, timers, memory, permissions
-and outbox. Mevedel already covers the inbox (the agent mailbox, Monitor and
-Bash wake-ups, one turn per session), memory (curated memory, journal,
-`/remember`) and permissions (automatic review, absence timeout, browser
-answers, `mevedel-notify-function`). The entries below fill the
-gaps. They apply to local sessions as well as a remote host used through the
-browser viewer.
+### A failed background start consumes unread mail
 
-Reference point (checked 2026-11-16,
-https://code.claude.com/docs/en/scheduled-tasks): Claude Code's `CronCreate` /
-`CronList` / `CronDelete` and `ScheduleWakeup` fire only between turns while
-the session is idle. Tasks are stored per session and restored on resume.
-Recurring tasks expire after seven days, one-shot tasks whose time passed are
-dropped, missed recurring runs are not caught up, and background commands and
-monitors are not restarted.
-
-### Scheduled wake-ups
-
-No tool lets the agent wake itself later. Add one-shot follow-ups ("check CI
-in 20 minutes") and recurring schedules that deliver a timer record to the
-owning session's mailbox, waking an idle root like a `MONITOR` record does.
-
-- Persist timers with the session, not in a live Emacs timer only. Use wall
-  time, so a timer due during a suspend fires once on wake (as the
-  [absence timeout](permissions.md#absence-timeout) does), and fires once,
-  not once per missed interval.
-- A due timer waits for the current turn and coalesces with other mail.
-  Bound the timer count per session, expire recurring timers, and list and
-  cancel them from the background-work panel and a tool.
-- Decide how timers interact with the paused-on-resume Goal rule
-  ([goals](goals.md)) before implementation: a restored timer must not
-  dispatch Goal work the rule withholds. Read that rule's history first.
-- Keep the sleep inhibitor rule for waiting Monitors: a pending timer alone
-  does not keep the machine awake.
-
-Not planned: inbound webhooks (a polling Monitor serves them) and the article's
-deferred tool calls that end a run and resume when the user answers. A pending
-card blocks only its own session, and browser answers plus the absence timeout
-already cover being away.
+When a background-event turn (Monitor, background command, wake-up) fails to
+start after its prompt is built, for example on a network error while the native
+request starts, the unread mailbox records are acknowledged anyway
+(`mevedel-tools.el`, mail acknowledgement at admission). The waking mail, and
+with it a scheduled wake-up's note, is lost without a turn. Acknowledge only once
+the request is admitted, or restore the records when the start fails. Found
+while reviewing scheduled wake-ups, 2026-11-20; workspace schedule runs already
+record such failures.
 
 ## Hook extensions
 

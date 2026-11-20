@@ -159,7 +159,8 @@ One timer for the earliest wake-up, rather than one per wake-up, keeps re-arming
 and teardown in one place and satisfies "idle means idle": nothing polls, and
 an Emacs with no pending wake-ups has no timer. Emacs timers are absolute, so a
 timer due during system sleep runs on wake, which is what makes the overdue
-annotation meaningful.
+annotation meaningful. A pending wake-up therefore does not hold the sleep
+inhibitor. Inbound webhooks were left out: a polling Monitor serves them.
 
 Delivering the note as a queued follow-up was rejected because follow-ups are
 user input and run first; a background notification must not acquire user

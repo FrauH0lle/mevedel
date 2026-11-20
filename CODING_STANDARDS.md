@@ -84,6 +84,12 @@ complex solutions; most do not.
   as the next step. Two such rescues in a row require a fresh scope decision.
 - Size safety mechanisms by consequence. Ephemeral, reproducible or low-value
   data does not need undo, proofs or recovery machinery.
+- Where durable state does need safety, a failed or inaccessible read is
+  **unknown**, never absence: delete or prune only what a successful read proves
+  stale. Name each multi-step write's crash window and its recovery, preferring
+  at-most-once (a lost run over a repeated one). A count or check guarding a
+  commit must be part of what that commit proves, not an earlier read that a
+  concurrent writer can invalidate.
 - A plan or slice that grows well beyond its original estimate is paused and
   re-justified with the person who owns the goal before work continues.
 
