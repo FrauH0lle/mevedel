@@ -153,6 +153,18 @@ for each started turn; `mevedel-schedule-test--settle' runs offered work."
     (should (= 1 (length (mevedel-schedule-test--wake-ups session))))
     (should (= 1795507200 (plist-get (car (mevedel-schedule-pending session)) :due))))
 
+  :doc "a recurring wake-up whose next run falls after its expiry expires at this firing"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-create session data-buf "every 1h" "Babysit PR 412" "90m")
+    (setq now (+ now 3600))
+    (mevedel-schedule-run-due)
+    (should (= 1 (length (mevedel-schedule-test--wake-ups session))))
+    (should-not (mevedel-schedule-pending session))
+    (let ((entry (car (mevedel-session-schedules session))))
+      (should (eq 'expired (plist-get entry :status)))
+      (should (= now (plist-get entry :expired-at))))
+    (should-not (mevedel-schedule-test--timers)))
+
   :doc "a firing past its expiry is recorded as expired without mail or a turn"
   (mevedel-schedule-test--with-session
     (mevedel-schedule-create session data-buf "20m" "Check CI" "30m")

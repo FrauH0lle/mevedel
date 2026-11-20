@@ -54,6 +54,15 @@
     (should (equal '(1795302000)
                    (mevedel-schedule-timing-test--runs "0 0 * * 7" 1795176000 1))))
 
+  :doc "a day field starting with * counts as unrestricted, as in cronie"
+  (mevedel-schedule-timing-test--in-zone "UTC"
+    ;; cronie 1.7.2 cronnext from 2026-01-01 12:00 UTC: odd days that are
+    ;; Mondays -> Jan 5; the 1st on an even weekday -> Sun Feb 1.
+    (should (equal '(1767603600)
+                   (mevedel-schedule-timing-test--runs "0 9 */2 * 1" 1767268800 1)))
+    (should (equal '(1769936400)
+                   (mevedel-schedule-timing-test--runs "0 9 1 * */2" 1767268800 1))))
+
   :doc "a cron time in the skipped hour fires once at the first minute after the gap"
   (mevedel-schedule-timing-test--in-zone "Europe/Zurich"
     ;; 2027-03-28: 02:00 CET jumps to 03:00 CEST.  02:30 -> 03:00 CEST, then
@@ -133,6 +142,27 @@
         (let ((err (should-error (mevedel-schedule-parse-timing (car case) 1795176000)
                                  :type 'user-error)))
           (should (string-match-p (cdr case) (cadr err))))))))
+
+(mevedel-deftest mevedel-schedule-entry-p ()
+  ,test
+  (test)
+  :doc "a persisted entry passes only with timing creation would accept"
+  (mevedel-schedule-timing-test--in-zone "Europe/Zurich"
+    (cl-flet ((entry (timing)
+                (list :id "w-1" :note "x" :timing timing :created-at 1795176000
+                      :due 1795177200 :expires-at nil :status 'pending)))
+      (should (mevedel-schedule-entry-p (entry '(:kind once :at 1795177200))))
+      (should (mevedel-schedule-entry-p (entry '(:kind interval :seconds 60))))
+      (should (mevedel-schedule-entry-p (entry '(:kind cron :expression "0 9 * * 1-5"))))
+      (dolist (timing '((:kind interval :seconds 0)
+                        (:kind interval :seconds 59)
+                        (:kind interval :seconds "60")
+                        (:kind cron :expression "BAD")
+                        (:kind cron :expression "0 9 * * MON")
+                        (:kind cron :expression "0 0 31 2 *")
+                        (:kind weekly)))
+        (ert-info ((format "%S" timing))
+          (should-not (mevedel-schedule-entry-p (entry timing))))))))
 
 (provide 'test-mevedel-schedule-timing)
 ;;; test-mevedel-schedule-timing.el ends here

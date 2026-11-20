@@ -29,11 +29,16 @@ failed" makes the conversation continue itself when the time comes.
 - **Recurring timing.** An interval has a one-minute minimum and its next run
   is timed from the actual firing, so missed runs never catch up: a laptop that
   slept through five runs receives one, annotated as overdue. Cron supports
-  values, `*`, ranges, steps and lists with the classic rule that a day
-  matching either restricted day field fires; names, `L`, `W` and `?` are
-  rejected rather than half-supported. A recurring wake-up expires 7 days
-  after creation by default and never later than 30, so a forgotten loop
-  cannot run and spend indefinitely.
+  values, `*`, ranges, steps and lists with cronie's day rule: a day field
+  starting with `*` (including `*/2`) is unrestricted, and when neither is, a
+  day matching either fires. Matching cronie rather than the stricter POSIX
+  wording keeps expressions copied from crontabs meaning what they meant
+  there. Names, `L`, `W` and `?` are rejected rather than half-supported. A
+  recurring wake-up expires 7 days after creation by default and never later
+  than 30, so a forgotten loop cannot run and spend indefinitely; the firing
+  whose next run would pass the expiry records it as expired, so it does not
+  hold one of the 50 pending slots until then. A persisted entry loads only
+  with timing creation would accept.
 - **Daylight saving.** Next-run calculation is a pure function of the timing,
   a reference time and the local zone. A local time in a skipped hour fires at
   the first valid minute after the gap; a local time in a repeated hour fires

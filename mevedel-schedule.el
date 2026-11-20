@@ -177,9 +177,13 @@ Signal `user-error' for syntax this scheduler does not support."
 (defun mevedel-schedule--cron-next (text after)
   "Return cron expression TEXT's first local fire time later than AFTER, or nil.
 A day matches when its month does and, if both day fields are restricted,
-either of them does; otherwise both."
+either of them does; otherwise both.  As in cronie and Vixie cron, a day
+field starting with * (including */2) is unrestricted."
   (pcase-let* ((`(,minutes ,hours ,days ,months ,weekdays)
                 (mevedel-schedule--parse-cron text))
+               (fields (split-string text))
+               (either (not (or (string-prefix-p "*" (nth 2 fields))
+                                (string-prefix-p "*" (nth 4 fields)))))
                (allows (lambda (values value) (or (eq values t) (memq value values))))
                (start (* 60 (1+ (floor (+ after (car (current-time-zone after))) 60))))
                (day (* 86400 (floor start 86400))))
@@ -187,11 +191,9 @@ either of them does; otherwise both."
     (cl-loop repeat (* 8 366)
              for date = (decode-time day t)
              when (and (funcall allows months (decoded-time-month date))
-                       (if (or (eq days t) (eq weekdays t))
-                           (and (funcall allows days (decoded-time-day date))
-                                (funcall allows weekdays (decoded-time-weekday date)))
-                         (or (memq (decoded-time-day date) days)
-                             (memq (decoded-time-weekday date) weekdays))))
+                       (funcall (if either (lambda (a b) (or a b)) (lambda (a b) (and a b)))
+                                (funcall allows days (decoded-time-day date))
+                                (funcall allows weekdays (decoded-time-weekday date))))
              thereis (cl-loop for hour in (if (eq hours t) (number-sequence 0 23) hours)
                               thereis
                               (cl-loop for minute in (if (eq minutes t)
@@ -293,8 +295,15 @@ An interval is timed from AFTER, so runs missed in between never catch up."
        (let ((timing (plist-get entry :timing)))
          (pcase (plist-get timing :kind)
            ('once (integerp (plist-get timing :at)))
-           ('interval (natnump (plist-get timing :seconds)))
-           ('cron (stringp (plist-get timing :expression)))))
+           ('interval (let ((seconds (plist-get timing :seconds)))
+                        (and (integerp seconds) (>= seconds 60))))
+           ;; The checks creation applies: supported syntax that ever fires.
+           ('cron (let ((expression (plist-get timing :expression)))
+                    (and (stringp expression)
+                         (condition-case nil
+                             (mevedel-schedule--cron-next
+                              expression (or (plist-get entry :created-at) 0))
+                           (user-error nil)))))))
        (integerp (plist-get entry :created-at))
        (integerp (plist-get entry :due))
        (let ((model (plist-get entry :model)) (effort (plist-get entry :effort)))
@@ -545,9 +554,13 @@ BUFFER is the root data buffer offered the background-event turn."
           ;; Removal and the record share the mailbox commit, so a firing is
           ;; never both delivered and still pending in the persisted store.
           (setf (mevedel-session-schedules session)
-                (if-let* ((next (mevedel-schedule-next-run (plist-get entry :timing) now)))
-                    (cl-substitute (plist-put (copy-sequence entry) :due next) entry previous)
-                  (remq entry previous)))
+                (let ((next (mevedel-schedule-next-run (plist-get entry :timing) now)))
+                  (cond ((null next) (remq entry previous))
+                        ;; A run past expiry would only be dropped; free the slot now.
+                        ((and expires (> next expires))
+                         (mevedel-schedule--expire session entry now))
+                        (t (cl-substitute (plist-put (copy-sequence entry) :due next)
+                                          entry previous)))))
           (mevedel-agent-control-enqueue-wake-up
            session (plist-get entry :note) (mevedel-schedule--record-meta entry now)
            (lambda (success failure)

@@ -1690,9 +1690,10 @@ non-blank `note` of at most 4,000 characters. `when` is a duration (`20m`,
 another zone. A recurring wake-up takes `every` and a duration of at least a
 minute, timed from the previous run, or a 5-field cron expression (minute,
 hour, day of month, month, day of week) in local time with values, `*`,
-ranges, steps and lists; day of week 7 is Sunday like 0, and when both day
-fields are restricted a day matching either fires. Cron names, `L`, `W` and
-`?` are rejected. The optional `expires` is a duration or local time and must
+ranges, steps and lists; day of week 7 is Sunday like 0. As in cronie and
+Vixie cron, a day field starting with `*` (including `*/2`) is unrestricted,
+and when neither day field is, a day matching either fires. Cron names, `L`,
+`W` and `?` are rejected. The optional `expires` is a duration or local time and must
 be later than the wake-up's first time; a recurring wake-up expires 7 days
 after creation by default and an explicit expiry may be at most 30 days away.
 Unparseable timing, an impossible date, a zero duration or sub-minute
@@ -1729,6 +1730,8 @@ with `overdue_by` added when it fired at least a minute late, as after sleep.
 A recurring wake-up stays pending after each firing with its next run computed
 from the actual firing time, so runs missed during sleep or while the session
 was closed arrive as one overdue record, never as a burst.
+When that next run would fall after its expiry, the firing records the
+wake-up as `expired` at once, freeing its pending slot.
 Like a background command's completion it wakes an idle root through the
 background-event path, holds for a running turn, a composer draft, pending
 decisions, queued or paused follow-ups and recovery blockers, coalesces with
