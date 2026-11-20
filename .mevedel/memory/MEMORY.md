@@ -46,3 +46,5 @@
 - [Preserve agreed scope, including approved prototype visuals](preserve-agreed-scope-in-specifications.md) - Do not silently drop agreed work or an approved prototype's visual treatment when writing specifications or implementing them.
 - [Keep user-facing customization at the main package boundary](main-package-customization-preference.md) - Keybinding customization should work from the main package configuration without requiring submodule-specific setup.
 - [Separate applying draft wording from committing it](collaborative-wording-commit-approval.md) - When wording is still under collaborative review, applying edits does not mean the user has approved a commit.
+- [Finalize one coherent design before implementing](finalize-coherent-design-before-implementing.md) - Do not start implementation, prototype edits or backlog additions while design is open; prefer one coherent design over phased versions.
+- [Land branches on master as a linear, squashed history](linear-master-history-preference.md) - Combine related commits and fast-forward; no merge commits on master.
