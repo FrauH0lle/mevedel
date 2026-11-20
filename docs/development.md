@@ -668,8 +668,8 @@ client killed before reporting, the session deadline and SIGTERM.
 
 ### Terminal docked-composer check
 
-The docked composer's native typing, send and history, and completion cases
-also run in terminal Emacs:
+The docked composer's native editing and window-command cases also run in
+terminal Emacs:
 
 ```bash
 npx @emacs-eask/cli run script terminal-check
@@ -681,8 +681,8 @@ The batch parent starts a **separate `emacs -Q -nw`** on a pseudo-terminal of
 It sends the child a real terminal focus-in report rather than stubbing
 `frame-focus-state`, and the child keeps its echo area at one line and
 warnings out of windows, so neither resizes the host between cases. The child
-selects the cases by ERT tag (`test/terminal-check.el`) from
-`test/test-mevedel-view-composer-graphical.el`. Unexpected results **or
+selects the cases by ERT tag (`test/terminal-check.el`) from the composer and
+pair graphical suites. Unexpected results **or
 skipped tests** fail the command. It needs no display, compositor or
 tree-sitter grammar; `ert.log` is printed rather than kept.
 

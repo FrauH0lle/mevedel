@@ -534,6 +534,8 @@ WINDOW defaults to the selected window, but need not be selected."
   (mevedel-view-user-state-test--with-view
     (mevedel-view-test--insert-composer-draft
      mevedel-view-user-state-test--draft 4)
+    (unless noninteractive
+      (should (mevedel-view-composer-display (selected-window))))
     (goto-char (point-min))
     (search-forward "[Manage]")
     (backward-char (length "[Manage]"))
@@ -588,17 +590,23 @@ WINDOW defaults to the selected window, but need not be selected."
           (mouse-wheel-progressive-speed nil))
       (mevedel-view-user-state-test--with-view
         (let* ((transcript (selected-window))
-               (reader (split-window-right)))
+               (reader (split-window-right))
+               ;; Test the targeted scroll independently of C-x o order: a
+               ;; second transcript now has a composer of its own.
+               (other-window-scroll-default (lambda () transcript)))
           (mevedel-view-test--insert-composer-draft
            mevedel-view-user-state-test--draft 4)
+          (should (mevedel-view-composer-display transcript))
           (goto-char (point-max))
           (recenter -1)
-          (redisplay t)
           (with-temp-buffer
-            (when ,different-buffer
-              (insert "The selected window is not a chat view.\n")
-              (set-window-buffer reader (current-buffer)))
+            (if ,different-buffer
+                (progn
+                  (insert "The selected window is not a chat view.\n")
+                  (set-window-buffer reader (current-buffer)))
+              (should (mevedel-view-composer-display reader)))
             (select-window reader)
+            (redisplay t)
             (let ((reader-point (window-point reader))
                   (reader-start (window-start reader)))
               (dotimes (_ ,up-count) ,up)

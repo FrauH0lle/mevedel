@@ -110,9 +110,10 @@ command loop decodes it, so wait from a timer, not a loop."
           ;; for missing Markdown grammars, would resize the host mid-case.
           (setq resize-mini-windows nil
                 warning-minimum-level :emergency)
-          (load (file-name-concat mevedel-terminal-check--root
-                                  "test" "test-mevedel-view-composer-graphical.el")
-                nil t)
+          (dolist (file '("test-mevedel-view-composer-graphical.el"
+                          "test-mevedel-view-pair-graphical.el"))
+            (load (file-name-concat mevedel-terminal-check--root "test" file)
+                  nil t))
           (let ((stats (ert-run-tests-batch mevedel-terminal-check--selector)))
             (cl-loop for test across (ert--stats-tests stats)
                      for result = (ert-test-most-recent-result test)

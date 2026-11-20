@@ -219,7 +219,7 @@
 
 ;; `mevedel-view-composer'
 (defvar mevedel-composer--view)
-(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
+(declare-function mevedel-view-composer-display "mevedel-view-pair" (view-window))
 (declare-function mevedel-view--assert-live-tip
                   "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--bind-input-mentions

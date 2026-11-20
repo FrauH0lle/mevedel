@@ -54,10 +54,23 @@ authoritative transcript.
 - **Composer buffer**: `mevedel-composer-mode`. Its first line is the read-only
   rail (mode badge, request activity, and pending actions). Below it are the input
   prefix and one editable draft per view, with its own caret, undo, history,
-  and completion. It opens in a plain window below the view; submitting it
+  and completion. Each window showing an editable view gets a composer
+  directly below it; splits share one draft, not one caret. Submitting it
   routes through the owning view to the data buffer. Closing the view kills
-  its composer. Agent transcript and historical segment displays have no
-  editable composer window.
+  its composer. Agent transcripts and historical segments have no dock.
+
+| Key in the transcript or composer | Effect |
+| --- | --- |
+| `C-x 1` | Keeps both windows in the pair. |
+| `C-x 0` | Closes the pair, subject to Emacs's last-window rule. |
+| `C-x 2` / `C-x 3` | Splits outside the pair; the new transcript gets its own dock. |
+| `C-x b` | Changes the transcript's buffer; the draft stays with its view. |
+| `C-x o` | Cycles through windows normally, including the composer. |
+
+The composer keeps its height when other windows resize. Popups normally open
+outside the pair. After a window layout changes, a deferred repair removes
+orphan docks and restores missing ones without selecting the repaired dock.
+A transcript remains usable when its window is too short for a dock.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Resident retained agents use their live conversation buffer
   whether running or idle; cold and historical agents use the saved transcript
@@ -1219,7 +1232,7 @@ composer work in it unmodified and no second renderer exists. See
 cannot host these interactions.
 
 An explicit action opens the frame with focus. On a terminal or where child
-frames are unavailable, the conversation opens in a side window.
+frames are unavailable, the conversation opens as a pair in a right-hand split.
 
 The frame opens below the note's last line, or flush above its first line
 when there is no room below, so the note stays readable beside its

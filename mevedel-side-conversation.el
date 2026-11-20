@@ -211,7 +211,6 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
-(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
 (defvar mevedel-composer--view)
 (declare-function mevedel-view--forward-input "mevedel-view-composer" t)
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
@@ -221,6 +220,10 @@
                   (&optional view without-properties))
 (declare-function mevedel-view-composer-insert "mevedel-view-composer"
                   (text &optional position view))
+
+;; `mevedel-view-pair'
+(declare-function mevedel-view-composer-display "mevedel-view-pair" (view-window))
+(declare-function mevedel-view-transcript-window "mevedel-view-pair" (&optional window))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender
@@ -991,7 +994,9 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (cl-labels
         ((display-side (view)
            (pop-to-buffer view)
-           (when-let* ((composer (mevedel-view-composer-display (selected-window))))
+           (when-let* ((window (mevedel-view-transcript-window))
+                       ((eq view (window-buffer window)))
+                       (composer (mevedel-view-composer-display window)))
              (select-window composer)))
          (show-side
            (view)

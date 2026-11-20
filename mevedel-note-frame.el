@@ -54,7 +54,12 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
+(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
+
+;; `mevedel-view-pair'
+(declare-function mevedel-view-composer-display "mevedel-view-pair" (view-window))
+(declare-function mevedel-view-composer-window "mevedel-view-pair" (&optional window))
+(declare-function mevedel-view-transcript-window "mevedel-view-pair" (&optional window))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--rendered-turn-starts "mevedel-view-render" ())
@@ -504,14 +509,22 @@ WINDOW is supplied by `window-scroll-functions'."
 Bounded by `mevedel-note-frame-min-height' and
 `mevedel-note-frame-height' so a one-line answer does not collapse
 the frame and a long one does not cover the buffer behind it."
-  (when (frame-live-p mevedel-note-frame--frame)
-    ;; `vertically' matters: fitting both dimensions widens the frame to the
-    ;; longest unwrapped line in the transcript, which readily exceeds the
-    ;; parent frame.  Width stays as computed from the parent at open.
-    (fit-frame-to-buffer mevedel-note-frame--frame
-                         mevedel-note-frame-height
-                         mevedel-note-frame-min-height
-                         nil nil 'vertically)))
+  (when-let* ((frame mevedel-note-frame--frame)
+              ((frame-live-p frame)))
+    (let* ((window (or (mevedel-view-transcript-window (frame-first-window frame))
+                       (frame-first-window frame)))
+           (composer (mevedel-view-composer-window window)))
+      (if (not composer)
+          (fit-frame-to-buffer frame mevedel-note-frame-height
+                               mevedel-note-frame-min-height nil nil 'vertically)
+        ;; `fit-frame-to-buffer' only fits a frame with a single window.
+        (let* ((row (frame-char-height frame))
+               (limit (* row mevedel-note-frame-height))
+               (content (cdr (window-text-pixel-size window t t nil limit t)))
+               (height (max (* row mevedel-note-frame-min-height)
+                            (min limit (+ content (window-pixel-height composer))))))
+          (unless (= height (frame-text-height frame))
+            (set-frame-height frame height nil t)))))))
 
 
 ;;
@@ -522,22 +535,23 @@ the frame and a long one does not cover the buffer behind it."
   "Display VIEW-BUFFER in a note frame anchored at NOTE.
 With FOCUS non-nil the frame is selected, which is what an explicit user
 action wants; a request dispatch leaves focus where it is.  Falls back to
-an ordinary window when child frames are unavailable."
+an ordinary right-hand split when child frames are unavailable."
   (unless (and (overlayp note)
                (eq (overlay-get note 'mevedel-instruction-type) 'note))
     (user-error "Select a note to open its conversation"))
   (let ((note-id (format "Note %s" (overlay-get note 'mevedel-id))))
     (unless (eq mevedel-note-frame--view-buffer view-buffer)
-      (when (buffer-live-p mevedel-note-frame--view-buffer)
-        (with-current-buffer mevedel-note-frame--view-buffer
-          (mevedel-note-frame-mode -1))))
+      (mevedel-note-frame--set-mode mevedel-note-frame--view-buffer -1))
     (cond
      ((or (not (mevedel-note-frame--available-p))
           (not (display-graphic-p)))
-      (display-buffer view-buffer
-                      '(display-buffer-in-side-window
-                        (side . right) (window-width . 0.5)))
-      (when focus (select-window (get-buffer-window view-buffer t))))
+      ;; A native side window cannot contain the two-window dock.
+      (when-let* ((window (display-buffer
+                           view-buffer
+                           '((display-buffer-reuse-window display-buffer-in-direction)
+                             (direction . right) (window . main) (window-width . 0.5)))))
+        (mevedel-view-composer-display window)
+        (when focus (select-window window))))
      ;; Reopening the same conversation must not move the frame under its reader.
      ((and (frame-live-p mevedel-note-frame--frame)
            (eq mevedel-note-frame--view-buffer view-buffer)
@@ -577,7 +591,7 @@ an ordinary window when child frames are unavailable."
                                       (cdr size))
                                    2)))
         (make-frame-visible frame)
-        (with-current-buffer view-buffer (mevedel-note-frame-mode 1))
+        (mevedel-note-frame--set-mode view-buffer 1)
         (mevedel-note-frame--follow-setup note)
         (when focus (select-frame-set-input-focus frame))
         frame)))))
@@ -610,9 +624,7 @@ dismiss command, \\[delete-frame], or Emacs exit -- restores point."
       (when (and (frame-live-p parent) (not (eq parent frame)))
         (select-frame-set-input-focus parent))
       (mevedel-note-frame--unfollow)
-      (when (buffer-live-p view-buffer)
-        (with-current-buffer view-buffer
-          (mevedel-note-frame-mode -1)))
+      (mevedel-note-frame--set-mode view-buffer -1)
       (setq mevedel-note-frame--frame nil
             mevedel-note-frame--view-buffer nil
             mevedel-note-frame--note-id nil
@@ -657,21 +669,16 @@ again after deletion and forcing one redisplay settles it immediately."
 ;;; Keys
 
 (defvar-keymap mevedel-note-frame-mode-map
-  :doc "Keymap active in a buffer displayed by the note frame.
-Bindings are prefixed because the view buffer holds an editable composer,
-where a single-letter binding would prevent typing.  `C-g' is left alone;
-in a view buffer it aborts the request."
+  :doc "Keymap active in the transcript and composer of the note frame."
   "C-c C-z" #'mevedel-note-frame-close)
 
 (defun mevedel-note-frame--display-in-parent (buffer alist)
   "Display BUFFER in the note frame's parent frame honoring ALIST.
-The frame's root window is dedicated and unsplittable and the frame is a
-few lines tall, so anything popped from it -- the transient menu, a
-cockpit surface, the patch buffer -- is unusable inside it.  Redirecting
-at the display layer covers every such surface, including ones that do
-not exist yet."
+The note frame is too short for menus, cockpits and other popups.  Redirect
+at the display layer so every popup gets the same treatment."
   (when-let* ((frame mevedel-note-frame--frame)
               ((frame-live-p frame))
+              ((eq frame (selected-frame)))
               (parent (frame-parent frame))
               ((frame-live-p parent)))
     (let ((window
@@ -693,7 +700,7 @@ not exist yet."
       window)))
 
 (define-minor-mode mevedel-note-frame-mode
-  "Minor mode for the view buffer while a note frame displays it."
+  "Minor mode for buffers displayed by the note frame."
   :lighter ""
   :keymap mevedel-note-frame-mode-map
   :interactive nil
@@ -701,6 +708,13 @@ not exist yet."
       (setq-local display-buffer-overriding-action
                   '(mevedel-note-frame--display-in-parent . nil))
     (kill-local-variable 'display-buffer-overriding-action)))
+
+(defun mevedel-note-frame--set-mode (view arg)
+  "Set the note-frame mode of VIEW and its composer according to ARG."
+  (when (buffer-live-p view)
+    (with-current-buffer view (mevedel-note-frame-mode arg))
+    (when-let* ((composer (mevedel-view-composer-buffer view)))
+      (with-current-buffer composer (mevedel-note-frame-mode arg)))))
 
 (provide 'mevedel-note-frame)
 

@@ -94,11 +94,13 @@
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
 (declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
-(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
-(declare-function mevedel-view-composer-window "mevedel-view-composer" (&optional view-window))
 (declare-function mevedel-view-transcript-tail "mevedel-view-composer" ())
 (defvar mevedel-composer--view)
 (defvar mevedel-view--prompt-hook-pending)
+
+;; `mevedel-view-pair'
+(declare-function mevedel-view-composer-window "mevedel-view-pair" (&optional window))
+(declare-function mevedel-view-transcript-window "mevedel-view-pair" (&optional window))
 
 ;; `mevedel-view-control-transfer'
 (declare-function mevedel-view-control-transfer-current-descriptor

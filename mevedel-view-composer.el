@@ -37,6 +37,7 @@
 (require 'mevedel-skills-input)
 (require 'mevedel-skills-ui)
 (require 'mevedel-utilities)
+(require 'mevedel-view-pair)
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
@@ -693,7 +694,8 @@ their distinct labels."
           (mevedel-view--propertize-input-prompt start (point)))
         (setq mevedel-composer--draft-start (point-marker))
         (setq buffer-undo-list nil)
-        (mevedel-view-composer-initialize)))))
+        (mevedel-view-composer-initialize))
+      (mevedel-view-pair-watch mevedel-view--composer-buffer))))
 
 (defun mevedel-view-composer-buffer (&optional view)
   "Return the buffer holding VIEW's draft, or nil if it has no composer.
@@ -705,44 +707,6 @@ VIEW defaults to the current buffer.  This does not display the composer."
          ((buffer-live-p mevedel-view--composer-buffer)
           mevedel-view--composer-buffer)
          ((buffer-live-p mevedel-composer--view) view))))))
-
-(defun mevedel-view-composer-window (&optional view-window)
-  "Return the existing composer window directly below VIEW-WINDOW.
-VIEW-WINDOW defaults to the selected window.  Do not change selection."
-  (let ((window (or view-window (selected-window))))
-    (when (window-live-p window)
-      (if (buffer-local-value 'mevedel-composer--view (window-buffer window))
-          window
-        (when-let* ((composer (mevedel-view-composer-buffer (window-buffer window)))
-                    (below (window-in-direction 'below window))
-                    ((eq (window-buffer below) composer)))
-          below)))))
-
-(defun mevedel-view-transcript-window (&optional window)
-  "Return WINDOW's transcript window without selecting or displaying it.
-WINDOW defaults to the selected window."
-  (let ((window (or window (selected-window))))
-    (when (window-live-p window)
-      (with-current-buffer (window-buffer window)
-        (if mevedel-composer--view
-            (when-let* ((above (window-in-direction 'above window))
-                        ((eq (window-buffer above) mevedel-composer--view))
-                        ((eq (mevedel-view-composer-window above) window)))
-              above)
-          (when (derived-mode-p 'mevedel-view-mode) window))))))
-
-(defun mevedel-view-composer-display (view-window)
-  "Display the draft below VIEW-WINDOW, without selecting either window."
-  (or (mevedel-view-composer-window view-window)
-      (when-let* ((view (window-buffer view-window))
-                  (composer (mevedel-view-composer-buffer view))
-                  ((not (buffer-local-value 'buffer-read-only composer)))
-                  ;; A too-small window still has a usable transcript.
-                  (window (condition-case nil
-                              (split-window view-window -4 'below)
-                            (error nil))))
-        (set-window-buffer window composer)
-        window)))
 
 (defvar-local mevedel-view--armed-session-fork nil
   "Stable fork-point target armed for the next model-bound submission.")
@@ -768,10 +732,7 @@ WINDOW defaults to the selected window."
       (if visible
           (dolist (window (get-buffer-window-list view nil t))
             (mevedel-view-composer-display window))
-        (dolist (window (get-buffer-window-list composer nil t))
-          (if (one-window-p t (window-frame window))
-              (set-window-buffer window view)
-            (delete-window window)))))))
+        (mevedel-view-pair-hide view)))))
 
 (defvar-keymap mevedel-view--armed-session-fork-map
   :doc "Keymap for the armed session-fork interaction row."
@@ -915,7 +876,8 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "M-p" #'mevedel-view-history-previous
   "M-r" #'mevedel-view-history-search
   "<backtab>" #'mevedel-view-cycle-permission-mode
-  "S-TAB" #'mevedel-view-cycle-permission-mode)
+  "S-TAB" #'mevedel-view-cycle-permission-mode
+  "<remap> <switch-to-buffer>" #'mevedel-view-pair-switch-buffer)
 
 (defvar-keymap mevedel-view--side-conversation-keymap
   :doc "Keymap active over an ephemeral side-conversation composer."
@@ -923,7 +885,8 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "C-c TAB" #'mevedel-view-send-follow-up
   "C-c C-k" #'mevedel-view-abort
   "C-c C-z" #'mevedel-side-conversation-close
-  "C-y" #'mevedel-view-yank-dwim)
+  "C-y" #'mevedel-view-yank-dwim
+  "<remap> <switch-to-buffer>" #'mevedel-view-pair-switch-buffer)
 
 (define-key mevedel-view--composer-keymap
             [remap move-beginning-of-line]

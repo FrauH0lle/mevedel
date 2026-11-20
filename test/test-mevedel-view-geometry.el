@@ -201,6 +201,9 @@
         (with-selected-frame frame
           (mevedel-view-test--with-buffers
             (switch-to-buffer view-buf)
+            ;; Measure a history reader's transcript-only viewport while the
+            ;; frame configure gives deferred window hooks a chance to run.
+            (mevedel-view-composer-set-historical-visible nil)
             (setq-local header-line-format "Static header" mode-line-format nil
                         tab-line-format nil truncate-lines nil word-wrap nil
                         line-spacing nil auto-window-vscroll nil)

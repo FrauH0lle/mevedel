@@ -278,7 +278,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
-(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
+(declare-function mevedel-view-composer-display "mevedel-view-pair" (view-window))
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)

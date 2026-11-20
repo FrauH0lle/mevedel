@@ -6136,7 +6136,7 @@ turn's later text, live and after reconstruction."
                             window-size-change-functions))
               (should-not (memq #'mevedel-view--resume-on-window-resize
                                 window-scroll-functions))
-              (delete-window (mevedel-view-composer-window))
+              (mevedel-view-pair-hide view-buf)
               (let ((narrow (split-window-right)))
                 (set-window-buffer narrow view-buf)
                 (should (mevedel-view-composer-display (selected-window)))
@@ -6887,7 +6887,7 @@ turn's later text, live and after reconstruction."
                        before (mevedel-view-stream-test--rail-activity)))
               ;; The same event must not paint an undisplayed buffer for an
               ;; unrelated frame; its frozen phase repaints on visibility.
-              (delete-window (mevedel-view-composer-window))
+              (mevedel-view-pair-hide view-buf)
               (set-window-buffer (selected-window) data-buf)
               (setq foreground "#ffff00")
               (run-hook-with-args 'enable-theme-functions 'mevedel-test-theme)
@@ -6967,7 +6967,7 @@ turn's later text, live and after reconstruction."
               (should-not mevedel-view--spinner-timer)
               ;; The old sample must stay untouched while its window is
               ;; hidden; returning to an attended frame repairs it.
-              (delete-window (mevedel-view-composer-window))
+              (mevedel-view-pair-hide view-buf)
               (set-window-buffer (selected-window) data-buf)
               (setq display-frame :first)
               (mevedel-view--start-spinner-timer)
@@ -7093,7 +7093,7 @@ turn's later text, live and after reconstruction."
                     (let ((visible-main (mevedel-view-stream-test--rail-activity))
                           (visible-tool (get-text-property
                                          (marker-position tool) 'display)))
-                      (delete-window (mevedel-view-composer-window))
+                      (mevedel-view-pair-hide view-buf)
                       (set-window-buffer (selected-window) data-buf)
                       (setq supported nil)
                       (run-hook-with-args 'enable-theme-functions
@@ -7167,7 +7167,7 @@ turn's later text, live and after reconstruction."
                     (should (eq undo buffer-undo-list))
                     (should (= here (point)))
                     (let ((visible (mevedel-view-stream-test--rail-activity)))
-                      (delete-window (mevedel-view-composer-window))
+                      (mevedel-view-pair-hide view-buf)
                       (set-window-buffer (selected-window) data-buf)
                       (set-face-attribute 'mevedel-view-spinner nil
                                           :foreground "#0000ff")
@@ -7531,7 +7531,7 @@ turn's later text, live and after reconstruction."
     (mevedel-view-stream-test--with-visible-view
       (mevedel-view--interaction-register
        '(:kind permission :id approval :count 1 :body "Approve" :activate ignore))
-      (delete-window (mevedel-view-composer-window))
+      (mevedel-view-pair-hide view-buf)
       (let* ((wide (selected-window))
              (narrow (split-window wide -24 'right))
              (wide-composer (mevedel-view-composer-display wide)))
@@ -7547,8 +7547,7 @@ turn's later text, live and after reconstruction."
           (let ((rail (mevedel-view-test--rail-text)))
             (should (< (string-width rail) (window-body-width composer)))
             (should (string-search "⚠" rail))
-            (should-not (string-search "Working" rail)))
-          (delete-window composer))
+            (should-not (string-search "Working" rail))))
         (delete-window narrow)
         (mevedel-view--resume-on-window-resize wide)
         (let ((rail (mevedel-view-test--rail-text)))

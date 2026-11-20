@@ -117,7 +117,7 @@ Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-session-rewind-merge.el staged smerge resolutions for atomic Rewind
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
-  mevedel-note-frame.el  note-anchored conversation child frame and side-window fallback
+  mevedel-note-frame.el  note-anchored conversation child frame and right-hand fallback
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-source.el per-consumer hook-proven transcript change frontiers
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
@@ -127,6 +127,7 @@ Chat / view
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-execution.el   background-work panel: agent and execution rows, inline inspection, actions
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
+  mevedel-view-pair.el        transcript/composer window lookup, command rules and deferred repair
   mevedel-view-input-files.el local file drops and clipboard-image input
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
   mevedel-view-native.el      optional native presentation, placement, fallback and teardown

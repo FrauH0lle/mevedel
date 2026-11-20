@@ -27,6 +27,7 @@
 (require 'mevedel-theme-faces)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-pair)
 (require 'mevedel-window)
 (require 'transient)
 (require 'org)
@@ -214,10 +215,13 @@ Bind parent, frame and window for BODY, which runs in the view buffer."
            (select-frame-set-input-focus parent))))))
 
 (defun mevedel-window-graphical-test--size (frame columns lines)
-  "Size FRAME to COLUMNS by LINES of its parent's canonical character cells."
+  "Size FRAME to COLUMNS by LINES in parent cells and dock its composer."
   (let ((parent (frame-parent frame)))
     (set-frame-size frame (* columns (frame-char-width parent))
-                    (* lines (frame-char-height parent)) t)))
+                    (* lines (frame-char-height parent)) t))
+  ;; The fixture bypasses note display; do not let deferred repair change the
+  ;; body height between the pinned and unpinned samples.
+  (should (window-live-p (mevedel-view-composer-display (frame-first-window frame)))))
 
 (defun mevedel-window-graphical-test--rows (window)
   "Return WINDOW's displayed chrome after redisplay.

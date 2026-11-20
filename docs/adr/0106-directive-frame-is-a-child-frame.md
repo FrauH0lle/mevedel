@@ -11,7 +11,9 @@ displays the real view buffer, so permissions, Ask, patch review, streaming,
 and the composer work in it unmodified and no second renderer exists. It takes
 focus when opened explicitly from the note's actions and stays unfocused
 when a dispatch opens it, since a request the user just started should not move
-point. Terminals and unavailable child frames use a side window.
+point. The note child frame contains a docked transcript and composer.
+Terminals and unavailable child frames use a right-hand split; a native side
+window cannot contain the pair as an independent window combination.
 
 `mevedel-note-frame.el` owns this presentation; `mevedel-note-source.el`
 coordinates source anchors and durable note records. Frame options and symbols
@@ -38,8 +40,8 @@ frame subsumes it, not because it was impossible.
 [0105](0105-cockpit-surfaces-follow-three-archetypes.md) does not apply. The
 note frame is a display geometry for the primary transcript surface, not a
 cockpit surface, and it adds no fourth archetype. The shared `q`/`?`/`g` key
-contract is independently impossible here: the view buffer contains an editable
-composer, so single-letter bindings would break typing. Prefixed note actions
+contract is independently impossible in the composer: single-letter bindings
+would break draft typing. Prefixed note actions
 leave ordinary characters to the composer. Closing preserves the conversation
 and draft and restores the invoking source position.
 
