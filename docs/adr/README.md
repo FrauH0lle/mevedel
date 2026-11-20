@@ -174,8 +174,8 @@ to the decision bearing that ID.
   amends ADR 0120's separate comments and assistant views and its explicit-only
   resolution, and extends ADR 0124's comment routing to every item kind.
 
-- [ADR 0126: Keep the composer still](0126-keep-the-composer-still.md): composer
-  anchoring, a permanent rail, explicit prompt focus and stable background-work
+- [ADR 0126: Keep transcript readers and controls still](0126-keep-the-composer-still.md):
+  end-following, viewport anchors, explicit prompt focus and stable background-work
   rows. No original ADR is replaced.
 
 - [ADR 0127: Open one Ask question at a time](0127-open-one-ask-question-at-a-time.md)

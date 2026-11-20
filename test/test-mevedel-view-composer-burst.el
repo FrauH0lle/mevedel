@@ -14,7 +14,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 
-(mevedel-deftest mevedel-view--restore-composer-anchors-burst ()
+(mevedel-deftest mevedel-view-transcript-follow-burst ()
   (let ((burst ,burst)
         (draft ,draft))
     (mevedel-view-test--with-buffers
@@ -41,15 +41,25 @@
               (should before-end-y)
               (should (< before-end-y (- (cdr (mevedel-view--window-body-geometry window))
                                          (* 2 (frame-char-height)))))
-              (mevedel-view-call-preserving-user-view-state
-               (lambda ()
-                 (mevedel-view--call-with-render-boundaries-advancing
-                  (lambda ()
-                    (let ((inhibit-read-only t)
-                          (inhibit-modification-hooks t))
-                      (goto-char (mevedel-view--history-insertion-marker))
-                      (dotimes (n rows)
-                        (insert (format "incoming line %d\n" n))))))))
+              (let ((native (symbol-function 'pos-visible-in-window-p)))
+                (cl-letf (((symbol-function 'pos-visible-in-window-p)
+                           (if noninteractive
+                               (lambda (pos win &optional partial)
+                                 (if (eq win window)
+                                     (mevedel-view--position-screen-y pos win (not partial))
+                                   (funcall native pos win partial)))
+                             native)))
+                  (should (pos-visible-in-window-p (point-max) window))
+                  (mevedel-view-call-preserving-user-view-state
+                   (lambda ()
+                     (mevedel-view--call-with-render-boundaries-advancing
+                      (lambda ()
+                        (let ((inhibit-read-only t)
+                              (inhibit-modification-hooks t))
+                          (goto-char (mevedel-view--history-insertion-marker))
+                          (dotimes (n rows)
+                            (insert (format "incoming line %d\n" n)))))))
+                   nil t)))
               (redisplay t)
               (should (eq (selected-window) composer))
               (should (equal composer-edges (window-pixel-edges composer)))

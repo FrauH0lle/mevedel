@@ -1253,6 +1253,30 @@ LENGTH counts characters from the window start to `point-max'."
             (cons window (- (point-max) (window-start window))))
           (mevedel-view--windows 'geometry)))
 
+(defun mevedel-view--last-page (window)
+  "Return the viewport that fits the last page of WINDOW."
+  (mevedel-view--viewport-at-y
+   window (point-max)
+   (max 0 (- (cdr (mevedel-view--window-body-geometry window))
+             (with-selected-window window
+               (save-excursion
+                 (goto-char (point-max))
+                 (line-pixel-height)))))))
+
+(defun mevedel-view-transcript-end-visible-p (window)
+  "Return non-nil if WINDOW fully shows its buffer end, even before redisplay."
+  (pos-visible-in-window-p (with-current-buffer (window-buffer window) (point-max))
+                           window))
+
+(defun mevedel-view-transcript-show-end (window)
+  "Show WINDOW's transcript end without changing focus.
+Keep its caret if it remains visible on the last page."
+  (with-current-buffer (window-buffer window)
+    (unless (mevedel-view-transcript-end-visible-p window)
+      (mevedel-view--set-viewport window (mevedel-view--last-page window))
+      (unless (pos-visible-in-window-p (window-point window) window t)
+        (set-window-point window (point-max))))))
+
 (defun mevedel-view--clamp-window-starts (tails &optional force)
   "Fill the last page when text below a restored start shrank.
 TAILS contains (WINDOW . LENGTH) entries captured before mutation by
@@ -1269,13 +1293,7 @@ Compute the last page in pixels, including wrapped and variable-height lines."
                    (> (window-vscroll window t) 0))
                (or (memq window force)
                    (< (- (point-max) (window-start window)) length)))
-      (let* ((end (point-max))
-             (y (max 0 (- (cdr (mevedel-view--window-body-geometry window))
-                          (with-selected-window window
-                            (save-excursion
-                              (goto-char end)
-                              (line-pixel-height))))))
-             (last-page (mevedel-view--viewport-at-y window end y))
+      (let* ((last-page (mevedel-view--last-page window))
              (current (window-start window)))
         (when (or (> current (car last-page))
                   (and (= current (car last-page))
@@ -1312,30 +1330,13 @@ last row separately because an empty EOF has no text pixel size."
              window (point-max)
              (+ (car row) (- current blank))))))
 
-(defun mevedel-view--preserve-text-scale-blanks (function &rest arguments)
-  "Call text-scale FUNCTION with ARGUMENTS, repairing only new view blanks.
-Capture before the face remapping changes, including programmatic calls and
-the anonymous repeat-map commands used by `text-scale-adjust'."
-  (if (not (derived-mode-p 'mevedel-view-mode))
-      (apply function arguments)
-    (let ((blanks (mapcar (lambda (window)
-                            (cons window (or (mevedel-view--window-blank-pixels window) 0)))
-                          (mevedel-view--windows 'geometry))))
-      (prog1 (apply function arguments)
-        (pcase-dolist (`(,window . ,blank) blanks)
-          (when (and (window-live-p window)
-                     (eq (window-buffer window) (current-buffer)))
-            (mevedel-view--restore-window-blank-pixels window blank)))))))
-
-(with-eval-after-load 'face-remap
-  (advice-add 'text-scale-mode :around #'mevedel-view--preserve-text-scale-blanks))
-
 (defun mevedel-view--call-preserving-window-state
-    (thunk &optional positions-preserved region)
+    (thunk &optional positions-preserved region follow-output)
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
-Windows already following the bottom continue following new output;
-windows browsing older content retain their point and start.
+With FOLLOW-OUTPUT, windows showing the end continue to show it unless
+they have a surviving visible row visit.  Other windows retain their
+reading viewport.
 
 Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
@@ -1354,9 +1355,10 @@ text.  Markers then follow positions outside it, and anchors inside it are
 found without scanning the rest of the buffer."
   (let* ((region (and region (cons (copy-marker (car region))
                                    (copy-marker (cdr region) t))))
+         (old-end (point-max))
          (readers (mevedel-view--history-reader-windows))
          (tails (mevedel-view--window-tail-lengths))
-         lost-starts visited-windows
+         lost-starts anchored-windows
          (mevedel-view--pww-selected-window (selected-window))
          (mevedel-view--pww-current-buffer (current-buffer))
          (mevedel-view--pww-current-point (point))
@@ -1379,7 +1381,7 @@ found without scanning the rest of the buffer."
                         (list w
 			      wp
 			      ws
-			      (= wp (point-max))
+				      (and follow-output (pos-visible-in-window-p old-end w))
 			      (mevedel-view--position-render-anchor wp nil region)
 			      (mevedel-view--position-render-anchor ws w region)
                               (and visit-y
@@ -1402,13 +1404,15 @@ found without scanning the rest of the buffer."
 						  mevedel-view--pww-current-anchor)))
 			   (goto-char (min (point-max) restored-current-point))))
 		       (dolist (entry mevedel-view--pww-saved)
-			 (pcase-let ((`(,w ,wp ,ws ,at-bottom ,wp-anchor ,ws-anchor ,visit)
+			 (pcase-let ((`(,w ,wp ,ws ,following ,wp-anchor ,ws-anchor ,visit)
 				      entry))
 			   (when (and (window-live-p w)
 				      (eq (window-buffer w) mevedel-view--pww-current-buffer))
 			     (unless positions-preserved
 			       (let ((restored-point
-				      (resolve-position wp wp-anchor)))
+				      (if (= wp old-end)
+				          (point-max)
+				        (resolve-position wp wp-anchor))))
 				 (when restored-point
 				   (set-window-point w (min (point-max) restored-point)))
 				 (when (eq w mevedel-view--pww-selected-window)
@@ -1420,20 +1424,20 @@ found without scanning the rest of the buffer."
 				 (when (and ws-anchor (not anchored-start))
 				   (push w lost-starts))
 				 (when (and restored-start (<= restored-start (point-max)))
-				   (set-window-start w restored-start t)))
-			       (when at-bottom
-				 (save-selected-window
-				   (select-window w)
-				   (goto-char (point-max))
-				   (recenter -1))))
-			     (when-let* ((position (and visit
-							(mevedel-view-zone-anchor-position (car visit)))))
-			       (set-window-point w position)
-			       (mevedel-view--set-viewport
-				w (mevedel-view--viewport-at-y w position (nth 1 visit)))
-			       (when (nth 2 visit)
-			         (mevedel-view--restore-window-blank-pixels w (nth 2 visit)))
-			       (push w visited-windows)))))
+					   (set-window-start w restored-start t))))
+                                     (let ((position (and visit
+                                                          (mevedel-view-zone-anchor-position (car visit)))))
+                                       (cond
+                                        (position
+                                         (set-window-point w position)
+                                         (mevedel-view--set-viewport
+                                          w (mevedel-view--viewport-at-y w position (nth 1 visit)))
+                                         (when (nth 2 visit)
+                                           (mevedel-view--restore-window-blank-pixels w (nth 2 visit)))
+                                         (push w anchored-windows))
+                                        (following
+                                         (mevedel-view-transcript-show-end w)
+                                         (push w anchored-windows)))))))
 		       (when (and (not positions-preserved) mevedel-view--pww-current-mark)
 			 (set-marker
 			  (mark-marker)
@@ -1445,7 +1449,7 @@ found without scanning the rest of the buffer."
 			       deactivate-mark mevedel-view--pww-deactivate-mark))
 		       (mevedel-view--clamp-window-starts
 			(seq-remove (lambda (tail)
-				      (or (memq (car tail) visited-windows)
+				      (or (memq (car tail) anchored-windows)
 					  (and (memq (car tail) readers)
 					       (not (memq (car tail) lost-starts)))))
 				    tails)
@@ -1517,20 +1521,21 @@ caller's buffer, not in a displayed view."
   `(mevedel-view--call-with-render-boundaries-advancing
     (lambda () ,@body)))
 
-(defun mevedel-view-call-preserving-user-view-state (thunk &optional region)
+(defun mevedel-view-call-preserving-user-view-state (thunk &optional region follow-output)
   "Call THUNK, a view write the user did not command; return its value.
 This is the entry every asynchronous view writer uses: timers, process
 output, stream chunks, deferred and batched renders.  Around THUNK it keeps
 transcript point and mark, and each window's reading or visited-row
-viewport.  A lost start fills the last page.  The separate composer is
-outside this write.
+viewport.  A lost start fills the last page.  With FOLLOW-OUTPUT, a window
+already showing the end keeps it visible, unless a row visit survives.
+The separate composer is outside this write.
 
 REGION, a cons (START . END), promises that THUNK replaces only that text.
 Anchors inside it are then resolved locally instead of scanning the
 buffer, so frequent small writers stay cheap."
   (mevedel-view--call-preserving-window-state
    (lambda () (let ((inhibit-modification-hooks t)) (funcall thunk)))
-   nil region))
+   nil region follow-output))
 
 
 ;;

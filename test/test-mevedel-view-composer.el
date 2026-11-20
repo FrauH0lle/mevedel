@@ -20,8 +20,6 @@
           "helpers"))
 
 (defvar org-mode-hook)
-(defvar text-scale-mode-amount)
-(defvar text-scale-mode-hook)
 
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -87,17 +85,6 @@ Pass VIEW explicitly to composer bounds used inside BODY."
      (list (list :namespace 'status :id 'anchor-test :priority 1
                  :body (mapconcat (lambda (n) (format "  row %d\n" n))
                                   (number-sequence 1 count) ""))))))
-
-(defun mevedel-view-composer-test--blank-rows (window)
-  "Count blank unit-height rows below EOF in WINDOW independently.
-Policy tests use terminal rows, not production's pixel measurement helper."
-  (with-current-buffer (window-buffer window)
-    (save-excursion
-      (goto-char (window-start window))
-      (let* ((height (window-body-height window))
-             (rows (vertical-motion height window)))
-        (when (and (= (point) (point-max)) (< rows height))
-          (max 0 (- height rows 1)))))))
 
 (mevedel-deftest mevedel-view--history-reader-viewport
   (:doc "A history reader keeps its viewport through status growth and shrink")
@@ -257,43 +244,6 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                      (goto-char (point-max))
                      (vertical-motion (- (1- (window-body-height window))) window)
                      (point))))))))
-
-(mevedel-deftest mevedel-view--preserve-text-scale-blanks ()
-  (let ((view ,view))
-    (require 'face-remap)
-    (mevedel-view-test--with-buffers
-      (save-window-excursion
-        (switch-to-buffer (if view view-buf data-buf))
-        (delete-other-windows)
-        (let ((inhibit-read-only t))
-          (goto-char (point-max))
-          (dotimes (n 200) (insert (format "line %d\n" n))))
-        (set-window-start nil (save-excursion
-                                (goto-char (point-max))
-                                (vertical-motion (- 5 (1- (window-body-height))))
-                                (point)) t)
-        (let* ((start (window-start))
-               (entered nil)
-               ;; Model the geometry change inside the actual mode event;
-               ;; batch geometry cannot observe a face's pixel height.
-               (text-scale-mode-amount 0)
-               (text-scale-mode-hook
-                (list (lambda ()
-                        (setq entered t)
-                        (let ((inhibit-modification-hooks t))
-                          (delete-region (save-excursion
-                                           (goto-char (point-max))
-                                           (forward-line -3)
-                                           (point))
-                                         (point-max)))))))
-          (text-scale-mode 1)
-          (should entered)
-          (if view
-              (should (= 5 (mevedel-view-composer-test--blank-rows (selected-window))))
-            (should (= start (window-start))))))))
-  (view)
-  :doc "the installed text-scale-mode advice preserves prior blank space" t
-  :doc "leaves ordinary buffers alone" nil)
 
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
@@ -1823,11 +1773,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (goto-char (point-max))
       (recenter -1)
       (redisplay t)
-      (mevedel-view--call-preserving-window-state
+      (mevedel-view-call-preserving-user-view-state
        (lambda ()
          ;; Transcript output in a bare buffer, not a composer draft.
          (goto-char (point-max))
-         (insert "new output\n")))
+         (insert "new output\n"))
+       nil t)
       (should (= (window-point) (point-max)))
       (should (>= (window-end nil t) (point-max)))))
 

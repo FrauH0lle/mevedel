@@ -256,7 +256,7 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-call-preserving-user-view-state
-                  "mevedel-view-composer" (thunk &optional region))
+                  "mevedel-view-composer" (thunk &optional region follow-output))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -4533,7 +4533,8 @@ the render so user toggles survive streaming ticks."
            (cons (min (if fresh-tail-p history-tail in-flight-p)
                       (or (mevedel-view-stream-in-flight-turn-start-position)
                           in-flight-p))
-                 (point-max))))))
+                 (point-max)))
+      t)))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")

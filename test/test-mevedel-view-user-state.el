@@ -317,12 +317,12 @@ sets it when geometry queries fontify text, which replaces nothing."
             :new (substring new i (min (length new) (+ i 30)))
             :new-properties (and (< i (length new)) (text-properties-at i new))))))
 
-(defun mevedel-view-user-state-test--validating-region (original thunk &optional region)
-  "Call ORIGINAL with THUNK and REGION, checking text outside REGION.
+(defun mevedel-view-user-state-test--validating-region (original thunk &optional region follow-output)
+  "Call ORIGINAL with THUNK, REGION and FOLLOW-OUTPUT, checking text outside REGION.
 Text and properties before and after REGION must be identical afterwards:
 REGION promises that THUNK replaces only that text."
   (if (not region)
-      (funcall original thunk region)
+      (funcall original thunk region follow-output)
     ;; Geometry can trigger composer jit-lock.  Compare already-fontified text
     ;; so ordinary redisplay faces do not look like an out-of-region write.
     (mevedel-view--fontify-composer (point-min) (point-max))
@@ -330,7 +330,7 @@ REGION promises that THUNK replaces only that text."
            (end (copy-marker (cdr region) t))
            (before (buffer-substring (point-min) start))
            (after (buffer-substring end (point-max))))
-      (prog1 (funcall original thunk region)
+      (prog1 (funcall original thunk region follow-output)
         (push (list (mevedel-view-user-state-test--difference
                      before (buffer-substring (point-min) start))
                     (mevedel-view-user-state-test--difference
@@ -548,6 +548,8 @@ WINDOW defaults to the selected window, but need not be selected."
     (goto-char (point-min))
     (search-forward "[Manage]")
     (backward-char (length "[Manage]"))
+    (when noninteractive
+      (set-window-start (selected-window) (line-beginning-position)))
     (unless noninteractive (redisplay t))
     (let ((y (mevedel-view--position-screen-y (point) (selected-window))))
       (should y)
@@ -650,6 +652,55 @@ WINDOW defaults to the selected window, but need not be selected."
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window))
 
+(ert-deftest mevedel-view-user-state/follows-visible-end ()
+  (skip-unless (not noninteractive))
+  (mevedel-view-user-state-test--with-view
+    (mevedel-view-test--insert-data data-buf "Continue.\n" nil)
+    (mevedel-view--full-rerender)
+    (mevedel-view-user-state-test--begin-turn data-buf)
+    (pcase-let* ((`(,transcript . ,reader) (mevedel-view-user-state-test--arrange))
+                 (composer (mevedel-view-composer-window transcript))
+                 (chunk (concat (apply #'concat (make-list 50 "\n\nMore response text."))
+                                "\n\nEnd of this chunk.")))
+      (goto-char (point-max))
+      (recenter -1)
+      (redisplay t)
+      (goto-char (window-start transcript))
+      (search-forward "Streaming response begins.")
+      (select-window composer)
+      (redisplay t)
+      (with-current-buffer view-buf
+        (should (pos-visible-in-window-p (point-max) transcript))
+        (should-not (= (point-max) (window-point transcript)))
+        (should-not (pos-visible-in-window-p (point-max) reader))
+        (let ((start (window-start transcript)))
+          (mevedel-view-user-state-test--preserves (cons transcript reader)
+            (mevedel-view-user-state-test--add-chunk data-buf chunk)
+            (mevedel-view--render-stream-update data-buf))
+          (should (string-search "End of this chunk." (buffer-string)))
+          (should (> (window-start transcript) start)))
+        (should (pos-visible-in-window-p (point-max) transcript))
+        (should-not (pos-visible-in-window-p (point-max) reader))
+        (with-selected-window transcript
+          (execute-kbd-macro (kbd "M-v")))
+        (redisplay t)
+        (should-not (pos-visible-in-window-p (point-max) transcript))
+        (let ((start (window-start transcript))
+              (point (window-point transcript)))
+          (mevedel-view-user-state-test--add-chunk data-buf chunk)
+          (mevedel-view--render-stream-update data-buf)
+          (redisplay t)
+          (should (= start (window-start transcript)))
+          (should (= point (window-point transcript))))
+        (mevedel-view-transcript-show-end transcript)
+        (redisplay t)
+        (should (pos-visible-in-window-p (point-max) transcript))
+        (mevedel-view-user-state-test--preserves (cons transcript reader)
+          (mevedel-view-user-state-test--add-chunk data-buf chunk)
+          (mevedel-view--render-stream-update data-buf))
+        (should (pos-visible-in-window-p (point-max) transcript))
+        (should (eq composer (selected-window)))))))
+
 (mevedel-deftest mevedel-view-user-state/live-reader ()
   ;; The graphical runner repeats every transition after a real wheel event
   ;; in the command loop, including one targeting the non-selected window.
@@ -679,6 +730,12 @@ WINDOW defaults to the selected window, but need not be selected."
 		(mouse-wheel-progressive-speed nil))
 	    (mevedel-view-user-state-test--wheel 'wheel-up reader))
 	  (should (= position (window-point reader))))
+        (unless noninteractive
+          ;; A caret in the live paragraph is a reader only when EOF is hidden.
+          (when (pos-visible-in-window-p (point-max) reader)
+            (with-selected-window reader (recenter -1))
+            (redisplay t))
+          (should-not (pos-visible-in-window-p (point-max) reader)))
 	(let ((start (window-start reader))
 	      (y (mevedel-view--position-screen-y position reader))
 	      (selected-window (selected-window)))

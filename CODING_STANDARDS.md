@@ -92,12 +92,12 @@ complex solutions; most do not.
 The user's point, windows and focus belong to the user. Only the command the
 user just invoked may change them, and only in the way its name promises.
 
-- **Background work never moves anything.** Process filters, timers, agent and
-  tool updates, status redraws and deferred renders keep point, mark, the
-  composer draft and each window's start where they were, in every window
-  showing the buffer ([ADR 0126](docs/adr/0126-keep-the-composer-still.md)).
-  Write through the view's preserving entries rather than editing view text
-  directly.
+- **Background work preserves the active surface.** Process filters, timers,
+  agent and tool updates, status redraws and deferred renders keep point, mark,
+  the draft, and each transcript window's reading viewport or visited row.
+  Output may advance a window already showing the buffer end; a lost window
+  start may fill the last page ([ADR 0126](docs/adr/0126-keep-the-composer-still.md)).
+  Write through the view's preserving entries rather than editing view text directly.
 - **No unrequested windows or focus changes.** Asynchronous events do not call
   `pop-to-buffer`, `switch-to-buffer`, `select-window` or `select-frame`, and
   do not split, resize or delete windows. Arriving prompts, results and

@@ -1111,6 +1111,10 @@ longer history lines and grows the character tail. Interaction-card visits repai
 only new blank pixels created below the buffer, retaining their prior blank area.
 Status-row visits do not fill new blank space: collapsing details keeps the
 visited row still.
+During output, each transcript window that showed the buffer end follows it
+if new text no longer fits. Scrolling away keeps the reading start; scrolling
+back to the end resumes following. A visible, surviving row visit takes
+priority over this rule. Status-only and card-only writes do not follow output.
 Surviving history readers keep their viewport through both growth and shrinkage
 below them. For other unanchored windows, a smaller character tail also permits
 clamping a start later than the last page backward; unchanged or growing tails
@@ -1128,35 +1132,6 @@ projection's insertion cursor, not a reader position, so the rail keeps it
 exactly and the enclosing projection restores reader state when it finishes.
 Treating that cursor as a composer offset would move it past the new rail and
 append the rest of the history below the chrome.
-
-Draft editing captures blank pixels before the first mutation of a command and
-repairs only new blank space after the complete command. Ordinary self-insertion
-without overwrite or auto-fill skips capture. Short plain deletions whose line
-fits every window also skip viewport capture; wrapping, remapping and display
-properties take the exact path. Other deletions (including multiline
-delete-selection) and insertion-first commands retain it. Pre/post-command hooks
-bound the transaction explicitly and finalize the originating view even when a
-command switches buffers. Commandless mutations repair immediately despite a
-stale `this-command` value. History/snapshot replacement and sending a folded draft are
-single transactions, not independent insertion/deletion viewport states. Only
-an actual increase in blank pixels triggers backward traversal. Height-only
-window growth leaves transcript and status readers at their native reading
-viewport; only windows with point in the editable composer infer the old blank
-area from the height delta when the buffer and width are unchanged. Width changes
-and newly displayed buffers are not inferred. The first size change remembers the original height and viewport;
-returning to that height restores the viewport while the buffer and width are
-unchanged and nothing else moved it. Shrink-then-grow therefore exposes nothing
-new, grow-then-shrink undoes its repair, and only growth beyond both the
-original height and any height already repaired exposes new blank space. Popup, chrome and transient frame size round
-trips thus neither erode intentional blank space nor drift the transcript.
-Any other viewport change discards that snapshot. Growth repair also skips pending input so
-an already-resolved focus click cannot have its text moved before it is read;
-undoing repairs under pending input is allowed only within 0.1 seconds of the first,
-too soon for the click to have targeted the repaired view.
-Text scaling captures actual blank pixels around `text-scale-mode`, including
-programmatic calls, without adding
-work to ordinary commands or redisplay. Both repairs retain pre-existing blank
-space.
 
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
@@ -2183,17 +2158,13 @@ Every asynchronous writer outside zone reconciliation goes through one entry,
 `mevedel-view-call-preserving-user-view-state`: live and settled stream
 updates, full and batched rerenders, latest-turn and tool-row refreshes,
 agent handle refreshes, terminal breadcrumbs, request-rail ticks and
-background elapsed ticks. It keeps composer text (also in a view no window
-shows), point, mark and every window's viewport, and drops the writer's undo
-entries. Status, interaction and rail zones reconcile through
-`mevedel-view-zone-reconcile`, which applies the same policy itself, so the
-request spinner's start, update and stop need no wrapper of their own. Three
-mechanisms stay distinct by design: draft and prompt replacements are single
-composer mutations ([ADR 0126](adr/0126-keep-the-composer-still.md)), table
-splices map positions by cell, and
-`mevedel-view-call-preserving-window-configuration` also restores frame
-layout. Decorative animation frames change only `display` properties and
-move no positions.
+background elapsed ticks. It preserves point, mark and every window's logical viewport or visited row
+([ADR 0126](adr/0126-keep-the-composer-still.md)). Output writes additionally
+keep the end visible in windows that already showed it. Draft text and undo
+stay in their separate buffer. Status, interaction and rail zones reconcile
+through `mevedel-view-zone-reconcile`, which applies their viewport rules
+without an extra preservation wrapper. Table splices use their exact cell
+mapping for positions and share the viewport policy.
 
 The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer

@@ -527,12 +527,12 @@ With MOTION, deliver a movement event before the release."
               (mevedel-view--render-stream-update data-buf))
             (let* ((window (selected-window))
                    (dock (mevedel-view-composer-display window))
-                   (clicked (mevedel-view-mouse-test--target "History line 95."))
+                   (clicked (mevedel-view-mouse-test--target "History line 65."))
                    (dock-point (window-point dock))
                    (dock-start (window-start dock)))
               (goto-char clicked)
               (set-window-start window (save-excursion (forward-line -8) (point)))
-              (set-window-vscroll window 7 t)
+              (set-window-vscroll window 7 t t)
               (redisplay t)
               (let* ((start (window-start window))
                      (reading-y (mevedel-view--position-screen-y clicked window)))
@@ -541,6 +541,7 @@ With MOTION, deliver a movement event before the release."
                   (should reading-y))
                 (should (posn-at-point dock-point dock))
                 (should (= 7 (window-vscroll window t)))
+                (should-not (pos-visible-in-window-p (point-max) window))
                 (setq focused nil)
                 (mevedel-view-test--insert-data
                  data-buf
