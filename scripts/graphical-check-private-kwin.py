@@ -208,8 +208,13 @@ def run_session(command, session_timeout, base_env=None):
 
 def main(argv=None):
     options = parse_arguments(sys.argv[1:] if argv is None else argv)
+    # Keep grammar lookup roots as metadata, not as the session's HOME/XDG.
+    env = os.environ | {
+        "MEVEDEL_GRAPHICAL_HOST_HOME": os.environ.get("HOME") or str(Path.home()),
+        "MEVEDEL_GRAPHICAL_HOST_CONFIG": os.environ.get("XDG_CONFIG_HOME", ""),
+    }
     return run_session(check_command(options.check_args),
-                       options.session_timeout)
+                       options.session_timeout, base_env=env)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@
 (require 'json)
 (require 'mevedel)
 (require 'mevedel-chat)
+(require 'mevedel-native)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-native)
 (require 'mevedel-view-pair)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
@@ -33,6 +35,8 @@
 (defvar mevedel-dc-bench--done nil "Time a measured command finished, or nil.")
 (defvar mevedel-dc-bench--records nil "Measurements, newest first.")
 (defvar mevedel-dc-bench--kwin nil "Private KWin PID.")
+(defvar mevedel-dc-bench--require-native nil "Reject Lisp rail fallback when non-nil.")
+(defvar mevedel-dc-bench--rail-renderer nil "Rail renderer observed in the idle request.")
 
 (defun mevedel-dc-bench--cpu-ns (pids)
   "Return the CPU times of PIDS' threads in nanoseconds, as ((TASK . NS) ...)."
@@ -407,6 +411,11 @@ CPU time."
        (mevedel-view--start-spinner "Working on the benchmark request"))
      (mevedel-dc-bench--measure "stream" (lambda () (mevedel-dc-bench--stream data view)))
      (mevedel-dc-bench--measure "idle-request" (lambda () (mevedel-dc-bench--idle mevedel-dc-bench--idle-seconds)))
+     (let ((native (buffer-local-value 'mevedel-view-native--entries
+                                      (mevedel-view-composer-buffer view))))
+       (when (and mevedel-dc-bench--require-native (not native))
+         (error "Native rail requested but the dock rendered with Lisp"))
+       (setq mevedel-dc-bench--rail-renderer (if native "native" "lisp")))
      (with-current-buffer view (mevedel-view--stop-spinner))
      (mevedel-dc-bench--measure "idle-quiet" (lambda () (mevedel-dc-bench--idle mevedel-dc-bench--idle-seconds)))
      (mevedel-dc-bench--measure "scrolling" (lambda () (mevedel-dc-bench--scroll view)))
@@ -425,6 +434,8 @@ CPU time."
   "Check the compiled runtime and configure the docked workloads."
   (unless (and (display-graphic-p) (eq window-system 'pgtk) (not noninteractive))
     (error "A graphical PGTK Emacs is required"))
+  (when (and mevedel-dc-bench--require-native (not (mevedel-native-load)))
+    (error "Native rail requested but the module did not load: %s" mevedel-native--load-state))
   (setq mevedel-view-spinner-animate t
         mevedel-view-spinner-power-policy 'full
         mevedel-dc-bench--kwin (mevedel-dc-bench--find-kwin))
@@ -458,14 +469,23 @@ CPU time."
              (list :emacs-version emacs-version
                    :library (symbol-file 'mevedel-view--render-stream-update 'defun)
                    :gptel (symbol-file 'gptel-mode 'defun)
+                   :rail-renderer mevedel-dc-bench--rail-renderer
                    :records (vconcat (reverse mevedel-dc-bench--records)))))))
 
 (defun mevedel-dc-bench-probe ()
-  "Type into the displayed composer to exercise frame delivery."
+  "Exercise frame delivery with typing and native rail placement."
   (mevedel-dc-bench--prepare)
   (mevedel-dc-bench--fresh-frame)
   (mevedel-dc-bench--with-view
-   (lambda (_data _view) (mevedel-dc-bench--repeat 36 '(?a)))))
+   (lambda (_data view)
+     (mevedel-dc-bench--repeat 36 '(?a))
+     (when (mevedel-view-native-available-p (selected-frame))
+       ;; Each placement requests a Wayland frame callback on the parent.
+       (dotimes (_ 24)
+         (with-current-buffer view (mevedel-view--start-spinner "Benchmark request"))
+         (mevedel-dc-bench--settle 0.25)
+         (with-current-buffer view (mevedel-view--stop-spinner))
+         (mevedel-dc-bench--settle))))))
 
 (provide 'mevedel-docked-composer-bench)
 ;;; mevedel-docked-composer-bench.el ends here

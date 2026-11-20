@@ -174,23 +174,27 @@ finally:
          (tmp (file-name-concat root "tmp"))
          (bin (file-name-concat root "bin"))
          (pid-file (file-name-concat root "child.pid"))
-         (header-file (file-name-concat root "bootstrap-header.txt"))
+         (bootstrap-copy (file-name-concat root "saved-bootstrap.el"))
+         (config (file-name-concat root "config"))
+         (grammar-dir (file-name-concat config "emacs" "tree-sitter"))
          (process-environment (copy-sequence process-environment)))
     (unwind-protect
         (progn
           (skip-unless (and (eq system-type 'gnu/linux) (executable-find "python3")))
           (make-directory tmp)
           (make-directory bin)
+          (make-directory grammar-dir t)
           ;; Stand-in for a hung graphical child: record its PID, then hang,
           ;; ignoring the SIGHUP batch Emacs sends its processes on exit.
           (with-temp-file (file-name-concat bin "emacs")
             (insert (format (concat "#!/bin/sh\ntrap '' HUP\n"
-                                    "head -n 1 \"$4\" > %s\n"
+                                    "cp \"$4\" %s\n"
                                     "echo $$ > %s\nexec sleep 300\n")
-                            (shell-quote-argument header-file)
+                            (shell-quote-argument bootstrap-copy)
                             (shell-quote-argument pid-file))))
           (set-file-modes (file-name-concat bin "emacs") #o755)
           (setenv "TMPDIR" tmp)
+          (setenv "XDG_CONFIG_HOME" config)
           (setenv "DISPLAY" ":graphical-sigterm-test")
           (setenv "XAUTHORITY" "/dev/null")
           (setenv "WAYLAND_DISPLAY" nil)
@@ -211,8 +215,9 @@ finally:
                "--output" (file-name-concat root "out") "--timeout" "60")
               (buffer-string))))
           (with-temp-buffer
-            (insert-file-contents header-file)
-            (should (string-match-p "lexical-binding: t" (buffer-string))))
+            (insert-file-contents bootstrap-copy)
+            (should (string-search "lexical-binding: t" (buffer-string)))
+            (should (string-search (prin1-to-string grammar-dir) (buffer-string))))
           (should-not (directory-files tmp nil "\\`mevedel-graphical-")))
       (delete-directory root t))))
 

@@ -67,6 +67,25 @@
              (setq timeout (string-to-number value)))))))
     (list output (nreverse grammars) timeout)))
 
+(defun mevedel-graphical-check--grammar-paths ()
+  "Find installed grammar directories before isolating the child."
+  (let* ((home (or (getenv "MEVEDEL_GRAPHICAL_HOST_HOME") (expand-file-name "~")))
+         (config (or (getenv "MEVEDEL_GRAPHICAL_HOST_CONFIG") (getenv "XDG_CONFIG_HOME")))
+         (legacy (file-name-concat home ".emacs.d"))
+         (xdg (file-name-concat (if (and config (file-name-absolute-p config))
+                                    config (file-name-concat home ".config"))
+                                "emacs")))
+    ;; shortcut: fixed paths only; use --grammar-dir for paths set by personal init.
+    (delete-dups
+     (append (mapcar #'expand-file-name treesit-extra-load-path)
+             (cl-remove-if-not
+              #'file-directory-p
+              (list (file-name-concat user-emacs-directory "tree-sitter")
+                    (file-name-concat legacy "tree-sitter")
+                    (file-name-concat xdg "tree-sitter")
+                    (file-name-concat legacy ".local/etc/tree-sitter")
+                    (file-name-concat xdg ".local/etc/tree-sitter")))))))
+
 (defun mevedel-graphical-check--environment (home)
   "Return a private process environment rooted at HOME.
 Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
@@ -113,6 +132,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
   (unless noninteractive (error "Use the Eask graphical-check script, not the live editor"))
   (pcase-let* ((`(,output ,grammars ,timeout)
                 (mevedel-graphical-check--options command-line-args-left))
+               (grammars (or grammars (mevedel-graphical-check--grammar-paths)))
                (temporary (make-temp-file "mevedel-graphical-" t))
                (home (file-name-concat temporary "home"))
                (bootstrap (file-name-concat temporary "bootstrap.el"))
@@ -197,7 +217,10 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
   (dolist (language '(markdown markdown-inline))
     (unless (treesit-language-available-p language)
       (error "Missing tree-sitter grammar %s: install both markdown and markdown-inline and pass --grammar-dir DIR (search: %S)"
-             language treesit-extra-load-path))))
+             language treesit-extra-load-path))
+    (princ (format "Tree-sitter grammar %s: %s\n" language
+                   (or (treesit-grammar-location language) "library path unavailable"))
+           'external-debugging-output)))
 
 (defun mevedel-graphical-check--resize-width (width)
   "Set the selected frame to WIDTH columns and wait for the compositor."

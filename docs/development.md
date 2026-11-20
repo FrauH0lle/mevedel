@@ -563,7 +563,7 @@ checkout being tested, after the worktree bootstrap:
 
 ```bash
 npx @emacs-eask/cli run script graphical-check
-# Grammars outside the system library path must be supplied explicitly:
+# Override automatic grammar discovery:
 npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter
 # Optional new artifact directory and graphical-child deadline (default 300s):
 npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter --output .scratch/view-check --timeout 90
@@ -594,12 +594,12 @@ Inside mevedel's command confinement only a Wayland display is reachable:
 `/tmp/.X11-unix` and the runtime directory's X authority are masked.
 
 Both **`markdown` and `markdown-inline` tree-sitter grammars** must load in the
-isolated child. Missing grammars are a hard failure, not silently unfontified
-Markdown or a prompt to download code. Install them separately (for example
-with Emacs's `M-x treesit-install-language-grammar`), then pass the directory
-containing their shared libraries with `--grammar-dir`. Repeat the option for
-multiple directories. The runner does not read personal Emacs configuration
-or automatically search its custom grammar directories.
+isolated child. The runner searches the batch Emacs's `treesit-extra-load-path`,
+the user's Emacs `tree-sitter` directories (including Doom's default location),
+and the system library path. It reports the loaded libraries. Missing grammars
+fail the check; install them
+separately. Use `--grammar-dir` (repeatable) to override discovered directories,
+including for custom paths set only in personal init files, which are not read.
 
 The smoke fixture builds a real paired transcript/view through production
 setup and full rendering, including Markdown and a table, and checks an active
@@ -646,7 +646,7 @@ socket. Arguments after `--` go to the graphical check unchanged; the exit
 status is the check's:
 
 ```sh
-python3 scripts/graphical-check-private-kwin.py -- --grammar-dir /path/to/tree-sitter
+python3 scripts/graphical-check-private-kwin.py
 # Whole-session deadline (default 900s; exit status 124 when exceeded):
 python3 scripts/graphical-check-private-kwin.py --session-timeout 600 -- --grammar-dir /path/to/tree-sitter
 ```
@@ -884,7 +884,7 @@ Run on an otherwise quiet machine:
 
 ```bash
 python3 scripts/bench-docked-composer.py --baseline b8b219e7 --candidate HEAD \
-    --grammar-dir /path/to/tree-sitter --rounds 6 --output .scratch/dock-raw.json
+    --grammar-dir /path/to/tree-sitter --require-native --rounds 6 --output .scratch/dock-raw.json
 python3 scripts/bench-docked-composer.py --report .scratch/dock-raw.json
 ```
 
@@ -893,7 +893,12 @@ own temporary directory with the same installed Eask dependencies. It launches
 the maintained private KWin runner, never the running editor. Emacs with PGTK
 and both Markdown grammars is required. Before and after the measured rounds,
 separate probes on both builds must receive completed Wayland frame callbacks.
-The measured processes do not log Wayland traffic.
+The probes also recreate the native rail when available to witness its frame
+callbacks. The measured processes do not log Wayland traffic.
+The report and raw samples label each measured process's rail backend (`native`
+or `lisp`). Each build loads from its own archived native sources. Use
+`--require-native` to reject a missing module or a fallback to the Lisp rail.
+Building the module needs `cc`, `pkg-config`, and Emacs, GTK3 and Wayland headers.
 
 Each build runs in a fresh Emacs with a discarded warm-up, and the order
 alternates across paired rounds. The same graphical chat drives typing, capped

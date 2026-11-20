@@ -38,6 +38,8 @@ def compile_build(temporary, revision):
     (temporary / ".eask").symlink_to((ROOT / ".eask").resolve(), target_is_directory=True)
     compiled = temporary / "compiled"
     compiled.mkdir()
+    # The native loader looks for its C sources beside the loaded bytecode.
+    (compiled / "native").symlink_to("../native", target_is_directory=True)
     files = sorted(str(p) for p in temporary.glob("mevedel*.el"))
     files.append(str(ROOT / "benchmark" / f"{BENCH}.el"))
     load_path = temporary / "load-path.eld"
@@ -62,9 +64,10 @@ def compile_build(temporary, revision):
     return load_path.read_text()
 
 
-def emacs_command(load_path, grammars, form):
+def emacs_command(load_path, grammars, require_native, form):
     """Return a graphical Emacs command evaluating FORM with compiled code."""
     bootstrap = (f"(progn (setq load-path '{load_path} native-comp-jit-compilation nil "
+                 f" mevedel-dc-bench--require-native {'t' if require_native else 'nil'}"
                  f" treesit-extra-load-path '({' '.join(map(json.dumps, grammars))}))"
                  f" (condition-case err (progn (require '{BENCH}) {form} (kill-emacs 0))"
                  " (error (princ (format \"bench error: %S\\n\" err) #'external-debugging-output)"
@@ -72,7 +75,7 @@ def emacs_command(load_path, grammars, form):
     return ["emacs", "-Q", "--no-splash", "--eval", bootstrap]
 
 
-def run_session(temporary, revisions, grammars, rounds, smoke):
+def run_session(temporary, revisions, grammars, rounds, smoke, require_native):
     paths = {build: compile_build(temporary / build, revisions[build]) for build in BUILDS}
     steps, probes, runs = [], [], []
     for index in range(rounds + 2):
@@ -82,13 +85,13 @@ def run_session(temporary, revisions, grammars, rounds, smoke):
         for build in BUILDS if index % 2 else reversed(BUILDS):
             if index in (0, rounds + 1):
                 log = temporary / f"probe-{index}-{build}.log"
-                command = emacs_command(paths[build], grammars, "(mevedel-dc-bench-probe)")
+                command = emacs_command(paths[build], grammars, require_native, "(mevedel-dc-bench-probe)")
                 steps.append(f"WAYLAND_DEBUG=client {shlex.join(command)} 2> {shlex.quote(str(log))}")
                 probes.append((build, "before" if index == 0 else "after", log))
             else:
                 output = temporary / f"round-{index}-{build}.json"
                 form = f"(mevedel-dc-bench-run {json.dumps(str(output))} {'t' if smoke else 'nil'})"
-                command = emacs_command(paths[build], grammars, form)
+                command = emacs_command(paths[build], grammars, require_native, form)
                 steps.append(f"printf '%s\\n' 'round {index}: {build}' && {shlex.join(command)}")
                 runs.append((index, build, output))
         if measured:
@@ -139,6 +142,8 @@ def callbacks(text):
 def report(data):
     print(f"Baseline {data['revisions']['baseline']}; candidate {data['revisions']['candidate']}")
     print(f"Emacs {data['rounds'][0]['emacs-version']}; gptel {data['rounds'][0]['gptel']}")
+    for run in data["rounds"]:
+        print(f"- {run['build']} round {run['round']}: rail {run.get('rail-renderer', 'unverified')}")
     if data["smoke"]:
         print("SMOKE: not performance evidence")
     print("Values: baseline → candidate; paired delta (candidate minus baseline), median [min, max].")
@@ -190,6 +195,7 @@ def main():
     parser.add_argument("--candidate", default="HEAD", help="docked candidate revision")
     parser.add_argument("--rounds", type=int, default=6)
     parser.add_argument("--smoke", action="store_true", help="shortened scenarios; not a verdict")
+    parser.add_argument("--require-native", action="store_true", help="reject Lisp rail fallback")
     parser.add_argument("--grammar-dir", action="append", default=[])
     output = parser.add_mutually_exclusive_group(required=True)
     output.add_argument("--output", type=Path, help="new path for the raw JSON samples")
@@ -210,7 +216,8 @@ def main():
                      "wl_surface#3.frame(new id wl_callback#2) wl_callback#2.done(1) "
                      "wl_surface#3.frame(new id wl_callback#2)") == (2, 1)
     with tempfile.TemporaryDirectory(prefix="mevedel-dc-bench-") as directory:
-        data = run_session(Path(directory), revisions, grammars, args.rounds, args.smoke)
+        data = run_session(Path(directory), revisions, grammars, args.rounds, args.smoke,
+                           args.require_native)
         with args.output.open("x") as raw:
             json.dump(data, raw)
         report(data)

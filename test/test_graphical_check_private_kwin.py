@@ -144,12 +144,23 @@ class SessionTests(unittest.TestCase):
                 f'sleep 300 & echo $! >> "$KWIN_TEST_DIR/pids"; {tail}')
 
     def test_check_status_returned_and_strays_removed(self):
-        self.assertEqual(self.start(self.client("exit 3")).wait(60), 3)
+        npx = self.dir / "bin" / "npx"
+        npx.write_text('#!/bin/sh\nprintf "%s\\n" "$MEVEDEL_GRAPHICAL_HOST_HOME" '
+                       '"$MEVEDEL_GRAPHICAL_HOST_CONFIG" > "$KWIN_TEST_DIR/grammar-roots"\n'
+                       + self.client("exit 3"))
+        npx.chmod(0o755)
+        host = self.dir / "host home"
+        config = host / "config"
+        env = self.env | {"HOME": str(host), "XDG_CONFIG_HOME": str(config)}
+        self.assertEqual(subprocess.run([sys.executable, str(SCRIPT)],
+                                        env=env, timeout=60).returncode, 3)
+        self.assert_cleaned()
+        self.assertEqual((self.dir / "grammar-roots").read_text().splitlines(),
+                         [str(host), str(config)])
         socket = (self.dir / "socket").read_text().strip()
         self.assertTrue(socket.endswith("/runtime/mevedel-kwin"), socket)
         self.assertTrue(os.path.isabs(socket))
         self.assertIn("--virtual", (self.dir / "kwin-args").read_text().split())
-        self.assert_cleaned()
 
     def test_session_timeout_terminates_everything(self):
         self.assertEqual(self.start(self.client("wait"), timeout=2).wait(60), 124)
