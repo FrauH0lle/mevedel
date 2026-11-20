@@ -320,12 +320,36 @@ can resume it with `C-c C-r` instead of converting it in the cockpit.
 Wake-ups are owned by the session that created them. The sidecar is their
 source of truth: creating or cancelling one commits it before the tool returns,
 and a firing removes it in the same commit that adds its `WAKE_UP` mailbox
-record. Resuming a session with this client holding its lease re-arms its
-pending wake-ups; a read-only buffer does not, and a buffer that becomes a
-read-only follower after control moves elsewhere stops firing them. Closing the session stops
-scheduling them, and they stay persisted until it is resumed. Save As carries
-them to the new session, while conversation and Worktree forks start with
-none, so one wake-up never fires in two conversations.
+record, so a crash after that commit cannot fire it again. Resuming a session
+with this client holding its lease, or regaining the lease through a control
+transfer, arms its pending wake-ups; a read-only buffer does not, and a buffer
+that becomes a read-only follower after control moves elsewhere stops firing
+them. Save As first commits the original and its index entry without them, and
+only then writes the new session carrying them; if that clear fails, Save As
+stops with an error before creating anything, and if Save As fails later the
+original commits them back. A crash in between can lose a wake-up but never
+fire it twice. Conversation and Worktree forks start with none, so one wake-up
+never fires in two conversations. Rewind and Restore
+keep the session's current wake-ups: a restored head brings back neither a
+fired nor a cancelled one.
+
+Wake-ups also fire for sessions that are not open. An Emacs-wide index under
+`mevedel-user-dir` (`wake-ups/`, one file per session naming its directory)
+lists every saved session holding a pending wake-up; it is a cache of the
+sidecars. Closing such a session keeps its wake-ups scheduled. At startup,
+`mevedel-install` runs `mevedel-schedule-restore`, which reads each indexed
+session's committed sidecar. Only an entry proven stale is removed: a malformed
+entry file, a session directory missing below an ancestor this Emacs can
+search, or a readable sidecar holding no pending wake-up. An entry file or
+session that cannot be read now (permissions, an unreachable host) keeps its
+entry with a warning and is retried at the next start. When a closed session's
+wake-up is due, the sidecar is read again and the
+session is resumed headlessly through the ordinary restore, without a window and
+without interaction; a notice in the echo area names it, and the resumed buffer
+delivers through the mailbox as above. A session that cannot be reopened is
+retried after a minute with a warning. Exactly one Emacs fires: when another
+client holds the lease, the reopened read-only buffer is closed again and that
+holder fires; a later restore finds the firing recorded and does nothing.
 
 
 ## Persistence flow

@@ -17,6 +17,7 @@
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-persistence)
+(require 'mevedel-schedule)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-recovery)
 (require 'mevedel-session-durability)
@@ -943,6 +944,50 @@ them are set, so the committing save keeps them."
              buffer session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "a Rewind keeps the current pending wake-up armed"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer "*test-rewind-wake-up*"))
+           (mevedel-user-dir (file-name-as-directory (file-name-concat tempdir "user")))
+           (now 1795176000)
+           (mevedel-schedule-clock (lambda () now)))
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setf (mevedel-session-root-buffer session) buffer)
+            (mevedel-request-begin session)
+            (insert "First prompt\n")
+            (insert (propertize "First reply.\n" 'gptel 'response))
+            (setf (mevedel-session-turn-count session) 1)
+            (mevedel-session-artifacts-save session buffer t)
+            (mevedel-request-end)
+            (mevedel-request-begin session)
+            (insert "Second prompt\n")
+            (insert (propertize "Second reply.\n" 'gptel 'response))
+            (mevedel-schedule-create session buffer "20m" "Check CI")
+            (setf (mevedel-session-turn-count session) 2)
+            (mevedel-session-artifacts-save session buffer t)
+            (let ((target (copy-sequence
+                           (cdar (last (mevedel-session-rewind--prompt-candidates
+                                        session))))))
+              (mevedel-request-end)
+              (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel--run-session-start-hooks) #'ignore))
+                (should (mevedel-session-rewind-rewind buffer target))))
+            (should (= 1 (mevedel-session-turn-count session)))
+            (should (= 1 (length (mevedel-schedule-pending session))))
+            (should (memq buffer mevedel-schedule--buffers))
+            (should mevedel-schedule--timer)
+            (setq now (+ now 1200))
+            (mevedel-schedule-run-due)
+            (should-not (mevedel-schedule-pending session)))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (should-not mevedel-schedule--timer)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
   :doc "keeps Rewind reachable and discloses known checkpoint gaps"
   (let* ((session
           (mevedel-session--create
@@ -2153,8 +2198,20 @@ them are set, so the committing save keeps them."
                       session-dir
                       (plist-get (mevedel-session-publication session) :head))
                      (time-subtract nil 60))
-                    (let* ((restorable (publish "Original transcript\n" 1))
-                           (rewound (publish "Rewound transcript\n" 0)))
+                    (let* ((fired (list :id "w-000001" :note "Fired already"
+                                        :timing '(:kind once :at 1795177200)
+                                        :created-at 1795176000 :due 1795177200
+                                        :expires-at nil :status 'pending))
+                           (live (list :id "w-000002" :note "Still pending"
+                                       :timing '(:kind once :at 1795180800)
+                                       :created-at 1795176000 :due 1795180800
+                                       :expires-at nil :status 'pending))
+                           (restorable
+                            (progn (setf (mevedel-session-schedules session) (list fired))
+                                   (publish "Original transcript\n" 1)))
+                           (rewound
+                            (progn (setf (mevedel-session-schedules session) (list live))
+                                   (publish "Rewound transcript\n" 0))))
                       (setq buffer (generate-new-buffer " *restore-live*"))
                       (with-current-buffer buffer
                         (org-mode)
@@ -2180,6 +2237,15 @@ them are set, so the committing save keeps them."
                         (should-not (equal head rewound))
                         (should-not (equal head restorable)))
                       (should (= 1 (mevedel-session-turn-count session)))
+                      ;; Wake-ups belong to the live session: a restored head
+                      ;; neither brings back a fired one nor drops a pending one.
+                      (should (equal (list live) (mevedel-session-schedules session)))
+                      (should (equal (list live)
+                                     (plist-get
+                                      (mevedel-session-codec-read
+                                       (plist-get (mevedel-session-publication-read session-dir)
+                                                  :sidecar))
+                                      :schedules)))
                       (should (= 1 (plist-get
                                     (mevedel-session-checkpoint-project session nil)
                                     :total-turn-count)))

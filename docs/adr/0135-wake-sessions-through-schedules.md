@@ -70,10 +70,27 @@ failed" makes the conversation continue itself when the time comes.
   entry stays in the store as `expired` until cancelled, and the 20 most recent
   expired entries are kept. A late but unexpired firing is delivered once with
   its overdue annotation; the model judges whether it still matters.
-- **Sessions that are not open.** Closing a session stops scheduling its
-  wake-ups without removing them; resuming it with the session lease re-arms
-  them. A wake-up never fires in two conversations: forks start without
-  wake-ups and Save As moves them to the new session.
+- **Sessions that are not open.** An Emacs-wide index under `mevedel-user-dir`
+  names every saved session holding a pending wake-up, one file per session.
+  It is a cache: at startup `mevedel-schedule-restore` reads each indexed
+  session's committed sidecar, drops only entries proven stale (session
+  directory provably missing, or a readable sidecar with no pending wake-up),
+  keeps unreadable ones for the next start, and schedules the rest. Closing a
+  session keeps its
+  wake-ups scheduled the same way. When one is due, the sidecar is read again
+  and the session is resumed headlessly through the ordinary restore, under
+  `inhibit-interaction` and without a window, with an echo-area notice; the
+  resumed buffer then fires as an open one does.
+- **Exactly one firing.** The session lease decides which Emacs fires. A
+  headless resume that finds another client holding the lease closes its
+  read-only buffer and leaves the session to that holder; resuming with the
+  lease, or regaining it through a control transfer, arms the wake-ups. A
+  wake-up never fires in two conversations: forks start without wake-ups, Save
+  As durably clears the original's wake-ups and index entry before it writes
+  the copy that carries them (a failed clear stops Save As; a later failure
+  gives them back), and Rewind and Restore keep the live session's wake-ups
+  rather than an earlier head's. Every handover is at most once: a crash can
+  lose a wake-up, never duplicate it, as the firing commit already ensures.
 
 ## Rationale and consequences
 
@@ -101,6 +118,31 @@ cannot lose the wake-up or deliver it twice in this Emacs. A failed commit keeps
 the wake-up pending and retries that session after a minute rather than
 spinning on an immediately due timer.
 
+The index exists because a closed session's store is only findable by
+scanning every workspace, and Emacs does not know at startup which
+workspaces exist. It holds nothing the stores do not: reconciling against
+them makes a stale entry (a crash between the firing commit and the index
+update, a cancelled or deleted session) harmless. One file per session,
+rather than one shared list, lets two Emacs instances sharing a user
+directory update it without a read-modify-write race. Restore reads each
+indexed sidecar once at startup so stale entries never arm a timer; for a
+session on a remote target that read is a network round trip during startup.
+Pruning deletes an entry and then reads the store again, recreating the entry
+when a wake-up appeared: the lease holder commits before it checks its entry,
+so a wake-up added during pruning is never left without one. This needs no
+lease, which a startup restore of many sessions would otherwise acquire one by
+one.
+
+Resuming headlessly rather than firing from the stored sidecar keeps one
+firing path: the resumed buffer acquires the lease, runs the same mailbox
+commit and background-event wake as an open session, and stays open for the
+turn. A resume-only restore, where a wake-up waits until its session is
+opened, was rejected because a server restarted nightly would never fire a
+wake-up nobody reopens. A lease miss does not retry: the
+holder has the session open and fires itself, and retrying would resume the
+session every minute while it stays held. The host restart predicate is
+unchanged; pending wake-ups survive restarts instead of holding them.
+
 The daylight-saving rule deliberately differs from Claude Code's scheduler,
 which skips a time that falls in a gap: a daily 02:30 job silently misses the
 spring-forward night, and a pinned one-shot in the gap can move a year ahead
@@ -110,5 +152,4 @@ and its day, at the cost of running half an hour "early" in wall terms on one
 night a year. Firing a repeated wall time only once matches what a calendar
 entry means; firing twice would duplicate work with no request for it.
 
-Restoring wake-ups of sessions that are not open and workspace targets are
-outside this decision.
+Workspace targets are outside this decision.

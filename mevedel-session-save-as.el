@@ -30,6 +30,14 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-hand-back "mevedel-schedule" (session))
+(declare-function mevedel-schedule-hand-over "mevedel-schedule" (session))
+(declare-function mevedel-schedule-restore-session "mevedel-schedule" (session buffer))
+(autoload 'mevedel-schedule-hand-back "mevedel-schedule")
+(autoload 'mevedel-schedule-hand-over "mevedel-schedule")
+(autoload 'mevedel-schedule-restore-session "mevedel-schedule")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-execution-session-live-spools "mevedel-execution" (session))
 (autoload 'mevedel-execution-session-live-spools "mevedel-execution")
@@ -113,6 +121,13 @@
 (declare-function mevedel-session-workspace
                   "mevedel-structs" (cl-x) t)
 
+;; `mevedel-utilities'
+(declare-function mevedel-diagnostic-scope "mevedel-utilities" (owner))
+(declare-function mevedel-diagnostic-warning "mevedel-utilities"
+                  (scope type message &optional level buffer-name))
+(autoload 'mevedel-diagnostic-scope "mevedel-utilities")
+(autoload 'mevedel-diagnostic-warning "mevedel-utilities")
+
 (defvar mevedel--view-buffer)
 
 
@@ -186,6 +201,26 @@ parent identity."
 
 ;;
 ;;; Stages
+
+(defun mevedel-session-save-as--hand-over (transaction)
+  "Durably clear the parent's wake-ups before any child can hold them.
+A wake-up then lives in at most one store: a crash before the child commits
+loses it rather than firing it twice.  The commit moves the parent head,
+so TRANSACTION captures the new one."
+  (let ((session (plist-get transaction :session)))
+    (when (condition-case err
+              (mevedel-schedule-hand-over session)
+            (error
+             (user-error "Save As stopped: the original's wake-ups could not be cleared (%s)"
+                         (error-message-string err))))
+      (let ((publication
+             (or (mevedel-session-save-as--read-publication
+                  (plist-get transaction :old-save-path))
+                 (error "Remote Save As requires a committed publication"))))
+        (plist-put transaction :handed-over t)
+        (plist-put transaction :parent-publication publication)
+        (plist-put transaction :parent-head (plist-get publication :head))))
+    transaction))
 
 (defun mevedel-session-save-as--capture-parent (transaction)
   "Recheck TRANSACTION's parent head while its lease is reserved."
@@ -393,6 +428,7 @@ parent identity."
                       transaction release-error))))
             (mevedel-session-save-as--rename-live-session-buffers
              session buffer)
+            (mevedel-schedule-restore-session session buffer)
             (plist-put transaction :stage 'adopted))
         (error
          (mevedel-session-save-as--record-error transaction error))))
@@ -425,7 +461,17 @@ parent identity."
           (error
            (setq transaction
                  (mevedel-session-save-as--record-error
-                  transaction error)))))))
+                  transaction error)))))
+      ;; No child holds the wake-ups, so the original takes them back.
+      (when (plist-get transaction :handed-over)
+        (condition-case error
+            (mevedel-schedule-hand-back (plist-get transaction :session))
+          (error
+           (mevedel-diagnostic-warning
+            (mevedel-diagnostic-scope (plist-get transaction :session)) 'mevedel
+            (format "Save As failed and the original's wake-ups could not be restored: %s"
+                    (error-message-string error))
+            :warning))))))
   transaction)
 
 (defun mevedel-session-save-as--finish (transaction)
@@ -462,8 +508,11 @@ the existing lease/publication gates for every child write."
             session buffer new-name new-id new-save-path)))
       (unwind-protect
           (condition-case error
-              (setq transaction
-                    (mevedel-session-save-as--run-stages transaction))
+              (progn
+                (setq transaction
+                      (mevedel-session-save-as--hand-over transaction))
+                (setq transaction
+                      (mevedel-session-save-as--run-stages transaction)))
             (error
              (setq transaction
                    (mevedel-session-save-as--record-error transaction error))))

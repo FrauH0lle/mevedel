@@ -368,6 +368,7 @@ after which the stub drains the pending request context like admission does."
   (test)
   :doc "a resumed session re-arms its persisted wake-up and fires into its mailbox"
   (let* ((root (make-temp-file "mevedel-schedule-restore-" t))
+         (mevedel-user-dir (file-name-as-directory (file-name-concat root "user")))
          (workspace (test-mevedel-session-persistence--make-workspace root))
          (session (mevedel-session-create "main" workspace))
          (buffer (generate-new-buffer " *schedule-restore*"))
@@ -387,10 +388,12 @@ after which the stub drains the pending request context like admission does."
           (mevedel-schedule-create session buffer "20m" "Check CI")
           (should (mevedel-schedule-test--timers))
           (test-mevedel-session-persistence--release-and-kill buffer session)
-          (should-not (mevedel-schedule-test--timers))
+          ;; Closed, the session stays scheduled; resuming hands it to its buffer.
+          (should (= 1 (length (mevedel-schedule-test--timers))))
           (setq restored (mevedel-session-persistence-restore
                           (mevedel-session-save-path session) nil nil workspace))
           (should (= 1 (length (mevedel-schedule-test--timers))))
+          (should-not mevedel-schedule--closed)
           (setq now (+ now 1200))
           (mevedel-schedule-run-due)
           (let* ((restored-session (buffer-local-value 'mevedel--session restored))

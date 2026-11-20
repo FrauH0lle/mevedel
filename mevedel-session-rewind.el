@@ -2131,9 +2131,12 @@ the file plan already confirmed before native preparation."
           ;; lives and what it talks to belong to the live session, as
           ;; they do on resume.  Its publication is the head being
           ;; restored, so retained file history resolves against it.
+          ;; Wake-ups are live too: an old head's would fire again.
           (setf (mevedel-session-save-path candidate) save-path
                 (mevedel-session-working-directory candidate)
                 (mevedel-session-working-directory session)
+                (mevedel-session-schedules candidate)
+                (mevedel-session-schedules session)
                 (mevedel-session-publication candidate) publication)
           (mevedel-session-set-execution-target
            candidate (mevedel-session-execution-target session))

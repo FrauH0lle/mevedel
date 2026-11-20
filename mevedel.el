@@ -319,6 +319,10 @@ See `mevedel-library-provenance' for how installation methods are covered.")
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-restore "mevedel-schedule" ())
+(autoload 'mevedel-schedule-restore "mevedel-schedule")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-choose-entry
                   "mevedel-session-persistence" (workspace))
@@ -579,13 +583,16 @@ always prompt for the session name."
 
   ;; Restart the collaboration lobbies still running and the artifacts
   ;; still shared when Emacs last exited, once startup has applied the
-  ;; user's relay configuration.
+  ;; user's relay configuration, and re-arm the pending wake-ups of saved
+  ;; sessions.
   (if after-init-time
       (progn
         (mevedel-collaboration-lobby-restore)
-        (mevedel-collaboration-artifact-room-restore))
+        (mevedel-collaboration-artifact-room-restore)
+        (mevedel-schedule-restore))
     (add-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
-    (add-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore 90))
+    (add-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore 90)
+    (add-hook 'emacs-startup-hook #'mevedel-schedule-restore 90))
 
   (message "mevedel installed successfully"))
 
@@ -684,6 +691,7 @@ always prompt for the session name."
 
   (remove-hook 'emacs-startup-hook #'mevedel-collaboration-lobby-restore)
   (remove-hook 'emacs-startup-hook #'mevedel-collaboration-artifact-room-restore)
+  (remove-hook 'emacs-startup-hook #'mevedel-schedule-restore)
 
   (message "mevedel uninstalled successfully"))
 

@@ -55,6 +55,10 @@
                   "mevedel-plan-mode" (&optional session outcome))
 (autoload 'mevedel-plan-approval-abort "mevedel-plan-mode")
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-restore-session "mevedel-schedule" (session buffer))
+(autoload 'mevedel-schedule-restore-session "mevedel-schedule")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-check-target-incarnation
                   "mevedel-session-artifacts" (session buffer))
@@ -776,6 +780,7 @@ session, including its native history, rather than a cooperative transfer."
               (with-current-buffer buffer
                 (setq buffer-read-only nil
                       mevedel-session--read-only-mode nil))
+              (mevedel-schedule-restore-session session buffer)
               (mevedel-session-set-control-transfer
                session
                (list :state 'acquired :request (plist-get transfer :request)))

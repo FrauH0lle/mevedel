@@ -1745,13 +1745,13 @@ wake-ups are kept. The background-work cockpit (`/ps`) lists pending and
 expired wake-ups after agents and executions, and `k` cancels the selected
 one.
 
-One Emacs-wide timer is armed for the earliest pending wake-up of the open
-root buffers that hold one and re-armed on every create, cancel, firing,
-resume and close; nothing polls while idle. A delivery whose mailbox commit
-fails keeps the wake-up pending, warns, and retries that session after a
-minute. Persistence and resume are described under
-[sessions](sessions.md#session-identity-and-display-names); a wake-up of a
-closed session waits until the session is resumed.
+One Emacs-wide timer is armed for the earliest pending wake-up across open root
+buffers and closed saved sessions, and re-armed on every create, cancel,
+firing, resume and close; nothing polls while idle. A delivery whose mailbox
+commit fails keeps the wake-up pending, warns, and retries that session after a
+minute. A wake-up of a closed session reopens it without a window, also after an
+Emacs restart; the index, startup restore and lease rule are described under
+[sessions](sessions.md#session-identity-and-display-names).
 
 ## Eval execution scope
 

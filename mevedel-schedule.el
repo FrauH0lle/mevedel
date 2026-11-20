@@ -9,13 +9,20 @@
 ;; a reference time and the local time zone.
 ;;
 ;; One Emacs-wide timer is armed for the earliest pending wake-up across the
-;; open root buffers that hold one, and re-armed whenever that set changes;
-;; nothing polls while idle.  Every decision reads `mevedel-schedule-clock'.
+;; open root buffers and closed saved sessions that hold one, and re-armed
+;; whenever that set changes; nothing polls while idle.  Every decision
+;; reads `mevedel-schedule-clock'.
 ;; A due wake-up becomes one WAKE_UP record in the root mailbox, committed
 ;; together with its removal from the store, or for a recurring one its next
 ;; due time computed from the firing time, and wakes an idle root through
 ;; the ordinary background-event path and its holds.  A wake-up past its
 ;; optional expiry is kept as `expired' instead, without a model turn.
+;;
+;; An Emacs-wide index under `mevedel-user-dir' names every saved session
+;; that holds pending wake-ups, one file per session.  At startup
+;; `mevedel-schedule-restore' reconciles it against the committed stores and
+;; schedules the sessions that are not open; when one is due, it is reopened
+;; without a window.  The session lease decides which Emacs fires.
 
 ;;; Code:
 
@@ -49,6 +56,18 @@
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
+(declare-function mevedel-session-persistence-load-sidecar
+                  "mevedel-session-persistence" (path &optional scope))
+(declare-function mevedel-session-persistence-restore
+                  "mevedel-session-persistence"
+                  (session-dir &optional lifecycle-source session-override workspace))
+(autoload 'mevedel-session-persistence-load-sidecar "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-read
+                  "mevedel-session-publication" (session-dir &optional head names))
+(autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-parse-selector "mevedel-models" (value))
@@ -95,6 +114,10 @@ Every scheduling decision reads this one clock.")
 
 (defvar mevedel-schedule--buffers nil
   "Live root data buffers whose sessions hold pending wake-ups.")
+
+(defvar mevedel-schedule--closed nil
+  "Saved sessions that are not open, as (DIRECTORY . DUE) pairs.
+DUE is the clock second their earliest pending wake-up needs attention.")
 
 (defvar mevedel-schedule--timer nil
   "The one timer armed for the earliest pending wake-up, or nil.")
@@ -341,6 +364,7 @@ An interval is timed from AFTER, so runs missed in between never catch up."
   "Re-arm the scheduler for SESSION's root BUFFER and refresh its cockpit."
   (when (mevedel-schedule-pending session)
     (mevedel-schedule--register buffer))
+  (mevedel-schedule--index session)
   (mevedel-schedule--rearm)
   (when (fboundp 'mevedel-background-list-refresh-session)
     (mevedel-background-list-refresh-session session buffer)))
@@ -412,6 +436,197 @@ Return the removed entry.  Expired wake-ups are removed the same way."
     (mevedel-schedule--changed session buffer)
     entry))
 
+(defun mevedel-schedule-hand-over (session)
+  "Commit SESSION's store and index entry without its wake-ups.
+Save As calls this before its copy is written, so a wake-up is durable in
+at most one session.  SESSION keeps its wake-ups in memory; a commit
+failure signals and leaves the store as it was.  Return non-nil when
+there was something to hand over."
+  (when-let* ((schedules (mevedel-session-schedules session)))
+    (setf (mevedel-session-schedules session) nil)
+    (unwind-protect
+        (progn
+          (mevedel-agent-control-commit-session session)
+          (mevedel-schedule--index session)
+          t)
+      (setf (mevedel-session-schedules session) schedules))))
+
+(defun mevedel-schedule-hand-back (session)
+  "Commit SESSION's in-memory wake-ups again after an abandoned hand-over."
+  (mevedel-agent-control-commit-session session)
+  (mevedel-schedule--index session))
+
+
+;;
+;;; Index
+
+(defun mevedel-schedule--directory-key (directory)
+  "Return DIRECTORY in the one spelling the index compares."
+  (directory-file-name (expand-file-name directory)))
+
+(defun mevedel-schedule--index-file (directory)
+  "Return the index file naming session DIRECTORY."
+  (file-name-concat mevedel-user-dir "wake-ups"
+                    (concat (md5 (mevedel-schedule--directory-key directory)) ".el")))
+
+(defun mevedel-schedule--index-directory (directory pending)
+  "Record in the index whether session DIRECTORY holds PENDING wake-ups."
+  (let ((file (mevedel-schedule--index-file directory)))
+    (condition-case err
+        (if pending
+            (unless (file-exists-p file)
+              (make-directory (file-name-directory file) t)
+              (with-temp-file file
+                (prin1 (mevedel-schedule--directory-key directory) (current-buffer))))
+          (when (file-exists-p file)
+            (delete-file file)))
+      (error
+       (mevedel-diagnostic-warning
+        'global 'mevedel
+        (format "Wake-up index for %s could not be updated: %s"
+                directory (error-message-string err))
+        :warning)))))
+
+(defun mevedel-schedule--index (session)
+  "Record in the index whether saved SESSION holds pending wake-ups."
+  (when-let* ((directory (mevedel-session-save-path session)))
+    (mevedel-schedule--index-directory
+     directory (mevedel-schedule-pending session))))
+
+(defun mevedel-schedule--absent-p (directory)
+  "Return non-nil when DIRECTORY provably does not exist.
+Only a missing path below an existing ancestor this Emacs can search is
+proof; a permission or transport failure is not."
+  (let* ((key (mevedel-schedule--directory-key directory))
+         (path key)
+         parent)
+    (while (and (not (file-exists-p path))
+                (not (equal path (setq parent (directory-file-name
+                                               (file-name-directory path))))))
+      (setq path parent))
+    (and (not (equal path key))
+         (file-accessible-directory-p path))))
+
+(defun mevedel-schedule--stored-due (directory)
+  "Return when session DIRECTORY's committed store next needs the scheduler.
+Return nil only when the session is provably gone or its readable store
+holds no pending wake-up; signal when the store cannot be read."
+  (unless (mevedel-schedule--absent-p directory)
+    (let* ((publication (or (mevedel-session-publication-read directory)
+                            (error "No readable session publication")))
+           (sidecar (or (mevedel-session-persistence-load-sidecar
+                         (plist-get publication :sidecar) 'global)
+                        (error "Session sidecar is unreadable")))
+           (dues (cl-loop for entry in (plist-get sidecar :schedules)
+                          when (and (mevedel-schedule-entry-p entry)
+                                    (eq 'pending (plist-get entry :status)))
+                          collect (plist-get entry :due))))
+      (and dues (apply #'min dues)))))
+
+(defun mevedel-schedule--open-p (directory)
+  "Return non-nil when a scheduled buffer holds session DIRECTORY."
+  (let ((key (mevedel-schedule--directory-key directory)))
+    (cl-some (lambda (buffer)
+               (when-let* ((session (buffer-local-value 'mevedel--session buffer))
+                           (path (mevedel-session-save-path session)))
+                 (equal key (mevedel-schedule--directory-key path))))
+             (cl-remove-if-not #'buffer-live-p mevedel-schedule--buffers))))
+
+(defun mevedel-schedule--prune (directory)
+  "Remove session DIRECTORY's index entry after its store read as stale.
+Return the store's due time when a wake-up appeared meanwhile, else nil.
+
+   Pruning Emacs              Lease holder
+   reads store: none
+                              commits a wake-up
+                              sees the entry, keeps it
+   deletes the entry
+   re-reads store: pending -> recreates the entry
+
+The holder commits before it looks at the entry, so deleting first and
+then re-reading never loses a wake-up whichever way the two interleave.
+Only a re-read that succeeds and finds nothing pending leaves the entry
+deleted; when it signals, the entry is put back before the error
+propagates."
+  (mevedel-schedule--index-directory directory nil)
+  (let (due confirmed)
+    (unwind-protect
+        (setq due (mevedel-schedule--stored-due directory)
+              confirmed t)
+      (when (or due (not confirmed))
+        (mevedel-schedule--index-directory directory t)))
+    due))
+
+(defun mevedel-schedule--forget-closed (directory)
+  "Stop scheduling closed session DIRECTORY."
+  (let ((key (mevedel-schedule--directory-key directory)))
+    (setq mevedel-schedule--closed
+          (cl-remove key mevedel-schedule--closed :key #'car :test #'equal))))
+
+;;;###autoload
+(defun mevedel-schedule-restore ()
+  "Schedule the pending wake-ups of saved sessions that are not open.
+Run at startup.  Only entries proven stale are removed: malformed ones,
+and those whose session is gone or whose readable store holds no pending
+wake-up.  An entry that cannot be read now is kept for the next restore."
+  (let ((inhibit-interaction t)
+        (index (file-name-concat mevedel-user-dir "wake-ups")))
+    (dolist (file (and (file-directory-p index)
+                       (directory-files index t "\\.el\\'")))
+      (let (directory)
+        (condition-case err
+            (progn
+              ;; An unreadable entry file signals here and is kept.
+              (setq directory (with-temp-buffer
+                                (insert-file-contents file)
+                                (ignore-errors (read (current-buffer)))))
+              (cond
+               ((not (stringp directory)) (delete-file file))
+               ((mevedel-schedule--open-p directory))
+               (t (when-let* ((due (or (mevedel-schedule--stored-due directory)
+                                       (mevedel-schedule--prune directory)))
+                              ((not (mevedel-schedule--open-p directory))))
+                    (mevedel-schedule--forget-closed directory)
+                    (push (cons directory due) mevedel-schedule--closed)))))
+          (error
+           (mevedel-diagnostic-warning
+            'global 'mevedel
+            (format "Wake-ups of %s were not restored: %s"
+                    (or directory file) (error-message-string err))
+            :warning))))))
+  (mevedel-schedule--rearm))
+
+(defun mevedel-schedule--wake-closed (directory now)
+  "Reopen closed session DIRECTORY without a window when it is due at NOW.
+Once open, the session schedules and fires its own wake-ups."
+  (condition-case err
+      (let ((due (or (mevedel-schedule--stored-due directory)
+                     (mevedel-schedule--prune directory))))
+        (cond
+         ((null due))
+         ((mevedel-schedule--open-p directory))
+         ((> due now) (push (cons directory due) mevedel-schedule--closed))
+         (t
+          (let* ((existing (buffer-list))
+                 (buffer (let ((inhibit-interaction t))
+                           (mevedel-session-persistence-restore directory))))
+            (if (buffer-local-value 'mevedel-session--read-only-mode buffer)
+                ;; Another Emacs holds the lease, so it fires for the session.
+                (unless (memq buffer existing)
+                  (let ((kill-buffer-query-functions nil))
+                    (kill-buffer buffer)))
+              (message "mevedel: reopened session %s for a wake-up"
+                       (mevedel-session-name
+                        (buffer-local-value 'mevedel--session buffer))))))))
+    (error
+     (push (cons directory (+ now mevedel-schedule-retry-delay))
+           mevedel-schedule--closed)
+     (mevedel-diagnostic-warning
+      'global 'mevedel
+      (format "Session %s could not be reopened for a wake-up (%s); retrying in %ds"
+              directory (error-message-string err) mevedel-schedule-retry-delay)
+      :warning))))
+
 
 ;;
 ;;; Scheduler
@@ -426,12 +641,23 @@ Return the removed entry.  Expired wake-ups are removed the same way."
 (defun mevedel-schedule-restore-session (session buffer)
   "Schedule SESSION's persisted pending wake-ups from its root data BUFFER.
 Call only where this client holds the session's mutation authority."
+  (when-let* ((directory (mevedel-session-save-path session)))
+    (mevedel-schedule--forget-closed directory))
   (when (mevedel-schedule-pending session)
-    (mevedel-schedule--register buffer)
-    (mevedel-schedule--rearm)))
+    (mevedel-schedule--register buffer))
+  (mevedel-schedule--index session)
+  (mevedel-schedule--rearm))
 
 (defun mevedel-schedule--forget-current ()
-  "Stop scheduling the current buffer's wake-ups; they stay persisted."
+  "Schedule the current buffer's wake-ups as those of a closed session.
+The session is reopened without a window when the earliest one is due."
+  (when-let* ((session (mevedel-schedule--session (current-buffer)))
+              (directory (mevedel-session-save-path session))
+              (dues (mapcar (lambda (entry) (plist-get entry :due))
+                            (mevedel-schedule-pending session))))
+    (mevedel-schedule--forget-closed directory)
+    (push (cons (mevedel-schedule--directory-key directory) (apply #'min dues))
+          mevedel-schedule--closed))
   (setq mevedel-schedule--buffers (delq (current-buffer) mevedel-schedule--buffers))
   (mevedel-schedule--rearm))
 
@@ -458,9 +684,10 @@ A buffer following a session whose lease another client holds never fires."
   (setq mevedel-schedule--timer nil
         mevedel-schedule--buffers
         (cl-remove-if-not #'mevedel-schedule--earliest mevedel-schedule--buffers))
-  (when mevedel-schedule--buffers
-    (let ((due (apply #'min (mapcar #'mevedel-schedule--earliest
+  (when-let* ((dues (append (mapcar #'cdr mevedel-schedule--closed)
+                            (mapcar #'mevedel-schedule--earliest
                                     mevedel-schedule--buffers))))
+    (let ((due (apply #'min dues)))
       (setq mevedel-schedule--timer
             (run-at-time (max 0 (- due (funcall mevedel-schedule-clock)))
                          nil #'mevedel-schedule-run-due)))))
@@ -468,6 +695,11 @@ A buffer following a session whose lease another client holds never fires."
 (defun mevedel-schedule-run-due ()
   "Fire every wake-up due by `mevedel-schedule-clock', then re-arm."
   (let ((now (mevedel-schedule-now)))
+    ;; A reopened session registers its buffer, which the loop below fires.
+    (dolist (closed (copy-sequence mevedel-schedule--closed))
+      (when (<= (cdr closed) now)
+        (setq mevedel-schedule--closed (delq closed mevedel-schedule--closed))
+        (mevedel-schedule--wake-closed (car closed) now)))
     (dolist (buffer (copy-sequence mevedel-schedule--buffers))
       (when-let* ((session (mevedel-schedule--session buffer))
                   ((<= (or (buffer-local-value 'mevedel-schedule--retry-at buffer) 0)
@@ -550,7 +782,8 @@ BUFFER is the root data buffer offered the background-event turn."
             (progn
               (setf (mevedel-session-schedules session)
                     (mevedel-schedule--expire session entry now))
-              (mevedel-schedule--commit session previous))
+              (mevedel-schedule--commit session previous)
+              (mevedel-schedule--index session))
           ;; Removal and the record share the mailbox commit, so a firing is
           ;; never both delivered and still pending in the persisted store.
           (setf (mevedel-session-schedules session)
@@ -565,11 +798,13 @@ BUFFER is the root data buffer offered the background-event turn."
            session (plist-get entry :note) (mevedel-schedule--record-meta entry now)
            (lambda (success failure)
              (if success
-                 (mevedel-agent-control-notify
-                  session (list 'root-wake buffer)
-                  (lambda ()
-                    (unless (mevedel-session-publication-stopping-p session)
-                      (mevedel-pending-inputs-offer-root-event session buffer))))
+                 (progn
+                   (mevedel-schedule--index session)
+                   (mevedel-agent-control-notify
+                    session (list 'root-wake buffer)
+                    (lambda ()
+                      (unless (mevedel-session-publication-stopping-p session)
+                        (mevedel-pending-inputs-offer-root-event session buffer)))))
                (mevedel-schedule--retry-later session buffer entry failure)
                (mevedel-schedule--rearm)))))
       ((error quit)

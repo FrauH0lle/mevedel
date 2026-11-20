@@ -26,6 +26,7 @@
 (require 'mevedel-execution)
 (require 'mevedel-overlays)
 (require 'mevedel-persistence)
+(require 'mevedel-schedule)
 (require 'mevedel-session-control-transfer)
 ;; Loaded up front because the coordinator requires them lazily inside the
 ;; functions under test, which would otherwise redefine stubbed symbols
@@ -408,6 +409,10 @@
            :type 'project :id root :root root :name "transfer"))
          (session (mevedel-session-create "requester" workspace))
          (target (mevedel-session-execution-target session))
+         (mevedel-user-dir (file-name-as-directory (file-name-concat root "user")))
+         (due (+ (truncate (float-time)) 3600))
+         (wake-up (list :id "w-000001" :note "Check CI" :timing (list :kind 'once :at due)
+                        :created-at (- due 3600) :due due :expires-at nil :status 'pending))
          (buffer (generate-new-buffer " *mevedel-transfer-live*"))
          (source-buffer (generate-new-buffer " *mevedel-transfer-source*"))
          reference reference-id
@@ -443,6 +448,7 @@
           (setq buffer-file-name old-file
                 default-directory root
                 mevedel--workspace workspace)
+          (setq-local mevedel--session session)
           (insert "old transcript")
           (set-buffer-modified-p nil)
           (set-visited-file-modtime)
@@ -462,6 +468,7 @@
                    (mevedel-session--create
                     :name "requester" :working-directory root
                     :external-conversations native-history
+                    :schedules (list wake-up)
                     :turn-count 9 :current-segment 2))))
                ((symbol-function 'mevedel-session-artifacts-read-artifact)
                 (lambda (&rest _)
@@ -496,6 +503,7 @@
               (should-error
                (mevedel-session-control-transfer--adopt-control
                 session buffer))
+              (should-not (memq buffer mevedel-schedule--buffers))
               (should (= 1 (mevedel-session-turn-count session)))
               (should (= 1 (mevedel-session-current-segment session)))
               (should (equal '(:head "old")
@@ -535,6 +543,9 @@
             (should (equal "new transcript" (buffer-string)))
             (should-not buffer-read-only)
             (should-not mevedel-session--read-only-mode)
+            ;; Regaining the lease arms the wake-ups the owner left pending.
+            (should (memq buffer mevedel-schedule--buffers))
+            (should mevedel-schedule--timer)
             (should (equal (list drain)
                            (mevedel-session-control-transfer-drains session)))
             (should-not
@@ -547,6 +558,10 @@
         (with-current-buffer buffer
           (set-buffer-modified-p nil))
         (kill-buffer buffer))
+      ;; Closing keeps a leased session's wake-up scheduled; forget it.
+      (setq mevedel-schedule--closed nil)
+      (mevedel-schedule--rearm)
+      (should-not mevedel-schedule--timer)
       (mevedel--clear-instruction-state workspace)
       (when (buffer-live-p source-buffer)
         (with-current-buffer source-buffer

@@ -30,6 +30,7 @@
   `(let* ((gptel--known-backends nil)
           (mevedel-workspace-identity--cache (make-hash-table :test #'equal))
           (root (make-temp-file "mevedel-schedule-tool-" t))
+          (mevedel-user-dir (file-name-as-directory (file-name-concat root "user")))
           (session (mevedel-skills-test--make-session "schedules" root))
           (now mevedel-tool-schedule-test--now)
           (mevedel-schedule-clock (lambda () now))
@@ -59,7 +60,9 @@
                    '((("mevedel" "Schedule") . "Schedule wake-ups")))
              ,@body))
        (kill-buffer buffer)
-       ;; Killing the root buffer unregisters it; nothing may stay armed.
+       ;; A closed session's pending wake-ups stay scheduled; forget them.
+       (setq mevedel-schedule--closed nil)
+       (mevedel-schedule--rearm)
        (should-not mevedel-schedule--timer)
        (set-time-zone-rule zone)
        (delete-directory root t))))
