@@ -1176,6 +1176,30 @@ With RAW-P, retain the full pipeline result including hidden render data."
                        (mapcar (lambda (call) (plist-get call :status))
                                calls))))))
 
+  :doc "call cancellation without a request reaches a standalone child's cleanup"
+  (let ((cleanups 0) (deliveries 0) started cancel outcome)
+    (test-mevedel-ptc-driver--register-probe
+     (lambda (_callback _args)
+       (setq started t)
+       (list :cancel (lambda () (cl-incf cleanups))))
+     t)
+    (test-mevedel-ptc-driver--select-probe buffer)
+    (with-current-buffer buffer
+      (setq cancel
+            (mevedel-pipeline-run-tool-outcome
+             (mevedel-tool-ensure "ToolCall")
+             (lambda (value) (cl-incf deliveries) (setq outcome value))
+             '(:expression "(PTCProbe :value \"wait\")"))))
+    (let ((deadline (+ (float-time) 2.0)))
+      (while (and (not started) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
+    (should started)
+    (funcall cancel)
+    (accept-process-output nil 0.05)
+    (should (= 1 cleanups))
+    (should (= 1 deliveries))
+    (should (eq 'cancelled (plist-get outcome :reason))))
+
   :doc "ignores its request canceller after successful settlement"
   (let* ((durable-session
           (mevedel-session--create

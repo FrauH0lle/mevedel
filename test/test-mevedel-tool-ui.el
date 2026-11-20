@@ -17,6 +17,7 @@
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-target)
 (require 'mevedel-goal)
+(require 'mevedel-mcp)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-ui)
@@ -1540,6 +1541,30 @@
       (should-not (mevedel-session-agent-root-waiter session))
       (apply (car scheduled) (cdr scheduled))
       (should-not delivered)))
+
+  :doc "without MCP progress a long wait ends before the client idle limit"
+  (dolist (bounded '(t nil))
+    (let* ((session (mevedel-tool-ui-test--session))
+           (mevedel-mcp-client-idle-timeout 100)
+           (mevedel-tools--current-engine
+            (mevedel-request--create
+             :session session :origin "/root"
+             :context (list :mevedel-mcp-idle-bounded bounded)))
+           delivered delay scheduled)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (seconds _repeat function &rest args)
+                   (setq delay seconds scheduled (cons function args))
+                   'fake-timer)))
+        (let ((mevedel--session session))
+          (mevedel-tool-ui--wait-agent
+           (lambda (value) (setq delivered value))
+           '(:timeout_ms 3600000)))
+        (should (if bounded (< delay 100) (= delay 3600)))
+        (apply (car scheduled) (cdr scheduled))
+        (should (eq bounded (and (string-search "Call WaitAgent again"
+                                                (plist-get delivered :result))
+                                 t)))
+        (should-not (mevedel-session-agent-root-waiter session)))))
 
   :doc "renders pending and settled wait text without changing a leading-> draft"
   (mevedel-view-test--with-buffers

@@ -11,6 +11,7 @@
           "mevedel-engine-test-support"))
 (require 'mevedel-acp-turn)
 (require 'mevedel-claude-code)
+(require 'mevedel-mcp)
 (require 'mevedel-plan-mode)
 (require 'mevedel-view-render)
 (require 'mevedel-sigpipe-test-support
@@ -470,6 +471,39 @@ BODY delivers the receipt and a Read call through `connection', `content' and
         (mevedel-abort buffer)
         (mevedel-test--await 5 "Turn did not settle"
           (not (mevedel-turn-busy-p buffer)))))))
+
+(mevedel-deftest mevedel-acp-turn-start/progress-token
+  (:quiet t :doc "a call without an MCP progress token marks its owner's waits as idle-bounded")
+  (mevedel-engine-test--with-session
+    (let* ((path (file-name-concat root "source.txt"))
+           (start (symbol-function 'mevedel-mcp-start))
+           (mevedel-acp-turn--announce-wait 0.03)
+           dispatch seen)
+      (write-region "evidence" nil path nil 'silent)
+      (cl-letf (((symbol-function 'mevedel-mcp-start)
+                 (lambda (tools callback &rest rest)
+                   (setq dispatch callback)
+                   (apply start tools callback rest))))
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook)
+           (list :command (executable-find "python3")
+                 :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
+                 :tool-id-field :fixtureToolId :announces-tool-calls t))
+         [((type . "text") (text . "wait"))]
+         (list (mevedel-tool-ensure "Read"))))
+      (mevedel-test--await 5 "Turn did not start"
+        (string-search "waiting" (buffer-string)))
+      (dolist (meta '((:fixtureToolId "silent") (:fixtureToolId "progress" :progressToken 7)))
+        (let (result)
+          (funcall dispatch "Read" (list :file_path path) meta
+                   (lambda (value) (setq result value)))
+          (mevedel-test--await 5 "Call did not finish" result)
+          (push (plist-get (mevedel-engine-info request) :mevedel-mcp-idle-bounded) seen)))
+      (should (equal '(nil t) seen))
+      (mevedel-abort buffer)
+      (mevedel-test--await 5 "Turn did not settle"
+        (not (mevedel-turn-busy-p buffer))))))
 
 (mevedel-deftest mevedel-acp-turn-start/tool-hooks (:quiet t)
   ,test

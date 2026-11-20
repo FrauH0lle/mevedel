@@ -225,9 +225,9 @@ or erroring callback cannot leave the recipient stuck waiting or remove a new
 wait started by the callback. The triggering mail remains queued until ordinary
 conversation delivery acknowledges it; another WaitAgent observes that mail
 immediately even when the previous callback failed.
-Cancelling an individual tool call (including MCP timeout or disconnect) also
-releases that call's wait, timer and waiting activity, without cancelling the
-surrounding turn or a later wait.
+Cancelling an individual tool call (including MCP timeout or disconnect, and a
+`ToolCall` that wraps the wait) also releases that call's wait, timer and
+waiting activity, without cancelling the surrounding turn or a later wait.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
@@ -538,7 +538,11 @@ steering message in the same resumed request, so no intermediate model sample
 can run before the input is visible. The default timeout is 30,000 ms.
 Out-of-range numeric tool arguments clamp to 10,000-3,600,000 ms; unrepairable
 tool arguments are rejected, and timeout is a successful outcome. Its result
-contains only the wake reason. The view renders `Waiting for agents` while the
+contains only the wake reason. Over MCP, the server sends progress notifications
+for pending calls whose client supplied a progress token, so clients that abort
+silent calls keep waiting. When the client supplied none, a single wait ends
+before `mevedel-mcp-client-idle-timeout` (default 1800 seconds) and asks the
+agent to call `WaitAgent` again. The view renders `Waiting for agents` while the
 tool is pending. Settled waits render `WaitAgent: agents (OUTCOME)`;
 consecutive calls coalesce into the final row with a count while every
 canonical call remains in the transcript.

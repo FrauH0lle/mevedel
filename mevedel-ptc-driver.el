@@ -864,22 +864,27 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                            total)))))))
                       (funcall progress 'progress nil total)
                       (funcall schedule-batch))))))
-            (when (bound-and-true-p mevedel--current-request)
-              (mevedel-request-push-canceller
-               mevedel--current-request
-               (lambda ()
-                 (unless settled
-                   (funcall
-                    guard
-                    (lambda ()
-                      (funcall settle-children
-                               'cancelled "Cancelled by request")
-                      (funcall
-                       finish
-                       (concat "Error: script interrupted"
-                               (mevedel-ptc-driver--partial-summary audit))
-                       'error 'interrupted)))))))
-            (funcall resume nil)))
+            (let ((interrupt
+                   (lambda ()
+                     (unless settled
+                       (funcall
+                        guard
+                        (lambda ()
+                          (funcall settle-children
+                                   'cancelled "Cancelled by request")
+                          (funcall
+                           finish
+                           (concat "Error: script interrupted"
+                                   (mevedel-ptc-driver--partial-summary audit))
+                           'error 'interrupted)))))))
+              (when (bound-and-true-p mevedel--current-request)
+                (mevedel-request-push-canceller mevedel--current-request interrupt))
+              (funcall resume nil)
+              ;; A cancelled call (MCP cancellation or disconnect) is settled by
+              ;; the pipeline, so only children and audit settle here.
+              (list :cancel (lambda ()
+                              (setq callback #'ignore)
+                              (funcall interrupt))))))
       (error
        (let* ((typed-p (eq (car err) 'mevedel-ptc-error))
               (kind (if typed-p (nth 1 err) 'script))

@@ -468,6 +468,12 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                (error "Tool call lacks its admitted tool or native identity"))
              (when (gethash id calls) (error "Tool call identity was already admitted"))
              (puthash id t calls)
+             ;; shortcut: one flag per turn owner from its latest call, since a
+             ;; client requests progress for all its calls or none; make it
+             ;; per-call if a client ever mixes them.
+             (setf (mevedel-engine-info request)
+                   (plist-put (mevedel-engine-info request) :mevedel-mcp-idle-bounded
+                              (not (plist-get metadata :progressToken))))
              (with-current-buffer buffer
                (let ((verdict (mevedel-acp-turn--run-tool-hooks
                                'gptel-pre-tool-call-functions request

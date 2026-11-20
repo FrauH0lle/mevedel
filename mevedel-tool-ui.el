@@ -23,6 +23,12 @@
                   "mevedel-agents" (args summary))
 (autoload 'mevedel-agents-agent-contract "mevedel-agents")
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-info "mevedel-engine" (owner))
+
+;; `mevedel-mcp'
+(defvar mevedel-mcp-client-idle-timeout)
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
@@ -38,6 +44,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query))
+(defvar mevedel-tools--current-engine)
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-model-details
@@ -174,28 +181,40 @@
     (_ "Wait finished")))
 
 (defun mevedel-tool-ui--wait-agent (callback args)
-  "Suspend WaitAgent ARGS and report the wake reason through CALLBACK."
-  (when-let* ((path
-               (mevedel-agent-control-wait
-                mevedel--session
-                (lambda (reason)
-                  (mevedel-tool-ui--deliver-result
-                   callback
-                   (list :result (mevedel-tool-ui--wait-summary reason)
-                         :render-data
-                         (list :kind 'collaboration-event
-                               :event 'finished-waiting
-                               :reason reason))))
-                (plist-get args :timeout_ms))))
-    (let* ((session mevedel--session)
-           (waiter (mevedel-agent-control--waiter session path))
-           (cancel (lambda ()
-                     (when (eq waiter
-                               (mevedel-agent-control--waiter session path))
-                       (mevedel-agent-control-cancel-wait session path)))))
-      (when mevedel--current-request
-        (mevedel-request-push-canceller mevedel--current-request cancel))
-      (list :cancel cancel))))
+  "Suspend WaitAgent ARGS and report the wake reason through CALLBACK.
+When the owning turn's MCP client accepts no progress notifications, the wait
+ends before `mevedel-mcp-client-idle-timeout' so the client does not abort it."
+  (let* ((requested (or (plist-get args :timeout_ms)
+                        mevedel-agent-control--wait-default-ms))
+         (limit (and mevedel-tools--current-engine
+                     (plist-get (mevedel-engine-info mevedel-tools--current-engine)
+                                :mevedel-mcp-idle-bounded)
+                     (floor (* 900 mevedel-mcp-client-idle-timeout))))
+         (cut (and limit (< limit requested))))
+    (when-let* ((path
+                 (mevedel-agent-control-wait
+                  mevedel--session
+                  (lambda (reason)
+                    (mevedel-tool-ui--deliver-result
+                     callback
+                     (list :result
+                           (if (and cut (eq reason 'timeout))
+                               "Still waiting: the MCP client's idle limit ended this call. Call WaitAgent again to keep waiting."
+                             (mevedel-tool-ui--wait-summary reason))
+                           :render-data
+                           (list :kind 'collaboration-event
+                                 :event 'finished-waiting
+                                 :reason reason))))
+                  (if cut limit requested))))
+      (let* ((session mevedel--session)
+             (waiter (mevedel-agent-control--waiter session path))
+             (cancel (lambda ()
+                       (when (eq waiter
+                                 (mevedel-agent-control--waiter session path))
+                         (mevedel-agent-control-cancel-wait session path)))))
+        (when mevedel--current-request
+          (mevedel-request-push-canceller mevedel--current-request cancel))
+        (list :cancel cancel)))))
 
 
 ;;

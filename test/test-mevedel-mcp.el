@@ -139,6 +139,37 @@
       (response 4)
       (should-not (seq-find (lambda (row) (equal (plist-get row :id) 2)) replies))))
 
+  :doc "pending calls with a progress token report progress until answered"
+  (let ((mevedel-mcp--progress-interval 0.05) finishes)
+    (mevedel-mcp-test--with-client
+        (lambda () [(:name "Wait" :inputSchema (:type "object"))])
+        (lambda (_name _args _metadata complete) (push complete finishes) #'ignore)
+      (cl-labels ((progress (token)
+                    (seq-filter (lambda (row)
+                                  (and (equal "notifications/progress" (plist-get row :method))
+                                       (equal token (plist-get (plist-get row :params)
+                                                               :progressToken))))
+                                replies)))
+        (initialize)
+        (send '(:jsonrpc "2.0" :id 2 :method "tools/call"
+                :params (:name "Wait" :_meta (:progressToken "tok"))))
+        (send '(:jsonrpc "2.0" :id 3 :method "tools/call" :params (:name "Wait")))
+        (mevedel-test--await 5 "No repeated progress" (>= (length (progress "tok")) 2))
+        (let ((values (mapcar (lambda (row) (plist-get (plist-get row :params) :progress))
+                              (reverse (progress "tok")))))
+          (should (equal values (sort (copy-sequence values) #'<)))
+          (should (= (length values) (length (delete-dups values)))))
+        (should-not (seq-find (lambda (row)
+                                (and (plist-get row :method)
+                                     (not (plist-get (plist-get row :params) :progressToken))))
+                              replies))
+        (dolist (finish finishes) (funcall finish '(:content [])))
+        (response 2)
+        (let ((count (length (progress "tok"))))
+          (sleep-for 0.2)
+          (accept-process-output nil 0.01)
+          (should (= count (length (progress "tok"))))))))
+
   :doc "invalid envelopes fail without dispatch and parsing recovers"
   (let ((calls 0))
     (mevedel-mcp-test--with-client

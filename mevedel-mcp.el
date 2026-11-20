@@ -16,12 +16,29 @@
 ;; `mevedel-utilities'
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
 
+;; `mevedel-transport'
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 (defconst mevedel-mcp--source-directory
   (mevedel-library-source-directory (or load-file-name buffer-file-name))
   "Directory containing the packaged stdio bridge.")
 
 (defconst mevedel-mcp--max-message-bytes (* 32 1024 1024)
   "Maximum size of one incoming MCP message.")
+
+(defvar mevedel-mcp--progress-interval 30
+  "Seconds between progress notifications for a pending tool call.
+Clients such as Claude Code abort a call that sends no response or progress
+for their idle limit; this keeps well below the shortest practical one.")
+
+(defcustom mevedel-mcp-client-idle-timeout 1800
+  "Seconds an MCP client waits for a silent tool call before aborting it.
+A client that requests no progress notifications cannot be kept waiting, so a
+long WaitAgent call through it returns before this limit and asks the agent
+to wait again.  The default matches Claude Code's
+CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT default."
+  :type 'natnum
+  :group 'mevedel)
 
 (cl-defstruct (mevedel-mcp (:constructor mevedel-mcp--create))
   "Private local server for one caller-owned tool scope."
@@ -143,7 +160,26 @@ completion of a still-pending request answers it."
        client id 'tool
        (lambda (complete)
          (funcall (mevedel-mcp-dispatch server)
-                  name args (plist-get params :_meta) complete))))))
+                  name args (plist-get params :_meta) complete)))
+      (when-let* ((meta (plist-get params :_meta))
+                  ((listp meta))
+                  (token (plist-get meta :progressToken))
+                  ((or (stringp token) (integerp token)))
+                  (cell (gethash id (process-get client 'mevedel-mcp-calls))))
+        (mevedel-mcp--progress client id cell token 1)))))
+
+(defun mevedel-mcp--progress (client id cell token count)
+  "Report progress COUNT under TOKEN while CLIENT's call ID is still CELL.
+Each report schedules the next, so the reports stop once the call is
+answered, cancelled or disconnected."
+  (mevedel-transport-run-at-time
+   mevedel-mcp--progress-interval
+   (lambda ()
+     (when (eq cell (gethash id (process-get client 'mevedel-mcp-calls)))
+       (mevedel-mcp--send client (list :jsonrpc "2.0" :method "notifications/progress"
+                                       :params (list :progressToken token
+                                                     :progress count)))
+       (mevedel-mcp--progress client id cell token (1+ count))))))
 
 (defun mevedel-mcp--receive (server client message)
   "Handle one decoded MESSAGE from SERVER's CLIENT."
