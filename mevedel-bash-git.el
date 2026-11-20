@@ -298,7 +298,8 @@ exit $?"
                            (string-match-p "%([*]?signature" value)))))))
 
 (defun mevedel-bash-git--parse (argv)
-  "Validate Git ARGV, returning (GLOBAL COMMAND ARGS), or signal an error."
+  "Validate Git ARGV, returning (GLOBAL COMMAND ARGS OPTIONS-END), or signal.
+OPTIONS-END counts the ARGS before the first operand or `--'."
   (unless (and (proper-list-p argv) (equal (car argv) "git")
                (cl-every (lambda (arg)
                            (and (stringp arg)
@@ -324,11 +325,15 @@ exit $?"
                             mevedel-bash-git--history-flags)))
            (values (append (cdr (assoc command mevedel-bash-git--values))
                            (when diff-p mevedel-bash-git--diff-values)))
-           operands seen-flags literal)
+           operands seen-flags literal options-end)
       (unless (assoc command mevedel-bash-git--flags)
         (error "Unsupported Git inspection command: %s" command))
       (while rest
         (let ((arg (pop rest)))
+          (when (and (not options-end)
+                     (or literal (equal arg "--")
+                         (not (string-prefix-p "-" arg))))
+            (setq options-end (- (length args) (length rest) 1)))
           (cond
            (literal (push arg operands))
            ((or (equal arg "--")
@@ -376,7 +381,7 @@ exit $?"
                          operands
                        (>= (length operands) 2))))
            (error "Missing or excess Git merge-base operands"))))
-      (list (nreverse global) command args))))
+      (list (nreverse global) command args (or options-end (length args))))))
 
 
 ;;; Public interface
@@ -411,7 +416,7 @@ See Commentary for the execution-environment trust boundary."
                    (string-prefix-p "/" temporary-root)
                    (not (string-match-p "\0" temporary-root))))
     (error "Invalid native temporary directory"))
-  (pcase-let* ((`(,global ,command ,args) (mevedel-bash-git--parse argv))
+  (pcase-let* ((`(,global ,command ,args ,options-end) (mevedel-bash-git--parse argv))
                (git-prefix
                 (append
                  '("git" "--no-pager" "--no-replace-objects" "--no-lazy-fetch"
@@ -431,12 +436,12 @@ See Commentary for the execution-environment trust boundary."
                         ;; does not stop earlier signature keys being evaluated.
                         (when (equal command "branch")
                           '("--no-sort" "--sort=refname"))
+                        ;; After every user option, so it wins; before operands,
+                        ;; which Git refuses to see followed by options.
                         (if (member command '("status" "diff"))
-                            (let ((separator (or (cl-position "--" args :test #'equal)
-                                                 (length args))))
-                              (append (cl-subseq args 0 separator)
-                                      '("--ignore-submodules=all")
-                                      (nthcdr separator args)))
+                            (append (cl-subseq args 0 options-end)
+                                    '("--ignore-submodules=all")
+                                    (nthcdr options-end args))
                           args))))
     (append
      (list "bash" "--noprofile" "--norc" "-p" "-c"

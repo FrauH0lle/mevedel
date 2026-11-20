@@ -136,7 +136,7 @@ metadata snapshots around an inspection."
          (copy (copy-tree argv)))
     (should (equal (mevedel-bash-git--parse argv)
                    '(("-C" "directory with spaces" "--no-pager")
-                     "log" ("-n2" "-U3" "HEAD" "--" "--ext-diff"))))
+                     "log" ("-n2" "-U3" "HEAD" "--" "--ext-diff") 2)))
     (should (equal argv copy)))
   :doc "cat-file and merge-base enforce finite operand modes"
   (dolist (argv '(("git" "cat-file" "-p")
@@ -237,6 +237,15 @@ metadata snapshots around an inspection."
                    '("-C" "some repo" "diff" "--no-ext-diff" "--no-textconv"
                      "--stat" "--ignore-submodules=all" "--" "--ext-diff")))
     (should (equal argv '("git" "-C" "some repo" "diff" "--stat" "--" "--ext-diff"))))
+  :doc "hardening ends the options when operands follow without a separator"
+  (dolist (case '((("git" "diff" "--stat" "CONTEXT.md")
+                   ("--stat" "--ignore-submodules=all" "CONTEXT.md"))
+                  (("git" "diff" "-U" "3" "HEAD" "file.el")
+                   ("-U" "3" "--ignore-submodules=all" "HEAD" "file.el"))
+                  (("git" "status" "--ignore-submodules=none" "dir")
+                   ("--ignore-submodules=none" "--ignore-submodules=all" "dir"))))
+    (should (equal (last (mevedel-bash-git-prepare (car case)) (length (cadr case)))
+                   (cadr case))))
   :doc "trusted temporary roots are separate launcher arguments and invalid roots fail closed"
   (let* ((argv '("git" "status" "--short"))
          (root "/native target/tmp with spaces")
