@@ -1024,15 +1024,18 @@ restart point is reused: its end is where the sequential scan stood, so
 scanning on from there is the scan the whole buffer would have run.  The
 restart point is the first change or the earliest opener without a span,
 whichever comes first, because a later close can pair such an opener."
-  (let ((old (and (not full)
-                  (mevedel-session-artifacts--prompt-cache-origin cache)
-                  (mevedel-session-artifacts--prompt-cache-spans cache)))
-        (old-p (and (not full)
-                    (mevedel-session-artifacts--prompt-cache-origin cache)))
-        (unresolved (mevedel-session-artifacts--prompt-cache-unresolved cache)))
+  (let* ((spans (mevedel-session-artifacts--prompt-cache-spans cache))
+         (unresolved (mevedel-session-artifacts--prompt-cache-unresolved cache))
+         ;; Body-relative offsets cannot track audit records inside the drawer:
+         ;; known metadata edits can move the origin without moving those records.
+         (old-p (and (not full)
+                     (mevedel-session-artifacts--prompt-cache-origin cache)
+                     (>= (or (caar spans) 0) 0)
+                     (>= (or unresolved 0) 0)))
+         (old (and old-p spans)))
     (if (and old-p (null d))
         (cons old unresolved)
-      (let* ((limit (if old-p (min d (or unresolved d)) -1))
+      (let* ((limit (if old-p (min d (or unresolved d)) (- (point-min) origin)))
              (reused (cl-loop for span in old
                               while (<= (nth 1 span) limit)
                               collect span))

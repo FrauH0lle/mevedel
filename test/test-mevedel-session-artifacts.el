@@ -3977,6 +3977,25 @@ With DIRECTIVE, wrap the turn in old directive boundary records."
                 (lambda (&rest args) (cl-incf ,var) (apply original args))))
        ,@body)))
 
+(mevedel-deftest mevedel-session-artifacts--prompt-derive/leading-drawer
+  (:doc "a full rescan finds audit spans before the transcript body")
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response))\n:END:\nQuestion\n")
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (goto-char (point-min))
+    (forward-line 1)
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "drawer" :turn 1)))
+    (let ((expected (mevedel-session-artifacts-fork-point-spans (current-buffer))))
+      (should (equal "drawer" (plist-get (car expected) :fork-point-id)))
+      (should (equal expected
+                     (cdr (mevedel-session-artifacts--prompt-derive (current-buffer)))))
+      (mevedel-transcript-source-call-with-metadata-change
+       (lambda () (search-forward "((response") (insert " x")))
+      (should (equal expected (mevedel-session-artifacts-fork-point-spans (current-buffer))))
+      (should (equal expected
+                     (cdr (mevedel-session-artifacts--prompt-derive (current-buffer))))))))
+
 (mevedel-deftest mevedel-session-artifacts--prompt-derive (:quiet t)
   ,test
   (test)
