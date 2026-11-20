@@ -856,6 +856,39 @@ text properties, not equivalent hooks, overlays, markers, mode state, layout
 or redisplay. Its time is a text-mutation floor, not an achievable UI latency
 target or a graphical redisplay measurement.
 
+### Docked composer performance gate
+
+Compare a docked build with an inline build at explicit Git revisions, after
+worktree bootstrap. Run on an otherwise quiet machine:
+
+```bash
+python3 scripts/bench-docked-composer.py --baseline 95ebf09a --candidate HEAD \
+    --grammar-dir /path/to/tree-sitter --rounds 6 --output .scratch/dock-raw.json
+python3 scripts/bench-docked-composer.py --report .scratch/dock-raw.json
+```
+
+The runner archives both revisions and strictly byte-compiles each into its
+own temporary directory with the same installed Eask dependencies. It launches
+the maintained private KWin runner, never the running editor. Emacs with PGTK
+and both Markdown grammars is required. Before and after the measured rounds,
+separate probes on both builds must receive completed Wayland frame callbacks.
+The measured processes do not log Wayland traffic.
+
+Each build runs in a fresh Emacs with a discarded warm-up, and the order
+alternates across paired rounds. The same graphical chat drives typing, capped
+wrapped deletion, paced streaming, idle with and without animation, and
+transcript paging. The layout scenarios check the resulting window tree after
+`C-x 3`, `C-x b` away and back, side-popup open and close, and resuming a saved
+session. Pair repair count and elapsed repair time are separate from dock-fit
+counts and from total command latency.
+
+Command latency includes deferred zero-delay work and Emacs redisplay, not
+display scanout. Stream latency times the production render function, not
+provider transport. CPU is Linux scheduler time for Emacs, private KWin and
+its Xwayland child; redisplay cycles are not presented frames. Compare the
+paired deltas as well as pooled tails. Mixed or noisy results are not proof of
+parity. Use `--smoke --rounds 1` to validate the path, not to issue a verdict.
+
 ### Reloading into a running Emacs
 
 Load compiled code into a live editor, never bare sources. Interpreted
