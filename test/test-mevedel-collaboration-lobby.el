@@ -34,6 +34,8 @@
 ;; inside a lobby frame; load it here so lease cases test ownership only.
 (require 'mevedel-view-stream)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-schedule)
+(require 'mevedel-workspace-schedule-runs)
 
 (defun mevedel-collaboration-lobby-test--workspace (root)
   "Return a workspace struct rooted at ROOT, outside the registry."
@@ -662,8 +664,8 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
                        (should (eq 'ws workspace))
                        (when (eq in-use 'error) (error "Disk gone"))
                        (unless in-use (push path deleted))))
-                    ((symbol-function 'mevedel-collaboration-lobby--frame)
-                     (lambda (_lobby) '(:t "lobby"))))
+                    ((symbol-function 'mevedel-collaboration-lobby--listings)
+                     (lambda (_lobby) '((:t "lobby") :t "lobby"))))
             (let ((delete (lambda (peer id)
                             (setq sent nil)
                             (mevedel-collaboration-lobby--handle-delete
@@ -724,8 +726,8 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
     (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                (lambda (_transport peer frame) (push (cons peer frame) sent) t))
-              ((symbol-function 'mevedel-collaboration-lobby--frame)
-               (lambda (_lobby) '(:t "lobby")))
+              ((symbol-function 'mevedel-collaboration-lobby--listings)
+               (lambda (_lobby) '((:t "lobby") :t "lobby")))
               ((symbol-function 'mevedel-model-candidates)
                (lambda () '(("Codex:gpt-6-luna" . provider))))
               ((symbol-function 'mevedel-collaboration-lobby--handle-open)
@@ -1485,6 +1487,150 @@ The list of stopped transports is bound to `stopped'."
     (funcall (plist-get callbacks :on-state) 'open)
     (should (equal (sort (mapcar (lambda (frame) (plist-get frame :guestId)) controls) #'string<)
                    (sort (cl-loop for i below 64 collect (format "browser-%d" i)) #'string<)))))
+
+(mevedel-deftest mevedel-collaboration-lobby/schedule-tiers
+  (:doc "each admitted tier receives only the workspace schedule fields it may see")
+  (mevedel-collaboration-lobby-test--with-relay
+    (cl-letf (((symbol-function 'mevedel-workspace-schedule-list)
+               (lambda (ws)
+                 (should (eq ws workspace))
+                 '((:id "s-ab1234" :name "Private job" :timing (:kind cron :expression "0 9 * * 1")
+                    :due nil :status paused :last-outcome skipped :prompt "secret prompt"
+                    :policy "private policy" :last-error "private error" :session-id "private session")))))
+      (dolist (tier '(view full owner))
+        (hello 1 "browser-a" tier)
+        (let ((listing (seq-find (lambda (frame) (equal "lobby" (plist-get frame :t))) replies)))
+          (should (equal (plist-get listing :schedules)
+                         (vector (append '(:id "s-ab1234" :timing "0 9 * * 1" :nextRun nil
+                                           :status "paused" :lastOutcome "skipped")
+                                         (unless (eq tier 'view) '(:name "Private job"))))))
+          (setq replies nil))))))
+
+(mevedel-deftest mevedel-collaboration-lobby/inaccessible-schedule-store
+  (:doc "An inaccessible schedule store does not hide sessions or presence from a guest.")
+  (mevedel-collaboration-lobby-test--with-relay
+    (let ((store (file-name-concat (mevedel-workspace-state-dir workspace) "schedules")) warning diagnostic)
+      (make-directory (file-name-directory store) t)
+      (write-region "not a directory" nil store nil 'silent)
+      (let ((cause (error-message-string (should-error (mevedel-workspace-schedule-list workspace)))))
+        (with-temp-buffer
+          (setq-local mevedel--session (mevedel-collaboration-lobby-test--session "live"))
+          (setf (mevedel-session-workspace mevedel--session) workspace)
+          (dolist (request '(view owner refresh))
+            (setq replies nil)
+            (setq warning nil)
+            (mevedel-test--with-captured-messages diagnostic
+              (cl-letf (((symbol-function 'display-warning)
+                         (lambda (_type text &rest _) (setq warning text))))
+                (pcase request
+                  ('view (hello 1 "viewer" 'view))
+                  ('owner (hello 2 "owner" 'owner))
+                  ('refresh (send 1 '(:t "lobby-refresh"))))))
+            (let ((listing (seq-find (lambda (f) (equal "lobby" (plist-get f :t))) replies)))
+              (should (equal "live" (plist-get (aref (plist-get listing :sessions) 0) :id)))
+              (should-not (plist-member listing :schedules)))
+            (unless (eq request 'refresh)
+              (should (seq-find (lambda (f) (equal "presence" (plist-get f :t))) replies)))
+            (if (eq request 'view)
+                (should (string-search cause warning))
+              (should-not warning)
+              (should (string-search cause diagnostic)))))
+        (setq replies nil)
+        (mevedel-test--with-captured-diagnostics warning
+          (send 2 '(:t "schedule-action" :reqId 42 :id "s-ab1234" :action "pause")))
+        (should (equal replies '((:t "schedule-action" :reqId 42 :ok :json-false
+                                    :message "Schedule could not be changed"))))
+        (should (string-search cause warning))))))
+
+(mevedel-deftest mevedel-collaboration-lobby/schedule-action
+  (:doc "only an authenticated owner can change a current schedule in this workspace")
+  (mevedel-collaboration-lobby-test--with-relay
+    (let* ((key (plist-get lobby :key)) (id "s-ab1234") (seq 0) challenges
+           (wire (append (list :key key :peers (make-hash-table)) callbacks))
+           (mevedel-schedule--workspaces nil) (mevedel-schedule--timer nil)
+           (now (mevedel-schedule-now))
+           (job (list :id id :name "Private" :prompt "secret" :preset 'mevedel-implement
+                      :policy '(:model-provider "test:model" :reasoning-effort nil :permission-mode full-auto)
+                      :timing '(:kind interval :seconds 900) :overlap 'skip
+                      :created-at now :due (+ now 900) :status 'active)))
+      (cl-labels
+          ((sealed (peer frame)
+             (let ((text (json-encode (append frame (list :challenge (alist-get peer challenges)
+                                                          :seq (cl-incf seq) :nonce "browser")))))
+               (mevedel-collaboration--transport-receive
+                wire (make-websocket-frame :opcode 'binary :completep t
+                      :payload (mevedel-collaboration--envelope-pack
+                                peer (mevedel-collaboration--seal key text))))))
+           (action (peer target verb &optional req)
+             (setq replies nil recipients nil)
+             (sealed peer (list :t "schedule-action" :reqId (or req 32) :id target :action verb
+                                :workspace "/other" :path "../other" :owner t))
+             (car replies))
+           (rows (status &optional outcome)
+             (let (seen)
+               (cl-loop for peer in recipients for frame in replies when (equal "lobby" (plist-get frame :t))
+                        do (let ((row (aref (plist-get frame :schedules) 0)))
+                             (should (equal id (plist-get row :id)))
+                             (should (equal outcome (plist-get row :lastOutcome)))
+                             (should (equal status (plist-get row :status))) (push peer seen)))
+               (should (equal '(1 2 3) (sort seen #'<))))))
+        (unwind-protect
+            (progn
+              (dolist (peer '(1 2 3))
+                (mevedel-collaboration--transport-receive
+                 wire (make-websocket-frame :opcode 'text :completep t :payload
+                       (json-encode (list :t "peer-joined" :peer peer))))
+                (push (cons peer (plist-get (car replies) :challenge)) challenges)
+                (should-not (action peer id "pause"))
+                (sealed peer (list :t "hello" :proto mevedel-collaboration--protocol-version
+                                   :writeToken (when (> peer 1) (mevedel-collaboration--base64url
+                                                                 (plist-get lobby :write-token)))
+                                   :ownerToken (when (= peer 3) (mevedel-collaboration--base64url
+                                                                 (plist-get lobby :owner-token))))))
+              (setq recipients nil replies nil)
+              (mevedel-workspace-schedule-create workspace job)
+              (rows "active")
+              (dolist (peer '(1 2))
+                (should (eq :json-false (plist-get (action peer id "pause") :ok))))
+              (should-not (action 3 id "pause" -1))
+              (dolist (invalid '(("s-ab1234" "delete") ("../s-ab1234" "pause") ("s-999999" "pause")))
+                (should (eq :json-false (plist-get (action 3 (car invalid) (cadr invalid)) :ok))))
+              (should (equal job (mevedel-workspace-schedule-get workspace id)))
+              (pcase-dolist (`(,verb ,status) '(("pause" paused) ("resume" active)))
+                (should (equal '(:t "schedule-action" :reqId 32 :ok t) (action 3 id verb)))
+                (should (eq status (plist-get (mevedel-workspace-schedule-get workspace id) :status)))
+                (rows (symbol-name status)))
+              (setq recipients nil replies nil)
+              (mevedel-workspace-schedule-update
+               workspace id (lambda (entry) (setf (plist-get entry :status) 'finished)
+                              (plist-put entry :last-outcome 'done)))
+              (rows "finished" "done")
+              (mevedel-test--with-captured-diagnostics nil
+                (should (equal "Schedule could not be changed" (plist-get (action 3 id "resume") :message)))))
+          (when (timerp mevedel-schedule--timer) (cancel-timer mevedel-schedule--timer)))))))
+
+(mevedel-deftest mevedel-collaboration-lobby/schedule-changes
+  (:doc "a store change refreshes all admitted peers once, and a viewer refresh stays local")
+  (mevedel-collaboration-lobby-test--with-relay
+    (let ((reads 0) jobs)
+      (cl-letf (((symbol-function 'mevedel-workspace-schedule-list)
+                 (lambda (ws) (should (eq workspace ws)) (cl-incf reads) jobs)))
+        (hello 1 "browser-a" 'view)
+        (hello 2 "browser-b" 'owner)
+        (setq reads 0 recipients nil replies nil
+              jobs '((:id "s-ab1234" :name "Private" :timing (:kind interval :seconds 900)
+                      :status active :due 3600 :last-outcome private-error)))
+        (run-hook-with-args 'mevedel-workspace-schedule-changed-functions workspace)
+        (should (= 1 reads))
+        (should (equal '(1 2) (sort (copy-sequence recipients) #'<)))
+        (cl-loop for frame in replies for peer in recipients
+                 for row = (aref (plist-get frame :schedules) 0) do
+                 (should (equal (and (= peer 2) "Private") (plist-get row :name)))
+                 (should-not (plist-member row :lastOutcome))
+                 (should (= 3600 (float-time (date-to-time (plist-get row :nextRun))))))
+        (setq recipients nil)
+        (send 1 '(:t "lobby-refresh"))
+        (should (equal '(1) recipients))))))
 
 (provide 'test-mevedel-collaboration-lobby)
 ;;; test-mevedel-collaboration-lobby.el ends here

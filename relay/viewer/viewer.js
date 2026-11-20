@@ -145,6 +145,7 @@
     history.connection(className === 'connected');
     if (className !== 'connected') {
       sessions.disconnected();
+      lobby.disconnected();
       state.connected = false;
       state.lobbyNotifications = false;
       notifications.render();
@@ -1491,6 +1492,8 @@
       lobby.deleted(frame);
     } else if (frame.t === 'rename-session') {
       lobby.renamed(frame);
+    } else if (frame.t === 'schedule-action') {
+      lobby.scheduleResult(frame);
     } else if (frame.t === 'files') {
       files.listed(frame);
     } else if (frame.t === 'file') {

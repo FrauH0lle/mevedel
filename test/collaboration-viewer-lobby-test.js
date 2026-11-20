@@ -13,7 +13,7 @@ const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-title', 'lobby-new', 'lobby-refresh', 'lobby-tabs',
              'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
              'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload',
-             'lobby-store-create'];
+             'lobby-store-create', 'lobby-schedules', 'lobby-schedule-list', 'lobby-schedule-empty'];
 
 function build({writable = true, owner = false, wanted = null} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -204,6 +204,26 @@ function openButton(nodes, index) {
   const full = build();
   full.lobby.show(listing);
   assert.ok(!full.nodes['lobby-list'].children[0].children.some(node => textOf(node) === 'Rename'));
+}
+
+// A pushed listing may change both lists while session actions await replies.
+{
+  const {lobby, nodes, followed} = build({owner: true});
+  const buttons = () => nodes['lobby-list'].children.find(row => row.dataset.id === 'a').children.slice(1);
+  const jobs = [{id: 's-123456', status: 'active', name: 'Build'}];
+  lobby.show(listing);
+  buttons().forEach(button => button.dispatch('click')); // Open, Rename, Delete
+  lobby.show({...listing, sessions: [...listing.sessions].reverse(), schedules: jobs});
+  assert.match(textOf(nodes['lobby-schedule-list']), /Build/);
+  assert.equal(textOf(buttons()[0]), 'Opening…');
+  assert.deepEqual(buttons().map(b => !!b.disabled), [true, true, true]);
+  lobby.renamed({reqId: 2, ok: false});
+  assert.deepEqual(buttons().map(b => !!b.disabled), [true, false, true]);
+  lobby.disconnected();
+  lobby.show({...listing, schedules: []});
+  assert.deepEqual(buttons().map(b => !!b.disabled), [false, false, false]);
+  lobby.opened({reqId: 1, ok: true, link: 'stale'});
+  assert.deepEqual(followed, []);
 }
 
 // A session created from the lobby is joined; one created from a room is

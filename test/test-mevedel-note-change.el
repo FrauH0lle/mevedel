@@ -261,7 +261,7 @@
       (should (equal "before\nnew\nafter\n" (mevedel-test--read-file file)))
       (should-not (eq 'closed (overlay-get note 'mevedel-note-state)))
       (should-not (eq 'ready (mevedel-notes-attention-state note)))
-      (undo-only 1)
+      (let ((last-command nil)) (undo-only 1))
       (should (equal "before\nold\nafter\n" (buffer-string)))))
   :doc "editing noted code immediately marks the waiting change stale and refuses apply"
   (mevedel-note-change-test--with-note

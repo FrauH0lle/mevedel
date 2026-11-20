@@ -32,6 +32,9 @@
     const list = document.getElementById('lobby-list');
     const empty = document.getElementById('lobby-empty');
     const omitted = document.getElementById('lobby-omitted');
+    const schedules = document.getElementById('lobby-schedules');
+    const scheduleList = document.getElementById('lobby-schedule-list');
+    const scheduleEmpty = document.getElementById('lobby-schedule-empty');
     const title = document.getElementById('lobby-title');
     const newButton = document.getElementById('lobby-new');
     const uploadButton = document.getElementById('files-upload');
@@ -44,6 +47,7 @@
     const opening = new Map();
     const deleting = new Map();
     const renaming = new Map();
+    const scheduleActions = new Map();
     // How many browsers are in each live session, by session id.
     let here = new Map();
     let shown = [];
@@ -88,7 +92,7 @@
 
     function open(row, button) {
       const reqId = ++requestSequence;
-      opening.set(reqId, button);
+      opening.set(reqId, {id: row.id, button});
       button.disabled = true;
       button.textContent = 'Opening…';
       send({t: 'open-session', reqId, id: row.id});
@@ -98,9 +102,20 @@
       const name = row.name || 'Untitled';
       if (!confirm(`Delete ${name}? Its saved conversation is gone for good.`)) return;
       const reqId = ++requestSequence;
-      deleting.set(reqId, button);
+      deleting.set(reqId, {id: row.id, button});
       button.disabled = true;
       send({t: 'delete-session', reqId, id: row.id});
+    }
+
+    // Listings and presence updates replace rows before their replies can arrive.
+    function restorePending(requests, id, button) {
+      for (const request of requests.values()) {
+        if (request.id !== id) continue;
+        button.disabled = true;
+        button.textContent = request.button.textContent;
+        request.button = button;
+        break;
+      }
     }
 
     function renderRow(row) {
@@ -119,6 +134,7 @@
         button.type = 'button';
         button.setAttribute('aria-label', `Open ${row.name || 'session'}`);
         button.addEventListener('click', () => open(row, button));
+        restorePending(opening, row.id, button);
         item.append(button);
       }
       if (state.owner) {
@@ -129,18 +145,78 @@
           const name = window.prompt('Session name', row.name || '');
           if (!name?.trim()) return;
           const reqId = ++requestSequence;
-          renaming.set(reqId, rename);
+          renaming.set(reqId, {id: row.id, button: rename});
           rename.disabled = true;
           send({t: 'rename-session', reqId, id: row.id, name: name.trim()});
         });
         item.append(rename);
+        restorePending(renaming, row.id, rename);
         const button = el('button', 'btn quiet danger', 'Delete');
         button.type = 'button';
         button.setAttribute('aria-label', `Delete ${row.name || 'session'}`);
         button.addEventListener('click', () => remove(row, button));
+        restorePending(deleting, row.id, button);
         item.append(button);
       }
       return item;
+    }
+
+    function scheduleRow(row) {
+      const item = el('li', 'lobby-row');
+      const main = el('div', 'lobby-main');
+      const name = row.name || row.id;
+      main.append(el('span', 'lobby-name', name));
+      main.append(el('span', 'lobby-meta', [row.timing, row.status].filter(Boolean).join(' · ')));
+      if (row.nextRun) main.append(el('span', 'lobby-meta', `Next: ${row.nextRun.replace('T', ' ')}`));
+      if (row.lastOutcome) main.append(el('span', 'lobby-meta', `Last run: ${row.lastOutcome}`));
+      item.append(main);
+      if (state.owner && (row.status === 'active' || row.status === 'paused')) {
+        const action = row.status === 'active' ? 'pause' : 'resume';
+        const label = action === 'pause' ? 'Pause' : 'Resume';
+        const button = el('button', 'btn quiet', label);
+        button.type = 'button';
+        button.dataset.schedule = row.id;
+        button.setAttribute('aria-label', `${label} ${name}`);
+        button.setAttribute('aria-disabled', String(scheduleActions.has(row.id)));
+        button.addEventListener('click', async () => {
+          if (scheduleActions.has(row.id)) return;
+          const reqId = ++requestSequence;
+          scheduleActions.set(row.id, reqId);
+          button.setAttribute('aria-disabled', 'true');
+          if (!await send({t: 'schedule-action', action, id: row.id, reqId})) {
+            scheduleResult({reqId, ok: false, message: 'Schedule action not sent. Reconnect and try again.'});
+          }
+        });
+        item.append(button);
+      }
+      return item;
+    }
+
+    function scheduleResult(frame) {
+      for (const [id, reqId] of scheduleActions) {
+        if (reqId !== frame.reqId) continue;
+        scheduleActions.delete(id);
+        scheduleList.querySelector(`[data-schedule="${CSS.escape(id)}"]`)?.setAttribute('aria-disabled', 'false');
+        if (frame.ok !== true) notice(frame.message || 'The schedule could not be changed.');
+        break;
+      }
+    }
+
+    // A pushed listing must not drop keyboard focus or scroll a phone to the new button.
+    function showRows(target, rows, render) {
+      const focused = document.activeElement;
+      const row = focused?.parentElement;
+      const retain = row?.parentElement === target;
+      const index = retain ? Array.from(row.children).indexOf(focused) : -1;
+      target.replaceChildren(...rows.map(data => {
+        const item = render(data);
+        item.dataset.id = data.id;
+        return item;
+      }));
+      if (retain) {
+        const replacement = Array.from(target.children).find(item => item.dataset.id === row.dataset.id);
+        replacement?.children[index]?.focus({preventScroll: true});
+      }
     }
 
     function show(frame) {
@@ -161,15 +237,19 @@
       retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];
       shown = rows;
-      list.replaceChildren(...rows.map(renderRow));
+      showRows(list, rows, renderRow);
       empty.hidden = rows.length > 0;
       const more = typeof frame.omitted === 'number' ? frame.omitted : 0;
       omitted.hidden = more === 0;
       omitted.textContent = more ? `${more} older sessions not shown.` : '';
+      schedules.hidden = !Array.isArray(frame.schedules);
+      const jobs = Array.isArray(frame.schedules) ? frame.schedules : [];
+      showRows(scheduleList, jobs, scheduleRow);
+      scheduleEmpty.hidden = jobs.length > 0;
     }
 
     function opened(frame) {
-      const button = opening.get(frame.reqId);
+      const button = opening.get(frame.reqId)?.button;
       if (!button) return;
       opening.delete(frame.reqId);
       if (frame.ok === true && typeof frame.link === 'string') {
@@ -184,7 +264,7 @@
 
     // A deletion's success arrives as a fresh listing for every guest.
     function deleted(frame) {
-      const button = deleting.get(frame.reqId);
+      const button = deleting.get(frame.reqId)?.button;
       if (!button) return;
       deleting.delete(frame.reqId);
       if (frame.ok === true) return;
@@ -194,7 +274,7 @@
     }
 
     function renamed(frame) {
-      const button = renaming.get(frame.reqId);
+      const button = renaming.get(frame.reqId)?.button;
       if (!button) return;
       renaming.delete(frame.reqId);
       button.disabled = false;
@@ -226,10 +306,13 @@
       if (!Array.isArray(entries)) return;
       here = new Map(entries.filter(entry => entry && typeof entry.id === 'string')
         .map(entry => [entry.id, entry.n]));
-      if (active) list.replaceChildren(...shown.map(renderRow));
+      if (active) showRows(list, shown, renderRow);
     }
 
-    return Object.freeze({show, opened, deleted, renamed, created, counts, select,
+    return Object.freeze({show, opened, deleted, renamed, created, counts, select, scheduleResult,
+                          disconnected: () => {
+                            for (const requests of [opening, deleting, renaming, scheduleActions]) requests.clear();
+                          },
                           tab: () => tab, active: () => active});
   }
 

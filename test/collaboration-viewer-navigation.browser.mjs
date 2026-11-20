@@ -209,6 +209,7 @@ async function open(browser, {lobbyRunning = true, records = [], sharedItem = nu
       return outbound;
     };
     page.push[id] = reply;
+    page.dropConnection = () => socket.close({code: 1001});
     // Bind the connection as the host does; unbound frames are dropped.
     let last = 0;
     reply({t: 'challenge', challenge: 'c'});
@@ -252,6 +253,91 @@ const gestures = [
 function tierLink(room, length) {
   return `http://localhost:8765/#${room.id}.${base64url(room.secret.slice(0, length))}`;
 }
+
+test('standing schedules show only public metadata at phone width on every lobby tier', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      const page = await open(browser, {viewport: {width: 375, height: 667}, touch: true});
+      await page.goto(tierLink(lobbyRoom, length));
+      await page.locator('#lobby-list li').waitFor();
+      await page.push[lobbyRoom.id]({t: 'lobby', sessions: [], schedules: [
+        {id: 'ci', name: 'Check CI', timing: 'weekdays at 09:00', nextRun: '2026-11-23T09:00:00+01:00',
+         status: 'active', lastOutcome: 'done', prompt: 'PRIVATE JOB'},
+        {id: 'unnamed', timing: 'every hour', nextRun: null, status: 'paused'}]});
+      const list = page.getByRole('list', {name: 'Schedules'});
+      await list.waitFor({timeout: 3000});
+      const text = await list.innerText();
+      for (const field of ['Check CI', 'weekdays at 09:00', '2026-11-23', '09:00:00+01:00',
+                           'active', 'done', 'unnamed', 'every hour', 'paused']) assert.ok(text.includes(field), field);
+      assert.doesNotMatch(text, /PRIVATE JOB|null/);
+      if (length < 64) assert.equal(await list.getByRole('button').count(), 0);
+      assert.ok(await list.evaluate(node => node.scrollWidth <= node.clientWidth));
+      await page.context().close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('owner schedule controls follow host state and send only pause or resume', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await open(browser, {viewport: {width: 375, height: 667}});
+    await page.goto(lobbyRoom.link);
+    await page.locator('#lobby-list li').waitFor();
+    const push = page.push[lobbyRoom.id];
+    const listing = status => ({t: 'lobby', sessions: [], schedules: [
+      {id: 'ci', name: 'Check CI', timing: 'daily', status},
+      {id: 'needs-approval', timing: 'daily', status: 'pending-approval'}]});
+    await push(listing('active'));
+    const list = page.getByRole('list', {name: 'Schedules'});
+    for (const [action, ok] of [['pause', false], ['pause', true], ['resume', true]]) {
+      const button = list.getByRole('button', {name: `${action} Check CI`, exact: false});
+      await button.waitFor({timeout: 3000});
+      assert.equal(await list.getByRole('button').count(), 1);
+      const request = page.waitForEvent('host-frame', {predicate: f => f.t === 'schedule-action'});
+      await button.click();
+      const frame = await request;
+      assert.ok(Number.isInteger(frame.reqId));
+      assert.deepEqual(frame, {t: 'schedule-action', reqId: frame.reqId, id: 'ci', action});
+      await push({t: 'schedule-action', reqId: frame.reqId, ok, message: ok ? undefined : 'Pause refused'});
+      if (!ok) await page.getByText('Pause refused', {exact: true}).waitFor({timeout: 3000});
+      else await push(listing(action === 'pause' ? 'paused' : 'active'));
+    }
+    const pause = list.getByRole('button', {name: 'Pause Check CI'});
+    const waiting = page.waitForEvent('host-frame', {predicate: f => f.t === 'schedule-action'});
+    await pause.click();
+    await waiting;
+    const rejoin = page.waitForEvent('host-frame', {predicate: f => f.t === 'hello', timeout: 10000});
+    page.dropConnection();
+    await rejoin;
+    await page.push[lobbyRoom.id](listing('active'));
+    await pause.waitFor();
+    assert.ok(await pause.isEnabled(), 'a missing reply must not lock the control on reconnect');
+  } finally { await browser.close(); }
+});
+
+test('a schedule status push keeps focus and scroll in either lobby list', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await open(browser, {viewport: {width: 375, height: 667}});
+    await page.goto(lobbyRoom.link);
+    await page.locator('#lobby-list li').waitFor();
+    const sessions = Array.from({length: 25}, (_, n) => ({id: `s${n}`, name: `Room ${n}`}));
+    const push = status => page.push[lobbyRoom.id]({t: 'lobby', sessions, schedules: [
+      {id: 'ci', timing: 'daily', status}]});
+    await push('active');
+    for (const [before, after, status] of [['Pause ci', 'Resume ci', 'paused'], ['Open Room 15', 'Open Room 15', 'active']]) {
+      const button = page.getByRole('button', {name: before, exact: true});
+      await button.focus();
+      const y = await page.evaluate(() => scrollY);
+      assert.ok(y > 0, 'focus is below the fold');
+      await push(status);
+      await page.getByRole('button', {name: status === 'paused' ? 'Resume ci' : 'Pause ci', exact: true}).waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), after);
+      assert.equal(await page.evaluate(() => scrollY), y);
+    }
+  } finally { await browser.close(); }
+});
 
 async function sourceState(page) {
   return page.evaluate(() => {

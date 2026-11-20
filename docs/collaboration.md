@@ -763,6 +763,17 @@ lobby's workspace and root; a non-owner request is refused, because a lobby
 has no session in which to ask the host. For the same reason only an owner's
 listing carries the models it may create a session on.
 
+Every lobby link lists this workspace's schedules. A view link identifies each
+schedule by its generated ID; full and owner links also see the name chosen in
+Emacs. All tiers see the timing, next run in the host's local time (if any),
+status, and last outcome when recorded: done, skipped, expired, or failed.
+The listing does not include the schedule's prompt, execution policy, error
+details, or links to its run sessions.
+
+Only an owner can pause or resume a schedule from the lobby. These controls
+change the same schedule as the controls in Emacs; they cannot restart a
+finished or expired schedule. Connected guests see changes without refreshing.
+
 Deleting removes a saved session's directory for good, under the safety rules
 of expired-session cleanup without its age cap. A session live in this Emacs
 is closed first, since its buffer would save it back; its room ends, so guests

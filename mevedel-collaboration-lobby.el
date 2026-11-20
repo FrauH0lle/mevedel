@@ -26,9 +26,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
-
+(require 'cl-lib)
 (require 'mevedel-collaboration)
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
@@ -106,6 +104,12 @@
 (declare-function mevedel-collaboration-files-handle-remove
                   "mevedel-collaboration-files" (owner peer frame root))
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-format-time "mevedel-schedule" (seconds))
+(declare-function mevedel-schedule-timing-label "mevedel-schedule" (timing))
+(autoload 'mevedel-schedule-format-time "mevedel-schedule")
+(autoload 'mevedel-schedule-timing-label "mevedel-schedule")
+
 ;; `mevedel-session-naming'
 (declare-function mevedel-session-naming-rename "mevedel-session-naming" (session buffer name &optional current-p))
 (defvar mevedel-session-naming-renamed-hook)
@@ -150,6 +154,16 @@
 (declare-function mevedel-workspace-name "mevedel-workspace" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-workspace" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
+
+;; `mevedel-workspace-schedule'
+(declare-function mevedel-workspace-schedule-list "mevedel-workspace-schedule" (workspace))
+(defvar mevedel-workspace-schedule-changed-functions)
+(autoload 'mevedel-workspace-schedule-list "mevedel-workspace-schedule")
+
+;; `mevedel-workspace-schedule-runs'
+(declare-function mevedel-workspace-schedule-set-paused "mevedel-workspace-schedule-runs"
+                  (workspace id paused))
+(autoload 'mevedel-workspace-schedule-set-paused "mevedel-workspace-schedule-runs")
 
 
 ;;
@@ -445,14 +459,69 @@ own order, marked live or shared when they are open here.  A row's
           :omitted (max 0 (- (length rows)
                              mevedel-collaboration-lobby--max-sessions)))))
 
-(defun mevedel-collaboration-lobby--send-listing (lobby peer)
-  "Send LOBBY's session listing to PEER.
+(defun mevedel-collaboration-lobby--listings (lobby)
+  "Return LOBBY's (VIEW . WRITABLE) listings from one store snapshot."
+  (let ((frame (mevedel-collaboration-lobby--frame lobby)) view writable)
+    (condition-case err
+        (progn
+          (dolist (job (mevedel-workspace-schedule-list (plist-get lobby :workspace)))
+            (let* ((outcome (plist-get job :last-outcome))
+                   (due (plist-get job :due))
+                   (row (append (list :id (plist-get job :id)
+                                      :timing (mevedel-schedule-timing-label (plist-get job :timing))
+                                      :nextRun (and due (mevedel-schedule-format-time due))
+                                      :status (symbol-name (plist-get job :status)))
+                                (when (memq outcome '(done skipped expired failed))
+                                  (list :lastOutcome (symbol-name outcome))))))
+              (push row view)
+              (push (append row (list :name (plist-get job :name))) writable)))
+          (cons (append frame (list :schedules (vconcat (nreverse view))))
+                (append frame (list :schedules (vconcat (nreverse writable))))))
+      (error
+       (mevedel--warn-once (plist-get lobby :directory) 'lobby-schedule-listing
+                           "Could not list lobby schedules: %s" (error-message-string err))
+       (cons frame frame)))))
+
+(defun mevedel-collaboration-lobby--schedule-action (lobby peer frame)
+  "Apply FRAME's pause or resume request for an admitted owner PEER of LOBBY."
+  (when-let* ((guest (mevedel-collaboration--guest lobby peer))
+              (req (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p req)))
+    (let* ((ws (plist-get lobby :workspace))
+           (id (plist-get frame :id))
+           (action (plist-get frame :action))
+           (case-fold-search nil)
+           (failure
+            (cond
+             ((not (plist-get guest :owner)) "Only an owner link can change schedules")
+             ((not (and (member action '("pause" "resume")) (stringp id) (= 8 (length id))
+                        (string-match-p "\\`s-[0-9a-f]\\{6\\}\\'" id))) "Invalid schedule action")
+             (t
+              (condition-case err
+                  (if (seq-find (lambda (job) (equal id (plist-get job :id)))
+                                (mevedel-workspace-schedule-list ws))
+                      (progn (mevedel-workspace-schedule-set-paused ws id (equal action "pause")) nil)
+                    "No such schedule")
+                (error
+                 (mevedel-diagnostic-warning
+                  (plist-get lobby :directory) 'mevedel
+                  (format "Could not %s schedule %s: %s" action id (error-message-string err)))
+                 "Schedule could not be changed"))))))
+      (mevedel-collaboration--transport-send
+       (plist-get lobby :transport) peer
+       (append (list :t "schedule-action" :reqId req)
+               (if failure (list :ok :json-false :message failure) (list :ok t)))))))
+
+(defun mevedel-collaboration-lobby--send-listing (lobby peer &optional listings)
+  "Send LOBBY's listing to PEER, reusing LISTINGS when broadcasting.
 An owner also receives the models it may create a session on."
-  (mevedel-collaboration--transport-send
-   (plist-get lobby :transport) peer
-   (append (mevedel-collaboration-lobby--frame lobby)
-           (when (plist-get (mevedel-collaboration--guest lobby peer) :owner)
-             (list :models (mevedel-collaboration--model-labels))))))
+  (let ((guest (mevedel-collaboration--guest lobby peer))
+        (listings (or listings (mevedel-collaboration-lobby--listings lobby))))
+    (mevedel-collaboration--transport-send
+     (plist-get lobby :transport) peer
+     (append (if (plist-get guest :writable) (cdr listings) (car listings))
+             (when (plist-get guest :owner)
+               (list :models (mevedel-collaboration--model-labels)))))))
 
 
 ;;
@@ -524,23 +593,35 @@ already; PEER receives the room at its own tier."
 ;;
 ;;; Renaming a session
 
+(defun mevedel-collaboration-lobby--broadcast-listing (lobby)
+  "Refresh the admitted guests of LOBBY from a single snapshot."
+  (let ((guests (plist-get lobby :guests))
+        (report (lambda (err)
+                  (mevedel-diagnostic-message
+                   (mevedel-diagnostic-scope (plist-get lobby :workspace))
+                   "Lobby refresh failed: %s" (error-message-string err)))))
+    (when (> (hash-table-count guests) 0)
+      (condition-case err
+          (let ((listings (mevedel-collaboration-lobby--listings lobby)))
+            (maphash (lambda (peer _guest)
+                       (condition-case err
+                           (mevedel-collaboration-lobby--send-listing lobby peer listings)
+                         (error (funcall report err)))) guests))
+        (error (funcall report err))))))
+
+(defun mevedel-collaboration-lobby--workspace-changed (workspace)
+  "Refresh the lobby for WORKSPACE after a committed change."
+  (when-let* ((workspace) (lobby (mevedel-collaboration-lobby--find workspace)))
+    (mevedel-collaboration-lobby--broadcast-listing lobby)))
+
 (defun mevedel-collaboration-lobby--session-renamed (session)
-  "Refresh running lobbies of SESSION's workspace after its name commits."
-  (maphash
-   (lambda (_root lobby)
-     (when (equal (plist-get lobby :workspace) (mevedel-session-workspace session))
-       (maphash (lambda (peer _guest)
-                  (condition-case err
-                      (mevedel-collaboration-lobby--send-listing lobby peer)
-                    (error (mevedel-diagnostic-message
-                            (mevedel-diagnostic-scope session)
-                            "Lobby rename refresh failed: %s"
-                                    (error-message-string err)))))
-                (plist-get lobby :guests))))
-   mevedel-collaboration-lobby--lobbies))
+  "Refresh SESSION's lobby after its name commits."
+  (mevedel-collaboration-lobby--workspace-changed (mevedel-session-workspace session)))
 
 (add-hook 'mevedel-session-naming-renamed-hook
           #'mevedel-collaboration-lobby--session-renamed)
+(add-hook 'mevedel-workspace-schedule-changed-functions
+          #'mevedel-collaboration-lobby--workspace-changed)
 
 (defun mevedel-collaboration-lobby--handle-rename (lobby peer frame)
   "Rename the listed session FRAME names for owner PEER in LOBBY."
@@ -617,9 +698,7 @@ Every guest of LOBBY receives the new listing after a deletion."
                (if failure (list :ok :json-false :message failure)
                  (list :ok t))))
       (unless failure
-        (maphash (lambda (other _guest)
-                   (mevedel-collaboration-lobby--send-listing lobby other))
-                 (plist-get lobby :guests))))))
+        (mevedel-collaboration-lobby--broadcast-listing lobby)))))
 
 
 ;;
@@ -661,6 +740,8 @@ returns; for the lobby's own types the value is unspecified."
      (mevedel-collaboration-lobby--handle-open lobby peer frame))
     ("delete-session"
      (mevedel-collaboration-lobby--handle-delete lobby peer frame))
+    ("schedule-action"
+     (mevedel-collaboration-lobby--schedule-action lobby peer frame))
     ("rename-session"
      (mevedel-collaboration-lobby--handle-rename lobby peer frame))
     ("files"
