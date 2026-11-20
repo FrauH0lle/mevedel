@@ -206,10 +206,13 @@ to the decision bearing that ID.
   Emacs that keeps state between calls.
 
 - [ADR 0134: Float the composer as a second window on the view buffer](0134-float-the-composer.md)
-  shows the composer in a child frame over a view window scrolled away from
-  it, and amends ADR 0126's scroll-away return for the selected window.
+  records the former child-frame design; ADR 0136 supersedes it.
 
 - [ADR 0135: Wake sessions through schedules](0135-wake-sessions-through-schedules.md)
   lets the root conversation wake itself later through wake-ups stored with
   the session and delivered as background mailbox events, and runs approved
   workspace schedules in new sessions, all armed by one timer.
+
+- [ADR 0136: Dock the composer in its own buffer](0136-dock-the-composer-in-its-own-buffer.md)
+  pairs the transcript and draft windows, repairs the pair after layout changes,
+  and records the accepted performance tradeoffs.

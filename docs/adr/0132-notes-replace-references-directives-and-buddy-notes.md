@@ -44,11 +44,11 @@ its subtree are excluded. A batch sends covered descendants only once. Preview
 shows the generated text before the send; the actual provider input is retained
 separately for inspection. Reopening resumes without adding newly nested notes.
 
-The ordinary session view and composer appear in an anchored child frame, using
-the presentation mechanism of [ADR 0106](0106-directive-frame-is-a-child-frame.md),
-or a side window when child frames are unavailable. There is no per-note
-Discuss, Implement or Plan action: session permissions and Plan mode govern
-tools. Ask requires approval for mutations; it is not a read-only mode. Plan
+The [docked transcript and composer](0136-dock-the-composer-in-its-own-buffer.md)
+appear in the anchored child frame from [ADR 0106](0106-directive-frame-is-a-child-frame.md),
+or in an ordinary right-hand split when child frames are unavailable. There is
+no per-note Discuss, Implement or Plan action: session permissions and Plan
+mode govern tools. Ask requires approval for mutations; it is not a read-only mode. Plan
 mode restricts project writes through the normal tool boundary, while allowing
 session-owned plan files and new review notes. The base preset defaults to
 `mevedel-implement` and remains user-selectable, as do model, effort and permission

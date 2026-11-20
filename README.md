@@ -681,10 +681,17 @@ a local file into the view
 inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
 the next send.
 
-The **composer** opens in a separate Emacs window below the transcript, also
-in terminal Emacs. Use `C-x o` to move between them: scrolling the transcript
-does not scroll the draft. `C-c RET` submits from the composer. The mode and
-pending-action rail is still at the end of the transcript.
+The **composer** is a separate draft buffer docked below the transcript, in
+both graphical and terminal Emacs. Press `C-c C-SPC` to switch between them,
+or use normal `C-x o` window cycling. From the composer, `C-M-v` and `C-M-S-v`
+page the transcript without leaving the draft. The transcript follows output
+only while you are at its end; scroll down or click **↓ Back to bottom** to
+resume following.
+
+The mode, activity and pending-action rail sits above the draft. Press `C-c C-j`
+to visit a pending card in the transcript, or `C-c RET` to send the draft.
+`C-x 1` keeps the pair, and regular popups open outside it. See the
+[view guide](docs/view.md#docked-composer) for the rest of the window commands.
 
 | Command                              | Command Description                                      |
 |--------------------------------------|----------------------------------------------------------|

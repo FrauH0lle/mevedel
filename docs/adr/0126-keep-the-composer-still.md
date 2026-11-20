@@ -4,11 +4,12 @@ Status: accepted
 
 ## Current decision
 
-The transcript and composer are separate buffers. Each transcript window
-follows streamed output if it showed the buffer end before the write; the
-composer's focus or caret does not decide. Scrolling away stops following in
-that window. Scrolling back or using Back to bottom resumes it without a
-sticky follow flag. An output write leaves the viewport alone if the new end
+The transcript and [docked composer](0136-dock-the-composer-in-its-own-buffer.md)
+are separate buffers. Each transcript window follows streamed output if it
+showed the buffer end before the write; the composer's focus or caret does not
+decide. Scrolling away stops following in that window. Scrolling back or using
+Back to bottom resumes it without a sticky follow flag. An output write leaves
+the viewport alone if the new end
 still fits. If not, it brings the last page into view without selecting the
 transcript or disturbing the dock's draft.
 

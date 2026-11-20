@@ -4,6 +4,7 @@ The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
 submission hooks, root dispatch, and send/fork coordination.
+`mevedel-view-pair.el` owns the paired windows, their command rules, and repair.
 `mevedel-view-input-files.el` owns local file drops and clipboard-image input.
 `mevedel-pending-inputs.el` owns steering, queued follow-ups, automatic
 delivery, and the Pending Inputs cockpit.
@@ -50,24 +51,32 @@ authoritative transcript.
   directive turns), tool results, hidden render-data blocks, and persisted
   gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
-  compact Markdown-rendered turns, and the status and interaction zones at its end.
+  compact Markdown-rendered turns, and the status and interaction zones at its
+  end. It does not hold an editable draft.
 - **Composer buffer**: `mevedel-composer-mode`. Its first line is the read-only
   rail (mode badge, request activity, and pending actions). Below it are the input
   prefix and one editable draft per view, with its own caret, undo, history,
-  and completion. Each window showing an editable view gets a composer
+  and completion. Each eligible window showing an editable view gets a composer
   directly below it; splits share one draft, not one caret. Submitting it
   routes through the owning view to the data buffer. Closing the view kills
   its composer. Agent transcripts and historical segments have no dock.
+- **Agent transcript view**: rendered read-only projection of a sub-agent
+  transcript. Resident retained agents use their live conversation buffer
+  whether running or idle; cold and historical agents use the saved transcript
+  file.
+
+### Docked composer
 
 | Key in the transcript or composer | Effect |
 | --- | --- |
-| `C-x 1` | Keeps both windows in the pair. |
+| `C-x 1` | Keeps both windows in the pair while closing other windows. |
 | `C-x 0` | Closes the pair, subject to Emacs's last-window rule. |
 | `C-x 2` / `C-x 3` | Splits outside the pair; the new transcript gets its own dock. |
 | `C-x b` | Changes the transcript's buffer; the draft stays with its view. |
 | `C-x o` | Cycles through windows normally, including the composer. |
 | `C-c C-SPC` | Moves focus between the transcript and its composer. |
 | `C-M-v` / `C-M-S-v` in the composer | Pages the paired transcript forward or backward without leaving the draft. |
+| `C-c C-j` in the composer | Visits the next interaction card. If you are still visiting it when it settles, focus returns to the saved draft position. |
 
 The composer grows from one draft line plus its rail and chrome up to a third
 of the pair. At the cap it scrolls with the caret and shows `↑ N more` when
@@ -78,11 +87,11 @@ line is below the composer, not between the two windows.
 Popups normally open outside the pair. A native split or a switch back can
 install its dock before redisplay. Deferred repair still removes orphan
 docks and restores missing ones in other layouts without selecting the dock.
-A transcript remains usable when its window is too short for a dock.
-- **Agent transcript view**: rendered read-only projection of a sub-agent
-  transcript. Resident retained agents use their live conversation buffer
-  whether running or idle; cold and historical agents use the saved transcript
-  file.
+A transcript remains usable when its window is too short to fit a dock or
+when a display rule puts it in a native side window. See
+[ADR 0136](adr/0136-dock-the-composer-in-its-own-buffer.md) for the design.
+
+### Transcript inspection
 
 Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
 `*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
@@ -131,14 +140,6 @@ the observation-only contract. Close an existing inspector before changing its
 placement. The header's **← Parent** action and `q` close inspection and return
 to the original parent view, including when inspecting another agent from an
 already-open inspector. The parent's draft, point and scroll position survive.
-A parent window that showed its composer gets back the composer's screen row
-from before the inspection opened: the side window narrowed it, and closing
-the side window widens it again, so its text rewraps into fewer rows. Without
-this, the composer of a 25-row window with wrapped paragraphs rose from the
-last row to row 18 above blank space. The row is restored only to windows that
-still show the composer with point in it just before the inspector closes
-(reflow from the close does not qualify a window); a parent window the user
-scrolled or moved into earlier history meanwhile keeps its start and point.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
@@ -1430,8 +1431,8 @@ the data buffer does not display that buffer or change where quitting returns.
 
 Tables and information panels use `mevedel-window.el` for their temporary
 display lifecycle. Opening records the invoking window and the configuration
-of the frame actually used by `display-buffer`; this also handles note
-composers whose child frame redirects popups into its parent. Quitting uses
+of the frame actually used by `display-buffer`; a note conversation's frame
+can redirect a popup to its parent frame. Quitting uses
 `quit-window` and releases the disposable buffer. If the frame's other windows
 still match their post-display layout and buffers, it restores the original
 layout and buffers while retaining current point and scroll positions in

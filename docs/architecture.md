@@ -286,11 +286,13 @@ Data buffer (authoritative gptel/org buffer; holds mevedel--workspace,
 mevedel--session, and the canonical transcript projected into provider context)
   |
 View buffer (mevedel-view-mode; holds mevedel--data-buffer and the
-input zone / editable composer)
-  |
-Derived buffers / previews / transcript inspection views point back to
-their data or parent view buffers as needed
+rendered transcript, status and interaction zones)
+  ├─ Composer buffer (mevedel-composer-mode; owns the draft and rail)
+  └─ Derived buffers / previews / transcript inspection views point back to
+     their data or parent view buffers as needed
 ```
+
+See [the docked composer](view.md#docked-composer) for the paired windows.
 
 Tools execute in the data-buffer context with `default-directory` set to
 the session working directory. File modifications are tracked per request

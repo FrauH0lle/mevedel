@@ -16,7 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = "mevedel-docked-composer-bench"
-BUILDS = ("inline", "docked")
+BUILDS = ("baseline", "candidate")
 STEADY = ("typing", "wrapped-deletion", "stream", "idle-request", "idle-quiet", "scrolling")
 LAYOUT = ("checkpoint", "split", "switch-away", "switch-back", "popup-open", "popup-close", "resume")
 MIN_CALLBACKS = 20
@@ -80,15 +80,14 @@ def run_session(temporary, revisions, grammars, rounds, smoke):
         if measured:
             steps.append(f"printf 'pair {index} before load: ' && cat /proc/loadavg")
         for build in BUILDS if index % 2 else reversed(BUILDS):
-            docked = "t" if build == "docked" else "nil"
             if index in (0, rounds + 1):
                 log = temporary / f"probe-{index}-{build}.log"
-                command = emacs_command(paths[build], grammars, f"(mevedel-dc-bench-probe {docked})")
+                command = emacs_command(paths[build], grammars, "(mevedel-dc-bench-probe)")
                 steps.append(f"WAYLAND_DEBUG=client {shlex.join(command)} 2> {shlex.quote(str(log))}")
                 probes.append((build, "before" if index == 0 else "after", log))
             else:
                 output = temporary / f"round-{index}-{build}.json"
-                form = f"(mevedel-dc-bench-run {json.dumps(str(output))} {docked} {'t' if smoke else 'nil'})"
+                form = f"(mevedel-dc-bench-run {json.dumps(str(output))} {'t' if smoke else 'nil'})"
                 command = emacs_command(paths[build], grammars, form)
                 steps.append(f"printf '%s\\n' 'round {index}: {build}' && {shlex.join(command)}")
                 runs.append((index, build, output))
@@ -138,11 +137,11 @@ def callbacks(text):
 
 
 def report(data):
-    print(f"Inline {data['revisions']['inline']}; docked {data['revisions']['docked']}")
+    print(f"Baseline {data['revisions']['baseline']}; candidate {data['revisions']['candidate']}")
     print(f"Emacs {data['rounds'][0]['emacs-version']}; gptel {data['rounds'][0]['gptel']}")
     if data["smoke"]:
         print("SMOKE: not performance evidence")
-    print("Values: inline → docked; paired delta (docked minus inline), median [min, max].")
+    print("Values: baseline → candidate; paired delta (candidate minus baseline), median [min, max].")
     for scenario in STEADY + LAYOUT:
         groups = {}
         for run in data["rounds"]:
@@ -187,8 +186,8 @@ def report(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", default="master", help="inline build revision")
-    parser.add_argument("--candidate", default="HEAD", help="docked build revision")
+    parser.add_argument("--baseline", help="docked baseline revision (required with --output)")
+    parser.add_argument("--candidate", default="HEAD", help="docked candidate revision")
     parser.add_argument("--rounds", type=int, default=6)
     parser.add_argument("--smoke", action="store_true", help="shortened scenarios; not a verdict")
     parser.add_argument("--grammar-dir", action="append", default=[])
@@ -199,6 +198,8 @@ def main():
     if args.report:
         report(json.loads(args.report.read_text()))
         return
+    if args.baseline is None:
+        parser.error("--baseline is required with --output")
     if args.rounds < 1 or args.output.exists():
         parser.error("use a positive round count and a new output path")
     revisions = {name: subprocess.check_output(["git", "rev-parse", "--verify", f"{rev}^{{commit}}"],

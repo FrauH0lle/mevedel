@@ -261,11 +261,10 @@ Enforced invariants:
   here` footer (optional final period) in root Lisp libraries and immediate
   `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
   executable fixtures are not libraries and are outside this layout check.
-- Only `mevedel-view-composer.el` may reference the inline input marker
-  (`mevedel-view--input-marker` or `mevedel-view--input-marker-position`).
-  Other Lisp code uses the composer draft or view prompt boundary interface.
-  This checks literal references across the working tree, except under `test/`
-  directories.
+- Use the composer draft or view prompt boundary interface. The checker rejects
+  literal references to the former inline input marker
+  (`mevedel-view--input-marker` or `mevedel-view--input-marker-position`) in
+  Lisp files outside `mevedel-view-composer.el` and `test/` directories.
 - Local inline/image and explicit reference Markdown links in `docs/` resolve
   to files/directories and, for Markdown fragments, heading or explicit HTML
   anchors. Fenced and inline code examples are ignored. This is not a full
@@ -856,13 +855,13 @@ text properties, not equivalent hooks, overlays, markers, mode state, layout
 or redisplay. Its time is a text-mutation floor, not an achievable UI latency
 target or a graphical redisplay measurement.
 
-### Docked composer performance gate
+### Docked composer benchmark
 
-Compare a docked build with an inline build at explicit Git revisions, after
-worktree bootstrap. Run on an otherwise quiet machine:
+Compare two docked builds at explicit Git revisions, after worktree bootstrap.
+Run on an otherwise quiet machine:
 
 ```bash
-python3 scripts/bench-docked-composer.py --baseline 95ebf09a --candidate HEAD \
+python3 scripts/bench-docked-composer.py --baseline b8b219e7 --candidate HEAD \
     --grammar-dir /path/to/tree-sitter --rounds 6 --output .scratch/dock-raw.json
 python3 scripts/bench-docked-composer.py --report .scratch/dock-raw.json
 ```
@@ -896,6 +895,12 @@ provider transport. CPU is Linux scheduler time for Emacs, private KWin and
 its Xwayland child; redisplay cycles are not presented frames. Compare the
 paired deltas as well as pooled tails. Mixed or noisy results are not proof of
 parity. Use `--smoke --rounds 1` to validate the path, not to issue a verdict.
+
+The inline comparison behind [ADR 0136](adr/0136-dock-the-composer-in-its-own-buffer.md#performance-verdict)
+uses the historical harness. To repeat it or read its raw JSON, run the script
+from a bootstrapped checkout of `b8b219e7`, with `--baseline 95ebf09a` and
+`--candidate 912b06d2` for a new run. The current harness requires docks in
+both builds.
 
 ### Reloading into a running Emacs
 

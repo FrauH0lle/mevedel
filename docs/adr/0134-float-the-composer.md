@@ -1,11 +1,11 @@
 # Float the composer as a second window on the view buffer
 
-Status: superseded by the [separate composer buffer](../view.md#buffer-roles).
+Status: superseded by [ADR 0136: Dock the composer in its own buffer](0136-dock-the-composer-in-its-own-buffer.md).
 The child frame clipped completion and command popups; the composer now
 uses a window in the transcript's frame. The following record describes the
 former design, which amended [ADR 0126](0126-keep-the-composer-still.md).
 
-## Decision
+## Former decision
 
 While the selected view window is scrolled away from the composer, a
 floating composer shows the same composer in a child frame over the bottom

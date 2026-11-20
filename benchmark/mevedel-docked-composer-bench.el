@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Drive the inline and docked composers in separate graphical processes.
+;; Drive two docked builds in separate graphical processes.
 ;; Run only in the private KWin launched by scripts/bench-docked-composer.py:
 ;; this fixture replaces frames, focus and options.
 
@@ -14,6 +14,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-pair)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-session-persistence)
@@ -21,13 +22,6 @@
 (defvar gcs-done)
 (defvar mevedel-session--read-only-mode)
 
-(defvar mevedel-floating-composer)
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional buffer))
-(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional buffer))
-(declare-function mevedel-view-composer-window "mevedel-view-pair" (&optional window))
-
-(defvar mevedel-dc-bench--docked nil "Whether the measured build has a dock.")
 (defvar mevedel-dc-bench--counters (list :redisplays 0 :repairs 0 :repair-ms 0.0 :fits 0)
   "Cumulative work counters.")
 (defvar mevedel-dc-bench--renders nil "Timed stream renders in the current workload.")
@@ -164,43 +158,35 @@ CPU time."
   "Count redisplay, pair repair, and fit work; time repair and stream renders."
   (add-function :before pre-redisplay-function
                 (lambda (_) (cl-incf (plist-get mevedel-dc-bench--counters :redisplays))))
-  (when mevedel-dc-bench--docked
-    (advice-add 'mevedel-view-pair--repair :around
-                (lambda (function &rest args)
-                  (let ((start (float-time)))
-                    (prog1 (apply function args)
-                      (cl-incf (plist-get mevedel-dc-bench--counters :repairs))
-                      (cl-incf (plist-get mevedel-dc-bench--counters :repair-ms)
-                               (* 1000 (- (float-time) start)))))))
-    (advice-add 'mevedel-composer--fit :before
-                (lambda (&rest _)
-                  (cl-incf (plist-get mevedel-dc-bench--counters :fits)))))
+  (advice-add 'mevedel-view-pair--repair :around
+              (lambda (function &rest args)
+                (let ((start (float-time)))
+                  (prog1 (apply function args)
+                    (cl-incf (plist-get mevedel-dc-bench--counters :repairs))
+                    (cl-incf (plist-get mevedel-dc-bench--counters :repair-ms)
+                             (* 1000 (- (float-time) start)))))))
+  (advice-add 'mevedel-composer--fit :before
+              (lambda (&rest _)
+                (cl-incf (plist-get mevedel-dc-bench--counters :fits))))
   (advice-add 'mevedel-view--render-stream-update :around
               (lambda (function &rest args)
                 (let ((start (float-time)))
                   (prog1 (apply function args)
                     (push (* 1000 (- (float-time) start)) mevedel-dc-bench--renders))))))
 
-(defun mevedel-dc-bench--draft-start ()
-  "Return the draft start in the current editing buffer."
-  (if mevedel-dc-bench--docked
-      (mevedel-view-composer-draft-start)
-    (mevedel-view--input-start)))
-
 (defun mevedel-dc-bench--windows (view count)
-  "Check that VIEW has COUNT transcripts and, on the candidate, COUNT docks."
-  (let ((views (get-buffer-window-list view nil (selected-frame))))
+  "Check that VIEW has COUNT transcripts and COUNT matching docks."
+  (let ((views (get-buffer-window-list view nil (selected-frame)))
+        (docks (get-buffer-window-list (mevedel-view-composer-buffer view)
+                                       nil (selected-frame))))
     (mevedel-dc-bench--check (= count (length views)) (format "%d transcripts" count))
-    (when mevedel-dc-bench--docked
-      (let ((docks (get-buffer-window-list (mevedel-view-composer-buffer view)
-                                          nil (selected-frame))))
-        (mevedel-dc-bench--check (= count (length docks)) (format "%d docks" count))
-        (dolist (window views)
-          (let ((dock (mevedel-view-composer-window window)))
-            (mevedel-dc-bench--check
-             (and (memq dock docks) (eq dock (window-next-sibling window)))
-             "a paired dock immediately below each transcript")
-            (setq docks (delq dock docks))))))))
+    (mevedel-dc-bench--check (= count (length docks)) (format "%d docks" count))
+    (dolist (window views)
+      (let ((dock (mevedel-view-composer-window window)))
+        (mevedel-dc-bench--check
+         (and (memq dock docks) (eq dock (window-next-sibling window)))
+         "a paired dock immediately below each transcript")
+        (setq docks (delq dock docks))))))
 
 (defun mevedel-dc-bench--with-view (function)
   "Call FUNCTION with the data and view buffers of a displayed chat."
@@ -234,11 +220,9 @@ CPU time."
           (mevedel-dc-bench--settle 0.2)
           (mevedel-dc-bench--windows view 1)
           (mevedel-dc-bench--check
-           (eq (window-buffer) (if mevedel-dc-bench--docked
-                                   (mevedel-view-composer-buffer view) view))
+           (eq (window-buffer) (mevedel-view-composer-buffer view))
            "focus in the displayed draft")
           (goto-char (point-max))
-          (unless mevedel-dc-bench--docked (recenter -1))
           (mevedel-dc-bench--settle)
           (funcall function data view))
       (when (buffer-live-p data) (mevedel-chat-discard-buffers data t))
@@ -323,8 +307,7 @@ CPU time."
   (let* ((scratch (get-buffer-create "*scratch*"))
          (popup (get-buffer-create "*Benchmark popup*"))
          (transcript (get-buffer-window view))
-         (editor (or (and mevedel-dc-bench--docked (mevedel-view-composer-window transcript))
-                     transcript)))
+         (editor (mevedel-view-composer-window transcript)))
     (with-current-buffer popup (special-mode))
     (dotimes (_ mevedel-dc-bench--layout-count)
       (select-window editor)
@@ -338,7 +321,7 @@ CPU time."
       (mevedel-dc-bench--settle)
       (mevedel-dc-bench--windows view 1))
     (dotimes (_ mevedel-dc-bench--layout-count)
-      (select-window (if mevedel-dc-bench--docked (mevedel-view-composer-window transcript) transcript))
+      (select-window (mevedel-view-composer-window transcript))
       (dolist (target (list scratch view))
         (mevedel-dc-bench--measure
          (if (eq target scratch) "switch-away" "switch-back")
@@ -348,7 +331,7 @@ CPU time."
              (mevedel-dc-bench--windows view (if (eq target scratch) 0 1))
              (list ms))))))
     (dotimes (_ mevedel-dc-bench--layout-count)
-      (select-window (if mevedel-dc-bench--docked (mevedel-view-composer-window transcript) transcript))
+      (select-window (mevedel-view-composer-window transcript))
       (mevedel-dc-bench--measure
        "popup-open"
        (lambda ()
@@ -394,7 +377,7 @@ CPU time."
   (mevedel-dc-bench--fresh-frame)
   (mevedel-dc-bench--with-view
    (lambda (data view)
-     (let ((start (mevedel-dc-bench--draft-start)))
+     (let ((start (mevedel-view-composer-draft-start)))
        (mevedel-dc-bench--measure "typing" (lambda () (mevedel-dc-bench--repeat 40 '(?a))))
        (mevedel-dc-bench--check (equal (make-string 40 ?a) (buffer-substring-no-properties start (point-max)))
                                 "the forty typed characters")
@@ -438,21 +421,18 @@ CPU time."
      (mevedel-dc-bench--check (not (buffer-modified-p data)) "a checkpointed transcript")
      (mevedel-dc-bench--layout data view))))
 
-(defun mevedel-dc-bench--prepare (docked)
-  "Check the compiled runtime and configure DOCKED or inline workloads."
+(defun mevedel-dc-bench--prepare ()
+  "Check the compiled runtime and configure the docked workloads."
   (unless (and (display-graphic-p) (eq window-system 'pgtk) (not noninteractive))
     (error "A graphical PGTK Emacs is required"))
-  (setq mevedel-dc-bench--docked docked
-        mevedel-floating-composer nil
-        mevedel-view-spinner-animate t
+  (setq mevedel-view-spinner-animate t
         mevedel-view-spinner-power-policy 'full
         mevedel-dc-bench--kwin (mevedel-dc-bench--find-kwin))
   (dolist (grammar '(markdown markdown-inline))
     (unless (treesit-language-available-p grammar)
       (error "Missing tree-sitter grammar: %s" grammar)))
-  (when docked (require 'mevedel-view-pair))
-  (dolist (f (append '(mevedel-dc-bench--workloads mevedel-view--render-stream-update mevedel--display-chat-buffer)
-                     (when docked '(mevedel-composer--fit mevedel-view-pair--repair))))
+  (dolist (f '(mevedel-dc-bench--workloads mevedel-view--render-stream-update
+               mevedel--display-chat-buffer mevedel-composer--fit mevedel-view-pair--repair))
     (unless (and (compiled-function-p (symbol-function f))
                  (string-suffix-p ".elc" (symbol-file f 'defun)))
       (error "%s is not loaded from bytecode" f)))
@@ -461,9 +441,9 @@ CPU time."
   (global-set-key [f10] #'mevedel-dc-bench--resume-command)
   (mevedel-dc-bench--instrument))
 
-(defun mevedel-dc-bench-run (output docked smoke)
-  "Warm up and measure one round for DOCKED; write OUTPUT.  Shorten for SMOKE."
-  (mevedel-dc-bench--prepare docked)
+(defun mevedel-dc-bench-run (output smoke)
+  "Warm up and measure one round; write OUTPUT.  Shorten for SMOKE."
+  (mevedel-dc-bench--prepare)
   (let ((mevedel-dc-bench--stream-count 16)
         (mevedel-dc-bench--idle-seconds 0.15)
         (mevedel-dc-bench--layout-count 1))
@@ -480,9 +460,9 @@ CPU time."
                    :gptel (symbol-file 'gptel-mode 'defun)
                    :records (vconcat (reverse mevedel-dc-bench--records)))))))
 
-(defun mevedel-dc-bench-probe (docked)
-  "Type into the displayed composer for the DOCKED or inline build."
-  (mevedel-dc-bench--prepare docked)
+(defun mevedel-dc-bench-probe ()
+  "Type into the displayed composer to exercise frame delivery."
+  (mevedel-dc-bench--prepare)
   (mevedel-dc-bench--fresh-frame)
   (mevedel-dc-bench--with-view
    (lambda (_data _view) (mevedel-dc-bench--repeat 36 '(?a)))))

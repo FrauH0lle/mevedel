@@ -8,14 +8,6 @@ Use the inbox for ideas that have not been investigated yet. Promote an
 item to a detailed entry when its scope and current status are understood.
 Remove items when they are implemented, obsolete, or no longer valuable.
 
-## Inbox
-
-- Move the composer into its own buffer, out of the view buffer. Large; scope,
-  estimate and open problems are in
-  [ADR 0134's alternatives](adr/0134-float-the-composer.md#alternatives). Also
-  the escalation path if the floating composer regresses typing, scrolling or
-  streaming.
-
 ## Proactive sessions
 
 Source: the 2026-11-16 review of Anthropic's "Building always-on agents"
