@@ -1272,11 +1272,12 @@ as a background event's, is recorded with the turn and consumed."
       data-turn-start)))
 
 (defun mevedel--submit-generated-turn
-    (prompt &optional display-text prompt-submission prepared-outcome)
+    (prompt &optional display-text prompt-submission prepared-outcome trigger)
   "Insert and send generated PROMPT through the canonical request path.
 DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
 accepted hook context until the turn is inserted.  PREPARED-OUTCOME carries
-skill-expanded model input and transcript render data."
+skill-expanded model input and transcript render data.  TRIGGER names the
+automatic initiator; omit it for user-started turns."
   (let* ((hook-context
           (and prompt-submission
                (mevedel-prompt-submission-context prompt-submission)))
@@ -1307,17 +1308,18 @@ skill-expanded model input and transcript render data."
     (when preparation
       (mevedel-implementation-policy-assert-preparation preparation))
     (mevedel--send-request
-     (or model-input (and hook-context stored-prompt)))))
+     (or model-input (and hook-context stored-prompt)) trigger)))
 
 (defvar mevedel--dispatching nil
   "Non-nil while `mevedel--dispatch-request' runs its local gptel send.
 The `gptel-send' advice then passes through instead of dispatching again.")
 
-(defun mevedel--dispatch-request (model-input local-send &optional native-input)
+(defun mevedel--dispatch-request (model-input local-send &optional native-input trigger)
   "Dispatch MODEL-INPUT using the resolved root request policy.
 LOCAL-SEND starts the caller's native gptel send when that engine is selected.
 NATIVE-INPUT replaces a missing MODEL-INPUT only for an external engine, which
 reads no prompt transforms; gptel keeps its stored transcript prompt.
+TRIGGER identifies an automatic root submission to the external engine.
 The effective model and effort apply only to this request, not saved selection."
   (condition-case err
       (let* ((policy (mevedel-skills-request-model-policy))
@@ -1332,7 +1334,7 @@ The effective model and effort apply only to this request, not saved selection."
         (if (mevedel-claude-code-backend-p backend)
             (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
                 (mevedel-claude-code-btw-send (or model-input native-input) policy)
-              (mevedel-claude-code-send (or model-input native-input) policy))
+              (mevedel-claude-code-send (or model-input native-input) policy nil trigger))
           (when (and mevedel--session
                      (assoc "root" (mevedel-session-external-conversations mevedel--session)))
             (mevedel-claude-code-release-history mevedel--session))
@@ -1355,18 +1357,21 @@ The effective model and effort apply only to this request, not saved selection."
          (mevedel-implementation-policy-pause-failure (current-buffer) err)))
      (signal (car err) (cdr err)))))
 
-(defun mevedel--send-request (&optional model-input)
+(defun mevedel--send-request (&optional model-input trigger)
   "Send the current prompt through the selected conversation engine.
-MODEL-INPUT replaces the stored prompt for this request only."
+MODEL-INPUT replaces the stored prompt for this request only.
+TRIGGER identifies an automatic submission across asynchronous preparation."
   (mevedel--dispatch-request
    model-input
    (lambda ()
      (gptel-request nil
+		    :context (and trigger (list :turn-trigger trigger))
 		    :stream gptel-stream
 		    :transforms gptel-prompt-transform-functions
 		    :fsm (gptel-make-fsm
 			  :table gptel-send--transitions
-			  :handlers gptel-send--handlers)))))
+			  :handlers gptel-send--handlers)))
+   nil trigger))
 
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.

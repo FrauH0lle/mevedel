@@ -20,6 +20,7 @@
 (require 'mevedel-execution-grants)
 (require 'mevedel-structs)
 (require 'mevedel-permission-log)
+(require 'mevedel-notify)
 (require 'mevedel-queue)
 (require 'mevedel-utilities)
 
@@ -158,34 +159,6 @@ session settle."
                  (natnum :tag "Seconds without an answer" :value 3600))
   :initialize #'custom-initialize-default
   :set #'mevedel-permission-queue--set-timeout
-  :group 'mevedel)
-
-(defcustom mevedel-permission-notify-function nil
-  "Function called when an interactive permission card enters the queue.
-
-Called once per card, at admission -- never for decisions the rule
-chain or hooks settle without prompting, and never again when the card
-is re-rendered, coalesced, or resolved.  No rate limiting is applied.
-Firing at enqueue is deliberate: the machine is certainly awake then,
-while an idle timer would die with a suspend.
-
-The single argument is the card's entry plist without its internal
-`:callback', so the function is always a small wrapper that formats a
-message from the entry -- never `notifications-notify' itself, whose
-keywords the entry does not carry.  Stable keys: `:kind' (`generic' /
-`eval' / `bash' / `sandbox'), `:tool-name', `:specifier-key',
-`:specifier-value' (display path, pattern, domain, or name),
-`:command' (bash), `:expression' (eval), `:detail' (sandbox),
-`:justification' (optional model reason), `:origin' (requesting agent path), and
-`:session'.
-
-The return value is ignored, nothing waits on it, and it cannot answer
-the prompt.  Errors are demoted: a broken notifier must not break
-admission.  Typical wrappers call `notifications-notify' or the
-`notify-send' binary for a desktop notification, or a push service
-such as ntfy to reach a phone; see the examples in
-docs/permissions.md."
-  :type '(choice (const :tag "Disabled" nil) function)
   :group 'mevedel)
 
 (defvar mevedel-permission-queue--settled-cells
@@ -635,14 +608,8 @@ ENTRY plist keys:
                (append (mevedel-permission-queue--get session) (list entry))
                session)
               (mevedel-permission-queue--ensure-armed session)
-              (when mevedel-permission-notify-function
-                (condition-case-unless-debug err
-                    (funcall mevedel-permission-notify-function
-                             (map-delete (copy-sequence entry) :callback))
-                  (error
-                   (mevedel-diagnostic-message
-                    (mevedel-diagnostic-scope session)
-                    "Permission notify failed: %S" err))))
+              (mevedel-notify session 'permission
+                              (map-delete (copy-sequence entry) :callback))
               ;; Re-render the head so its pending count includes new siblings.
               (mevedel-permission-queue--render-head session)))
           (error

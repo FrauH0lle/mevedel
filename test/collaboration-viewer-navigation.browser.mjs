@@ -289,6 +289,59 @@ async function liveRoom(browser, viewport) {
 
 const atLiveEdge = () => document.documentElement.scrollHeight - scrollY - innerHeight < 2;
 
+test('hidden viewer without Push only notifies for explicit host notices', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await open(browser);
+    await page.addInitScript(() => {
+      delete window.PushManager;
+      Object.defineProperty(document, 'hidden', {value: true, configurable: true});
+      localStorage.setItem(`mevedel-notify:${location.hash.slice(1)}`, 'on');
+      window.shown = [];
+      window.Notification = class {
+        static permission = 'granted';
+        constructor(title, {body}) { window.shown.push({title, body}); }
+      };
+    });
+    await page.goto(sessionRoom.link);
+    await page.locator('#composer-input').waitFor();
+    const send = page.push[sessionRoom.id];
+    await send({t: 'status', busy: true});
+    await send({t: 'status', busy: false, outcome: 'error', name: 'Settled'});
+    await page.waitForFunction(() => document.querySelector('#session-label').textContent === 'Settled');
+    assert.deepEqual(await page.evaluate(() => window.shown), []);
+    assert.doesNotMatch(await page.title(), /^●/);
+    const shownAfter = async label => {
+      // A message-only notice is an in-page receipt after all preceding sealed frames.
+      await send({t: 'notice', message: label});
+      await page.waitForFunction(text => document.querySelector('#notice').textContent === text, label);
+      return page.evaluate(() => window.shown.splice(0));
+    };
+    for (const outcome of ['error', 'aborted', 'lost', 'success']) {
+      await send({t: 'notice', kind: 'completion', outcome});
+    }
+    const idle = 'The mevedel session is idle again.';
+    assert.deepEqual(await shownAfter('Completion notices received'), [
+      {title: 'Turn failed', body: 'Open the session for the failure and recovery actions.'},
+      {title: 'Turn interrupted', body: idle},
+      {title: 'Turn interrupted', body: idle},
+      {title: 'Turn finished', body: idle},
+    ]);
+    for (const kind of ['notify', 'goal', 'failure', 'other']) {
+      await send({t: 'notice', kind, message: 'Private transcript details'});
+    }
+    const generic = {title: 'New mevedel activity', body: 'Open MevView to see the encrypted session update.'};
+    assert.deepEqual(await shownAfter('Attention notices received'), [generic, generic, generic]);
+    assert.equal(await page.evaluate(() => {
+      delete document.hidden;
+      return !document.hidden && document.hasFocus();
+    }), true);
+    await send({t: 'notice', kind: 'completion'});
+    await send({t: 'notice', kind: 'notify'});
+    assert.deepEqual(await shownAfter('Focused notices received'), []);
+  } finally { await browser.close(); }
+});
+
 test('room composer keeps Enter for newlines and submits with Control or Command Enter', async () => {
   const browser = await chromium.launch();
   try {

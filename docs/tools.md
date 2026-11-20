@@ -43,6 +43,16 @@ Update manuals with the implementation, and retrieve needed detail again after
 context loss or a manual change. Static manuals do not list dynamic capabilities:
 ToolSearch delivers current contracts; the dialect manual lists pure operations.
 
+## Notify
+
+The root can send a short line to the user with `Notify`. It is recorded in
+the transcript and delivered through the [local notification function](permissions.md)
+and a content-free [remote push](collaboration.md#notifications-and-browser-storage).
+Repeated identical text from the same session within 24 hours is dropped;
+changed text is not. A deliberate notice does not suppress a user-started
+turn’s normal completion notification. Child agents report to the root instead.
+Explicit custom tool rosters still control which tools their root advertises.
+
 ## Workspace note writes
 
 `NoteWrite` creates, edits, tags, closes, deletes and sends notes through an

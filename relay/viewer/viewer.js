@@ -1432,11 +1432,6 @@
       notifiedRequests.delete(frame.reqId);
     } else if (frame.t === 'status') {
       state.turnCount = Number.isInteger(frame.turnCount) ? frame.turnCount : null;
-      if (state.busy === true && frame.busy !== true) {
-        notifications.maybeNotify(
-          frame.outcome === 'error' ? 'Turn failed' : ['aborted', 'lost'].includes(frame.outcome) ? 'Turn interrupted' : 'Turn finished',
-          frame.outcome === 'error' ? 'Open the session for the failure and recovery actions.' : 'The mevedel session is idle again.');
-      }
       // Once an owner has the detailed recovery frame, it owns the list.
       if (!state.owner || !recoverySignature) renderRecoveryIssues(frame.issues);
       state.busy = frame.busy === true;
@@ -1533,8 +1528,17 @@
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');
     } else if (frame.t === 'notice') {
-      // Informational: the host refused one action, the room stays usable.
-      if (typeof frame.message === 'string') showNotice(frame.message);
+      if (frame.kind === 'completion') {
+        if (frame.outcome === 'error') {
+          notifications.maybeNotify('Turn failed', 'Open the session for the failure and recovery actions.');
+        } else {
+          const interrupted = ['aborted', 'lost'].includes(frame.outcome);
+          notifications.maybeNotify(interrupted ? 'Turn interrupted' : 'Turn finished',
+                                    'The mevedel session is idle again.');
+        }
+      } else if (['notify', 'goal', 'failure'].includes(frame.kind)) {
+        notifications.maybeNotify('New mevedel activity', 'Open MevView to see the encrypted session update.');
+      } else if (typeof frame.message === 'string') showNotice(frame.message);
     } else if (frame.t === 'error') {
       showTerminal(
         'Rejected',

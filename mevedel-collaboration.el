@@ -814,9 +814,8 @@ guest's own pending entries."
 (defun mevedel-collaboration--status-frame (room)
   "Return ROOM\='s guest-visible session status.
 
-Busy drives the viewer\='s turn-finished notification; the model and
-permission mode are what its status strip reports, the same two facts
-the Emacs mode line carries.  The session's display name heads the
+The model and permission mode match those in the Emacs mode line.
+The session's display name heads the
 room, and follows a rename, including an automatic title."
   (let ((busy (mevedel-collaboration--busy-p room))
         (data-buffer (mevedel-collaboration--room-data-buffer room)))
@@ -857,19 +856,14 @@ room, and follows a rename, including an automatic title."
 
 (defun mevedel-collaboration--publish-status (room)
   "Broadcast ROOM\='s session status to its guests when it has changed."
-  (let ((old (plist-get room :status))
-        (status (mevedel-collaboration--status-frame room)))
+  (let ((status (mevedel-collaboration--status-frame room)))
     (unless (equal status (plist-get room :status))
       (setq room (plist-put room :status status))
       (mevedel-collaboration--broadcast room status)
       (maphash (lambda (peer guest)
                  (when (plist-get guest :ready)
                    (mevedel-collaboration-recovery-send room peer)))
-               (plist-get room :guests))
-      (when (and (eq t (plist-get old :busy))
-                 (eq :json-false (plist-get status :busy)))
-        (mevedel-collaboration--transport-control
-         (plist-get room :transport) (list :t "push"))))))
+               (plist-get room :guests)))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
@@ -877,11 +871,20 @@ room, and follows a rename, including an automatic title."
     (setq room (plist-put room :publish-timer nil))
     (mevedel-collaboration--publish room)))
 
-(defun mevedel-collaboration-notify-request-changed (data-buffer)
-  "Publish DATA-BUFFER's settled request ownership without delaying the turn."
+(defun mevedel-collaboration-notify-request-changed (data-buffer &optional completed-trigger)
+  "Publish DATA-BUFFER's status.
+COMPLETED-TRIGGER names the finished root turn's initiator."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (condition-case err
-        (mevedel-collaboration--publish-status room)
+        (progn
+          (mevedel-collaboration--publish-status room)
+          (when (and (eq completed-trigger 'user)
+                     (not (mevedel-collaboration--busy-p room)))
+            (mevedel-collaboration--transport-control
+             (plist-get room :transport) (list :t "push"))
+            (mevedel-collaboration--broadcast
+             room (list :t "notice" :kind "completion"
+                        :outcome (plist-get (plist-get room :status) :outcome)))))
       (error (mevedel-collaboration--observer-failure room err)))))
 
 (defun mevedel-collaboration--on-session-event (data-buffer event)

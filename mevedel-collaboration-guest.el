@@ -45,6 +45,8 @@
                   "mevedel-collaboration" (data-buffer))
 (declare-function mevedel-collaboration--room-for-overlay
                   "mevedel-collaboration" (overlay))
+(declare-function mevedel-collaboration--room-for-session
+                  "mevedel-collaboration" (session))
 (declare-function mevedel-collaboration--room-list
                   "mevedel-collaboration" ())
 (declare-function mevedel-collaboration--sanitize-guest-id
@@ -977,6 +979,17 @@ that step."
                  (push guest-id guest-ids)))
              (plist-get room :push-guests))
     (mevedel-collaboration--push-guests room guest-ids)))
+
+(defun mevedel-collaboration-push-notice (session kind)
+  "Send a content-free attention wake of KIND to SESSION's writable guests."
+  (when-let* ((room (mevedel-collaboration--room-for-session session)))
+    (mevedel-collaboration--push-writable-guests room)
+    (maphash (lambda (peer guest)
+               (when (and (plist-get guest :ready) (plist-get guest :writable))
+                 (mevedel-collaboration--transport-send
+                  (plist-get room :transport) peer
+                  (list :t "notice" :kind (symbol-name kind)))))
+             (plist-get room :guests))))
 
 (defun mevedel-collaboration--restore-push-subscriptions (room)
   "Restore ROOM's Web Push endpoints after a relay reconnect."

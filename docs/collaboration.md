@@ -2080,7 +2080,11 @@ The viewer supports installable-PWA presentation, host-synchronized theme,
 and opt-in system notifications for attention-worthy session changes. On
 platforms with the Push API, opt-in registers a service worker and a
 room-scoped Web Push endpoint. Pending interactions wake only the subscribed
-writable guests they target; a completed turn wakes all subscribers. The
+writable guests they target. A user-started turn wakes all session subscribers
+when it finishes. Automatic turns, including Goal continuations and mailbox
+wakes from Monitors or background commands, finish quietly. `Notify` and
+terminal Goals instead wake writable subscribers deliberately, even if the
+user started the turn; they do not replace a user turn’s completion wake. The
 relay sends an empty push, so browser push services receive no session
 content; the service worker displays a generic notice and the viewer
 reconnects for sealed detail. This works for supporting Android browsers as

@@ -1050,13 +1050,28 @@
             (setq-local mevedel--current-request nil))
           (mevedel-collaboration--publish-status room)
           (should (eq :json-false (plist-get (cdr (car sent)) :busy)))
-          (should (equal '(:t "push") (car controls)))
+          ;; An idle snapshot is not itself a completion signal.
+          (should-not controls)
           ;; Re-publishing the same idle state sends neither status nor push.
           (setq sent nil controls nil)
           (mevedel-collaboration--publish-status room)
           (should-not sent)
           (should-not controls)
+          ;; The live-page fallback needs the same explicit user edge as Push.
+          (let ((mevedel-collaboration--rooms (make-hash-table :test #'eq)))
+            (puthash data-buffer room mevedel-collaboration--rooms)
+            (mevedel-collaboration-notify-request-changed data-buffer 'user)
+            (should (equal '((:t "push")) controls))
+            (should (equal "completion" (plist-get (cdar sent) :kind)))
+            ;; A teardown callback can already have started a new request.
+            (setq controls nil sent nil)
+            (with-current-buffer data-buffer
+              (setq-local mevedel--current-request 'successor))
+            (mevedel-collaboration-notify-request-changed data-buffer 'user)
+            (should-not controls)
+            (should (equal "status" (plist-get (cdar sent) :t))))
           ;; The session's name heads the room and follows a rename.
+          (setq controls nil)
           (let ((session (mevedel-session--create :name "2026-10-05T17-00-abc")))
             (plist-put room :session session)
             (mevedel-collaboration--publish-status room)

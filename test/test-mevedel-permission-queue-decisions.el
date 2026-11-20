@@ -395,8 +395,8 @@ turn in the data buffer is the real intent the review requires."
   :doc "prompt timing: a card appears at admission and the next after settlement"
   (mevedel-pq-test--with-queue (session _data view)
     (let* ((notified nil)
-           (mevedel-permission-notify-function
-            (lambda (entry) (push (plist-get entry :specifier-value) notified)))
+           (mevedel-notify-function
+            (lambda (_kind entry) (push (plist-get entry :specifier-value) notified)))
            (first (pqd--entry "Read" :specifier-value "/first.el"))
            (second (pqd--entry "Read" :specifier-value "/second.el")))
       (mevedel-pq-test--request (car first))

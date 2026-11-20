@@ -37,6 +37,7 @@
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-note)
+(require 'mevedel-tool-notify)
 (require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-usage)
@@ -122,6 +123,7 @@
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
   (mevedel-tool-note-register)
+  (mevedel-tool-notify-register)
   (mevedel-tool-editing--register)
   (mevedel-tool-ptc--register)
   (mevedel-tool-introspect--register)
@@ -172,7 +174,7 @@ Keep them request-local across temporary removal of all callable tools."
 OWNER is a native gptel FSM or an external turn owner.  Plan sessions and
 requests carrying inherited Plan limits hide editing tools except ApplyPatch;
 Goal tools follow availability.
-Monitor is visible only to the root, never to an agent invocation.
+Monitor and Notify are visible only to the root, never to an agent invocation.
 Without OWNER, use the current conversation, including before admission."
   (let* ((info (and owner (mevedel-engine-info owner)))
          (buffer (or (plist-get info :buffer) (current-buffer)))
@@ -196,7 +198,13 @@ Without OWNER, use the current conversation, including before admission."
                    (and invocation
                         (mevedel-agent-invocation-plan-read-only invocation))))))
     (lambda (name)
-      (and (not (and invocation (equal name "Monitor")))
+      (and (not (and invocation (member name '("Monitor" "Notify"))))
+           (or (not (equal name "Notify"))
+               (and session (not (mevedel-goal--context-summary-request-p info))
+                    (or (null request)
+                        (and (equal (mevedel-request-origin request) "/root")
+                             (not (mevedel-request-ephemeral-p request))
+                             (not (mevedel-request-cancelled-p request))))))
            (mevedel-tool-goal-available-p name owner)
            (not (and plan-read-only-p
                      (when-let* ((registered (or (mevedel-tool-for-call name)

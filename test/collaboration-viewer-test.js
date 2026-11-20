@@ -2245,9 +2245,7 @@ async function main() {
   assert.equal(nodes['composer-scope'].children.length, 1);
   nodes['skill-chips'].children[2].dispatch('click');
 
-  // Notifications are opt-in through the bell and fire only while the
-  // tab is hidden: turn settlement (busy true -> false) and interaction
-  // arrival notify; nothing else does.
+  // Opting in on a push-capable browser registers a room subscription.
   assert.equal(nodes['notify-button'].hidden, false);
   const pushBefore = first.sent.length;
   nodes['notify-button'].dispatch('click');
@@ -2706,14 +2704,17 @@ async function main() {
   await deliver({t: 'status', busy: false});
   assert.doesNotMatch(textOf(nodes.modeline), /Assistant working/);
   assert.equal(shownNotifications.length, 0);
-  // The tab title carries a marker too, which needs no permission.
+  // Explicit notices mark the away tab without duplicating Web Push.
+  await deliver({t: 'notice', kind: 'completion', outcome: 'success'});
   assert.match(document.title, /^●/);
+  assert.equal(shownNotifications.length, 0);
   document.focused = true;
   document.hidden = true;
   await deliver({t: 'status', busy: true});
   await deliver({t: 'status', busy: false});
   assert.equal(shownNotifications.length, 0);
-  // An unchanged busy state does not re-notify.
+  await deliver({t: 'notice', kind: 'notify'});
+  assert.equal(shownNotifications.length, 0);
   await deliver({t: 'status', busy: false});
   assert.equal(shownNotifications.length, 0);
 

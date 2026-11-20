@@ -495,7 +495,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:discoverable read)
             (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
             (:tool "Eval")
-            (:tool "WriteStdin") (:tool "Monitor")
+            (:tool "WriteStdin") (:tool "Monitor") (:tool "Notify")
             (:tool "ToolSearch") (:tool "ToolCall")
             (:discoverable util)
             (:discoverable (:tool "ListExecutions"))

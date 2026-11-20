@@ -24,7 +24,7 @@ always-on agents into five primitives: event inbox, timers, memory, permissions
 and outbox. Mevedel already covers the inbox (the agent mailbox, Monitor and
 Bash wake-ups, one turn per session), memory (curated memory, journal,
 `/remember`) and permissions (automatic review, absence timeout, browser
-answers, `mevedel-permission-notify-function`). The entries below fill the
+answers, `mevedel-notify-function`). The entries below fill the
 gaps. They apply to local sessions as well as a remote host used through the
 browser viewer.
 
@@ -54,17 +54,6 @@ owning session's mailbox, waking an idle root like a `MONITOR` record does.
   dispatch Goal work the rule withholds. Read that rule's history first.
 - Keep the sleep inhibitor rule for waiting Monitors: a pending timer alone
   does not keep the machine awake.
-
-### Notifications beyond permission prompts
-
-`mevedel-permission-notify-function` covers prompts only. Unattended work that
-ends (a timer run, a Goal turn, a Monitor-triggered turn) has no way to reach
-a user who is not watching. Consider a general notification hook or model tool
-with a quiet-by-default policy: notify only when a turn the user did not start
-has something for them, never repeat the same notice, and leave the volume to
-configuration. The relay never sees the room key, so notification text must
-not carry conversation content in clear text; send "session X needs you" with
-a link, or encrypt the payload for the device.
 
 Not planned: inbound webhooks (a polling Monitor serves them) and the article's
 deferred tool calls that end a run and resume when the user answers. A pending

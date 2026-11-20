@@ -755,7 +755,7 @@
 
   :doc "uncertainty and malformed output fall back before notification"
   (let* ((cards 0) (notifications 0)
-        (mevedel-permission-notify-function (lambda (_entry) (cl-incf notifications))))
+        (mevedel-notify-function (lambda (_kind _entry) (cl-incf notifications))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (_entry) (cl-incf cards))))
       (mevedel-permission-request entry session)

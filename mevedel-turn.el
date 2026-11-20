@@ -53,7 +53,7 @@
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-notify-request-changed
-                  "mevedel-collaboration" (data-buffer))
+                  "mevedel-collaboration" (data-buffer &optional completed-trigger))
 
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
@@ -707,7 +707,13 @@ is returned here."
             (let ((until (+ (float-time) mevedel--gc-settlement-grace)))
               (mevedel--gc-hold request (lambda () (< (float-time) until))))
             (when (fboundp 'mevedel-collaboration-notify-request-changed)
-              (mevedel-collaboration-notify-request-changed (current-buffer)))))))))
+              (let ((context (plist-get (mevedel-engine-info (mevedel-engine-owner request)) :context))
+                    (session (mevedel-request-session request)))
+                (mevedel-collaboration-notify-request-changed
+                 (current-buffer)
+                 (and session (eq (current-buffer) (mevedel-session-root-buffer session))
+                      (or (and (listp context) (plist-get context :turn-trigger))
+                          'user)))))))))))
 
 
 ;;

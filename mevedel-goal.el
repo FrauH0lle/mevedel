@@ -41,7 +41,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
                   "mevedel-chat" (prompt &optional display-text
-                                         prompt-submission))
+                                         prompt-submission prepared-outcome trigger))
 (autoload 'mevedel--submit-generated-turn "mevedel-chat")
 
 ;; `mevedel-implementation-policy'
@@ -458,7 +458,7 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
         (mevedel--submit-generated-turn
          mevedel-goal--continuation-trigger
          mevedel-goal--continuation-trigger
-         prompt-submission))
+         prompt-submission nil 'goal-continuation))
       (mevedel-telemetry-record
        session 'goal-continuation :goal-id (mevedel-goal-id goal))
       'dispatched))))

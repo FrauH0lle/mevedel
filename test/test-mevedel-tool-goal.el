@@ -8,6 +8,9 @@
 (require 'mevedel)
 (require 'mevedel-tool-goal)
 (require 'mevedel-tools)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-transport)
 (require 'mevedel-context-delivery)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-pipeline)
@@ -234,6 +237,38 @@ and `verify-callback' delivers the verifier outcome."
 (mevedel-deftest mevedel-tool-goal--handle-update ()
   ,test
   (test)
+  :doc "terminal Goals notify once locally and wake only writable devices without text"
+  (dolist (terminal '("blocked" "complete"))
+    (mevedel-tool-goal-test--with-request
+      (let* ((mevedel-collaboration--rooms (make-hash-table :test #'eq))
+             (subscriptions (make-hash-table :test #'equal))
+             (guests (make-hash-table :test #'eq))
+             notices frames sealed
+             (mevedel-notify-function
+              (lambda (kind details)
+                (push (list kind (plist-get details :text)) notices))))
+        (puthash "reader" '(:writable nil) subscriptions)
+        (puthash "phone" '(:writable t) subscriptions)
+        (puthash 1 '(:ready t :writable t) guests)
+        (puthash 2 '(:ready t :writable nil) guests)
+        (puthash (current-buffer)
+                 (list :session session :guests guests :push-guests subscriptions :transport 'relay)
+                 mevedel-collaboration--rooms)
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
+                   (lambda (_transport frame) (push frame frames)))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sealed))))
+          (mevedel-tool-goal--handle-create '(:objective "Ship"))
+          (mevedel-pipeline-run-tool-outcome
+           (mevedel-tool-get "UpdateGoal") #'ignore
+           (list :status terminal :summary "Review requested"))
+          (when verify-callback
+            (should-not notices)
+            (funcall verify-callback '(:verdict pass :result "OK")))
+          (should (equal notices (list (list 'goal (concat "Goal " terminal ": Ship")))))
+          (should (equal frames '((:t "push" :guestIds ["phone"]))))
+          (should (equal sealed '((1 :t "notice" :kind "goal"))))))))
+
   :doc "completes only after the verifier passes, leaving its usage to agent accounting"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship the parser"))

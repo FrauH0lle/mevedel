@@ -128,12 +128,13 @@ This command does not start a model request or resume a paused Goal."
         (mevedel-recovery-save session)))))
 
 ;;;###autoload
-(defun mevedel-claude-code-send (&optional model-input model-policy prepared-input)
+(defun mevedel-claude-code-send (&optional model-input model-policy prepared-input trigger)
   "Send MODEL-INPUT through the effective Claude subscription MODEL-POLICY.
 When input is omitted, read the latest submitted canonical transcript prompt.
 An omitted policy resolves through the common request model resolver.
 PREPARED-INPUT reuses accepted ACP content, including the initial excerpt and
-original image bytes, for an explicit retry from its pre-failure boundary."
+original image bytes, for an explicit retry from its pre-failure boundary.
+TRIGGER names the initiator of an automatic root turn."
   (let* ((mevedel-implementation-policy--admission-preparation
           (mevedel-implementation-policy-capture-preparation))
          (model-policy (or model-policy (mevedel-skills-request-model-policy)))
@@ -184,7 +185,8 @@ original image bytes, for an explicit retry from its pre-failure boundary."
             (message "mevedel: starting Claude with an excerpt continuation"))
           (setf (mevedel-engine-info request)
                 (append (mevedel-engine-info request)
-                        (list :backend backend :model model-id :reasoning-effort effort
+                        (list :context (and trigger (list :turn-trigger trigger))
+                              :backend backend :model model-id :reasoning-effort effort
                               :mevedel-native-before-history (copy-tree history)
                               :external-history t :mevedel-native-isolated isolated)))
           ;; UpdateGoal visibility depends on the request's Goal attribution.

@@ -393,8 +393,9 @@
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
          (notified nil)
-         (mevedel-permission-notify-function
-          (lambda (entry) (push entry notified))))
+         (kinds nil)
+         (mevedel-notify-function
+          (lambda (kind entry) (push kind kinds) (push entry notified))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (mevedel-permission-request
@@ -405,7 +406,7 @@
       (mevedel-permission-request
        (list :kind 'bash :command "git add ." :origin "/root"
              :callback #'ignore)))
-    (should (= 2 (length notified)))
+    (should (equal '(permission permission) kinds))
     (should (equal "Read" (plist-get (cadr notified) :tool-name)))
     (should (eq :path (plist-get (cadr notified) :specifier-key)))
     (should (equal "one.el"
@@ -419,8 +420,8 @@
   :doc "the notify function never fires for a no-session abort"
   (let ((mevedel--session nil)
         (notified 0)
-        (mevedel-permission-notify-function
-         (lambda (_entry) (cl-incf notified))))
+        (mevedel-notify-function
+         (lambda (_kind _entry) (cl-incf notified))))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
       (mevedel-permission-request
@@ -431,8 +432,8 @@
   :doc "a signaling notify function does not break admission"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
-         (mevedel-permission-notify-function
-          (lambda (_entry) (error "Notifier broke")))
+         (mevedel-notify-function
+          (lambda (_kind _entry) (error "Notifier broke")))
          captured)
     (mevedel-test--with-captured-diagnostics captured
       (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
@@ -813,8 +814,8 @@
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
          (notified 0)
-         (mevedel-permission-notify-function
-          (lambda (_entry) (cl-incf notified)))
+         (mevedel-notify-function
+          (lambda (_kind _entry) (cl-incf notified)))
          (resolved-outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))

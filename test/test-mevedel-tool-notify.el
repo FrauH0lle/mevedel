@@ -1,0 +1,130 @@
+;;; test-mevedel-tool-notify.el --- Deliberate root notices -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Exercise Notify through the tool pipeline and its transcript projection.
+
+;;; Code:
+
+(require 'mevedel)
+(require 'mevedel-notify)
+(require 'mevedel-tools)
+(require 'mevedel-pipeline)
+(require 'mevedel-presets)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-transport)
+(require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                                    "helpers"))
+
+(defmacro mevedel-tool-notify-test--with-request (&rest body)
+  "Run BODY with a registered tool and an admitted root conversation."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (let* ((session (mevedel-skills-test--make-session "notice" default-directory))
+            (fsm (gptel-make-fsm :info (list :buffer (current-buffer)
+                                              :position (point-marker)
+                                              :callback #'gptel--insert-response)))
+            notices
+            (mevedel-notify-function (lambda (kind details)
+                                       (push (list kind (plist-get details :text)) notices))))
+       (setq-local mevedel--session session
+                   mevedel--current-request (mevedel-request--create :session session :fsm fsm :origin "/root"))
+       (setf (mevedel-session-save-path session) default-directory
+             (mevedel-session-root-buffer session) (current-buffer))
+       (mevedel-tools-register)
+       (cl-flet ((call (text)
+                   (let (answer)
+                     (mevedel-pipeline-run-tool-outcome
+                      (mevedel-tool-for-call "Notify") (lambda (value) (setq answer value))
+                      (list :text text) (list :engine fsm :projection 'provider))
+                     (mevedel-test--await 3 "Notify did not answer" answer)
+                     answer)))
+         ,@body))))
+
+(mevedel-deftest mevedel-tool-notify/delivery ()
+  ,test
+  (test)
+  :doc "records the delivered line in the ordinary tool transcript"
+  (mevedel-tool-notify-test--with-request
+    (let ((mevedel-collaboration--rooms (make-hash-table :test #'eq))
+          (subscriptions (make-hash-table :test #'equal))
+          (gptel-include-tool-results t) controls)
+      (puthash "phone" '(:writable t) subscriptions)
+      (puthash (current-buffer) (list :data-buffer (current-buffer) :session session
+                                      :push-guests subscriptions :guests (make-hash-table)
+                                      :transport 'relay :status nil) mevedel-collaboration--rooms)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
+                 (lambda (_transport frame) (push frame controls))))
+        (let ((answer (call "CI is red")))
+          (should (equal notices '((notify "CI is red"))))
+          (gptel--display-tool-results
+           (list (list (gptel-get-tool '("mevedel" "Notify")) '(:text "CI is red")
+                       (plist-get answer :result))) (gptel-fsm-info fsm)))
+        (should (string-match-p "^Notified: CI is red$" (buffer-string)))
+        (should (equal controls '((:t "push" :guestIds ["phone"]))))
+        (mevedel-request-end)
+        (should (equal controls '((:t "push") (:t "push" :guestIds ["phone"]))))))))
+
+(mevedel-deftest mevedel-tool-notify/authority ()
+  ,test
+  (test)
+  :doc "the standard root offers Notify without widening custom or child rosters"
+  (mevedel-tool-notify-test--with-request
+    (let ((gptel-tools nil)
+          (mevedel-preset--registry nil))
+      (mevedel-define-preset notice-test :tools ((:tool "Read")))
+      (mevedel-preset--post 'notice-test nil)
+      (should (equal '("Read") (mapcar #'mevedel-tool-name (mevedel-tools-native-roster fsm))))
+      (mevedel--define-presets)
+      (mevedel-preset--post 'mevedel-implement nil)
+      (should (member "Notify" (mapcar #'mevedel-tool-name (mevedel-tools-native-roster fsm))))
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :parent-session session :path "/root/child"))
+      (should-not (member "Notify" (mapcar #'mevedel-tool-name (mevedel-tools-native-roster fsm))))
+      (should-not (member "Notify" (mevedel-tool-ptc--roster)))
+      (should (eq 'error (plist-get (call "Child bypass") :status)))
+      (setq-local mevedel--agent-invocation nil)
+      (setf (mevedel-request-origin mevedel--current-request) "/root/child")
+      (should (eq 'error (plist-get (call "Indirect child") :status)))
+      (should-not notices))))
+
+(mevedel-deftest mevedel-tool-notify/validation ()
+  ,test
+  (test)
+  :doc "invalid text never reaches the user"
+  (mevedel-tool-notify-test--with-request
+    (dolist (text (list "" "   " "one\ntwo" "one\rtwo" "one\u2028two" (make-string 241 ?x)))
+      (should (eq 'error (plist-get (call text) :status))))
+    (should-not notices)
+    (call (make-string 240 ?é))
+    (should (= 1 (length notices)))))
+
+(mevedel-deftest mevedel-tool-notify/duplicate-window ()
+  ,test
+  (test)
+  :doc "reopening preserves suppression; other text, owners and the 24h boundary pass"
+  (mevedel-tool-notify-test--with-request
+    (let ((now 1000000))
+      (cl-letf (((symbol-function 'current-time) (lambda () now)))
+        (call "CI red")
+        (call "Login expired")
+        (setq-local mevedel--session
+                    (mevedel-session-create "renamed" (mevedel-session-workspace session)
+                                            nil (mevedel-session-session-id session)))
+        (setf (mevedel-request-session mevedel--current-request) mevedel--session
+              (mevedel-session-save-path mevedel--session) (mevedel-session-save-path session))
+        (cl-incf now 86399)
+        (call "CI red")
+        (should (= 2 (length notices)))
+        (cl-incf now)
+        (call "CI red")
+        (should (= 3 (length notices)))
+        (setq-local mevedel--session (mevedel-skills-test--make-session "other" default-directory))
+        (make-directory (file-name-concat default-directory "other"))
+        (setf (mevedel-request-session mevedel--current-request) mevedel--session
+              (mevedel-session-save-path mevedel--session) (file-name-concat default-directory "other"))
+        (call "CI red")
+        (should (= 4 (length notices)))))))
+
+(provide 'test-mevedel-tool-notify)
+;;; test-mevedel-tool-notify.el ends here

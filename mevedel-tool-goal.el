@@ -19,6 +19,7 @@
   (require 'subr-x))
 
 (require 'mevedel-goal)
+(require 'mevedel-notify)
 
 ;; `gptel-request'
 
@@ -171,6 +172,8 @@ CAPTURED-ID must match its Goal identity."
           (and (stringp summary) (not (string-blank-p summary))
                (string-trim summary))
           (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
+    (mevedel-notify session 'goal
+                    (format "Goal %s: %s" status (mevedel-goal-objective goal)))
     (format "Goal status changed to %s" status)))
 
 (defun mevedel-tool-goal--verification-prompt (session goal)

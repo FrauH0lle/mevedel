@@ -11,6 +11,8 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-engine-test-support"))
 (require 'gptel-openai)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-transport)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-permissions)
 (require 'mevedel-presets)
@@ -26,7 +28,8 @@
         (let ((gptel--known-backends nil)
               (mevedel-claude-code-directory (file-name-concat root "claude"))
               (view (generate-new-buffer " *wake-admission-view*"))
-              admitted)
+              (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+              admitted controls)
           (unwind-protect
               (cl-letf (((symbol-function 'mevedel-claude-code-unavailable-reason)
                          #'ignore))
@@ -64,7 +67,12 @@
                                   (list :model-provider provider :reasoning-effort nil
                                         :permission-mode 'full-auto))
                     (setq-local mevedel--pending-permission-mode 'full-auto))
-                  (cl-letf (((symbol-function 'gptel-curl-get-response)
+                  (puthash buffer (list :data-buffer buffer :session session :status nil
+                                        :guests (make-hash-table) :transport 'phone)
+                           mevedel-collaboration--rooms)
+                  (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
+                             (lambda (_transport frame) (push frame controls)))
+                            ((symbol-function 'gptel-curl-get-response)
                              (lambda (_fsm) (funcall capture)))
                             ((symbol-function 'gptel--url-get-response)
                              (lambda (_fsm) (funcall capture)))
@@ -88,6 +96,8 @@
                         (gptel--fsm-transition (mevedel-request-fsm previous) 'DONE))
                       (mevedel-test--await 5 "First request did not settle"
                         (not (mevedel-turn-busy-p buffer)))
+                      (should (equal '((:t "push")) controls))
+                      (setq controls nil)
                       ;; The live baseline can change after the originating turn.
                       (setf (mevedel-session-permission-mode session) 'edits
                             (mevedel-session-plan-mode session) sticky-plan)
@@ -111,7 +121,33 @@
                         (gptel--fsm-transition
                          (mevedel-request-fsm (caar admitted)) 'DONE))
                       (mevedel-test--await 5 "Background request did not settle"
-                        (not (mevedel-turn-busy-p buffer)))))))
+                        (not (mevedel-turn-busy-p buffer)))
+                      (should-not controls)
+                      ;; Exercise the other initiators once per engine, not once
+                      ;; per permission configuration.  End with a fresh user turn.
+                      (unless (or implementation sticky-plan)
+                        (dolist (source '(monitor workspace-schedule goal user))
+                          (ert-info ((format "Completion after %S" source))
+                            (setq admitted nil controls nil)
+                            (mevedel-session--set-messages session nil)
+                            (pcase source
+                              ('goal
+                               (mevedel-goal-create "Check the build" :session session :token-budget nil)
+                               (should (eq 'dispatched (mevedel-goal-continue-if-idle session buffer))))
+                              ('workspace-schedule
+                               (mevedel--submit-generated-turn "Check CI" nil nil nil 'workspace-schedule))
+                              ('user (mevedel--submit-generated-turn "Check CI"))
+                              ('monitor
+                               (mevedel-agent-control-enqueue-monitor-events
+                                session "monitor-ci" "CI" '(("CI finished")) t)
+                               (mevedel-pending-inputs--wake-for-event buffer)))
+                            (mevedel-test--await 5 "Request was not admitted" admitted)
+                            (when (eq source 'goal)
+                              (setf (mevedel-goal-status (mevedel-session-goal session)) 'paused))
+                            (unless external
+                              (gptel--fsm-transition (mevedel-request-fsm (caar admitted)) 'DONE))
+                            (mevedel-test--await 5 "Request did not settle" (not (mevedel-turn-busy-p buffer)))
+                            (should (equal controls (and (eq source 'user) '((:t "push"))))))))))))
             (when (buffer-live-p view) (kill-buffer view)))))))
   (engine)
   :doc "native wake admission drops one-turn overrides and honors live sticky Plan"

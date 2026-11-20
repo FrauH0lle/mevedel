@@ -154,6 +154,7 @@ created as a side effect of registration and handles serialization."
     ("TaskList" "TaskWrite"
      mevedel-tool-task mevedel-tool-task--register)
     ("NoteWrite" mevedel-tool-note mevedel-tool-note-register)
+    ("Notify" mevedel-tool-notify mevedel-tool-notify-register)
     ("WebFetch" "WebSearch"
      mevedel-tool-web-registration mevedel-tool-web--register))
   "Built-in tool names followed by their feature and registrar.")

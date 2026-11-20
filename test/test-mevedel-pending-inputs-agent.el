@@ -87,7 +87,7 @@ ON-SAVE can deliver a report inside the real settlement transaction."
               ((symbol-function 'mevedel-telemetry-record) #'ignore)
               ((symbol-function 'mevedel-view--begin-external-turn) #'ignore)
               ((symbol-function 'mevedel--send-request)
-               (lambda (&optional _model-input)
+               (lambda (&optional _model-input _trigger)
                  (let* ((new (mevedel-request-begin session))
                         (machine
                          (gptel-make-fsm

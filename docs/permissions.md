@@ -728,21 +728,28 @@ one deadline, kept in the transient `permission-absence` session slot.
   turns, running commands and collaboration can keep the
   [sleep inhibitor](sessions.md#system-sleep) held.
 
-`mevedel-permission-notify-function` (default nil) is called once per admitted
-card with its entry plist, at admission -- never for decisions the rule chain
-or hooks settle without prompting, and never again on head redraw, coalesce,
-or resolution. Only prompts the user must answer notify, never auto-resolved
-tool calls; how many that is per session depends entirely on the session's
-permission mode and rules. It fires at enqueue rather than after an
-unanswered delay because the machine is certainly awake then; an
-idle-escalation timer dies with a suspend, which is exactly the situation --
-the user stepped away, the machine slept on an open prompt -- the hook exists
-for. Errors are demoted so a broken notifier cannot break admission.
+`mevedel-notify-function` (default nil) receives a kind and a details plist;
+`:session` identifies the session for every kind:
 
-The value is always a small wrapper that formats a message from the entry;
-the entry carries mevedel's card keys, not a notification API's keywords, so
-pointing the variable directly at `notifications-notify` shows an empty
-notification.
+| Kind | When | Details |
+|---|---|---|
+| `permission` | A card needs a human answer | Card entry (without its internal `:callback`) |
+| `notify` | The root uses `Notify` | `:text`, the agent’s short message |
+| `goal` | A Goal becomes complete or blocked | `:text`, the Goal status and objective |
+
+Permission notices fire once per card, without rate limiting, when the card
+enters the queue. Redraw, coalescing, resolution, and automatic approval do not
+notify. Firing at admission avoids losing the notice if the machine suspends.
+A notifier error warns without breaking admission or remote delivery.
+
+The card's `:kind` (`generic`, `eval`, `bash`, or `sandbox`) is distinct from
+the notice kind `permission`. Other card fields include `:tool-name`,
+`:specifier-key`, `:specifier-value`, `:command` (Bash), `:expression` (Eval),
+`:detail` (sandbox), `:justification` (when supplied), and `:origin` (agent path).
+
+A wrapper can format the card details for a desktop notification and display
+other notices directly. Passing the entry itself to `notifications-notify`
+does not work: it has card keys, not DBus notification keywords.
 
 ```elisp
 ;; One formatter, reused by every wrapper below.  A notification is a
@@ -762,34 +769,37 @@ notification.
                   ""))
              110 nil nil t))))
 
+(defun my/mevedel-notice-body (kind details)
+  (if (eq kind 'permission)
+      (my/mevedel-permission-summary details)
+    (plist-get details :text)))
+
 ;; Desktop notification via Emacs's built-in DBus client
 ;; (notifications.el ships with Emacs and talks to the same
 ;; freedesktop daemon notify-send does):
 (require 'notifications)
-(setq mevedel-permission-notify-function
-      (lambda (entry)
+(setq mevedel-notify-function
+      (lambda (kind details)
         (notifications-notify
-         :title "mevedel needs permission"
+         :title (format "mevedel: %s" kind)
          :urgency 'critical
          :timeout 0
-         :body (my/mevedel-permission-summary entry))))
+         :body (my/mevedel-notice-body kind details))))
 
 ;; The same through the notify-send binary; destination 0 makes
 ;; call-process fire-and-forget:
-(setq mevedel-permission-notify-function
-      (lambda (entry)
+(setq mevedel-notify-function
+      (lambda (kind details)
         (call-process "notify-send" nil 0 nil
                       "--app-name=mevedel" "--urgency=critical"
                       "--expire-time=0"
-                      "mevedel needs permission"
-                      (my/mevedel-permission-summary entry))))
+                      (format "mevedel: %s" kind)
+                      (my/mevedel-notice-body kind details))))
 
-;; Phone push through ntfy, for the prompt that opens after you have
-;; left the desk:
-(setq mevedel-permission-notify-function
-      (lambda (entry)
-        (call-process "curl" nil 0 nil "-s"
-                      "-d" (my/mevedel-permission-summary entry)
+;; Optional phone wake via ntfy; send no card or conversation content.
+(setq mevedel-notify-function
+      (lambda (_kind _details)
+        (call-process "curl" nil 0 nil "-s" "-d" "Open mevedel"
                       "https://ntfy.sh/YOUR-TOPIC")))
 ```
 

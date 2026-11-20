@@ -358,7 +358,7 @@
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
              (active
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
-        (should (equal '("ApplyPatch" "Bash" "Eval" "Glob" "Grep" "Monitor" "Read"
+        (should (equal '("ApplyPatch" "Bash" "Eval" "Glob" "Grep" "Monitor" "Notify" "Read"
                          "ToolCall" "ToolSearch" "WriteStdin")
                        (sort active #'string<))))))
 

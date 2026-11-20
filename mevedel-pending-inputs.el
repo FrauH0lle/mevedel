@@ -1480,7 +1480,7 @@ runs under the session's current permission settings."
          (unwind-protect
              (mevedel--submit-generated-turn
               mevedel-pending-inputs--event-trigger
-              mevedel-pending-inputs--event-trigger)
+              mevedel-pending-inputs--event-trigger nil nil 'background-event)
            ;; Consumed where the prompt is inserted; a start that
            ;; failed before that must not label a later prompt.
            (setq mevedel-view--pending-guest-attribution nil)))))))

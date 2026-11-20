@@ -20,6 +20,10 @@ and does not change durable accounting.
 An invalid accepted-plan address is reported as `plan_reference_error`, leaving
 the Goal inspectable without changing its state.
 
+Automatic continuation turns finish quietly. When a Goal becomes `complete` or
+`blocked`, it sends one [notice](permissions.md) with its status and objective;
+a completion claim awaiting verification does not notify.
+
 Browser collaborators of every link tier can inspect the durable Goal from its
 own status-strip chip. The read-only sheet shows the objective, status/reason,
 budget and durable token/time/turn accounting, with incomplete usage marked as a
