@@ -75,17 +75,19 @@ class RunnerTests(unittest.TestCase):
                 cwd=Path(run_tests.__file__).parent, capture_output=True, text=True, check=True)
             self.assertEqual(child.stdout.strip(), '1000')
 
-    def test_affected_base_explicit_then_environment_then_master(self):
-        for environment, arguments, expected in (
-            ({}, ['--affected'], 'master'),
-            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'}, ['--affected'], 'branch-point'),
+    def test_affected_base_precedence(self):
+        for environment, arguments, pinned, expected in (
+            ({}, ['--affected'], 'master', 'master'),
+            ({}, ['--affected'], 'pinned', 'pinned'),
+            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'}, ['--affected'], 'pinned', 'branch-point'),
             ({'MEVEDEL_AFFECTED_BASE': 'branch-point'},
-             ['--affected', 'explicit-revision'], 'explicit-revision'),
-            ({'MEVEDEL_AFFECTED_BASE': ''}, ['--affected'], 'master'),
+             ['--affected', 'explicit-revision'], 'pinned', 'explicit-revision'),
+            ({'MEVEDEL_AFFECTED_BASE': ''}, ['--affected'], 'pinned', 'pinned'),
         ):
             with self.subTest(environment=environment, arguments=arguments), \
                  patch.dict(os.environ, environment, clear=True), \
                  patch.object(sys, 'argv', ['run_tests.py', *arguments]), \
+                 patch.object(affected_tests, 'git', return_value=[pinned]), \
                  patch.object(affected_tests, 'changed_files',
                               side_effect=ValueError('stop after base selection')) as changed, \
                  contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
@@ -449,6 +451,23 @@ else:
                              ['committed.el', 'edited.el', 'removed.el', 'untracked.el'])
             with self.assertRaises(subprocess.CalledProcessError):
                 affected_tests.changed_files(root, 'no-such-revision')
+
+    def test_affected_tooling_runs_python_tests_and_only_relevant_ert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {**LIBRARIES, **dict.fromkeys(affected_tests.SMOKE, ''),
+                              'test/test_tools.py': 'raise SystemExit(23)',
+                              'test/test-bench.el': '"bench.el"\n',
+                              'test/test-other-bench.el': '"benchmark/other.el"\n'})
+            changed = ['test/test_tools.py', 'test/test_deleted.py', 'test/terminal-check.el',
+                       'benchmark/bench.el', 'benchmark/no-smoke.el']
+            self.assertEqual(affected_tests.select(root, changed)[0], ['test/test-bench.el'])
+            with patch.object(run_tests, 'ROOT', root), \
+                 patch.object(affected_tests, 'changed_files', return_value=changed), \
+                 patch.object(sys, 'argv', ['run_tests.py', '--affected', 'HEAD',
+                                           '--output', str(root / 'reports')]), \
+                 patch.object(run_tests, 'run_logged', return_value=(7, 0)):
+                self.assertEqual(run_tests.main(), 23)
 
     def test_affected_cli_adds_smoke_set_and_never_runs_zero_files(self):
         self.assertEqual(run_tests.select_files(list(affected_tests.SMOKE)),

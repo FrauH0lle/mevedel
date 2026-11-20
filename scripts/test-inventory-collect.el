@@ -1,4 +1,4 @@
-;;; test-inventory-collect.el --- Read literal test names and strings -*- lexical-binding: t; -*-
+;;; test-inventory-collect.el --- Read literal test names, imports and strings -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Read test snapshots without loading helpers, expanding arbitrary macros, or
@@ -10,9 +10,9 @@
 (require 'json)
 
 (defun mevedel-test-inventory--collect (text)
-  "Return literal test names, strings and fixture paths read from TEXT."
+  "Return literal test names, imports, strings and fixture paths from TEXT."
   (let ((file-name-handler-alist nil)
-        tests strings paths globals)
+        tests imports provides strings paths globals)
     (cl-labels
         ((path
           (form environment)
@@ -56,6 +56,21 @@
               (push (cons (cadr form) (path (nth 2 form) environment)) globals))
             (unless quoted
               (pcase (car form)
+                ('provide
+                 (pcase (cadr form)
+                   (`(quote ,(and (pred symbolp) feature))
+                    (push (symbol-name feature) provides))))
+                ((or 'require 'load 'load-file)
+                 (let* ((kind (car form))
+                        (file (if (eq kind 'require) (nth 2 form) (cadr form))))
+                   (cond
+                    ((stringp file)
+                     (push `((file . ,file) (kind . ,(symbol-name kind)) (line . ,line)) imports))
+                    ((and (eq kind 'require) (null file))
+                     (pcase (cadr form)
+                       (`(quote ,(and (pred symbolp) feature))
+                        (push `((feature . ,(symbol-name feature)) (kind . "require")
+                                (line . ,line)) imports)))))))
                 ('ert-deftest
                  (when (symbolp (cadr form))
                    (push `((name . ,(symbol-name (cadr form))) (line . ,line)) tests)))
@@ -97,6 +112,8 @@
           (let ((line (line-number-at-pos)))
             (walk (read (current-buffer)) line nil nil)))))
     `((tests . ,(vconcat (nreverse tests)))
+      (imports . ,(vconcat (nreverse imports)))
+      (provides . ,(vconcat provides))
       (strings . ,(vconcat (nreverse strings)))
       (paths . ,(vconcat (nreverse paths))))))
 

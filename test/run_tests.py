@@ -167,10 +167,9 @@ def main():
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     parser.add_argument('--output', type=Path)
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')
-    parser.add_argument('--affected', nargs='?',
-                        const=os.environ.get('MEVEDEL_AFFECTED_BASE') or 'master', metavar='REV',
+    parser.add_argument('--affected', nargs='?', const='', metavar='REV',
                         help='fast tier: test files for changes since the merge base with '
-                             'REV (default MEVEDEL_AFFECTED_BASE or master), including '
+                             'REV (default MEVEDEL_AFFECTED_BASE, then worktree pin or master), including '
                              'uncommitted and untracked files')
     lane = parser.add_mutually_exclusive_group()
     lane.add_argument('--fresh-files', action='store_true',
@@ -182,17 +181,25 @@ def main():
         parser.error('--jobs must be positive')
     if args.replay and args.files:
         parser.error('--replay uses its saved file roster; do not pass files')
-    if args.affected and (args.files or args.replay):
+    if args.affected is not None and (args.files or args.replay):
         parser.error('--affected selects its own files; do not pass files or --replay')
     try:
         replay = read_replay(args.replay) if args.replay else None
-        if args.affected:
-            changed = affected_tests.changed_files(ROOT, args.affected)
+        if args.affected is not None:
+            base = args.affected or os.environ.get('MEVEDEL_AFFECTED_BASE') or affected_tests.git(
+                ROOT, 'config', '--worktree', '--default=master', '--get', 'mevedel.affectedBase')[0]
+            changed = affected_tests.changed_files(ROOT, base)
             selected, notes = affected_tests.select(ROOT, changed)
             for note in notes[:20]:
                 print(note, flush=True)
             if len(notes) > 20:
                 print(f'... {len(notes) - 20} more changed files', flush=True)
+            for path in changed:
+                if affected_tests.PYTHON_TEST.fullmatch(path) and (ROOT / path).is_file():
+                    print(f'Running Python test: {path}', flush=True)
+                    code = subprocess.run([sys.executable, path], cwd=ROOT).returncode
+                    if code:
+                        return code if code > 0 else 1
             files = select_files(sorted(set(selected) | set(affected_tests.SMOKE))
                                  if selected is not None else [])
             print(f'Affected tier: {len(changed)} changed files; '

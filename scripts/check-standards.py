@@ -250,7 +250,7 @@ def stub_library(name):
 
 
 def test_inventory(root, sources):
-    """Read literal ERT names and fixture strings without evaluating test code."""
+    """Read test names, imports and fixture references without evaluating code."""
     with tempfile.TemporaryDirectory(prefix='mevedel-test-inventory-') as tmp:
         directory = Path(tmp)
         request, response = directory / 'input.json', directory / 'output.json'
@@ -265,7 +265,7 @@ def test_inventory(root, sources):
 
 
 def test_integrity_errors(root, names):
-    """Reject duplicate literal names and tracked tests using untracked fixtures.
+    """Reject ERT name collisions, cross-imports and untracked fixture references.
 
     Fixture references include explicit test/fixtures paths and literal path
     constructors rooted in fixture directories.  Unrelated basename strings
@@ -287,7 +287,24 @@ def test_integrity_errors(root, names):
                        *('/'.join(parts[index:]) for index in range(len(parts)))):
             suffixes.setdefault(suffix, set()).add(fixture)
     errors, owners = [], {}
-    for name, data in test_inventory(root, sources).items():
+    collected = test_inventory(root, sources)
+    test_files = {name for name, data in collected.items() if data['tests']}
+    providers = {}
+    for name in sorted(test_files):
+        for feature in collected[name]['provides']:
+            providers.setdefault(feature, set()).add(name)
+    for name, data in collected.items():
+        if name in test_files:
+            for item in data['imports']:
+                targets = providers.get(item.get('feature'), set())
+                if 'file' in item:
+                    # shortcut: literal repo/sibling paths only; extend if tests compute imports.
+                    path = re.sub(r'\.elc?$', '', item['file']) + '.el'
+                    targets = {posixpath.relpath(root / directory / path, root)
+                               for directory in ('', posixpath.dirname(name))} & test_files
+                for target in sorted(targets - {name}):
+                    errors.append(f'{name}:{item["line"]}: cannot {item["kind"]} ERT test file {target}; '
+                                  'move shared fixtures to a test helper')
         for test in data['tests']:
             symbol, line = test['name'], test['line']
             if symbol in owners:

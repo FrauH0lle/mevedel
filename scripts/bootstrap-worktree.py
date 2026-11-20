@@ -63,7 +63,28 @@ def run(argv, cwd, **kwargs):
     return result.stdout.strip()
 
 
-def prepare(root):
+def pin_affected_base(root, base):
+    """Pin BASE or the branch's recorded creation commit in this worktree."""
+    config = ["git", "config", "--worktree"]
+    key = "mevedel.affectedBase"
+    if base:
+        commit = run(["git", "rev-parse", "--verify", "--end-of-options",
+                      f"{base}^{{commit}}"], root)
+    else:
+        if run([*config, "--default=", "--get", key], root):
+            return
+        branch = run(["git", "rev-parse", "--symbolic-full-name", "HEAD"], root)
+        if not branch.startswith("refs/heads/"):
+            return
+        log = run(["git", "reflog", "show", "--format=%H%x09%gs", branch], root).splitlines()
+        if not log or "\tbranch: Created from " not in log[-1]:
+            return
+        commit = log[-1].split("\t", 1)[0]
+    run([*config, key, commit], root)
+    print(f"Affected base: {commit}", flush=True)
+
+
+def prepare(root, base=None):
     """Reuse the primary checkout's cache when safe, then prove loadability."""
     root = root.resolve(strict=True)
     top = Path(run(["git", "rev-parse", "--show-toplevel"], root)).resolve()
@@ -104,6 +125,9 @@ def prepare(root):
         run(["git", "config", "--local", "extensions.worktreeConfig", "true"], root)
         run(["git", "config", "--worktree", "core.hooksPath", ".githooks"], root)
         print("Worktree hook: .githooks (worktree-only)", flush=True)
+        pin_affected_base(root, base)
+    elif base:
+        raise RuntimeError("--base can only pin a linked worktree")
     command = ([shutil.which("eask")] if shutil.which("eask") else
                ["npx", "--offline", "--silent", "--no-install", "@emacs-eask/cli"])
     environment = os.environ.copy()
@@ -140,9 +164,10 @@ def prepare(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("worktree", nargs="?", type=Path, default=Path.cwd())
+    parser.add_argument("--base", help="pin this linked worktree's affected base to REV")
     args = parser.parse_args()
     try:
-        prepare(args.worktree)
+        prepare(args.worktree, args.base)
     except (OSError, RuntimeError) as error:
         print(f"Worktree bootstrap failed: {error}", file=sys.stderr)
         print("No dependencies were installed or upgraded. Recovery must use the "

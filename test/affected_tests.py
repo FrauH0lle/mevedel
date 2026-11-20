@@ -26,6 +26,7 @@ SMOKE = ('test/test-mevedel-agent-exec.el', 'test/test-mevedel-persistence.el',
          'test/test-mevedel-structs.el')
 DOCUMENTATION = ('.md', '.org', '.txt', '.png', '.jpg', '.svg', '.gif')
 NODE_TESTS = ('.js', '.mjs')
+PYTHON_TEST = re.compile(r'test/test_[^/]+\.py\Z')
 BROAD_SHARE = 0.25
 REQUIRE = re.compile(r"\(require\s+'([^\s()]+)")
 PROVIDE = re.compile(r"^\(provide\s+'([^\s()]+)", re.M)
@@ -73,6 +74,9 @@ def select(root, changed):
     for path in changed:
         if path in FULL_SUITE:
             matches, reason = None, 'shared test support'
+        elif PYTHON_TEST.fullmatch(path):
+            notes.append(f'{path}: Python test; no ERT selection')
+            continue
         elif path.endswith('.el') and (
                 '/' not in path or (path.startswith('test/') and path.count('/') == 1)):
             if path.startswith('test/test-') and path not in texts:
@@ -89,7 +93,7 @@ def select(root, changed):
         else:
             names = [path, f'"{Path(path).name}"'] + [
                 str(parent) + '/' for parent in Path(path).parents
-                if str(parent) not in ('.', 'test')]
+                if str(parent) not in ('.', 'test', 'benchmark')]
             pattern = re.compile('|'.join(r'(?<![\w.-])' + re.escape(name) for name in names))
             matches = {test for test in tests if pattern.search(texts[test])}
             reason = 'no test file names it or its directory'
@@ -99,6 +103,10 @@ def select(root, changed):
             if not matches and node_test_p(path):
                 notes.append(f'{path}: Node/browser test; run by its own runner')
                 continue
+        if not matches and (path == 'test/terminal-check.el' or
+                            (path.startswith('benchmark/') and path.endswith('.el'))):
+            notes.append(f'{path}: standalone check; no matching ERT smoke test')
+            continue
         if not matches:
             notes.append(f'{path}: full suite ({reason})')
             full = True

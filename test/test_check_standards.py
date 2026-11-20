@@ -278,6 +278,29 @@ class StandardsTests(unittest.TestCase):
                    '(ert-deftest distinct () (should t))'))
         self.check(0)
 
+    def test_ert_files_cannot_import_each_other(self):
+        for script in ('check-standards.py', 'checkdoc-collect.el',
+                       'test-inventory-collect.el', 'test-stubs-collect.el'):
+            self.write(f'scripts/{script}', (ROOT / 'scripts' / script).read_text())
+        self.commit()
+        self.write('test/test-target.el', library('test-target').replace(
+            "(provide 'test-target)", "(ert-deftest target () (should t))\n(provide 'suite)"))
+        self.write('test/test-helper.el', library('test-helper'))
+        for form, kind in (("(require 'suite)", 'require'),
+                           ('(load "test/test-target")', 'load'),
+                           ('(load-file "test/test-target.el")', 'load-file'),
+                           ('(require \'suite "test/test-target.el")', 'require'),
+                           ("(require 'test-helper)\n'(load \"test/test-target\")", None)):
+            with self.subTest(form=form):
+                self.write('test/test-source.el', library('test-source').replace(
+                    "(provide 'test-source)", f'{form}\n(ert-deftest importer () (should t))'))
+                result = subprocess.run(['python3', 'scripts/check-standards.py', '--base', 'HEAD'],
+                                        cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, int(kind is not None),
+                                 result.stdout + result.stderr)
+                if kind:
+                    self.assertIn(f'cannot {kind} ERT test file test/test-target.el', result.stderr)
+
     def test_generated_test_names_collide_with_literal_names(self):
         self.write('test/test-one.el', library('test-one').replace(
             "(provide 'test-one)",

@@ -59,8 +59,8 @@ else:
                               text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT).stdout
 
-    def bootstrap(self, root=None, success=True):
-        result = subprocess.run([sys.executable, str(SCRIPT), str(root or self.tree)],
+    def bootstrap(self, root=None, success=True, *, options=()):
+        result = subprocess.run([sys.executable, str(SCRIPT), str(root or self.tree), *options],
                                 env=self.environment, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if success:
@@ -100,6 +100,21 @@ else:
         self.assertIn("(local)", self.bootstrap(self.root))
         self.assertEqual(self.git("config", "--local", "--list"), configuration)
 
+    def test_pins_creation_base_per_worktree_and_allows_override(self):
+        self.git("switch", "-c", "integration")
+        self.git("commit", "--allow-empty", "-m", "integration changes")
+        self.git("-C", str(self.tree), "switch", "-c", "topic", "integration")
+        created_from = self.git("rev-parse", "integration").strip()
+        self.git("commit", "--allow-empty", "-m", "later integration changes")
+        self.assertIn(f"Affected base: {created_from}", self.bootstrap())
+        override = self.git("rev-parse", "integration~2").strip()
+        self.bootstrap(options=("--base", "integration~2"))
+        self.bootstrap()
+        self.assertEqual(self.git("-C", str(self.tree), "config", "--worktree", "--get",
+                                  "mevedel.affectedBase").strip(), override)
+        self.assertEqual(self.git("config", "--default=missing", "--get",
+                                  "mevedel.affectedBase").strip(), "missing")
+
     def test_hook_runs_only_in_bootstrapped_worktree(self):
         self.git("config", "core.hooksPath", "primary-hooks")
         before = self.git("config", "--local", "--list")
@@ -118,15 +133,14 @@ else:
         self.assertEqual(after.replace("extensions.worktreeconfig=true\n", ""), before)
         self.assertFalse((self.root / ".git/config.worktree").exists())
         log = self.base / "hook-command"
-        npx = self.base / "bin/npx"
-        npx.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$COMMAND_LOG"\nexit 23\n')
-        npx.chmod(0o755)
+        eask = self.base / "bin/eask"
+        eask.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$COMMAND_LOG"\nexit 23\n')
         result = subprocess.run(
             ["git", "-C", str(self.tree), "commit", "--allow-empty", "-m", "Blocked"],
             env={**self.environment, "COMMAND_LOG": str(log)}, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(log.read_text().strip(),
-                         "@emacs-eask/cli run script check -- --affected")
+                         "run script check -- --affected")
 
     def test_unsafe_shared_configuration_is_not_migrated(self):
         for key, value in (("core.worktree", str(self.root)), ("core.bare", "true")):
