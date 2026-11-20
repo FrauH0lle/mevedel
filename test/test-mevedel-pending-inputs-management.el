@@ -152,8 +152,7 @@
       (switch-to-buffer view-buf)
       (mevedel-session-enqueue-pending-input session 'steering '(:input "short"))
       (mevedel-session-enqueue-pending-input session 'follow-up '(:input "long\nbody"))
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-composer-insert "> draft\nsecond line")
       (dolist (pair '(("short" . "d") ("long" . "DEL")))
         (mevedel-view--interaction-rebuild)
         (goto-char (point-min))
@@ -219,10 +218,10 @@
     (mevedel-session-set-pending-input-paused session t)
     (with-current-buffer data-buf
       (setq-local mevedel--current-request (mevedel-request--create :id "active")))
-    (with-current-buffer view-buf
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
       (should-error (mevedel-view-resume-pending) :type 'user-error)
       (with-current-buffer data-buf (setq-local mevedel--current-request nil))
-      (goto-char (point-max)) (insert "draft")
+      (mevedel-view-composer-insert "draft")
       (should-error (mevedel-view-resume-pending) :type 'user-error))
     (should (mevedel-session-pending-input-paused session))))
 

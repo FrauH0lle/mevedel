@@ -73,6 +73,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
   (test)
   :doc "shows a pending row after staged preparation and preserves the draft"
   (mevedel-prepare-test--with-tool
+    (goto-char (point-max))
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
       (mevedel-prepare-test--paused
         (should mevedel-view-prepare--jobs)
@@ -114,6 +115,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
         (mevedel-view--full-rerender)
         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
         (clrhash mevedel-view--tool-rendering-cache)
+        (goto-char (point-max))
         (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
               threads)
           (unwind-protect
@@ -441,7 +443,10 @@ BODY can release it by setting RELEASED and inspect WORKER."
   :doc "publication queued behind an active writer validates after ownership"
   (mevedel-prepare-test--with-tool
     (mevedel-prepare-test--paused
+      ;; A transcript writer would otherwise finish the batch and retire the job.
+      (mevedel-prepare-test--wait (lambda () (not mevedel-view-render--batch)))
       (let ((job (car mevedel-view-prepare--jobs)))
+        (should job)
         (mevedel-view-render-mutate
          'test
          (lambda ()

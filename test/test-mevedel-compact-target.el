@@ -767,7 +767,7 @@
             (should (= 2 (mevedel-session-current-segment session)))
             (with-current-buffer view-buf
               (goto-char (point-min))
-              (should-not (search-forward "old.el" (mevedel-view-prompt-boundary) t))
+              (should-not (search-forward "old.el" (mevedel-view-transcript-tail) t))
               (goto-char (point-min))
               (search-forward "recent.el")
               (should-not (get-text-property (point) 'mevedel-view-collapsed))

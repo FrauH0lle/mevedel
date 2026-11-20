@@ -3285,13 +3285,13 @@
               (should (string-match-p
                        "Running PreToolUse hook"
                        (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
               ;; Agents are counted by the background-work panel, not
               ;; the progress footer.
               (should-not (string-match-p
                            "agent"
                            (buffer-substring-no-properties
-                            (point-min) (mevedel-view-prompt-boundary)))))
+                            (point-min) (mevedel-view-transcript-tail)))))
             (funcall handler-finish nil)
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"

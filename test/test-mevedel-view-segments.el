@@ -241,7 +241,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should-not (string-search "Archived answer one" (buffer-string)))
     (should-not (string-search "Live answer" (buffer-string)))
     (should buffer-read-only)
-    (should (invisible-p (mevedel-view-composer-draft-start))))
+    (should (buffer-local-value 'buffer-read-only (mevedel-view-composer-buffer))))
 
   :doc "a missing adjacent segment leaves the current projection unchanged"
   (let* ((directory (make-temp-file "mevedel-view-segment-gap-" t))
@@ -310,7 +310,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               (should (string-search "Complete archived answer."
                                      (buffer-string)))
               (should (= 1 (how-many "^You$" (point-min)
-                                     (mevedel-view-prompt-boundary)))))))
+                                     (mevedel-view-transcript-tail)))))))
       (mevedel-session-durability-lease-release directory session)
       (mevedel-workspace-clear-registry)
       (delete-directory directory t)))
@@ -525,7 +525,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (should-not (string-search "Viewing archived segment"
                                  (buffer-string)))
       (should-not buffer-read-only)
-      (should-not (invisible-p (mevedel-view-composer-draft-start)))
+      (should-not (buffer-local-value 'buffer-read-only (mevedel-view-composer-buffer)))
       (should (equal draft (mevedel-view-composer-draft-text)))
       (should (= point-offset (mevedel-view-segments-test--draft-offset))))))
 
@@ -768,7 +768,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (goto-char (point-min))
       (let ((state (mevedel-view-render-capture-segment-state)))
         (should-not (plist-get state :point-anchor))
-        (goto-char (mevedel-view-prompt-boundary))
+        (goto-char (mevedel-view-transcript-tail))
         (mevedel-view-render--restore-segment-state state 'backward)
         (should (= (point) (point-min)))))))
 

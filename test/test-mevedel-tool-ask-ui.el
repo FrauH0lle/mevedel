@@ -1207,15 +1207,19 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "form changes preserve a multiline composer draft and restore its point"
   (test-mevedel-tool-ask-ui--with-form
-    (with-current-buffer view-buffer
-      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
-    (test-mevedel-tool-ask-ui--show
-     #'ignore [(:question "Layout?" :options ["Compact" "Spacious"])])
-    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-    (with-current-buffer view-buffer
-      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t))))
-    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-    (with-current-buffer view-buffer
+    (let* ((view-window (selected-window))
+           (composer (mevedel-view-composer-display view-window)))
+      (select-window composer)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (with-current-buffer data-buffer
+        (mevedel-tool-ask-ui-show
+         #'ignore [(:question "Layout?" :options ["Compact" "Spacious"])]))
+      (mevedel-view-jump-to-interaction)
+      (should (eq view-window (selected-window)))
+      (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+      (should (eq composer (selected-window)))
       (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
       (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
@@ -1225,12 +1229,16 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "an arriving form leaves point in the draft until the user visits it"
   (test-mevedel-tool-ask-ui--with-form
-    (with-current-buffer view-buffer
-      (mevedel-view-test--insert-composer-draft "> draft" 3))
-    (mevedel-tool-ask-ui-show #'ignore [(:question "Use cache?" :options ["Yes" "No"])])
-    (with-current-buffer view-buffer
+    (let* ((view-window (selected-window))
+           (composer (mevedel-view-composer-display view-window)))
+      (select-window composer)
+      (mevedel-view-test--insert-composer-draft "> draft" 3)
+      (with-current-buffer data-buffer
+        (mevedel-tool-ask-ui-show #'ignore [(:question "Use cache?" :options ["Yes" "No"])]))
+      (should (eq composer (selected-window)))
       (should (= 3 (mevedel-view-test--composer-point-offset)))
       (mevedel-view-jump-to-interaction)
+      (should (eq view-window (selected-window)))
       (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))))
 
   :doc "shows every question at once and submits the whole form"

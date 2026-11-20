@@ -33,6 +33,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-utilities)
+(require 'mevedel-view-composer)
 (require 'mevedel-execution)
 (require 'mevedel-journal-capture)
 (require 'mevedel-journal-test-support
@@ -946,7 +947,7 @@
                 (with-current-buffer view-buf
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
-                    (goto-char (mevedel-view-prompt-boundary))
+                    (goto-char (mevedel-view-transcript-tail))
                     (insert "Exit hook view chrome\n"))
                   (set-buffer-modified-p t))
                 (cl-letf (((symbol-function 'buffer-list)
@@ -5532,7 +5533,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (with-current-buffer view
                   (mevedel-view--full-rerender)
                   (let ((text (buffer-substring-no-properties
-                               (point-min) (mevedel-view-prompt-boundary))))
+                               (point-min) (mevedel-view-transcript-tail))))
                     (should (string-match-p "hook changed prompt" text))
                     (should (string-match-p "rewritten prompt" text))
                     (should-not (string-match-p "original prompt" text)))
@@ -5540,7 +5541,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                   (search-forward "hook changed prompt")
                   (mevedel-view-toggle-section)
                   (let ((expanded (buffer-substring-no-properties
-                                   (point-min) (mevedel-view-prompt-boundary))))
+                                   (point-min) (mevedel-view-transcript-tail))))
                     (should (string-match-p "original prompt" expanded)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
@@ -5597,7 +5598,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (buf     (generate-new-buffer "*test-data-buf*"))
-               restored displayed)
+               restored)
           (unwind-protect
               (progn
                 (with-current-buffer buf
@@ -5608,34 +5609,35 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (test-mevedel-session-persistence--release-and-kill
                  buf session)
                 (setq buf nil)
-                (let ((default-directory tempdir))
-                  (cl-letf (((symbol-function 'mevedel-workspace)
-                             (lambda (&optional _arg) workspace))
-                            ((symbol-function
-                              'mevedel--ordered-completion-table)
-                             (lambda (values &rest _) values))
-                            ;; The first candidate starts a new session; the
-                            ;; second is the persisted one under test.
-                            ((symbol-function 'completing-read)
-                             (lambda (_prompt collection &rest _)
-                               (cadr collection)))
-                            ((symbol-function 'display-buffer)
-                             (lambda (buffer &optional _action _frame)
-                               (setq displayed buffer)
-                               buffer)))
-                    (let ((mevedel-preset--registry
-                           '((test-preset :parents nil :settings nil)))
-                          (gptel--known-presets
-                           (cons '(test-preset :description "Test")
-                                 gptel--known-presets)))
-                      (mevedel))))
-                (should (buffer-live-p displayed))
-                (setq restored
-                      (buffer-local-value 'mevedel--data-buffer displayed))
-                (should (buffer-live-p restored))
-                (should (eq displayed
-                            (buffer-local-value 'mevedel--view-buffer
-                                                restored))))
+                (save-window-excursion
+                  (let ((default-directory tempdir)
+                        (transcript-window (selected-window))
+                        (gptel-display-buffer-action '(display-buffer-same-window)))
+                    (cl-letf (((symbol-function 'mevedel-workspace)
+                               (lambda (&optional _arg) workspace))
+                              ((symbol-function
+                                'mevedel--ordered-completion-table)
+                               (lambda (values &rest _) values))
+                              ;; The first candidate starts a new session; the
+                              ;; second is the persisted one under test.
+                              ((symbol-function 'completing-read)
+                               (lambda (_prompt collection &rest _)
+                                 (cadr collection))))
+                      (let ((mevedel-preset--registry
+                             '((test-preset :parents nil :settings nil)))
+                            (gptel--known-presets
+                             (cons '(test-preset :description "Test")
+                                   gptel--known-presets)))
+                        (mevedel)))
+                    (let ((displayed (window-buffer transcript-window)))
+                      (setq restored
+                            (buffer-local-value 'mevedel--data-buffer displayed))
+                      (should (buffer-live-p restored))
+                      (should (eq displayed (buffer-local-value 'mevedel--view-buffer restored)))
+                      (let ((composer (should (mevedel-view-composer-window transcript-window))))
+                        (should (eq (selected-window) composer))
+                        (should (eq (window-buffer composer)
+                                    (mevedel-view-composer-buffer displayed))))))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

@@ -169,11 +169,13 @@
                (source-window (selected-window))
                (view (mevedel-note-send (mevedel-note-create "Explain this code")))
                (frame mevedel-note-frame--frame)
-               (window (frame-selected-window frame))
+               (window (get-buffer-window view frame))
+               (editor (mevedel-view-composer-window window))
                (info (gptel-fsm-info (car sent))))
           (unwind-protect
               (progn
                 (should (frame-parent frame))
+                (should (eq (window-buffer editor) (mevedel-view-composer-buffer view)))
                 (should (plist-get info :stream))
                 (wait 0.2)
                 (let ((target (if ,source-selected source-window window)))
@@ -182,14 +184,15 @@
                 (wait 0.2)
                 (let ((selected (selected-window))
                       (source-start (window-start source-window))
-                      view-point view-row)
+                      draft-point draft-start draft-row)
                   (should (eq selected (if ,source-selected source-window window)))
                   (with-current-buffer view
-                    (mevedel-view-test--insert-composer-draft draft)
-                    (set-window-point window (point)))
+                    (mevedel-view-test--insert-composer-draft draft 4))
                   (wait 0.1)
-                  (with-current-buffer view
-                    (setq view-point (copy-marker (window-point window))))
+                  (setq draft-point (window-point editor)
+                        draft-start (window-start editor)
+                        draft-row (cdr (posn-col-row (posn-at-point draft-point editor))))
+                  (should draft-row)
                   (plist-put info :http-status "200")
                   (plist-put info :status "HTTP/1.1 200 OK")
                   (gptel--fsm-transition (car sent))
@@ -210,13 +213,10 @@
                                                       (get-char-property
                                                        (car mevedel-view--spinner-label-target)
                                                        'display window))))))
-                      (should (equal draft (mevedel-view-composer-draft-text)))
-                      (should (= view-point (window-point window)))
-                      ;; The first response consumes blank space; later chunks
-                      ;; keep the filled composer viewport (ADR 0126).
-                      (let ((row (cdr (posn-col-row (posn-at-point view-point window)))))
-                        (when view-row (should (= view-row row)))
-                        (setq view-row row)))
+                      (should (equal draft (mevedel-view-composer-draft-text))))
+                    (should (= draft-point (window-point editor)))
+                    (should (= draft-start (window-start editor)))
+                    (should (= draft-row (cdr (posn-col-row (posn-at-point draft-point editor)))))
                     (should (eq selected (selected-window)))
                     (should (= source-start (window-start source-window))))
                   (gptel--fsm-transition (car sent))
@@ -275,8 +275,7 @@
         (goto-char (point-min))
         (should (search-forward "It is the selected code." nil t))
         (should-error (insert "not editable") :type 'text-read-only)
-        (goto-char (point-max))
-        (insert "A reply without the minibuffer"))
+        (mevedel-view-composer-insert "A reply without the minibuffer"))
       (with-current-buffer source
         (should (equal "outside-before\nselected code\noutside-after\n" (buffer-string))))))
   :doc "initial input includes capabilities and memory but excludes unrelated conversation context"
@@ -409,8 +408,7 @@
                        (mevedel-system-context-components session))))
       (with-current-buffer view
         (should mevedel-note-conversation-mode)
-        (goto-char (point-max))
-        (insert "Follow up")
+        (mevedel-view-composer-insert "Follow up")
         (with-current-buffer (mevedel-view-composer-buffer)
           (mevedel-view-send)))
       (should (= 2 (length sent)))
@@ -427,27 +425,28 @@
     (let* ((note (mevedel-note-create "Improve this code"))
            (view (mevedel-note-send note))
            (data (buffer-local-value 'mevedel--data-buffer view))
+           (composer (mevedel-view-composer-buffer view))
            (draft "> active draft\nsecond line"))
       (mevedel-note-conversation-test--answer (car sent) "An answer.")
-      (with-current-buffer view
+      (with-current-buffer composer
         (should (string-search "C-c C-z close\n> " (buffer-string)))
         (mevedel-view-test--insert-composer-draft draft))
       (let ((selected (selected-window))
-            (position (with-current-buffer view (copy-marker (point))))
+            (position (mevedel-view-test--composer-point-offset view))
             (start (window-start (selected-window))))
         (with-current-buffer data
           (mevedel-tool-patch-handler
            #'ignore
            '(:patch "*** Begin Patch\n*** Update File: source.el\n@@\n-selected code\n+improved code\n*** End Patch")))
-        (with-current-buffer view
+        (with-current-buffer composer
           (should (string-search "C-c C-z close · C-c C-a apply · C-c C-g merge\n> "
                                  (buffer-string)))
           (should (equal draft (mevedel-view-composer-draft-text)))
-          (should (= position (point))))
+          (should (= position (mevedel-view-test--composer-point-offset view))))
         (should (eq selected (selected-window)))
         (should (= start (window-start selected))))
       (mevedel-note-apply-change note)
-      (with-current-buffer view
+      (with-current-buffer composer
         (should (string-search "C-c C-z close\n> " (buffer-string)))
         (should-not (string-search "C-c C-a apply" (buffer-string)))
         (should (equal draft (mevedel-view-composer-draft-text)))))))
@@ -590,7 +589,7 @@
                      (car (all-completions "" collection))))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
           (mevedel-rewind)))
-      (with-current-buffer view
+      (with-current-buffer (mevedel-view-composer-buffer view)
         (should (string-search "C-c C-z close\n> " (buffer-string)))
         (should-not (string-search "C-c C-a apply" (buffer-string))))
       (mevedel--clear-instruction-state workspace)
@@ -1194,9 +1193,8 @@
             (goto-char (point-min))
             (forward-line 1)
             (setq view (mevedel-note-send)))
-          (with-current-buffer view
-            (goto-char (point-max))
-            (insert "Follow up without a new mention")
+          (with-current-buffer (mevedel-view-composer-buffer view)
+            (mevedel-view-composer-insert "Follow up without a new mention")
             (call-interactively (key-binding (kbd "C-c C-c"))))
           (let ((next (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
             (should (string-search "MENTIONED-TEXT" next))
@@ -1328,9 +1326,8 @@
     (let* ((note (mevedel-note-create "Explain this?"))
            (view (mevedel-note-send note)))
       (mevedel-note-conversation-test--answer (car sent) "First answer.")
-      (with-current-buffer view
-        (goto-char (point-max))
-        (insert "And why?")
+      (with-current-buffer (mevedel-view-composer-buffer view)
+        (mevedel-view-composer-insert "And why?")
         (call-interactively (key-binding (kbd "C-c C-c"))))
       (should (= 2 (length sent)))
       (let ((payload (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
@@ -1538,8 +1535,7 @@
              (view (buffer-local-value 'mevedel--view-buffer main))
              outcome)
         (with-current-buffer view
-          (goto-char (point-max))
-          (insert "Suggest a fix")
+          (mevedel-view-composer-insert "Suggest a fix")
           (with-current-buffer (mevedel-view-composer-buffer)
             (mevedel-view-send)))
         (with-current-buffer main

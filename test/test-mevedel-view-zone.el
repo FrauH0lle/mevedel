@@ -26,7 +26,7 @@
   (save-excursion
     (goto-char (point-min))
     (let ((mevedel-view--agent-transcript-p t))
-      (mevedel-view-composer-initialize-prompt))))
+      (mevedel-view-transcript-tail-initialize))))
 
 (defun mevedel-view-zone-test--caret-offset ()
   "Return the composer caret offset from its draft start.
@@ -97,7 +97,7 @@ The current buffer is the owning view."
                (- (marker-position mevedel-view--interaction-marker)
                   (point-min))))
     (should (= (marker-position mevedel-view--interaction-marker)
-               (mevedel-view-prompt-boundary))))
+               (mevedel-view-transcript-tail))))
 
   :doc "history inserted before a managed zone stays outside its bounds"
   (dolist (zone '(status interaction progress))
@@ -212,12 +212,13 @@ The current buffer is the owning view."
                                   (forward-line 2)
                                   (point))))
         ;; The first line now wraps onto a second screen row.
-        (should-not (mevedel-view-test--composer-screen-y (selected-window)))
+        (should-not (mevedel-view-test--position-screen-y
+                     (point-max) (selected-window)))
         (funcall render (concat (make-string (+ width 10) ?x) "\n"))
         (should (= 2 (count-screen-lines
                       (plist-get (mevedel-view-zone-fragment-bounds 'interaction 'form) :start)
                       (window-start))))
-        (should (equal "> draft" (mevedel-view-composer-draft-text))))))
+        (should (string-suffix-p "> draft" (buffer-string))))))
 
   :doc "preserves point at a fragment's final character across redraws"
   (with-temp-buffer
@@ -276,7 +277,7 @@ The current buffer is the owning view."
       (insert (propertize "Stale\n"
                           'mevedel-view-zone-namespace 'status
                           'mevedel-view-zone-region (make-overlay 1 1)))
-      (set-marker (mevedel-view-prompt-boundary-marker) (point-max))
+      (set-marker (mevedel-view-transcript-tail-marker) (point-max))
       (mevedel-view-zone-reconcile
        'status (point-min) (point-min)
        '((:namespace status :id live :body "Live")))
@@ -287,7 +288,7 @@ The current buffer is the owning view."
         (goto-char tail-start)
         (insert "Tail")
         (set-text-properties tail-start (point-max) nil))
-      (set-marker (mevedel-view-prompt-boundary-marker) (point-max))
+      (set-marker (mevedel-view-transcript-tail-marker) (point-max))
       (let* ((anchor (copy-marker (point-max) t))
              (bounds (mevedel-view-zone-fragment-bounds 'status 'live))
              (dead-owner (make-overlay 1 1)))
@@ -312,8 +313,9 @@ The current buffer is the owning view."
         (dotimes (n 100) (insert (format "transcript %d\n" n))))
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
       (let* ((visitor (selected-window))
-             (writer (split-window-right))
-             (reader (split-window writer nil 'below))
+             (right (split-window-right))
+             (writer (mevedel-view-composer-display right))
+             (reader right)
              (card (list :namespace 'interaction :id 'visited :priority 2
                          :body "question\noption one\noption two\nanswer"))
              (lower (list :namespace 'interaction :id 'lower :priority 1
@@ -324,20 +326,15 @@ The current buffer is the owning view."
              (render (lambda (fragments)
                        (mevedel-view-zone-reconcile
                         'interaction mevedel-view--interaction-marker
-                        (mevedel-view-prompt-boundary-marker) fragments))))
+                        (mevedel-view-transcript-tail-marker) fragments))))
         (funcall render (list card))
         (goto-char (plist-get (mevedel-view-zone-fragment-bounds
                               'interaction 'visited) :start))
         (forward-line 2)
         (set-window-start visitor
                           (save-excursion (vertical-motion -5 visitor) (point)) t)
+        (should writer)
         (set-window-point writer (+ 4 (mevedel-view-composer-draft-start)))
-        (set-window-start writer
-                          (save-excursion
-                            (goto-char (mevedel-view-composer-draft-start))
-                            (vertical-motion (- (1- (window-body-height writer)))
-                                             writer)
-                            (point)) t)
         (let ((reader-start (save-excursion
                               (goto-char (point-min)) (forward-line 10) (point))))
           (set-window-start reader reader-start t)
@@ -416,7 +413,7 @@ The current buffer is the owning view."
                (render (lambda (fragments)
                          (mevedel-view-zone-reconcile
                           'interaction mevedel-view--interaction-marker
-                          (mevedel-view-prompt-boundary-marker) fragments))))
+                          (mevedel-view-transcript-tail-marker) fragments))))
           (funcall render (list card lower))
           (goto-char (plist-get (mevedel-view-zone-fragment-bounds
                                 'interaction 'visited) :start))
@@ -454,7 +451,7 @@ The current buffer is the owning view."
             (should (looking-at-p "option two"))
             (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))))
 
-  :doc "composer anchoring preserves deliberate blank rows when a card shrinks"
+  :doc "the dock keeps its deliberate blank rows when a card shrinks"
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
@@ -465,45 +462,46 @@ The current buffer is the owning view."
         (dotimes (n 100) (insert (format "transcript %d\n" n))))
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
       (mevedel-view-zone-reconcile
-       'interaction mevedel-view--interaction-marker (mevedel-view-prompt-boundary-marker)
-       ;; Removing these rows must shrink the character tail even after
-       ;; composer anchoring exposes three shorter transcript rows.
+       'interaction mevedel-view--interaction-marker (mevedel-view-transcript-tail-marker)
        (list (list :namespace 'interaction :id 'card
                    :body (mapconcat #'identity
                                     (make-list 3 (make-string 50 ?x)) "\n"))))
-      (set-window-start nil
-                        (save-excursion
-                          (goto-char (mevedel-view-composer-draft-start))
-                          (vertical-motion -6) (point)) t)
-      (mevedel-view-zone-clear 'interaction)
-      (should (= 6 (mevedel-view-test--composer-screen-y (selected-window))))
-      (should (= (+ 4 (mevedel-view-composer-draft-start)) (point)))
-      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))))
+      (let ((dock (mevedel-view-composer-display (selected-window))))
+        (should dock)
+        (should (> (window-body-height dock) 2))
+        (should (= 0 (mevedel-view-test--composer-screen-y dock)))
+        (mevedel-view-zone-clear 'interaction)
+        (should (= 0 (mevedel-view-test--composer-screen-y dock)))
+        (should (= (+ 4 (mevedel-view-composer-draft-start)) (window-point dock)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
-  :doc "composer anchoring wins over a logical start inside a growing card"
+  :doc "a start inside a growing card anchors independently of the dock"
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
       (delete-other-windows)
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
-      (let ((render (lambda (rows)
+      (let ((dock (mevedel-view-composer-display (selected-window)))
+            (render (lambda (rows)
                       (mevedel-view-zone-reconcile
                        'interaction mevedel-view--interaction-marker
-                       (mevedel-view-prompt-boundary-marker)
+                       (mevedel-view-transcript-tail-marker)
                        (list (list :namespace 'interaction :id 'tall
                                    :body (mapconcat
                                           (lambda (n) (format "row %d" n))
                                           (number-sequence 1 rows) "\n")))))))
+        (should dock)
         (funcall render 60)
         (set-window-start nil
                           (save-excursion
-                            (goto-char (mevedel-view-composer-draft-start))
+                            (goto-char (mevedel-view-transcript-tail))
                             (vertical-motion -10) (point)) t)
         (should (mevedel-view-zone-bounds-at (window-start)))
-        (should (= 10 (mevedel-view-test--composer-screen-y (selected-window))))
-        (funcall render 90)
-        (should (= 10 (mevedel-view-test--composer-screen-y (selected-window))))
-        (should (= (+ 4 (mevedel-view-composer-draft-start)) (point)))
+        (let ((start (window-start)) (dock-start (window-start dock)))
+          (funcall render 90)
+          (should (= start (window-start)))
+          (should (= dock-start (window-start dock))))
+        (should (= (+ 4 (mevedel-view-composer-draft-start)) (window-point dock)))
         (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
   :doc "removed cards fill a lost start but preserve a surviving history reader"
@@ -518,7 +516,7 @@ The current buffer is the owning view."
           (dotimes (n 100) (insert (format "transcript %d\n" n))))
         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
         (mevedel-view-zone-reconcile
-         'interaction mevedel-view--interaction-marker (mevedel-view-prompt-boundary-marker)
+         'interaction mevedel-view--interaction-marker (mevedel-view-transcript-tail-marker)
          (list (list :namespace 'interaction :id 'tall
                      :body (mapconcat (lambda (_) "option")
                                       (number-sequence 1 (* 2 (window-body-height)))
@@ -575,7 +573,7 @@ The current buffer is the owning view."
             (inhibit-modification-hooks t))
         (erase-buffer)
         (dotimes (n 100) (insert (format "history %d\n" n)))
-        (mevedel-view-composer-initialize-prompt)
+        (mevedel-view-transcript-tail-initialize)
         (setq-local mevedel-view--status-marker (copy-marker (point) t)
                     mevedel-view--interaction-marker (copy-marker (point) t)))
       (mevedel-view-zone-reconcile

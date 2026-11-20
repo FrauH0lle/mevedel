@@ -143,9 +143,12 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   "Insert @file mentions for dropped PATHS into the composer."
   (mevedel-view--ensure-interactive-chat-view)
   (let ((session (mevedel-view--session))
-        tokens)
+        (composer (mevedel-view-composer-buffer))
+        tokens expanded-paths)
     (unless session
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No active session for dropped files"))
+    (unless composer
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No editable composer for dropped files"))
     (dolist (path paths)
       (let* ((expanded (expand-file-name path))
              (token (mevedel-mentions-file-token expanded)))
@@ -154,14 +157,12 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
          (list :kind 'file :token token :path expanded)
          token)
         (push token tokens)
-        (mevedel-session-add-dropped-file-grant session expanded)))
+        (push expanded expanded-paths)))
     (when tokens
-      (let* ((view (current-buffer))
-             (composer (mevedel-view-composer-buffer view))
-             (start (mevedel-view-composer-draft-start view))
-             (end (mevedel-view-composer-draft-end view))
-             (pos (if (and (eq view composer)
-                           (mevedel-view-composer-in-draft-p (point) view))
+      (let* ((start (mevedel-view-composer-draft-start))
+             (end (mevedel-view-composer-draft-end))
+             (pos (if (and (eq (current-buffer) composer)
+                           (mevedel-view-composer-in-draft-p (point)))
                       (point) end)))
         (with-current-buffer composer
           (save-restriction
@@ -174,8 +175,10 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
                      (unless (or (= pos end)
                                  (memq (char-after pos) '(?\s ?\t ?\n)))
                        " "))
-             pos view)
-            (font-lock-flush start (mevedel-view-composer-draft-end view))))))))
+             pos)
+            (dolist (path (nreverse expanded-paths))
+              (mevedel-session-add-dropped-file-grant session path))
+            (font-lock-flush start (mevedel-view-composer-draft-end))))))))
 
 (defun mevedel-view--pop-dropped-file-grants-for-input (input session)
   "Consume SESSION's pending drag/drop grants referenced by INPUT."
@@ -291,7 +294,7 @@ ARG is passed through from the interactive prefix."
     (yank arg)))
 
 (defun mevedel-view--install-dnd ()
-  "Install local file drag/drop support for the current view buffer."
+  "Install local file drag/drop support in the current view or composer."
   (setq-local dnd-protocol-alist
               (cons '("^file:" . mevedel-view--dnd-handle-files)
                     (cl-remove #'mevedel-view--dnd-handle-files

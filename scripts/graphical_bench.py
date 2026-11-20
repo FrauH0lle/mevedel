@@ -1,10 +1,7 @@
-#!/usr/bin/env python3
-"""Floating composer performance gate against the option off.
+"""Compiled graphical benchmark support for a private presenting KWin.
 
-Usage: bench-floating-composer.py [--rounds N] [--output RAW.json]
-
-Compiles the package and benchmark/mevedel-floating-composer-bench.el into
-a temporary directory, then runs one private presenting KWin session
+Compiles the package and the chosen benchmark into a temporary directory,
+then runs one private presenting KWin session
 (scripts/graphical-check-private-kwin.py) whose client runs three graphical
 Emacs processes: a presentation probe, the benchmark, and a second probe.
 The probes log Wayland traffic (WAYLAND_DEBUG=client) and must show
@@ -13,7 +10,6 @@ report lists, for each workload, every scenario against its baseline with
 paired per-round ratios.  Never contacts the running editor.
 """
 
-import argparse
 import importlib.util
 import json
 import os
@@ -25,30 +21,23 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
-BENCH = "mevedel-floating-composer-bench"
 MIN_CALLBACKS = 20
-ROUNDS = 6
-# (scenario, baseline)
-COMPARISONS = [("on-never", "off-inline"), ("on-hidden", "off-inline"),
-               ("on-visible", "off-inline"), ("on-visible", "off-away")]
-INLINE = ["typing", "wrapped-deletion"]
 
 
 def load_kwin_runner():
     spec = importlib.util.spec_from_file_location(
-        "private_kwin", ROOT / "scripts" / "graphical-check-private-kwin.py")
+        "private_kwin", Path(__file__).with_name("graphical-check-private-kwin.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def compile_build(temporary):
+def compile_build(root, temporary, bench):
     """Byte-compile everything into TEMPORARY/compiled; return the load path."""
     compiled = temporary / "compiled"
     compiled.mkdir()
-    files = sorted(str(p) for p in ROOT.glob("mevedel*.el"))
-    files.append(str(ROOT / "benchmark" / f"{BENCH}.el"))
+    files = sorted(str(p) for p in root.glob("mevedel*.el"))
+    files.append(str(bench.resolve()))
     load_path = temporary / "load-path.eld"
     expression = f"""
 (progn
@@ -65,26 +54,26 @@ def compile_build(temporary):
                NPM_CONFIG_CACHE=os.environ.get("NPM_CONFIG_CACHE", str(Path.home() / ".npm")))
     result = subprocess.run(["npx", "--offline", "@emacs-eask/cli", "emacs", "--batch",
                              "-L", ".", "-L", "benchmark", "--eval", expression],
-                            cwd=ROOT, env=env, capture_output=True, text=True)
+                            cwd=root, env=env, capture_output=True, text=True)
     if result.returncode:
         raise SystemExit(f"compilation failed:\n{result.stdout[-4000:]}{result.stderr[-4000:]}")
     return load_path.read_text()
 
 
-def emacs_command(load_path, form):
+def emacs_command(load_path, bench, form):
     """Return a graphical Emacs command evaluating FORM with compiled code."""
     bootstrap = (f"(progn (setq load-path '{load_path} native-comp-jit-compilation nil)"
-                 f" (condition-case err (progn (require '{BENCH}) {form} (kill-emacs 0))"
+                 f" (condition-case err (progn (require '{bench}) {form} (kill-emacs 0))"
                  " (error (princ (format \"bench error: %S\\n\" err) #'external-debugging-output)"
                  " (kill-emacs 1))))")
     return ["emacs", "-Q", "--no-splash", "--eval", bootstrap]
 
 
-def client_command(load_path, output, probes):
+def client_command(load_path, bench, form, probe_form, probes):
     """Return the session client: probe, benchmark, probe; fail on any failure."""
-    probe = emacs_command(load_path, "(mevedel-fc-bench-probe)")
+    probe = emacs_command(load_path, bench, probe_form)
     steps = [f"WAYLAND_DEBUG=client {shlex.join(probe)} 2> {shlex.quote(str(probes[0]))}",
-             shlex.join(emacs_command(load_path, f"(mevedel-fc-bench-run {json.dumps(str(output))} {ROUNDS})")),
+             shlex.join(emacs_command(load_path, bench, form)),
              f"WAYLAND_DEBUG=client {shlex.join(probe)} 2> {shlex.quote(str(probes[1]))}"]
     return ["sh", "-c", " && ".join(steps)]
 
@@ -111,8 +100,6 @@ def metrics(record):
             "KWin CPU": ("ms", record["kwin-ns"] / 1e6),
             "Xwayland CPU": ("ms", record["xwayland-ns"] / 1e6),
             "redisplay cycles": ("count", record["redisplays"]),
-            "child-frame move/resize": ("count", record["placements"]),
-            "child-frame show/hide": ("count", record["visibility"]),
             "GCs": ("count", record["gcs"])}
     if record["samples-ms"]:
         rows["latency (run median)"] = ("ms", median(record["samples-ms"]))
@@ -135,7 +122,7 @@ def paired(name, ours, base, rounds):
           f"n {len(rounds)} rounds")
 
 
-def report(data):
+def report(data, comparisons):
     runs = {}
     for record in data["records"]:
         runs.setdefault((record["scenario"], record["workload"]), {})[record["round"]] = record
@@ -149,10 +136,8 @@ def report(data):
                       f"in {states.count(False)} of {len(states)} runs")
     print("Values: scenario vs baseline; paired = per-round scenario minus baseline "
           "(ratio = scenario / baseline), median [min, max] over rounds.")
-    for scenario, baseline in COMPARISONS:
+    for scenario, baseline in comparisons:
         for workload in workloads:
-            if baseline == "off-away" and workload in INLINE:
-                continue
             if (scenario, workload) not in runs or (baseline, workload) not in runs:
                 continue
             ours, base = runs[(scenario, workload)], runs[(baseline, workload)]
@@ -168,53 +153,32 @@ def report(data):
             for name in metrics(ours[rounds[0]]):
                 if name != "latency (run median)":
                     paired(name, ours, base, rounds)
-    first = runs.get(("on-never", "first-show"))
-    if first:
-        values = [x for r in first.values() for x in r["samples-ms"]]
-        print(f"\n## first-show: on-never (child frame created; no off counterpart)\n"
-              f"- latency incl. redisplay: {median(values):.2f} ms median, "
-              f"p90 {quantile(values, 0.9):.2f} ms; pooled commands; n {len(values)}")
 
 
-def main(argv=None):
-    global ROUNDS
-    parser = argparse.ArgumentParser(prog="bench-floating-composer.py")
-    parser.add_argument("--rounds", type=int, default=6)
-    parser.add_argument("--output", help="new file for the raw JSON samples")
-    parser.add_argument("--report", help="only report an existing raw JSON file")
-    options = parser.parse_args(argv)
-    if options.report:
-        report(json.loads(Path(options.report).read_text()))
-        return 0
-    if options.output and Path(options.output).exists():
-        parser.error(f"output exists: {options.output}")
-    ROUNDS = options.rounds
+def run_benchmark(root, bench, run_form, probe_form):
+    """Run BENCH (an Elisp file) with ROOT's sources; return raw JSON data.
+
+    RUN_FORM takes the raw output path and returns the benchmark Lisp form.
+    PROBE_FORM drives redisplay in a separate Emacs before and after the run.
+    """
     kwin = load_kwin_runner()
-    with tempfile.TemporaryDirectory(prefix="mevedel-fc-bench-") as directory:
+    with tempfile.TemporaryDirectory(prefix="mevedel-graphical-bench-") as directory:
         temporary = Path(directory)
-        load_path = compile_build(temporary)
+        load_path = compile_build(root, temporary, bench)
         output = temporary / "raw.json"
         probes = [temporary / "probe-before.log", temporary / "probe-after.log"]
-        status = kwin.run_session(client_command(load_path, output, probes),
+        status = kwin.run_session(client_command(load_path, bench.stem, run_form(output),
+                                                 probe_form, probes),
                                   session_timeout=7200)
         for probe in probes:
-            if probe.exists():
-                requested, done = callbacks(probe)
-                print(f"- presentation probe {probe.stem}; frame requests {requested}; "
-                      f"completed callbacks {done}; n 1 run")
-                if done < MIN_CALLBACKS:
-                    print("Presentation not verified: too few completed frame callbacks",
-                          file=sys.stderr)
-                    status = status or 1
+            requested, done = callbacks(probe) if probe.exists() else (0, 0)
+            print(f"- presentation probe {probe.stem}; frame requests {requested}; "
+                  f"completed callbacks {done}; n 1 run")
+            if done < MIN_CALLBACKS:
+                print("Presentation not verified: too few completed frame callbacks",
+                      file=sys.stderr)
+                status = status or 1
         if status:
             print(f"Benchmark session failed with status {status}", file=sys.stderr)
-            return status
-        data = json.loads(output.read_text())
-        if options.output:
-            Path(options.output).write_text(json.dumps(data))
-        report(data)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+            raise SystemExit(status)
+        return json.loads(output.read_text())

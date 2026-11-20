@@ -179,7 +179,7 @@ mouse events in them, which later interactive calls would read."
               (mevedel-view--render-status)
               (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
               (mevedel-view-execution-test--activate "  ▸ Running   bash")
-              (goto-char (mevedel-view-prompt-boundary))
+              (goto-char (mevedel-view-transcript-tail))
               (let ((action-line (save-excursion
                                    (mevedel-view-execution-test--at "[Full output]")
                                    (line-number-at-pos))))
@@ -235,7 +235,7 @@ mouse events in them, which later interactive calls would read."
                 (mevedel-view--render-status)
                 (should (string-search "✓ Completed" (buffer-string)))
                 ;; Leaving restarts the full grace period.
-                (goto-char (mevedel-view-prompt-boundary))
+                (goto-char (mevedel-view-transcript-tail))
                 (mevedel-view-execution--check-release view-buf)
                 (setq clock 1109.0)
                 (mevedel-view-execution--check-release view-buf)
@@ -300,7 +300,7 @@ mouse events in them, which later interactive calls would read."
                   (should (= line (funcall line-of "cmd 3")))
                   (should (string-search "[Show all 6]" (buffer-string))))
                 ;; Leaving shows new work and starts the held row's grace.
-                (goto-char (mevedel-view-prompt-boundary))
+                (goto-char (mevedel-view-transcript-tail))
                 (mevedel-view-execution--check-release view-buf)
                 (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
                 (should (string-search "✓ Completed" (buffer-string))))
@@ -314,7 +314,7 @@ mouse events in them, which later interactive calls would read."
         (cl-letf (((symbol-function 'float-time)
                    (lambda (&optional time) (if time (funcall float-time-orig time) clock))))
           (mevedel-view--render-status)
-          (goto-char (mevedel-view-prompt-boundary))
+          (goto-char (mevedel-view-transcript-tail))
           (setq live nil)
           (unwind-protect
               (progn
@@ -626,7 +626,7 @@ mouse events in them, which later interactive calls would read."
       (let* ((position (point))
              (event (list 'mouse-1 (list (selected-window) position '(0 . 0) 0)))
              (command (lookup-key (get-text-property position 'keymap) [mouse-1])))
-        (goto-char (mevedel-view-prompt-boundary))
+        (goto-char (mevedel-view-transcript-tail))
         (funcall command event)
         (should mevedel-view-execution--selected))))
   :doc "TAB toggles only its row, including preview controls, and preserves the draft"
@@ -844,7 +844,7 @@ mouse events in them, which later interactive calls would read."
     (save-window-excursion
       (switch-to-buffer view-buf)
       (mevedel-view--render-status)
-      (goto-char (mevedel-view-prompt-boundary))
+      (goto-char (mevedel-view-transcript-tail))
       (let ((clock 1000.0) (focus t) (inside t) (window (selected-window)))
         (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
                   ((symbol-function 'frame-focus-state) (lambda (&optional _) focus))
@@ -868,7 +868,7 @@ mouse events in them, which later interactive calls would read."
           (should (mevedel-view-execution--pointer-on-panel-p))
           (setq focus nil)
           (should-not (mevedel-view-execution--pointer-on-panel-p))
-          (goto-char (mevedel-view-prompt-boundary))
+          (goto-char (mevedel-view-transcript-tail))
           (setq focus t)
           (should (mevedel-view-execution--pointer-on-panel-p))
           (setq clock 1560.0)
@@ -1552,7 +1552,7 @@ mouse events in them, which later interactive calls would read."
                                :model-metadata '(:backend "Claude" :model "opus" :effort "high"))))
            (clock 1000.0)
            (float-time-orig (symbol-function 'float-time))
-           (lines (lambda () (count-lines (point-min) (mevedel-view-prompt-boundary)))))
+           (lines (lambda () (count-lines (point-min) (mevedel-view-transcript-tail)))))
       (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
                 ((symbol-function 'float-time)
                  (lambda (&optional time) (if time (funcall float-time-orig time) clock)))

@@ -14,15 +14,22 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 
-(mevedel-deftest mevedel-view-composer-buffer ()
-  ,test
-  (test test)
-  :doc "An initialized inline composer uses the view buffer, not the data buffer"
+(ert-deftest mevedel-view-composer-buffer/owned-lifetime ()
+  "Each editable view owns a distinct composer for its lifetime."
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (should-not (mevedel-view-composer-buffer))
-      (should (eq view-buf (mevedel-view-composer-buffer view-buf)))
-      (should (eq data-buf (current-buffer)))))
+      (let ((composer (mevedel-view-composer-buffer view-buf)))
+        (should (buffer-live-p composer))
+        (should-not (memq composer (list view-buf data-buf)))
+        (should (eq composer (mevedel-view-composer-buffer view-buf)))
+        (should (eq data-buf (current-buffer)))
+        (kill-buffer view-buf)
+        (should-not (buffer-live-p composer))))))
+
+(mevedel-deftest mevedel-view-composer-buffer ()
+  ,test
+  (test)
   :doc "A read-only agent transcript has no composer even with zone markers"
   (mevedel-view-test--with-buffers
     (mevedel-view--setup view-buf data-buf '(:agent-transcript-p t))
@@ -41,7 +48,13 @@
         (set-window-buffer origin data-buf)
         (set-window-buffer view-window view-buf)
         (should-not (mevedel-view-composer-window))
-        (should (eq view-window (mevedel-view-composer-window view-window)))
+        (should-not (mevedel-view-composer-window view-window))
+        (let ((composer-window (mevedel-view-composer-display view-window)))
+          (should (window-live-p composer-window))
+          (should-not (eq composer-window view-window))
+          (should (eq composer-window (mevedel-view-composer-window view-window)))
+          (should (eq (window-buffer composer-window)
+                      (mevedel-view-composer-buffer view-buf))))
         (should (eq origin (selected-window)))))))
 
 (mevedel-deftest mevedel-view-composer-in-draft-p ()
@@ -104,7 +117,7 @@
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let* ((start (mevedel-view-composer-draft-start))
-             (transcript (buffer-substring (point-min) (mevedel-view-prompt-boundary)))
+             (transcript (buffer-substring (point-min) (mevedel-view-transcript-tail)))
              (prefix (with-current-buffer (mevedel-view-composer-buffer)
                        (buffer-substring (point-min) start))))
         (mevedel-view-composer-insert "old\nlong draft")
@@ -116,7 +129,7 @@
         (should (= start (mevedel-view-composer-replace "")))
         (should (equal "" (mevedel-view-composer-draft-text)))
         (should (equal-including-properties
-                 transcript (buffer-substring (point-min) (mevedel-view-prompt-boundary))))
+                 transcript (buffer-substring (point-min) (mevedel-view-transcript-tail))))
         (with-current-buffer (mevedel-view-composer-buffer)
           (should (equal-including-properties
                    prefix (buffer-substring (point-min) start)))))))

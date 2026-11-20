@@ -60,7 +60,7 @@
         (mevedel-view--full-rerender)
         (cl-flet ((check-header ()
                     (goto-char (point-min))
-                    (should (search-forward "Thinking..." (mevedel-view-prompt-boundary) t))
+                    (should (search-forward "Thinking..." (mevedel-view-transcript-tail) t))
                     (should (eq 'mevedel-view-thinking-summary
                                 (get-text-property (match-beginning 0) 'font-lock-face)))
                     (beginning-of-line)
@@ -70,7 +70,7 @@
                                 (get-text-property (1- (point)) 'font-lock-face))))
                   (check-body ()
                     (goto-char (point-min))
-                    (should (search-forward body (mevedel-view-prompt-boundary) t))
+                    (should (search-forward body (mevedel-view-transcript-tail) t))
                     (should-not (invisible-p (match-beginning 0)))
                     (should (equal "    " (get-text-property (point) 'line-prefix)))
                     (should (equal "    " (get-text-property (point) 'wrap-prefix)))

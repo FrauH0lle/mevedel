@@ -37,7 +37,7 @@
 
 (defvar-keymap mevedel-note-conversation-mode-map
   :doc "Note conversation actions; ordinary characters remain composer input."
-  "C-c C-c" #'mevedel-view-send
+  "C-c C-c" #'mevedel-note-conversation-send-reply
   "C-c C-a" #'mevedel-note-apply-change
   "C-c C-b" #'mevedel-note-revert-change
   "C-c C-g" #'mevedel-note-merge-change
@@ -52,7 +52,7 @@
   "Invoking window and point to restore when the conversation closes.")
 
 (define-minor-mode mevedel-note-conversation-mode
-  "Note conversation controls on an ordinary session view."
+  "Note conversation controls in its transcript and composer."
   :lighter "" :interactive nil)
 
 (defun mevedel-note-conversation-attention-state (properties)
@@ -69,16 +69,18 @@
 (defun mevedel-note-conversation-send-reply ()
   "Send the note composer, or save an explicitly opened pending-input edit."
   (interactive)
-  (if mevedel-view--pending-input-edit
-      (mevedel-pending-inputs-save-edit)
-    (mevedel-view-send)))
+  (with-current-buffer (or mevedel-composer--view (current-buffer))
+    (if mevedel-view--pending-input-edit
+        (mevedel-pending-inputs-save-edit)
+      (mevedel-view-send))))
 
 (defun mevedel-note-conversation-close ()
   "Close this note's frame or window, keeping its conversation and draft."
   (interactive)
-  (let ((origin mevedel-note-conversation--origin))
+  (let* ((view (or mevedel-composer--view (current-buffer)))
+         (origin (buffer-local-value 'mevedel-note-conversation--origin view)))
     (if (and (frame-live-p mevedel-note-frame--frame)
-             (eq (current-buffer) mevedel-note-frame--view-buffer))
+             (eq view mevedel-note-frame--view-buffer))
         (mevedel-note-frame-close)
       (quit-window nil))
     (when (window-live-p (car origin))
@@ -114,7 +116,10 @@ DATA contains request text and tool schemas, never transport credentials."
                      :key #'mevedel-reminder-type)))
   (add-hook 'gptel-post-request-hook #'mevedel-note-conversation--record-gptel-input nil t)
   (when (buffer-live-p mevedel--view-buffer)
-    (with-current-buffer mevedel--view-buffer (mevedel-note-conversation-mode 1)))
+    (with-current-buffer mevedel--view-buffer
+      (mevedel-note-conversation-mode 1)
+      (when-let* ((composer (mevedel-view-composer-buffer)))
+        (with-current-buffer composer (mevedel-note-conversation-mode 1)))))
   (mevedel-note-conversation-refresh-hint))
 
 (defun mevedel-note-conversation-refresh-hint (&optional note)

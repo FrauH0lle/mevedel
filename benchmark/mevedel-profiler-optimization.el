@@ -192,7 +192,7 @@ returns additional counters from one unprofiled workload run."
          (let ((workload
                 (lambda ()
                   (dotimes (_ iterations)
-                    (unless (mevedel-view-prompt-boundary)
+                    (unless (mevedel-view-transcript-tail)
                       (error "Prompt benchmark lost the prompt"))))))
            (let ((metrics
                   (mevedel-benchmark--measure
@@ -761,7 +761,7 @@ unattributed remainder, including preservation, reset, and batch bookkeeping."
                        (= (point) (+ (mevedel-view-composer-draft-start) 4)))
             (error "Projection benchmark moved the composer"))
           (let ((text (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary))))
+                       (point-min) (mevedel-view-transcript-tail))))
             (when (and reference (not (equal text reference)))
               (error "Batched and synchronous projection differ"))
             (setq reference text)

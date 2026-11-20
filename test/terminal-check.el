@@ -1,11 +1,11 @@
-;;; terminal-check.el --- Isolated terminal floating-composer checks -*- lexical-binding: t -*-
+;;; terminal-check.el --- Isolated terminal composer checks -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
 ;; Entry point for Eask's terminal-check script.  The batch parent starts a
 ;; separate `emacs -Q -nw' on a pseudo-terminal of fixed size, never this
 ;; editor, and owns the deadline and temporary HOME.  The child runs the
-;; native floating-composer cases that hold on a terminal and exits nonzero
+;; native docked-composer cases that hold on a terminal and exits nonzero
 ;; on any unexpected result or skip.
 
 ;;; Code:
@@ -22,9 +22,7 @@
   "Checkout whose sources and tests the runner uses.")
 
 (defconst mevedel-terminal-check--selector
-  '(or (tag mevedel-floating-composer/hand-over)
-       (tag mevedel-floating-composer/host-geometry)
-       (tag mevedel-floating-composer/keys))
+  '(tag mevedel-docked-composer)
   "ERT selector for the cases the terminal child runs.")
 
 (defun mevedel-terminal-check-run ()
@@ -68,8 +66,7 @@
              :command (list "sh" "-c" "stty rows 40 cols 110 && exec \"$0\" \"$@\""
                             (expand-file-name invocation-name invocation-directory)
                             "-Q" "-nw" "--load" bootstrap)
-             ;; Keep what the child draws: the floating composer's top line
-             ;; must reach the terminal.  Draining also keeps it from blocking.
+             ;; Verify both panes drew to the terminal.  Drain to avoid blocking.
              :coding 'utf-8
              :filter (lambda (_process output)
                        (with-current-buffer screen (insert output)))))
@@ -87,7 +84,7 @@
         (princ (format "Terminal check FAILED (%s)\n" status))
         (kill-emacs 1))
       (with-current-buffer screen
-        (dolist (drawn '("───" "↓ Back to bottom"))
+        (dolist (drawn '("An earlier response." "unsent draft"))
           (goto-char (point-min))
           (unless (search-forward drawn nil t)
             (princ (format "Terminal check FAILED: %S never drawn\n" drawn))
@@ -114,7 +111,7 @@ command loop decodes it, so wait from a timer, not a loop."
           (setq resize-mini-windows nil
                 warning-minimum-level :emergency)
           (load (file-name-concat mevedel-terminal-check--root
-                                  "test" "test-mevedel-floating-composer-graphical.el")
+                                  "test" "test-mevedel-view-composer-graphical.el")
                 nil t)
           (let ((stats (ert-run-tests-batch mevedel-terminal-check--selector)))
             (cl-loop for test across (ert--stats-tests stats)

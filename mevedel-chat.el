@@ -278,6 +278,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
+(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
@@ -898,9 +899,14 @@ Completion labels include identity, because display names need not be unique."
 (defun mevedel--display-chat-buffer (chat-buffer)
   "Ensure CHAT-BUFFER has a preset and display its view."
   (mevedel--ensure-chat-preset chat-buffer)
-  (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
-                      chat-buffer)
-                  gptel-display-buffer-action))
+  (when-let* ((window (display-buffer
+                       (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+                           chat-buffer)
+                       gptel-display-buffer-action)))
+    (when-let* ((composer (mevedel-view-composer-display window))
+                ((eq window (selected-window))))
+      (select-window composer))
+    window))
 
 (defun mevedel--normalize-session-directory (directory workspace)
   "Return DIRECTORY as an absolute directory inside WORKSPACE."

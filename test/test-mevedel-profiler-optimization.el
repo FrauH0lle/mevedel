@@ -125,7 +125,7 @@
                            (+ 4 (mevedel-view-composer-draft-start))))
        (mevedel-view--full-rerender data)
        (let ((reference (buffer-substring-no-properties
-                         (point-min) (mevedel-view-prompt-boundary)))
+                         (point-min) (mevedel-view-transcript-tail)))
              (source (with-current-buffer data (buffer-string))))
          (should (string-match-p "Result 39" reference))
          (should (string-match-p "Read" reference))
@@ -135,7 +135,7 @@
            (should (> (mevedel-benchmark--projection-drain) 1))
            (should-not mevedel-view-render--batch)
            (should (equal reference (buffer-substring-no-properties
-                                     (point-min) (mevedel-view-prompt-boundary))))
+                                     (point-min) (mevedel-view-transcript-tail))))
            (should (equal "> benchmark draft\nsecond line"
                           (mevedel-view-composer-draft-text)))
            (should (= 4 (mevedel-view-test--composer-point-offset)))
@@ -272,11 +272,11 @@
                               composer (+ 3 (mevedel-view-composer-draft-start))))
                            (mevedel-view--full-rerender data)
                            (let ((text (buffer-substring-no-properties
-                                        (point-min) (mevedel-view-prompt-boundary))))
+                                        (point-min) (mevedel-view-transcript-tail))))
                              (should (string-match-p "Saved" text))
                              (should (> (mevedel-benchmark--projection-drain) 0))
                              (should (equal text (buffer-substring-no-properties
-                                                 (point-min) (mevedel-view-prompt-boundary))))
+                                                 (point-min) (mevedel-view-transcript-tail))))
                              (should (equal "> restored draft\nsecond line"
                                             (mevedel-view-composer-draft-text)))
                              (should (= 3 (mevedel-view-test--composer-point-offset)))

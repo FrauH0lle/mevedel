@@ -1888,7 +1888,7 @@
                 (add-text-properties 1 (point-max)
                                      '(mevedel-view-turn-id 1
                                        mevedel-view-turn-role assistant)))
-              (mevedel-view-composer-initialize-prompt)
+              (mevedel-view-transcript-tail-initialize)
               (goto-char (point-min))
               (mevedel-view--collapse-turn)
               (should (get-text-property 1 'mevedel-view-stash))
@@ -1937,27 +1937,27 @@
                 (add-text-properties 1 (point-max)
                                      '(mevedel-view-turn-id 1
                                        mevedel-view-turn-role assistant)))
-              (mevedel-view-composer-initialize-prompt)
+              (mevedel-view-transcript-tail-initialize)
               (goto-char (point-min))
               (mevedel-view--collapse-turn)
               (setq-local mevedel-view--status-marker
-                          (copy-marker (mevedel-view-prompt-boundary)))
+                          (copy-marker (mevedel-view-transcript-tail)))
               (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
                          (lambda () data))
                         ((symbol-function 'mevedel-view-stream--execution-view-buffer)
                          (lambda (_) view)))
                 (should-not (mevedel-view-audit-breadcrumb-present-p
                              '(:execution-id "exec-2" :owner "/root")
-                             (mevedel-view-prompt-boundary)))
+                             (mevedel-view-transcript-tail)))
                 (should-not (mevedel-view-audit-breadcrumb-present-p
                              '(:execution-id "exec-1" :owner "/root/child")
-                             (mevedel-view-prompt-boundary)))
+                             (mevedel-view-transcript-tail)))
                 (mevedel-view-stream--terminal-breadcrumb
                  (list :data-buffer data :tool-use-id "original" :facts facts)))
               (goto-char (point-min))
               (mevedel-view--expand-turn)
               (should (= 1 (how-many "Background command \"printf result\" completed"
-                                     (point-min) (mevedel-view-prompt-boundary))))
+                                     (point-min) (mevedel-view-transcript-tail))))
               (with-current-buffer data
                 (should (= 1 (length (mevedel-transcript-audit-records
                                       (buffer-string) 'execution-breadcrumb))))))))

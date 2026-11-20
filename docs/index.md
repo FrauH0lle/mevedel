@@ -47,8 +47,8 @@ Read the relevant contracts before planning or changing an unfamiliar area.
     extraction, permanent disposal and attachment housekeeping
   - [`memory-journal.md`](memory-journal.md) — journal capture, generation,
     discovery, abandoned checkpoints, inspection and retention
-- [`view.md`](view.md) — dual-buffer view model, status /
-  interaction / input zones, rendered agent transcript views, input
+- [`view.md`](view.md) — data, transcript and composer buffers, status
+  and interaction zones, rendered agent transcript views, input
   history, and the [workspace artifact store](view.md#artifact-store)
 - [`collaboration.md`](collaboration.md) — browser sharing, bearer-link
   authority, typed guest input, notifications, and relay reconnection

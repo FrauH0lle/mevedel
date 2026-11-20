@@ -16,9 +16,25 @@
 (require 'mevedel-background-list)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-execution)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
+
+(defun mevedel-view-mouse-test--target-window (needle)
+  "Return the selected view window or its dock for composer NEEDLE."
+  (if (string-suffix-p "composer target" needle)
+      (let ((window (mevedel-view-composer-display (selected-window))))
+        (should (window-live-p window))
+        window)
+    (selected-window)))
+
+(defun mevedel-view-mouse-test--target (needle)
+  "Return the position of the intended click within NEEDLE."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward needle)
+    (- (point) 3)))
 
 (defun mevedel-view-mouse-test--click (position update redraw queued)
   "Click POSITION with UPDATE between down and release.
@@ -127,33 +143,29 @@ UPDATE, like input already queued by the display backend."
              (with-current-buffer data-buf (point-max)))
             (mevedel-view-test--insert-data data-buf "Initial stream text." 'response)
             (mevedel-view--render-stream-update data-buf)
-            (goto-char (point-min))
-            (search-forward needle)
-            (let ((clicked (- (point) 3)))
+            (let ((target-window (mevedel-view-mouse-test--target-window needle)))
               (goto-char (point-min))
               (set-window-start nil (point-min))
-              (redisplay t)
               (should mevedel-view-execution--elapsed-targets)
-              (mevedel-view-mouse-test--click
-               clicked
-               (lambda ()
-		 (if (eq operation 'tick)
-                     (progn
-                       (setq clock 1001.0)
-                       (mevedel-view--spinner-tick))
-                   (mevedel-view-test--insert-data data-buf " Additional chunk." 'response)
-                   (mevedel-view--render-stream-update data-buf)))
-               redraw queued)
+              (with-selected-window target-window
+                (redisplay t)
+                (mevedel-view-mouse-test--click
+                 (mevedel-view-mouse-test--target needle)
+                 (lambda ()
+                   (with-current-buffer view-buf
+                     (if (eq operation 'tick)
+                         (progn
+                           (setq clock 1001.0)
+                           (mevedel-view--spinner-tick))
+                       (mevedel-view-test--insert-data data-buf " Additional chunk." 'response)
+                       (mevedel-view--render-stream-update data-buf))))
+                 redraw queued)
+                (should (eq target-window (selected-window)))
+                (should (= (mevedel-view-mouse-test--target needle) (point))))
               (if (eq operation 'tick)
                   (should (string-search "1m 00s" (buffer-string)))
 		(should (string-search "Additional chunk." (buffer-string))))
-              (let ((actual (point))
-                    (expected (save-excursion
-				(goto-char (point-min))
-				(search-forward needle)
-				(- (point) 3))))
-		(should (equal draft (mevedel-view--input-text)))
-		(should (= expected actual)))))))))
+              (should (equal draft (mevedel-view--input-text)))))))))
   (needle redraw queued operation)
   :doc "composer click, stale geometry, release resolved after update"
   "click composer target" nil nil 'tick
@@ -364,11 +376,10 @@ With MOTION, deliver a movement event before the release."
                (with-current-buffer data-buf (point-max)))
               (mevedel-view-test--insert-data data-buf "Live initial." 'response)
               (mevedel-view--render-stream-update data-buf))
-            (goto-char (point-min))
-            (search-forward needle)
-            (backward-char 3)
-            (let ((clicked (point))
-                  (old-text (buffer-string)))
+            (let* ((target-window (mevedel-view-mouse-test--target-window needle))
+                   (clicked (with-selected-window target-window
+                              (goto-char (mevedel-view-mouse-test--target needle))))
+                   (old-text (buffer-string)))
               (set-window-start nil (point-min))
               (redisplay t)
               (setq focused nil)
@@ -384,35 +395,36 @@ With MOTION, deliver a movement event before the release."
               (should (equal old-text (buffer-string)))
               (should-not mevedel-view--render-timer)
               (should mevedel-view--pending-render-kind)
-              (funcall
-               (if (memq ordering '(macro-between macro-requeue macro-requeue-motion))
-                   (lambda (pos _order callback)
-                     (mevedel-view-mouse-test--macro-click
-                      pos callback (memq ordering '(macro-requeue macro-requeue-motion))
-                      (eq ordering 'macro-requeue-motion)))
-                 #'mevedel-view-mouse-test--focus-click)
-               clicked ordering
-               (lambda (complete)
-                 (setq focused t)
-                 (mevedel-view--resume-attended-views)
-                 (should mevedel-view--render-timer)
-                 ;; The actual scheduled timer must fire, not a direct flush.
-                 (unless (eq complete 'schedule)
-                   (mevedel-view-mouse-test--wait
-                    (lambda () (null mevedel-view--render-timer))))
-                 (when (eq complete t)
-                   (mevedel-view-mouse-test--wait
-                    (lambda () (null mevedel-view-render--batch))))))
+              (with-selected-window target-window
+                (funcall
+                 (if (memq ordering '(macro-between macro-requeue macro-requeue-motion))
+                     (lambda (pos _order callback)
+                       (mevedel-view-mouse-test--macro-click
+                        pos callback (memq ordering '(macro-requeue macro-requeue-motion))
+                        (eq ordering 'macro-requeue-motion)))
+                   #'mevedel-view-mouse-test--focus-click)
+                 clicked ordering
+                 (lambda (complete)
+                   (with-current-buffer view-buf
+                     (setq focused t)
+                     (mevedel-view--resume-attended-views)
+                     (should mevedel-view--render-timer)
+                     ;; The actual scheduled timer must fire, not a direct flush.
+                     (unless (eq complete 'schedule)
+                       (mevedel-view-mouse-test--wait
+                        (lambda () (null mevedel-view--render-timer))))
+                     (when (eq complete t)
+                       (mevedel-view-mouse-test--wait
+                        (lambda () (null mevedel-view-render--batch)))))))
+                (should (eq target-window (selected-window))))
               (mevedel-view-mouse-test--wait
                (lambda () (null mevedel-view-render--batch)))
               (should (string-search "Deferred response 5" (buffer-string)))
               (should (equal draft (mevedel-view--input-text)))
               (when (equal needle "[Manage]") (should managed))
-              (let ((actual (point))
-                    (expected (save-excursion
-                                (goto-char (point-min))
-                                (search-forward needle)
-                                (- (point) 3))))
+              (let ((actual (window-point target-window))
+                    (expected (with-current-buffer (window-buffer target-window)
+                                (mevedel-view-mouse-test--target needle))))
                 (ert-info ((format "Kind %S ordering %S target %S: old=%d actual=%d expected=%d; macro=%S"
                                    kind ordering needle clicked actual expected
                                    mevedel-view-mouse-test--macro-observations))
@@ -513,25 +525,21 @@ With MOTION, deliver a movement event before the release."
                (with-current-buffer data-buf (point-max)))
               (mevedel-view-test--insert-data data-buf "Live initial.\n\n" 'response)
               (mevedel-view--render-stream-update data-buf))
-            (goto-char (mevedel-view-composer-draft-start))
             (let* ((window (selected-window))
-                   (input (point))
-                   (y (- (cdr (mevedel-view--window-body-geometry window))
-                         (* 3 (frame-char-height)))))
-              (mevedel-view--set-viewport
-               window (mevedel-view--viewport-at-y window input y))
+                   (dock (mevedel-view-composer-display window))
+                   (clicked (mevedel-view-mouse-test--target "History line 95."))
+                   (dock-point (window-point dock))
+                   (dock-start (window-start dock)))
+              (goto-char clicked)
+              (set-window-start window (save-excursion (forward-line -8) (point)))
               (set-window-vscroll window 7 t)
               (redisplay t)
               (let* ((start (window-start window))
-                     (clicked (save-excursion
-                                (goto-char (point-min))
-                                (search-forward "History line 95.")
-                                (- (point) 3)))
                      (reading-y (mevedel-view--position-screen-y clicked window)))
-                (ert-info ((format "Kind %S start=%d clicked=%d input=%d end=%d"
-                                   kind start clicked input (point-max)))
+                (ert-info ((format "Kind %S start=%d clicked=%d end=%d"
+                                   kind start clicked (point-max)))
                   (should reading-y))
-                (should (mevedel-view--position-screen-y input window))
+                (should (posn-at-point dock-point dock))
                 (should (= 7 (window-vscroll window t)))
                 (setq focused nil)
                 (mevedel-view-test--insert-data
@@ -556,6 +564,9 @@ With MOTION, deliver a movement event before the release."
                 (should (= start (window-start window)))
                 (should (= 7 (window-vscroll window t)))
                 (should (= reading-y (mevedel-view--position-screen-y (point) window)))
+                (should (eq window (selected-window)))
+                (should (= dock-point (window-point dock)))
+                (should (= dock-start (window-start dock)))
                 (should (equal draft (mevedel-view--input-text))))))))))
   (kind)
   :doc "A history focus click retains its pixel viewport across full catch-up" 'full

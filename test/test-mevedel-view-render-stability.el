@@ -84,10 +84,16 @@
             (let ((column (current-column))
                   (other (split-window-right))
                   (index 4)
+                  (reader (selected-window))
+                  (composer (mevedel-view-composer-buffer))
                   composer-window)
               (set-window-buffer other view-buf)
-              (setq composer-window (mevedel-view-composer-window other))
+              (setq composer-window (mevedel-view-composer-display other))
+              (should (eq (window-buffer composer-window) composer))
               (set-window-point composer-window (+ (mevedel-view-composer-draft-start) 3))
+              (with-current-buffer composer
+                (set-mark (+ (mevedel-view-composer-draft-start) 1))
+                (setq mark-active t))
               (dolist (refresh '(full live live full live live))
                 (mevedel-view-test--insert-data
                  data-buf
@@ -106,10 +112,14 @@
                 (should (= column (current-column)))
                 (should (= (mark) (+ (point) 2)))
                 (should mark-active)
+                (should (eq reader (selected-window)))
                 (should (= (window-point) (point)))
                 (should (= (window-start) (line-beginning-position)))
                 (should (= (window-point composer-window)
                            (+ (mevedel-view-composer-draft-start) 3)))
+                (with-current-buffer composer
+                  (should (= (mark) (+ (mevedel-view-composer-draft-start) 1)))
+                  (should mark-active))
                 (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
                 (should (string-match-p "Read: f0.el" (buffer-string)))))))))))
 
@@ -183,7 +193,7 @@
        (search-forward "stable response")
        (mevedel-view-toggle-section)
        (let ((before (buffer-substring-no-properties (point-min) (point-max)))
-             (boundary (mevedel-view-prompt-boundary)))
+             (boundary (mevedel-view-transcript-tail)))
          (cl-letf (((symbol-function 'mevedel-view-render-insert-expanded-disclosure)
                     (lambda (&rest _)
                       (when partial (insert "Partial replacement\n"))
@@ -191,7 +201,7 @@
            (should-error
             (mevedel-view-toggle-section)))
          (should (equal before (buffer-substring-no-properties (point-min) (point-max))))
-         (should (= boundary (mevedel-view-prompt-boundary)))
+         (should (= boundary (mevedel-view-transcript-tail)))
          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
          (should-not mevedel-view-render--owner)
          (should (get-text-property (point) 'mevedel-view-collapsed))

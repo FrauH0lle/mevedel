@@ -1514,7 +1514,7 @@
               (should-not outcomes)
               (should (= 3 (length (mevedel-session-permission-queue session))))
               (let* ((text (buffer-substring-no-properties
-                            (point-min) (mevedel-view-prompt-boundary)))
+                            (point-min) (mevedel-view-transcript-tail)))
                      (agent-pos (string-search
                                  "Blocked   agent    /root/verifier" text))
                      (prompt-pos (string-search
@@ -1528,7 +1528,7 @@
                 (save-excursion
                   (goto-char (point-min))
                   (search-forward "3 permissions pending"
-                                  (mevedel-view-prompt-boundary))
+                                  (mevedel-view-transcript-tail))
                   (should (eq 'interaction
                               (get-text-property
                                (match-beginning 0)

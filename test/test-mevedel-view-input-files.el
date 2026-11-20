@@ -41,9 +41,11 @@
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)
-          (with-current-buffer view-buf
-            (with-current-buffer (mevedel-view-composer-buffer view-buf)
-              (goto-char (mevedel-view-composer-draft-end view-buf)))
+          (with-current-buffer (mevedel-view-composer-buffer view-buf)
+            (let ((buffer-read-only t))
+              (should-error (mevedel-view--insert-dropped-file-mentions (list path))
+                            :type 'buffer-read-only))
+            (should-not (mevedel-session-dropped-file-grants session))
             (mevedel-view--insert-dropped-file-mentions (list path))
             (should (equal (format "@file:{%s}" path)
                            (mevedel-view-composer-draft-text)))
@@ -63,13 +65,12 @@
 (mevedel-deftest mevedel-view--dnd-handle-files ()
   ,test
   (test)
-  :doc "routes a single-URI drop from the transcript to a detached draft"
+  :doc "a single-URI drop appends from the view and inserts at point in the composer"
   (let* ((dir (make-temp-file "mevedel-dnd-" t))
          (path (expand-file-name "single.txt" dir))
          (uri (concat "file://" path))
          (data-buf (generate-new-buffer " *test-data-dnd-single*"))
          (view-buf (generate-new-buffer " *test-view-dnd-single*"))
-         (draft-buf (generate-new-buffer " *test-draft-dnd-single*"))
          (ws (mevedel-workspace--create :type 'project :id "dnd-single"
                                         :root dir :name "dnd-single"))
          (session (mevedel-session-create "main" ws)))
@@ -81,22 +82,25 @@
             (setq-local gptel-response-separator "\n\n")
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
-          (mevedel-view--setup draft-buf data-buf)
           (mevedel-view--setup view-buf data-buf)
-          (with-current-buffer draft-buf
-            (mevedel-view-composer-replace "look at"))
           (with-current-buffer view-buf
             (goto-char (point-min))
-            (let ((transcript (buffer-string)))
-              (cl-letf (((symbol-function 'mevedel-view-composer-buffer)
-                         (lambda (&optional _view) draft-buf)))
+            (let ((transcript (buffer-string))
+                  (pos (point)))
+              (mevedel-view-composer-replace "look at")
+              (should (eq 'copy (mevedel-view--dnd-handle-files uri 'copy)))
+              (should (equal (format "look at @file:%s" path)
+                             (mevedel-view-composer-draft-text nil t)))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-composer-replace "look here")
+                (goto-char (+ 5 (mevedel-view-composer-draft-start)))
                 (should (eq 'copy
                             (mevedel-view--dnd-handle-files uri 'copy)))
-                (should (equal (format "look at @file:%s" path)
+                (should (equal (format "look @file:%s here" path)
                                (mevedel-view-composer-draft-text nil t))))
+              (should (= pos (point)))
               (should (equal transcript (buffer-string))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p draft-buf) (kill-buffer draft-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))
       (delete-directory dir t))))
 

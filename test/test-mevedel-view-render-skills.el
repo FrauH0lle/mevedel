@@ -145,7 +145,7 @@
                 (should (eq 'ask mevedel-permission-mode))
                 (with-current-buffer view
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
-                                         (point-min) (mevedel-view-prompt-boundary))))
+                                         (point-min) (mevedel-view-transcript-tail))))
                   ;; The prompt record lists the native system prompt's changed
                   ;; observation sections beside the trailing mode constraint.
                   (should (string-search
@@ -161,7 +161,7 @@
                   (mevedel-view--full-rerender)
                   (should (string-search "You\nImplement accepted plan\n" (buffer-string)))
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
-                                         (point-min) (mevedel-view-prompt-boundary))))
+                                         (point-min) (mevedel-view-transcript-tail))))
                   (should (string-search "ALPHA ATTACHMENT BODY" (buffer-string)))
                   (goto-char (point-min))
                   (search-forward "attached skills")
@@ -215,11 +215,11 @@
                 (and launched (not (mevedel-turn-busy-p buffer))))
               (with-current-buffer view
                 (should (= 1 (how-many "1 attached skill (alpha)"
-                                       (point-min) (mevedel-view-prompt-boundary))))
+                                       (point-min) (mevedel-view-transcript-tail))))
                 (should (string-search "COMPOSER SKILL BODY" (buffer-string)))
                 (mevedel-view--full-rerender)
                 (should (= 1 (how-many "1 attached skill (alpha)"
-                                       (point-min) (mevedel-view-prompt-boundary))))
+                                       (point-min) (mevedel-view-transcript-tail))))
                 (should (string-search "COMPOSER SKILL BODY" (buffer-string))))))
         (when (buffer-live-p view) (kill-buffer view))))))
 

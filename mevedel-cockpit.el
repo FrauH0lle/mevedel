@@ -22,6 +22,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
+(defvar mevedel-composer--view)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -94,6 +95,11 @@ Without CONTEXT, use the invoking transient's explicit context."
       (cond
        (mevedel-cockpit--context
         mevedel-cockpit--context)
+       ((and (bound-and-true-p mevedel-composer--view)
+             (buffer-live-p mevedel-composer--view)
+             (buffer-live-p mevedel--data-buffer))
+        (mevedel-cockpit--make-context
+         mevedel-composer--view mevedel--data-buffer buffer))
        ((and (derived-mode-p 'mevedel-view-mode)
              (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))

@@ -445,7 +445,7 @@ render would see once gptel has written the batch."
         (should (string-match-p
                  "Assistant text"
                  (buffer-substring-no-properties
-                  (point-min) (mevedel-view-prompt-boundary))))
+                  (point-min) (mevedel-view-transcript-tail))))
         (should (equal draft (mevedel-view-composer-draft-text)))
         (should (= 4 (mevedel-view-stream-test--draft-offset)))))))
 
@@ -636,15 +636,15 @@ render would see once gptel has written the batch."
             (should-not (string-match-p
                          "line 7"
                          (buffer-substring-no-properties
-                          (point-min) (mevedel-view-prompt-boundary))))
+                          (point-min) (mevedel-view-transcript-tail))))
             (should-not (string-match-p
                          "line 1"
                          (buffer-substring-no-properties
-                          (point-min) (mevedel-view-prompt-boundary))))
+                          (point-min) (mevedel-view-transcript-tail))))
             (should (string-match-p
                      "Bash: printf run · running · 2s"
                      (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary))))
+                      (point-min) (mevedel-view-transcript-tail))))
             (should-not
              (mevedel-view-stream-handle-execution-event
               (list :type 'terminal :delivery 'mailbox :session session
@@ -680,7 +680,7 @@ render would see once gptel has written the batch."
                    (plist-get (cdr parsed) :sandbox-summary)
                    :additional-write-count))))
             (let ((visible (buffer-substring-no-properties
-                            (point-min) (mevedel-view-prompt-boundary))))
+                            (point-min) (mevedel-view-transcript-tail))))
               (should-not (string-match-p "whole head" visible))
               (should-not (string-match-p "whole tail" visible))
               (should (string-match-p
@@ -695,7 +695,7 @@ render would see once gptel has written the batch."
               (should (get-text-property (point) 'mevedel-view-collapsed))
               (mevedel-view-toggle-section)
               (let ((visible (buffer-substring-no-properties
-                              (point-min) (mevedel-view-prompt-boundary))))
+                              (point-min) (mevedel-view-transcript-tail))))
                 (should (string-match-p "whole head" visible))
                 (should (string-match-p "whole tail" visible))
                 (should (string-match-p "success · exit 0" visible))))
@@ -712,7 +712,7 @@ render would see once gptel has written the batch."
             (should (gethash "call-new" mevedel-view--execution-events))
             (should-not (gethash "call-live" mevedel-view--execution-events))
             (let ((visible (buffer-substring-no-properties
-                            (point-min) (mevedel-view-prompt-boundary))))
+                            (point-min) (mevedel-view-transcript-tail))))
               (should (string-match-p "whole head" visible))
               (should (string-match-p "whole tail" visible))
               (should (string-match-p "Bash: printf new · running · 2s"
@@ -816,15 +816,10 @@ render would see once gptel has written the batch."
         (progn
           (dolist (buffer (list main-data agent-data))
             (with-current-buffer buffer
+              (mevedel--transcript-org-mode)
               (setq-local mevedel--session session)))
-          (with-current-buffer main-view
-            (setq-local mevedel--data-buffer main-data)
-            (setq-local mevedel-view--agent-transcript-p nil)
-            (setq-local mevedel-view--pending-tool-calls nil))
-          (with-current-buffer agent-view
-            (setq-local mevedel--data-buffer agent-data)
-            (setq-local mevedel-view--agent-transcript-p t)
-            (setq-local mevedel-view--pending-tool-calls nil))
+          (mevedel-view--setup main-view main-data)
+          (mevedel-view--setup agent-view agent-data '(:agent-transcript-p t))
           (cl-letf
               (((symbol-function
                  'mevedel-view--refresh-tool-row)
@@ -892,13 +887,13 @@ turn's later text, live and after reconstruction."
                         :state completed :termination exited :exit-code 0
                         :outcome success)))
         (let ((visible (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
           (ert-info ((format "View after completion:\n%s" visible))
             (should-not (string-search "Background command \"make slow\" completed" visible))))
         ;; Flush only what the completion itself scheduled.
         (mevedel-view--flush-scheduled-render view-buf t)
         (let ((visible (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
           (ert-info ((format "View after its render:\n%s" visible))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))))
@@ -919,7 +914,7 @@ turn's later text, live and after reconstruction."
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected
                           (buffer-substring-no-properties
-                           (point-min) (mevedel-view-prompt-boundary))))))
+                           (point-min) (mevedel-view-transcript-tail))))))
           (should (equal draft (mevedel-view-composer-draft-text)))
           (should (= 4 (mevedel-view-stream-test--draft-offset))))
         (with-current-buffer data-buf
@@ -934,7 +929,7 @@ turn's later text, live and after reconstruction."
               (set-marker tracking (point)))))
         (mevedel-view-render-live-update data-buf)
         (let ((visible (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
           (ert-info ((format "View:\n%s" visible))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))
@@ -964,7 +959,7 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((visible (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
           (ert-info ((format "Reconstructed view:\n%s" visible))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))
@@ -1008,7 +1003,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-handle-execution-event event)
         (with-current-buffer view-buf
           (let ((visible (buffer-substring-no-properties
-                          (point-min) (mevedel-view-prompt-boundary))))
+                          (point-min) (mevedel-view-transcript-tail))))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           "[Show result]" visible)))
             (should (string-match-p
@@ -1817,7 +1812,7 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker status-start)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker mevedel-view--status-marker))
           (setq mevedel-view--data-turn-start
@@ -1851,9 +1846,9 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -1885,9 +1880,9 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -1923,9 +1918,9 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -1965,7 +1960,7 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -2002,9 +1997,9 @@ turn's later text, live and after reconstruction."
                               'mevedel-view-agent-status t))
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -2039,9 +2034,9 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker (point-min))
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -2081,9 +2076,9 @@ turn's later text, live and after reconstruction."
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker (mevedel-view-prompt-boundary)))
+                (copy-marker (mevedel-view-transcript-tail)))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -2125,7 +2120,7 @@ turn's later text, live and after reconstruction."
         (insert "TASK STATUS\n")
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -2158,7 +2153,7 @@ turn's later text, live and after reconstruction."
         (insert "TASK STATUS\n")
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (mevedel-view-stream-set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
@@ -2196,7 +2191,7 @@ turn's later text, live and after reconstruction."
         (insert "TASK STATUS\n")
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (mevedel-view-stream-set-in-flight-turn-start history-start)
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
@@ -2234,7 +2229,7 @@ turn's later text, live and after reconstruction."
         (insert "TASK STATUS\n")
         (set-marker mevedel-view--status-marker (point-min))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (mevedel-view-stream-set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
@@ -2276,7 +2271,7 @@ turn's later text, live and after reconstruction."
         (insert "TASK STATUS\n")
         (set-marker mevedel-view--status-marker history-start)
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -2319,7 +2314,7 @@ turn's later text, live and after reconstruction."
                               'read-only t))
           (set-marker mevedel-view--status-marker (+ row-start 5)))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -2362,14 +2357,12 @@ turn's later text, live and after reconstruction."
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (status (string-match-p "Running   agent    /root/verifier" text))
-                 (prompt (string-match-p "^> " text)))
+                 (status (string-match-p "Running   agent    /root/verifier" text)))
             (should-not old)
             (should (numberp response))
             (should (numberp status))
-            (should (numberp prompt))
             (should (< response status))
-            (should (< status prompt)))))))
+            (should (< status (- (mevedel-view-transcript-tail) (point-min)))))))))
 
   :doc "aggregate status stays below pending live tail with detached status marker"
   (mevedel-view-stream-test--with-buffers
@@ -2389,7 +2382,7 @@ turn's later text, live and after reconstruction."
                                 'mevedel-view-source '(1 . 2)))
             (set-marker mevedel-view--status-marker nil)
             (set-marker mevedel-view--interaction-marker (point))
-            (set-marker (mevedel-view-prompt-boundary-marker) (point))
+            (set-marker (mevedel-view-transcript-tail-marker) (point))
             (setq mevedel-view--data-turn-start
                   (with-current-buffer data-buf
                     (copy-marker (point-min))))
@@ -2427,7 +2420,7 @@ turn's later text, live and after reconstruction."
             (insert "TASK STATUS\n")
             (set-marker mevedel-view--status-marker (point-min))
             (set-marker mevedel-view--interaction-marker (point))
-            (set-marker (mevedel-view-prompt-boundary-marker) (point))
+            (set-marker (mevedel-view-transcript-tail-marker) (point))
             (setq mevedel-view--data-turn-start
                   (with-current-buffer data-buf
                     (copy-marker (point-min)))))
@@ -2444,7 +2437,7 @@ turn's later text, live and after reconstruction."
             (should (< header response))
             (should (< response status)))))))
 
-  :doc "pending live tail ignores a stale prompt boundary marker"
+  :doc "pending live tail ignores a stale transcript tail marker"
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
@@ -2453,7 +2446,7 @@ turn's later text, live and after reconstruction."
           (goto-char (marker-position mevedel-view--status-marker))
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
-          (set-marker (mevedel-view-prompt-boundary-marker) (point-min))
+          (set-marker (mevedel-view-transcript-tail-marker) (point-min))
           (mevedel-view-stream-set-in-flight-turn-start (point-min))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
@@ -2533,12 +2526,13 @@ turn's later text, live and after reconstruction."
               (copy-marker (mevedel-view--history-insertion-marker)))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min))))
-        (mevedel-view-test--insert-composer-draft "> keep\nthis" 3))
+        (mevedel-view-test--insert-composer-draft "> keep\nthis" 3)
+        (goto-char (point-min)))
       (with-current-buffer data-buf
         (mapc #'mevedel-view-stream-pre-tool calls))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (= 1 (mevedel-view-stream-test--count-substring
                         "5 calls: read 3 files, searched 2 patterns · 5 running" text)))
           (should-not (string-match-p "Read: a" text))))
@@ -2551,10 +2545,10 @@ turn's later text, live and after reconstruction."
         (mapc #'mevedel-view-stream-post-tool calls))
       (with-current-buffer view-buf
         (let ((settled (buffer-substring-no-properties
-                        (point-min) (mevedel-view-prompt-boundary))))
+                        (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "✓ 5 calls: read 3 files, searched 2 patterns" settled))
           (should-not (string-match-p "running" settled))
-          (should-not (text-property-any (point-min) (mevedel-view-prompt-boundary)
+          (should-not (text-property-any (point-min) (mevedel-view-transcript-tail)
                                          'mevedel-view-pending-tool-live t))
           (should (equal "> keep\nthis" (mevedel-view-composer-draft-text)))
           (should (= 3 (mevedel-view-stream-test--draft-offset)))
@@ -2562,7 +2556,7 @@ turn's later text, live and after reconstruction."
           (mevedel-view--full-rerender)
           (should (equal settled
                          (buffer-substring-no-properties
-                          (point-min) (mevedel-view-prompt-boundary))))))))
+                          (point-min) (mevedel-view-transcript-tail))))))))
 
   :doc "a finished call leaves the other parallel call running"
   (mevedel-view-stream-test--with-buffers
@@ -2608,7 +2602,7 @@ turn's later text, live and after reconstruction."
       (should (string-match-p
                "tool input repaired"
                (buffer-substring-no-properties
-                (point-min) (mevedel-view-prompt-boundary))))))
+                (point-min) (mevedel-view-transcript-tail))))))
 
   :doc "repair audit redraw preserves a multiline > composer and point"
   (mevedel-view-stream-test--with-buffers
@@ -2631,7 +2625,7 @@ turn's later text, live and after reconstruction."
         (should (string-match-p
                  "tool input repaired"
                  (buffer-substring-no-properties
-                  (point-min) (mevedel-view-prompt-boundary)))))))
+                  (point-min) (mevedel-view-transcript-tail)))))))
 
   :doc "post-tool hook retires a running row when no replacement text is ready"
   (mevedel-view-stream-test--with-buffers
@@ -2689,16 +2683,16 @@ turn's later text, live and after reconstruction."
       (setq mevedel-view--pending-tool-calls
             '(("call-1" "Read" nil)))
       (let ((inhibit-read-only t)
-            (tail-start (marker-position (mevedel-view-prompt-boundary-marker))))
-        (goto-char (mevedel-view-prompt-boundary-marker))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+            (tail-start (marker-position (mevedel-view-transcript-tail-marker))))
+        (goto-char (mevedel-view-transcript-tail-marker))
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
         (insert "Assistant\n| Calling Read...\n")
         (setq mevedel-view--in-flight-turn-start
               (copy-marker tail-start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil))
       (mevedel-view-stream-test--draw-running-rows)
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
@@ -2721,15 +2715,15 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             (start nil))
-        (goto-char (mevedel-view-prompt-boundary-marker))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+        (goto-char (mevedel-view-transcript-tail-marker))
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
         (setq start (point))
         (insert "Assistant\n› Calling Read: mevedel-pipeline.el...\n")
         (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
       (setq mevedel-view--pending-tool-calls nil)
@@ -2747,16 +2741,16 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               (tail-start nil))
-          (goto-char (mevedel-view-prompt-boundary-marker))
-          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+          (goto-char (mevedel-view-transcript-tail-marker))
+          (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
           (setq tail-start (point))
           (insert "Assistant\n... Thinking... (1 lines)\nCalling Read...\n")
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker tail-start nil))
           (set-marker mevedel-view--status-marker (point))
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker (mevedel-view-prompt-boundary-marker) (point))
-          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
+          (set-marker (mevedel-view-transcript-tail-marker) (point))
+          (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-max))))
         (setq mevedel-view--pending-tool-calls nil)
@@ -2792,6 +2786,7 @@ turn's later text, live and after reconstruction."
           (second '((:name "Read" :args (:file_path "b"))
                     (:name "Read" :args (:file_path "c")))))
       (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf (goto-char (point-min)))
       (mevedel-view-stream-test--batch data-buf first)
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (string-match-p "● Read: a" text))
@@ -3018,7 +3013,8 @@ turn's later text, live and after reconstruction."
                    (:name "Grep" :args (:pattern "x")))))
       (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
       (with-current-buffer view-buf
-        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+        (goto-char (point-min)))
       (mevedel-view-stream-test--batch data-buf calls)
       (dolist (call (butlast calls))
         (mevedel-view-stream-test--batch data-buf (list call) t))
@@ -3240,6 +3236,7 @@ turn's later text, live and after reconstruction."
           (calls (mapcar (lambda (file) (list :name "Read" :args (list :file_path file)))
                          '("a" "b" "c" "d"))))
       (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf (goto-char (point-min)))
       (mevedel-view-stream-test--batch data-buf calls)
       (cl-flet ((event (type call id)
                   (run-hook-with-args
@@ -3276,6 +3273,7 @@ turn's later text, live and after reconstruction."
           (calls (mapcar (lambda (file) (list :name "Read" :args (list :file_path file)))
                          '("a" "b" "c" "d"))))
       (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf (goto-char (point-min)))
       (mevedel-view-stream-test--batch data-buf calls)
       (cl-flet ((event (type call id &rest extra)
                   (run-hook-with-args
@@ -3518,7 +3516,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Working...")
       (goto-char (point-min))
-      (should (search-forward "Working" (mevedel-view-prompt-boundary) t))
+      (should (search-forward "Working" (mevedel-view-transcript-tail) t))
       (goto-char (match-beginning 0))
       (should (eq 'progress
                   (get-text-property
@@ -3531,11 +3529,11 @@ turn's later text, live and after reconstruction."
                    (point) 'mevedel-view-zone-region)))
       (let ((zone-text (buffer-substring-no-properties
                         (point)
-                        (mevedel-view-composer-draft-start))))
-        (should (string-match-p "Working[^\n]*\n> \\'" zone-text)))
+                        (mevedel-view-transcript-tail))))
+        (should (string-match-p "\\`Working[^\n]*\n\\'" zone-text)))
       (mevedel-view--stop-spinner)
       (should (text-property-any
-                   (point-min) (mevedel-view-prompt-boundary)
+                   (point-min) (mevedel-view-transcript-tail)
                    'mevedel-view-zone-namespace 'progress))
       (should-not mevedel-view--spinner-status)
       (should-not mevedel-view--spinner-timer)))
@@ -3559,13 +3557,10 @@ turn's later text, live and after reconstruction."
         (mevedel-view--interaction-rebuild)
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (queued (string-match-p "queued while busy" text))
-               (working (string-match-p "Working" text))
-               (prompt (string-match-p "\n> " text working)))
+               (working (string-match-p "Working[^\n]*\n\\'" text)))
           (should queued)
           (should working)
-          (should prompt)
-          (should (< queued working))
-          (should (< working prompt)))
+          (should (< queued working)))
         (mevedel-view--stop-spinner))))
 
   :doc "queued interaction rebuild suppresses modification hooks"
@@ -3616,15 +3611,12 @@ turn's later text, live and after reconstruction."
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (calling (string-match-p "● Read: a" text))
                (queued (string-match-p "queued while busy" text))
-               (working (string-match-p "Working" text))
-               (prompt (string-match-p "\n> " text working)))
+               (working (string-match-p "Working[^\n]*\n\\'" text)))
           (should calling)
           (should queued)
           (should working)
-          (should prompt)
           (should (< calling queued))
-          (should (< queued working))
-          (should (< working prompt)))
+          (should (< queued working)))
         (mevedel-view--stop-spinner))))
 
   :doc "a live render of running calls suppresses modification hooks"
@@ -3644,7 +3636,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-render-live-update data-buf)
         (should (= 0 changes))
         (let ((pos (text-property-any
-                    (point-min) (mevedel-view-prompt-boundary)
+                    (point-min) (mevedel-view-transcript-tail)
                     'mevedel-view-pending-tool-live t)))
           (should pos)
           ;; A running call has no transcript source to disclose.
@@ -3746,18 +3738,18 @@ turn's later text, live and after reconstruction."
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (let ((inhibit-read-only t))
-        (goto-char (mevedel-view-prompt-boundary-marker))
+        (goto-char (mevedel-view-transcript-tail-marker))
         (insert (propertize "Calling Read...\n"
                             'mevedel-view-source '(1 . 2)
                             'mevedel-view-type 'response))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
         (insert "| Calling Read...\n")
         (setq mevedel-view--in-flight-turn-start
               (copy-marker (point-min) nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker (mevedel-view-prompt-boundary-marker) (point))
-        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
+        (set-marker (mevedel-view-transcript-tail-marker) (point))
+        (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil))
       (setq mevedel-view--pending-tool-calls
             (list (list "call-1" "Read" nil)))
       (mevedel-view-stream-test--draw-running-rows)
@@ -4233,7 +4225,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-render-live-update data-buf)
         (should (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Partial answer" text))
           (should (string-match-p "Working" text))))))
 
@@ -4265,7 +4257,7 @@ turn's later text, live and after reconstruction."
         (should (= (marker-position mevedel-view--data-turn-start)
                    (marker-position position)))
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Working" text))))))
 
   :doc "pre-tool render keeps request progress and adds a running row"
@@ -4482,7 +4474,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
+      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "You" text))
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Hello world" text))
@@ -4534,14 +4526,14 @@ turn's later text, live and after reconstruction."
         (should (mevedel-view--request-progress-visible-p))
         (should-not mevedel-view--spinner-status)
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Done" text))
           (should (string-match-p "Worked for 6m" text))
           (should-not (string-match-p "Working\\.\\.\\." text))
           (should-not (string-match-p "mevedel-render-data" text)))
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Worked for 6m" text))
           (should-not (string-match-p "mevedel-render-data" text))))))
 
@@ -4590,7 +4582,7 @@ turn's later text, live and after reconstruction."
           (should-not (string-match-p ":elapsed-seconds 4" data))))
       (with-current-buffer view-buf
         (let* ((text (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary)))
+                      (point-min) (mevedel-view-transcript-tail)))
                (worked (string-match-p "Worked for" text))
                (javascript (string-match-p "javascript ⧉" text)))
           (should javascript)
@@ -4608,7 +4600,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
+      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Read.*test\\.el" text))
         (should-not (string-match-p "file content" text))
         (should (string-match-p "Here is the file" text)))))
@@ -4631,7 +4623,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Read.*test\\.el" text))
         (should (string-match-p "hook changed tool result" text))
         (should-not (string-match-p "original result" text)))
@@ -4639,7 +4631,7 @@ turn's later text, live and after reconstruction."
       (search-forward "hook changed tool result")
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Original result" text))
         (should (string-match-p "original result" text))
         (should (string-match-p "Updated result" text))
@@ -4666,7 +4658,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Read.*test\\.el" text))
         (should (string-match-p "hook changed tool result" text))
         (should-not (string-match-p "original result" text)))
@@ -4674,7 +4666,7 @@ turn's later text, live and after reconstruction."
       (search-forward "hook changed tool result")
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Original result" text))
         (should (string-match-p "original result" text))
         (should (string-match-p "Updated result" text))
@@ -4694,7 +4686,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Review update" text))
         (should (string-match-p "● Agent /root/reviewer finished" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
@@ -4709,7 +4701,7 @@ turn's later text, live and after reconstruction."
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "● Agent /root/reviewer finished" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
@@ -4728,7 +4720,7 @@ turn's later text, live and after reconstruction."
                (buffer-substring-no-properties (point-min) (point-max)))))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Here is `code`" text))
         (should (string-match-p "emacs-lisp ⧉" text))
         (should (string-match-p "(message \"hi\")" text))
@@ -4745,7 +4737,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "```emacs-lisp" text))
         (should (string-match-p "(message \"hi\")" text)))))
 
@@ -4887,14 +4879,14 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "r ⧉" text))
         (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
         (should-not (string-match-p "```r" text))
         (should-not (string-match-p "eval(f3, df)" text)))
       (let ((pos (save-excursion
                    (goto-char (point-min))
-                   (when (search-forward "[[3]]" (mevedel-view-prompt-boundary) t)
+                   (when (search-forward "[[3]]" (mevedel-view-transcript-tail) t)
                      (match-beginning 0)))))
         (should pos)
         (should-not (get-text-property pos 'htmlize-link))
@@ -4920,7 +4912,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let* ((text (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary)))
+      (let* ((text (buffer-substring-no-properties (point-min) (mevedel-view-transcript-tail)))
              (you-count (cl-count-if (lambda (line) (string= line "You"))
                                      (split-string text "\n"))))
         (should (= 0 you-count))
@@ -4954,7 +4946,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (= 2 (mevedel-view-stream-test--count-substring
                       "Bash:" text))))
       (goto-char (point-min))
@@ -4962,7 +4954,7 @@ turn's later text, live and after reconstruction."
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "success output" text))
         (should-not (string-match-p "Filesystem authority required" text))
         (should-not (string-match-p "#\\+begin_tool\\|#\\+end_tool"
@@ -4989,7 +4981,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (= 3 (mevedel-view-stream-test--count-substring
                         "Bash:" text)))
           (dolist (command '("test 1 = 2"
@@ -5025,7 +5017,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "RecoverRead: /tmp/f" text))
         (should (string-match-p
                  "Fixed the byte-compilation warning" text))
@@ -5036,7 +5028,7 @@ turn's later text, live and after reconstruction."
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "file body" text))
         (should-not (string-match-p
                      "#\\+begin_tool\\|#\\+end_tool\\|n_tool" text)))))
@@ -5054,7 +5046,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should-not (string-match-p "Reading 4 files" text))
           (dolist (file '("file0.el" "file1.el" "file2.el" "file3.el"))
             (should (string-match-p
@@ -5081,7 +5073,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response start end))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Second" text))
           (should (string-match-p "Second response" text))))))
 
@@ -5103,7 +5095,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response start end))
       (with-current-buffer view-buf
         (let* ((text (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary)))
+                      (point-min) (mevedel-view-transcript-tail)))
                (you-count (cl-count-if (lambda (line) (string= line "You"))
                                        (split-string text "\n"))))
           (should (= 1 you-count))
@@ -5138,7 +5130,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response response-start response-end))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Bash" text))
           (should (string-match-p "Thinking" text))
           (should (string-match-p "Final answer" text))
@@ -5148,7 +5140,7 @@ turn's later text, live and after reconstruction."
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should-not (string-match-p "root cause thought" text))))))
 
   :doc "final response widening does not duplicate visible user echo"
@@ -5176,7 +5168,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response response-start response-end))
       (with-current-buffer view-buf
         (let* ((text (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary)))
+                      (point-min) (mevedel-view-transcript-tail)))
                (you-count (cl-count-if (lambda (line) (string= line "You"))
                                        (split-string text "\n"))))
           (should (= 1 you-count))
@@ -5211,7 +5203,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-render-live-update data-buf)
         (mevedel-view-render-live-update data-buf)
         (let* ((text (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary)))
+                      (point-min) (mevedel-view-transcript-tail)))
                (assistant-count
                 (cl-count-if (lambda (line) (string= line "Assistant"))
                              (split-string text "\n")))
@@ -5250,7 +5242,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-render-live-update data-buf)
         (should (= 0 changes))
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "Partial response" text))
           ;; The redraw replaced the running row instead of adding one.
           (should (= 1 (mevedel-view-stream-test--count-substring
@@ -5270,8 +5262,8 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (mevedel-view--insert-user-message "Prompt")
         (let ((inhibit-read-only t))
-          (goto-char (mevedel-view-prompt-boundary-marker))
-          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+          (goto-char (mevedel-view-transcript-tail-marker))
+          (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
           (unwind-protect
               (progn
                 (insert "✉ from explorer\nhi\n\n")
@@ -5280,13 +5272,13 @@ turn's later text, live and after reconstruction."
                 (insert "Assistant\nold live tail\n")
                 (set-marker mevedel-view--status-marker (point))
                 (set-marker mevedel-view--interaction-marker (point))
-                (set-marker (mevedel-view-prompt-boundary-marker) (point)))
-            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
+                (set-marker (mevedel-view-transcript-tail-marker) (point)))
+            (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil)))
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--user-pre-rendered nil)
         (mevedel-view-render-live-update data-buf)
         (let* ((text (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary)))
+                      (point-min) (mevedel-view-transcript-tail)))
                (you-count (cl-count-if (lambda (line) (string= line "You"))
                                        (split-string text "\n"))))
           (should (= 1 you-count))
@@ -5299,7 +5291,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
+      (let ((text (buffer-substring-no-properties (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Thinking" text))
         (should (string-match-p "line 1" text))
         (should (string-match-p "42" text)))))
@@ -5332,7 +5324,7 @@ turn's later text, live and after reconstruction."
           (should (= (marker-position (car source)) reasoning-start))
           (should (string-match-p "Thinking\\.\\.\\. (1 lines)" line)))
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "real thought" text))
           (should-not (string-match-p "VERDICT: PASS" text))
           (should-not (string-match-p "</agent-result>" text)))
@@ -5357,7 +5349,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should-not (string-match-p "<proposed_plan>" text))
           (should-not (string-match-p "# Plan" text))
           (should (string-match-p "Normal" text))
@@ -5390,7 +5382,7 @@ turn's later text, live and after reconstruction."
               (mevedel-view-stream-render-response (point-min) (point-max)))
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
-                           (point-min) (mevedel-view-prompt-boundary))))
+                           (point-min) (mevedel-view-transcript-tail))))
                 (should-not (string-match-p "<proposed_plan>" text))
                 (should-not (string-match-p "# Old plan" text))
                 (should (string-match-p "Normal" text))
@@ -5410,7 +5402,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Change alpha" text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "Full hidden prompt" text))
@@ -5419,7 +5411,7 @@ turn's later text, live and after reconstruction."
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
       (let ((expanded (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary))))
+                       (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Full hidden prompt" expanded)))))
 
   :doc "renders inline skills as compact invocation with collapsed prompt"
@@ -5443,7 +5435,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p
                  "\\$emacs-context-snapshot\nSay hi!"
                  text))
@@ -5454,7 +5446,7 @@ turn's later text, live and after reconstruction."
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
       (let ((expanded (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary))))
+                       (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "You are helping with this user request"
                                 expanded)))))
 
@@ -5475,7 +5467,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "\\$green-loop current changes" text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "# Green Loop" text))
@@ -5485,7 +5477,7 @@ turn's later text, live and after reconstruction."
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
       (let ((expanded (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary))))
+                       (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "# Green Loop" expanded))
         (should (string-match-p "Run the loop" expanded)))))
 
@@ -5513,7 +5505,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
-                   (point-min) (mevedel-view-prompt-boundary))))
+                   (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Previous answer" text))
         (should (string-match-p "Worked for 2m" text))
         (should (string-match-p "You\n\\$green-loop current changes" text))
@@ -5545,7 +5537,7 @@ turn's later text, live and after reconstruction."
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
       (let ((expanded (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary))))
+                       (point-min) (mevedel-view-transcript-tail))))
         (should (string-match-p "Visible model prompt" expanded))
         (should-not (string-match-p ":PROPERTIES:" expanded))
         (should-not (string-match-p "GPTEL_BOUNDS" expanded)))))
@@ -7605,21 +7597,23 @@ turn's later text, live and after reconstruction."
   ,test
   (test)
 
-  :doc "idle, active and settled rails occupy the same line next to input"
+  :doc "idle, active and settled rails occupy the transcript tail and preserve input"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view-test--insert-composer-draft "> draft\nsecond" 4)
-      (let ((lines (count-lines (point-min) (mevedel-view-prompt-boundary))))
-        (should (string-match-p "\\[ask\\]\n> > draft"
+      (let ((lines (count-lines (point-min) (mevedel-view-transcript-tail))))
+        (should (string-match-p "\\[ask\\]\n\\'"
                                 (buffer-string)))
+        (with-current-buffer (mevedel-view-composer-buffer view-buf)
+          (should (string-prefix-p "> > draft\nsecond" (buffer-string))))
         (should-not (mevedel-view--spinner-active-p))
         (should-not mevedel-view--spinner-timer)
         (mevedel-view--start-spinner "Working...")
-        (should (= lines (count-lines (point-min) (mevedel-view-prompt-boundary))))
-        (should (string-match-p "\\[ask\\] · Working[^\n]*\n> > draft"
+        (should (= lines (count-lines (point-min) (mevedel-view-transcript-tail))))
+        (should (string-match-p "\\[ask\\] · Working[^\n]*\n\\'"
                                 (buffer-string)))
         (mevedel-view--stop-spinner)
-        (should (= lines (count-lines (point-min) (mevedel-view-prompt-boundary))))
+        (should (= lines (count-lines (point-min) (mevedel-view-transcript-tail))))
         (should-not (mevedel-view--spinner-active-p))
         (should-not mevedel-view--spinner-timer)
         (should (equal "> draft\nsecond" (mevedel-view-composer-draft-text)))
@@ -7639,7 +7633,7 @@ turn's later text, live and after reconstruction."
       (should (= 3 (mevedel-view-stream-test--draft-offset)))
       (let ((notice (text-property-any
                      (mevedel-view-zone-start 'progress)
-                     (mevedel-view-prompt-boundary)
+                     (mevedel-view-transcript-tail)
                      'mevedel-view-zone-activate
                      #'mevedel-view-jump-to-interaction)))
         (should notice)
@@ -7692,18 +7686,6 @@ turn's later text, live and after reconstruction."
       (should (string-prefix-p "[edits] · ⚠ 2 permissions · C-c C-j" rail))
       (should-not (string-match-p "Working" rail)))))
 
-(mevedel-deftest mevedel-view--animation-window-frame
-  (:doc "A child frame marked to animate as its parent shares the parent's palette.")
-  (let ((window (selected-window))
-        (frame (selected-frame)))
-    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) 'parent)))
-      (should (eq frame (mevedel-view--animation-window-frame window)))
-      (unwind-protect
-          (progn
-            (set-frame-parameter frame 'mevedel-view-animate-as-parent t)
-            (should (eq 'parent (mevedel-view--animation-window-frame window))))
-        (set-frame-parameter frame 'mevedel-view-animate-as-parent nil)))))
-
 (mevedel-deftest mevedel-view--spinner-framerate ()
   (let ((mevedel-view-spinner-framerate 30)
         (mevedel-view-spinner-battery-framerate 5)
@@ -7711,56 +7693,14 @@ turn's later text, live and after reconstruction."
         (mevedel-view-spinner-animate t))
     ,test)
   (test)
-  :doc "applies the user's power policy by default"
+  :doc "uses the full frame rate under the full power policy"
   (should (= 30 (mevedel-view--spinner-framerate)))
-  :doc "applies a given policy instead"
-  (should (= 5 (mevedel-view--spinner-framerate 'save)))
+  :doc "uses the battery ceiling under the save power policy"
+  (let ((mevedel-view-spinner-power-policy 'save))
+    (should (= 5 (mevedel-view--spinner-framerate))))
   :doc "is zero while animation is off"
   (let ((mevedel-view-spinner-animate nil))
     (should (zerop (mevedel-view--spinner-framerate)))))
-
-(mevedel-deftest mevedel-view--spinner-label-power-policy ()
-  (with-temp-buffer
-    (insert "Working...")
-    (setq-local mevedel-view--spinner-label-target
-                (cons (copy-marker 1) (copy-marker (point-max))))
-    (save-window-excursion
-      (let* ((inline (selected-window))
-             (floating (split-window))
-             (mevedel-view-spinner-power-policy 'full)
-             (showing nil)
-             (attended (list inline floating)))
-        (set-window-parameter floating 'mevedel-floating-composer t)
-        (cl-letf (((symbol-function 'mevedel-view--windows)
-                   (lambda (&rest _) (list inline floating)))
-                  ((symbol-function 'mevedel-view--window-attended-p)
-                   (lambda (window) (memq window attended)))
-                  ((symbol-function 'mevedel-view--animation-span-in-window-p)
-                   (lambda (_start _end window) (memq window showing))))
-          ,test))))
-  (test)
-  :doc "a label shown only in a floating composer animates under `save'"
-  (progn
-    (setq showing (list floating))
-    (should (eq 'save (mevedel-view--spinner-label-power-policy))))
-  :doc "a label also shown inline keeps the user's policy"
-  (progn
-    (setq showing (list inline floating))
-    (should (eq 'full (mevedel-view--spinner-label-power-policy))))
-  :doc "an unattended inline window does not count"
-  (progn
-    (setq showing (list inline floating)
-          attended (list floating))
-    (should (eq 'save (mevedel-view--spinner-label-power-policy))))
-  :doc "a label no attended window shows keeps the user's policy"
-  (progn
-    (setq attended nil showing (list floating))
-    (should (eq 'full (mevedel-view--spinner-label-power-policy))))
-  :doc "no label keeps the user's policy"
-  (progn
-    (setq showing (list floating)
-          mevedel-view--spinner-label-target nil)
-    (should (eq 'full (mevedel-view--spinner-label-power-policy)))))
 
 (mevedel-deftest mevedel-view--animation-frozen-p
   (:doc "Input pause and reduced motion independently freeze presentation.")

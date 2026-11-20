@@ -12,6 +12,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
+(require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -19,15 +20,15 @@
           "helpers"))
 
 (defmacro mevedel-view-zone-noop-test--counting (&rest body)
-  "Run BODY counting composer captures and restores; return (CAPTURES RESTORES)."
+  "Run BODY counting logical viewport captures and restores; return (CAPTURES RESTORES)."
   (declare (indent 0) (debug t))
   `(let ((captures 0) (restores 0)
-         (capture (symbol-function 'mevedel-view--composer-anchors))
-         (restore (symbol-function 'mevedel-view--restore-composer-anchors)))
-     (cl-letf (((symbol-function 'mevedel-view--composer-anchors)
+         (capture (symbol-function 'mevedel-view-zone--capture-logical-state))
+         (restore (symbol-function 'mevedel-view-zone--restore-logical-state)))
+     (cl-letf (((symbol-function 'mevedel-view-zone--capture-logical-state)
                 (lambda (&rest args)
                   (cl-incf captures) (apply capture args)))
-               ((symbol-function 'mevedel-view--restore-composer-anchors)
+               ((symbol-function 'mevedel-view-zone--restore-logical-state)
                 (lambda (&rest args)
                   (cl-incf restores) (apply restore args))))
        ,@body)
@@ -59,12 +60,12 @@ The current buffer is the owning view."
              (start (window-start))
              (vscroll (window-vscroll nil t))
              (captures 0) (restores 0)
-             (capture (symbol-function 'mevedel-view--composer-anchors))
-             (restore (symbol-function 'mevedel-view--restore-composer-anchors)))
-        (cl-letf (((symbol-function 'mevedel-view--composer-anchors)
+             (capture (symbol-function 'mevedel-view-zone--capture-logical-state))
+             (restore (symbol-function 'mevedel-view-zone--restore-logical-state)))
+        (cl-letf (((symbol-function 'mevedel-view-zone--capture-logical-state)
                    (lambda (&rest args)
                      (cl-incf captures) (apply capture args)))
-                  ((symbol-function 'mevedel-view--restore-composer-anchors)
+                  ((symbol-function 'mevedel-view-zone--restore-logical-state)
                    (lambda (&rest args)
                      (cl-incf restores) (apply restore args))))
           (should (eq region (mevedel-view-zone-reconcile
@@ -158,7 +159,7 @@ The current buffer is the owning view."
       (should (= 4 (mevedel-view-zone-noop-test--caret-offset))))))
 
 (mevedel-deftest mevedel-view-zone-absent-stream-update
-  (:doc "a stream update with an empty status zone runs one capture/restore pair")
+  (:doc "a stream update runs one viewport transaction without an empty status transaction")
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
@@ -174,10 +175,15 @@ The current buffer is the owning view."
       (should-not (mevedel-view-zone-region 'status))
       (dotimes (_ 3)
         (mevedel-view-test--insert-data data-buf " word" 'response)
-        ;; The live writer keeps its pair; the empty status writer needs none.
-        (should (equal '(1 1)
-                       (mevedel-view-zone-noop-test--counting
-                         (mevedel-view--render-stream-update data-buf)))))
+        (let ((writes 0)
+              (preserve (symbol-function 'mevedel-view--call-preserving-window-state)))
+          (cl-letf (((symbol-function 'mevedel-view--call-preserving-window-state)
+                     (lambda (&rest args)
+                       (cl-incf writes) (apply preserve args))))
+            (should (equal '(0 0)
+                           (mevedel-view-zone-noop-test--counting
+                             (mevedel-view--render-stream-update data-buf)))))
+          (should (= 1 writes))))
       (should (string-search "Then word word word" (buffer-string)))
       (should (equal "> draft" (mevedel-view-composer-draft-text))))))
 

@@ -89,13 +89,17 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
          (with-current-buffer view
            (mevedel-benchmark--insert-history (* 1024 1024))
            (mevedel-view-composer-insert mevedel-gate--draft)
-           (goto-char (+ (mevedel-view-composer-draft-start) 4))
-           (set-window-point (selected-window) (point))
-           (let ((offset 4)
-                 (chunk " fixed stream chunk.")
-                 (reconciles 0)
-                 (reconcile (symbol-function 'mevedel-view-zone-reconcile))
-                 update result)
+           (let* ((composer-window (mevedel-view-composer-display (selected-window)))
+                  (composer (mevedel-view-composer-buffer view))
+                  (target (if (eq scenario 'composer-keystroke) composer view))
+                  (offset 4)
+                  (chunk " fixed stream chunk.")
+                  (reconciles 0)
+                  (reconcile (symbol-function 'mevedel-view-zone-reconcile))
+                  update result)
+             (unless (and composer-window (eq (window-buffer composer-window) composer))
+               (error "Fixture composer is not displayed"))
+             (set-window-point composer-window (+ (mevedel-view-composer-draft-start) offset))
              (pcase scenario
                ('stream-chunk
                 (mevedel-view-stream-begin-turn
@@ -114,11 +118,8 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                     (put-text-property start (point) 'gptel 'response)))
                 (setq update (lambda () (mevedel-view--render-stream-update data))))
                ('composer-keystroke
-                (unless (memq #'mevedel-view--realign-on-window-change
-                              post-command-hook)
-                  (error "Composer fixture is missing its realignment hook"))
-                ;; Prime the fixed window geometry before the typed command.
-                (run-hooks 'post-command-hook)
+                (with-selected-window composer-window
+                  (run-hooks 'post-command-hook))
                 (setq update
                       (lambda ()
                         (let ((last-command-event ?x)
@@ -137,11 +138,11 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
              (set-window-start
               (selected-window)
               (save-excursion
-                (goto-char (mevedel-view-prompt-boundary))
+                (goto-char (mevedel-view-transcript-tail))
                 (forward-line -4)
                 (point)))
              (redisplay t)
-             (let ((tick (buffer-modified-tick)))
+             (let ((tick (buffer-modified-tick target)))
                (cl-letf (((symbol-function 'mevedel-view-zone-reconcile)
                           (lambda (&rest args)
                             (cl-incf reconciles)
@@ -159,10 +160,13 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                              (funcall operation)))))
                  (cl-letf (((symbol-function 'current-time) time-function)
                            ((symbol-function 'float-time) float))
-                   (setq result (funcall consumer update))))
-               (unless (> (buffer-modified-tick) tick)
-                 (error "Scenario did not modify the view: %s" scenario)))
-             (unless (and (= (point) (+ (mevedel-view-composer-draft-start) offset))
+                   (with-selected-window composer-window
+                     (with-current-buffer target
+                       (setq result (funcall consumer update))))))
+               (unless (> (buffer-modified-tick target) tick)
+                 (error "Scenario did not modify its target buffer: %s" scenario)))
+             (unless (and (= (with-current-buffer composer (point))
+                             (+ (mevedel-view-composer-draft-start) offset))
                           (equal (mevedel-view-composer-draft-text nil t)
                                  (if (eq scenario 'composer-keystroke)
                                      "> bexnchmark draft\nsecond line"
@@ -178,7 +182,7 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                ('zone-tick
                 (unless (and (> reconciles 0)
                              (save-excursion
-                               (let ((boundary (mevedel-view-prompt-boundary)))
+                               (let ((boundary (mevedel-view-transcript-tail)))
                                  (goto-char (- boundary 100))
                                  (search-forward "13s" boundary t))))
                   (error "Zone tick skipped elapsed metadata reconciliation"))))

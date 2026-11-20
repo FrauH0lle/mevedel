@@ -63,6 +63,7 @@
 (declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
 (declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
 (declare-function mevedel-view-composer-replace "mevedel-view-composer" (text &optional view))
+(defvar mevedel-composer--view)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -114,12 +115,10 @@
   (ring-elements (mevedel-view-history--ensure-ring)))
 
 (defun mevedel-view-history--input-active-p ()
-  "Return non-nil when point is in the editable composer."
-  (and (derived-mode-p 'mevedel-view-mode)
-       (not mevedel-view--agent-transcript-p)
-       (boundp 'mevedel--data-buffer)
-       mevedel--data-buffer
-       (mevedel-view-composer-in-draft-p (point-marker))))
+  "Return non-nil when point is in the composer draft."
+  (and (derived-mode-p 'mevedel-composer-mode)
+       (buffer-live-p mevedel-composer--view)
+       (mevedel-view-composer-in-draft-p (point))))
 
 (defun mevedel-view-history--input-text ()
   "Return current view input text, untrimmed."
@@ -129,8 +128,7 @@
 (defun mevedel-view-history--replace-input (text)
   "Replace the current view input with TEXT."
   (mevedel-view--ensure-interactive-chat-view)
-  (let ((inhibit-read-only t))
-    (mevedel-view-composer-replace text))
+  (mevedel-view-composer-replace text)
   (when-let* ((session (mevedel-view--session)))
     (mevedel-session-clear-dropped-file-grants session)))
 
@@ -359,39 +357,41 @@ to `.bad' and ignored."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-p"))
-    (let ((ring (mevedel-view-history--ensure-ring)))
-      (when (ring-empty-p ring)
-        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
-      (unless mevedel-view-history--index
-        (setq mevedel-view-history--stored-incomplete
-              (mevedel-view-history--input-text)))
-      (setq mevedel-view-history--index
-            (if mevedel-view-history--index
-                (min (1- (ring-length ring))
-                     (1+ mevedel-view-history--index))
-              0))
-      (mevedel-view-history--replace-input
-       (ring-ref ring mevedel-view-history--index)))))
+    (with-current-buffer mevedel-composer--view
+      (let ((ring (mevedel-view-history--ensure-ring)))
+        (when (ring-empty-p ring)
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
+        (unless mevedel-view-history--index
+          (setq mevedel-view-history--stored-incomplete
+                (mevedel-view-history--input-text)))
+        (setq mevedel-view-history--index
+              (if mevedel-view-history--index
+                  (min (1- (ring-length ring))
+                       (1+ mevedel-view-history--index))
+                0))
+        (mevedel-view-history--replace-input
+         (ring-ref ring mevedel-view-history--index))))))
 
 (defun mevedel-view-history-next ()
   "Cycle forward through view input history when in the composer."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-n"))
-    (cond
-     ((null mevedel-view-history--index)
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not browsing input history"))
-     ((> mevedel-view-history--index 0)
-      (setq mevedel-view-history--index
-            (1- mevedel-view-history--index))
-      (mevedel-view-history--replace-input
-       (ring-ref (mevedel-view-history--ensure-ring)
-                 mevedel-view-history--index)))
-     (t
-      (setq mevedel-view-history--index nil)
-      (mevedel-view-history--replace-input
-       (or mevedel-view-history--stored-incomplete ""))
-      (setq mevedel-view-history--stored-incomplete nil)))))
+    (with-current-buffer mevedel-composer--view
+      (cond
+       ((null mevedel-view-history--index)
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Not browsing input history"))
+       ((> mevedel-view-history--index 0)
+        (setq mevedel-view-history--index
+              (1- mevedel-view-history--index))
+        (mevedel-view-history--replace-input
+         (ring-ref (mevedel-view-history--ensure-ring)
+                   mevedel-view-history--index)))
+       (t
+        (setq mevedel-view-history--index nil)
+        (mevedel-view-history--replace-input
+         (or mevedel-view-history--stored-incomplete ""))
+        (setq mevedel-view-history--stored-incomplete nil))))))
 
 (defun mevedel-view-history--search-matches (query entries)
   "Return ENTRIES matching QUERY for incremental history search."
@@ -421,8 +421,9 @@ to `.bad' and ignored."
 (defun mevedel-view-history--search-restore (stored)
   "Restore STORED input and reset transient history navigation state."
   (mevedel-view-history--replace-input stored)
-  (setq mevedel-view-history--stored-incomplete nil
-        mevedel-view-history--index nil))
+  (with-current-buffer mevedel-composer--view
+    (setq mevedel-view-history--stored-incomplete nil
+          mevedel-view-history--index nil)))
 
 (defun mevedel-view-history-search ()
   "Incrementally search backward through input history.
@@ -434,7 +435,8 @@ request."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-r"))
-    (let* ((entries (mevedel-view-history--entries))
+    (let* ((entries (with-current-buffer mevedel-composer--view
+                      (mevedel-view-history--entries)))
            (stored (mevedel-view-history--input-text))
            (query "")
            (matches nil)
@@ -442,8 +444,9 @@ request."
            (done nil))
       (when (null entries)
         (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
-      (setq mevedel-view-history--stored-incomplete stored
-            mevedel-view-history--index nil)
+      (with-current-buffer mevedel-composer--view
+        (setq mevedel-view-history--stored-incomplete stored
+              mevedel-view-history--index nil))
       (unwind-protect
           (condition-case nil
               (while (not done)
@@ -499,7 +502,8 @@ request."
 (defun mevedel-view-history-browse ()
   "Browse input history and insert the selected entry into the composer."
   (interactive)
-  (let ((entries (mevedel-view-history--entries)))
+  (let ((entries (with-current-buffer (or mevedel-composer--view (current-buffer))
+                   (mevedel-view-history--entries))))
     (when (null entries)
       (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No input history"))
     (let* ((choice (completing-read "Input history: " entries nil t))

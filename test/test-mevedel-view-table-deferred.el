@@ -58,27 +58,32 @@
                         (set-window-buffer window view-buf)
                         (mevedel-view--full-rerender)
                         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
-                        (set-window-point
-                         (mevedel-view-composer-window window)
-                         (with-current-buffer (mevedel-view-composer-buffer view-buf)
-                           (point)))
-                        (set-window-start
-                         window
-                         ;; Inline-only: the transcript window scrolls from the draft.
-                         (save-excursion
-                           (goto-char (mevedel-view-composer-draft-start view-buf))
-                           (vertical-motion (- (- (window-body-height window) 3)) window)
-                           (point))
-                         t)
-                        (let ((y (mevedel-view-test--composer-screen-y window))
-                              (lines (count-lines (point-min) (point-max))))
-                          (should y)
-                          (mevedel-view--realign-markdown view-buf window)
-                          (should (string-search "│" (buffer-string)))
-                          (should (= lines (count-lines (point-min) (point-max))))
-                          (should (= y (mevedel-view-test--composer-screen-y window)))
-                          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
-                          (should (= 4 (mevedel-view-test--composer-point-offset)))))))))
+                        (goto-char (point-min))
+                        (search-forward "| Name")
+                        (beginning-of-line)
+                        (set-window-start window (point) t)
+                        (let* ((composer (mevedel-view-composer-display window))
+                               (caret (+ (mevedel-view-composer-draft-start) 4)))
+                          (set-window-point composer caret)
+                          (with-selected-window composer
+                            (redisplay t)
+                            (with-current-buffer view-buf
+                              (let ((y (mevedel-view-test--composer-screen-y window))
+                                    (edges (window-pixel-edges composer))
+                                    (start (window-start composer))
+                                    (lines (count-lines (point-min) (point-max))))
+                                (should y)
+                                (mevedel-view--realign-markdown view-buf window)
+                                (redisplay t)
+                                (should (string-search "│" (buffer-string)))
+                                (should (= lines (count-lines (point-min) (point-max))))
+                                (should (eq (selected-window) composer))
+                                (should (equal edges (window-pixel-edges composer)))
+                                (should (= start (window-start composer)))
+                                (should (= y (mevedel-view-test--composer-screen-y window)))
+                                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+                                (should (= caret (window-point composer)))
+                                (should (= 4 (mevedel-view-test--composer-point-offset))))))))))))
 
 (mevedel-deftest mevedel-view-table-decorate/layout-cache ()
   ,test

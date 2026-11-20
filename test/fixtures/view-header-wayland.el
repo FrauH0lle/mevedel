@@ -26,7 +26,8 @@
              (insert "Continued answer\n"
                      (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt")
                      "More answer\n")
-             (mevedel-view-composer-initialize-prompt)
+             (mevedel-view-transcript-tail-initialize)
+             (mevedel-view-composer-create)
              (mevedel-view-composer-insert "> draft\nsecond line")
              (setq-local mevedel-view--continuation-prompt-cache
                          '(nil nil nil nil (:segment 1 :pos 1 :preview "Archived prompt")))

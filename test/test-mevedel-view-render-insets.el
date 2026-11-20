@@ -54,7 +54,7 @@
                                              :path "/root/test")))
                  (inset (concat (make-string (string-width indent) ?\s) "    ")))
             (let ((inhibit-read-only t))
-              (goto-char (mevedel-view-prompt-boundary))
+              (goto-char (mevedel-view-transcript-tail))
               (if (string-empty-p indent)
                   (mevedel-view--insert-rendered-tool
                    (plist-put (mevedel-view--child-call-rendering child)
@@ -101,7 +101,7 @@
                  (prefix (concat (make-string (string-width indent) ?\s) "    │ "))
                  (wrap (make-string (+ (string-width indent) 6) ?\s)))
             (let ((inhibit-read-only t))
-              (goto-char (mevedel-view-prompt-boundary))
+              (goto-char (mevedel-view-transcript-tail))
               (if (string-empty-p indent)
                   (progn
                     (insert text)
@@ -141,7 +141,7 @@
                  (wrap (unless (string-empty-p indent)
                          (make-string (string-width indent) ?\s))))
             (let ((inhibit-read-only t))
-              (goto-char (mevedel-view-prompt-boundary))
+              (goto-char (mevedel-view-transcript-tail))
               (if (string-empty-p indent)
                   (let ((mevedel-view-mailbox-collapse-line-threshold 0))
                     (insert text)
@@ -156,12 +156,12 @@
                           (if (equal tag "agent-result")
                               (progn
                                 (should-not (search-forward "collapsed]"
-                                                            (mevedel-view-prompt-boundary) t))
+                                                            (mevedel-view-transcript-tail) t))
                                 (goto-char (point-min))
                                 (should (search-forward "Agent /root/test finished"
-                                                        (mevedel-view-prompt-boundary) t)))
+                                                        (mevedel-view-transcript-tail) t)))
                             (should (search-forward "[1 line collapsed]"
-                                                    (mevedel-view-prompt-boundary) t)))
+                                                    (mevedel-view-transcript-tail) t)))
                           (let ((hint (match-beginning 0)))
                             (should (equal (unless (string-empty-p indent) indent)
                                            (get-text-property hint 'line-prefix)))
@@ -174,7 +174,7 @@
                     (mevedel-view-toggle-section)
                     (goto-char (point-min))
                     (should-not (search-forward "collapsed]"
-                                                (mevedel-view-prompt-boundary) t))
+                                                (mevedel-view-transcript-tail) t))
                     (search-forward "/root/test")
                     (mevedel-view-toggle-section)
                     (check-hint))))
@@ -210,7 +210,7 @@
                             '(:kind collaboration-event :event interacted
                               :path "/root/following"))))
                    (inhibit-read-only t))
-              (goto-char (mevedel-view-prompt-boundary))
+              (goto-char (mevedel-view-transcript-tail))
               (mevedel-view--insert-child-call-block child '(1 . 8) t "  ")
               (mevedel-view--insert-child-call-block
                following '(8 . 15) t following-indent)

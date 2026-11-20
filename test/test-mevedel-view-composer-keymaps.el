@@ -74,7 +74,7 @@
           (should (equal (mevedel-view-composer-draft-text view-buf t)
                          "`word`\nsecond line"))))))
 
-  :doc "Lookup tracks current point, prefixes, meta events and command remapping"
+  :doc "Composer and transcript resolve their own prefixes and command remappings"
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer (mevedel-view-composer-buffer view-buf))
@@ -96,9 +96,9 @@
         (goto-char (+ start 3))
         (execute-kbd-macro (kbd "C-z"))
         (should (= (point) start))
-        ;; Inline-only: positions before the draft share the composer buffer.
-        (dolist (position (list (point-min) (1- start)))
-          (goto-char position)
+        (with-current-buffer view-buf
+          (use-local-map (copy-keymap (current-local-map)))
+          (local-set-key (kbd "C-z") #'move-beginning-of-line)
           (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
           (should (eq (key-binding (kbd "C-c C-k")) #'mevedel-view-abort))
           (should (eq (key-binding (kbd "C-z")) #'beginning-of-visual-line)))
@@ -111,31 +111,31 @@
 
   :doc "Root and side composers keep distinct bindings across rebuilds"
   (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
+    (let ((composer (mevedel-view-composer-buffer view-buf)))
       (dolist (side '(nil t nil))
         (mevedel-view--setup view-buf data-buf (list :side-conversation-p side))
-        (set-buffer (mevedel-view-composer-buffer view-buf))
+        (with-current-buffer (mevedel-view-composer-buffer view-buf)
+          (goto-char (mevedel-view-composer-draft-end view-buf))
+          (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
+          (should (eq (key-binding (kbd "C-c C-k"))
+                      (if side #'mevedel-view-abort #'mevedel-view-cancel-composer-state)))
+          (should (eq (eq (key-binding (kbd "C-c C-z")) #'mevedel-side-conversation-close)
+                      side))
+          (should (eq (eq (key-binding (kbd "M-p")) #'mevedel-view-history-previous)
+                      (not side)))
+          (should (eq (eq (key-binding (kbd "C-<tab>")) #'mevedel-view-toggle-plan-mode)
+                      (not side)))))
+      (mevedel-view--setup view-buf data-buf '(:agent-transcript-p t))
+      (should-not (buffer-live-p composer))
+      (should-not (mevedel-view-composer-buffer view-buf))
+      (with-current-buffer view-buf
+        (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send)))
+      (mevedel-view--setup view-buf data-buf)
+      (with-current-buffer (mevedel-view-composer-buffer view-buf)
         (goto-char (mevedel-view-composer-draft-end view-buf))
         (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
-        (should (eq (key-binding (kbd "C-c C-k"))
-                    (if side #'mevedel-view-abort #'mevedel-view-cancel-composer-state)))
-        (should (eq (eq (key-binding (kbd "C-c C-z")) #'mevedel-side-conversation-close)
-                    side))
-        (should (eq (eq (key-binding (kbd "M-p")) #'mevedel-view-history-previous)
-                    (not side)))
-        (should (eq (eq (key-binding (kbd "C-<tab>")) #'mevedel-view-toggle-plan-mode)
-                    (not side))))
-      (mevedel-view--setup view-buf data-buf '(:agent-transcript-p t))
-      (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
-      (mevedel-view--setup view-buf data-buf)
-      (set-buffer (mevedel-view-composer-buffer view-buf))
-        (goto-char (mevedel-view-composer-draft-end view-buf))
-      (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
-      ;; Inline-only: losing the inline prompt marker disables the draft maps.
-      (set-marker mevedel-view--input-marker nil)
-      (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
-      (fundamental-mode)
-      (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))))
+        (fundamental-mode)
+        (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send)))))
 
   :doc "Composer outranks ordinary mode maps but respects overriding maps"
   (let* ((other (define-keymap "C-c RET" #'backward-char "C-y" #'backward-char))
@@ -173,9 +173,8 @@
           (let ((before (point)))
             (execute-kbd-macro (kbd "C-v"))
             (should (= (point) (+ before (if side -1 1)))))
-          ;; Inline-only: the view's first row shares the composer buffer.
-          (goto-char (point-min))
-          (should (eq (key-binding (kbd "C-v")) #'scroll-up-command)))))))
+          (with-current-buffer view-buf
+            (should (eq (key-binding (kbd "C-v")) #'scroll-up-command))))))))
 
 (provide 'test-mevedel-view-composer-keymaps)
 ;;; test-mevedel-view-composer-keymaps.el ends here

@@ -19,7 +19,6 @@
           "helpers"))
 (require 'mwheel)
 (require 'mevedel-execution)
-(require 'mevedel-floating-composer)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
@@ -71,29 +70,30 @@ and elapsed labels read.  `data-buf' and `view-buf' are bound too."
            ,@body)))))
 
 (defun mevedel-view-user-state-test--arrange ()
-  "Show the current view in a composer window above a history reader.
+  "Show the current view and its composer above a second transcript window.
 Insert the draft with point at offset 4 and show the composer at the
 bottom of its window; the reader visits a line of earlier history.
-Return (COMPOSER . READER)."
+Return (VIEW-WINDOW . READER)."
   (delete-other-windows)
-  (let ((composer (selected-window))
+  (let ((view-window (selected-window))
         (reader (split-window-below)))
     (set-window-buffer reader (current-buffer))
     (mevedel-view-test--insert-composer-draft mevedel-view-user-state-test--draft 4)
+    (should (mevedel-view-composer-display view-window))
     (if noninteractive
-        (set-window-start composer
+        (set-window-start view-window
                           (save-excursion
                             (goto-char (point-max))
-                            (forward-line (- 1 (window-body-height composer)))
+                            (forward-line (- 1 (window-body-height view-window)))
                             (point)))
       ;; The exact last page, as growth leaves it.  `recenter' keeps up to a
       ;; line of blank pixels, which the first overflowing growth consumes.
       (let* ((end (point-max))
-             (y (- (cdr (mevedel-view--window-body-geometry composer))
-                   (with-selected-window composer
+             (y (- (cdr (mevedel-view--window-body-geometry view-window))
+                   (with-selected-window view-window
                      (save-excursion (goto-char end) (line-pixel-height))))))
         (mevedel-view--set-viewport
-         composer (mevedel-view--viewport-at-y composer end y)))
+         view-window (mevedel-view--viewport-at-y view-window end y)))
       (redisplay t))
     (let ((line (save-excursion
                   (goto-char (point-min))
@@ -105,7 +105,7 @@ Return (COMPOSER . READER)."
                                  (forward-line -2)
                                  (point))))
     (unless noninteractive (redisplay t))
-    (cons composer reader)))
+    (cons view-window reader)))
 
 (defun mevedel-view-user-state-test--draft-offset ()
   "Return the caret offset from the draft start, read in the composer buffer."
@@ -114,7 +114,7 @@ Return (COMPOSER . READER)."
       (- (point) (mevedel-view-composer-draft-start view)))))
 
 (defun mevedel-view-user-state-test--observe (windows)
-  "Return what the user sees in WINDOWS, a (COMPOSER . READER) pair."
+  "Return what the user sees in WINDOWS, a (VIEW-WINDOW . READER) pair."
   (unless noninteractive (redisplay t))
   (let ((composer (mevedel-view-composer-window (car windows)))
         (reader (cdr windows))
@@ -460,8 +460,8 @@ REGION promises that THUNK replaces only that text."
                           (list left right))))
         (let ((before (observe))
               (lines (count-lines (point-min) (point-max))))
-          (should (mevedel-view--window-shows-end-p left))
-          (should (mevedel-view--window-shows-end-p right))
+          (should (mevedel-view--position-screen-y (point-max) left t))
+          (should (mevedel-view--position-screen-y (point-max) right t))
           (dotimes (_ 6)
             (if ,toggle
                 (if ,outer
@@ -508,13 +508,13 @@ REGION promises that THUNK replaces only that text."
       (redisplay t)
       (mevedel-view-user-state-test--activate-row "Inspect runner")
       (should (looking-at-p "  ▾ Running"))
-      ;; The composer sits mid-window with blank space below it, as after
+      ;; The transcript ends mid-window with blank space below it, as after
       ;; `recenter' or an earlier shrink.
       (save-excursion
-        (goto-char (mevedel-view-composer-draft-start))
+        (goto-char (point-max))
         (recenter 20))
       (redisplay t)
-      (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window)))
+      (let ((end-y (mevedel-view--position-screen-y (point-max) (selected-window)))
             (start (window-start))
             (position (point))
             (row-y (mevedel-view--position-screen-y (point) (selected-window))))
@@ -527,10 +527,10 @@ REGION promises that THUNK replaces only that text."
         (should (= position (window-point)))
         (should (equal row-y (mevedel-view--position-screen-y
                              (point) (selected-window))))
-        (should (< (mevedel-view-test--composer-screen-y (selected-window))
-                   composer-y)))))
+        (should (< (mevedel-view--position-screen-y (point-max) (selected-window))
+                   end-y)))))
   (test)
-  :doc "collapsing a background row keeps the visited row, not the composer"
+  :doc "collapsing a background row keeps the visited row, not the transcript end"
   nil)
 
 (defun mevedel-view-user-state-test--wheel (direction &optional window)
@@ -588,45 +588,6 @@ WINDOW defaults to the selected window, but need not be selected."
     (should done)
     (redisplay t)))
 
-(mevedel-deftest mevedel-view-user-state/scroll-return ()
-  (progn
-    (skip-unless (display-graphic-p))
-    ;; The floating composer would take the draft cursor (its own suite).
-    (let ((mevedel-floating-composer nil)
-          (scroll-preserve-screen-position t)
-          (mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
-          (mouse-wheel-progressive-speed nil))
-      (mevedel-view-user-state-test--with-view
-        (mevedel-view-test--insert-composer-draft
-         mevedel-view-user-state-test--draft 4)
-        (save-excursion (goto-char (mevedel-view-composer-draft-end)) (recenter -1))
-        (redisplay t)
-        (dotimes (_ 3) (mevedel-view-user-state-test--wheel 'wheel-up))
-        ;; Emacs keeps point visible, so it left the composer for chrome rows.
-        (should-not (mevedel-view--point-in-input-region-p))
-        ,redraw
-        (let ((notches 0))
-          (while (and (< notches 8)
-                      (not (mevedel-view--position-screen-y
-                            (point-max) (selected-window) t)))
-            (mevedel-view-user-state-test--wheel 'wheel-down)
-            (cl-incf notches)))
-        (should (mevedel-view--position-screen-y (point-max) (selected-window) t))
-        (should (equal mevedel-view-user-state-test--draft (mevedel-view-composer-draft-text)))
-        (should (= 4 (mevedel-view-user-state-test--draft-offset))))))
-  (redraw)
-  :doc "scrolling away from the composer and back returns point to the draft"
-  nil
-  :doc "the return survives redraws while scrolled away"
-  (progn
-    (setq clock (1+ clock))
-    (mevedel-view--spinner-tick)
-    (mevedel-view-user-state-test--add-chunk data-buf "Arrived while scrolled away.\n")
-    (mevedel-view--full-rerender)
-    (setq agents (list (list :path "/root/arriving" :status 'running
-                             :started-at 990.0)))
-    (mevedel-view--render-status)))
-
 (mevedel-deftest mevedel-view-user-state/scroll-unselected ()
   (progn
     (skip-unless (display-graphic-p))
@@ -635,9 +596,13 @@ WINDOW defaults to the selected window, but need not be selected."
           (mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
           (mouse-wheel-progressive-speed nil))
       (mevedel-view-user-state-test--with-view
-        (let* ((windows (mevedel-view-user-state-test--arrange))
-               (composer (car windows))
-               (reader (cdr windows)))
+        (let* ((transcript (selected-window))
+               (reader (split-window-right)))
+          (mevedel-view-test--insert-composer-draft
+           mevedel-view-user-state-test--draft 4)
+          (goto-char (point-max))
+          (recenter -1)
+          (redisplay t)
           (with-temp-buffer
             (when ,different-buffer
               (insert "The selected window is not a chat view.\n")
@@ -647,123 +612,43 @@ WINDOW defaults to the selected window, but need not be selected."
                   (reader-start (window-start reader)))
               (dotimes (_ ,up-count) ,up)
               (with-current-buffer view-buf
-                (should (< (window-point (mevedel-view-composer-window composer))
-                              (mevedel-view-composer-draft-start))))
+                (should-not (mevedel-view--position-screen-y (point-max) transcript t)))
               (let ((notches 0))
                 (while (and (< notches 8)
                             (with-current-buffer view-buf
                               (not (mevedel-view--position-screen-y
-                                    (point-max) composer t))))
+                                    (point-max) transcript t))))
                   ,down
                   (cl-incf notches)))
               (with-current-buffer view-buf
-                (should (mevedel-view--position-screen-y (point-max) composer t))
+                (should (mevedel-view--position-screen-y (point-max) transcript t))
                 (should (equal mevedel-view-user-state-test--draft
                                (mevedel-view-composer-draft-text)))
-                (should (= 4 (- (window-point (mevedel-view-composer-window composer))
-                                (mevedel-view-composer-draft-start)))))
-              (should-not (window-parameter composer 'mevedel-view-scroll-return))
+                (should (= 4 (mevedel-view-user-state-test--draft-offset))))
               (should (eq reader (selected-window)))
               (should (= reader-point (window-point reader)))
               (should (= reader-start (window-start reader)))))))))
   (different-buffer up-count up down)
-  :doc "wheel scrolling a non-selected view window restores its own draft offset"
+  :doc "wheel scrolling a non-selected view window leaves the draft offset alone"
   nil 3
-  (mevedel-view-user-state-test--wheel 'wheel-up composer)
-  (mevedel-view-user-state-test--wheel 'wheel-down composer)
-  :doc "wheel scrolling a view from another buffer restores its draft offset"
+  (mevedel-view-user-state-test--wheel 'wheel-up transcript)
+  (mevedel-view-user-state-test--wheel 'wheel-down transcript)
+  :doc "wheel scrolling a view from another buffer leaves the draft offset alone"
   t 3
-  (mevedel-view-user-state-test--wheel 'wheel-up composer)
-  (mevedel-view-user-state-test--wheel 'wheel-down composer)
-  :doc "scroll-other-window restores the non-selected window's draft offset"
+  (mevedel-view-user-state-test--wheel 'wheel-up transcript)
+  (mevedel-view-user-state-test--wheel 'wheel-down transcript)
+  :doc "scroll-other-window leaves the draft offset alone"
   nil 3
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-S-v")) 'scroll-other-window-down)
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window)
-  :doc "scroll-other-window from another buffer restores the view's draft offset"
+  :doc "scroll-other-window from another buffer leaves the draft offset alone"
   t 3
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-S-v")) 'scroll-other-window-down)
   (mevedel-view-user-state-test--deliver-scroll
    (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window))
-
-(mevedel-deftest mevedel-view--scroll-return ()
-  (with-temp-buffer
-    (save-window-excursion
-      (let ((window (selected-window)))
-        (set-window-buffer window (current-buffer))
-        (unwind-protect
-            ,test
-          (set-window-parameter window 'mevedel-view-scroll-return nil)))))
-  (test)
-  :doc "returns the offset recorded for the buffer the window shows"
-  (progn
-    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
-    (should (= 7 (mevedel-view--scroll-return window))))
-  :doc "ignores an offset recorded for a buffer the window showed earlier"
-  (with-temp-buffer
-    (set-window-parameter window 'mevedel-view-scroll-return (cons (current-buffer) 7))
-    (should-not (mevedel-view--scroll-return window)))
-  :doc "returns nil without a pending return"
-  (should-not (mevedel-view--scroll-return window)))
-
-(mevedel-deftest mevedel-view--return-from-scroll ()
-  (mevedel-view-user-state-test--with-view
-    (mevedel-view-test--insert-composer-draft
-     mevedel-view-user-state-test--draft 4)
-    (let* ((transcript (save-excursion
-                         (goto-char (point-min))
-                         (search-forward "Line 20 ")
-                         (point)))
-           (bottom (save-excursion
-                     (goto-char (point-max))
-                     (forward-line (- 1 (window-body-height)))
-                     (point)))
-           (away (save-excursion (goto-char transcript) (line-beginning-position))))
-      (set-window-start nil bottom)
-      (cl-flet ((run (command thunk)
-                  ;; ADR 0126's own return; the floating composer has its suite.
-                  (let ((this-command command)
-                        (mevedel-floating-composer nil))
-                    (run-hooks 'pre-command-hook)
-                    (funcall thunk)
-                    (run-hooks 'post-command-hook))))
-        ;; A scroll displaces point from the draft.
-        (run 'scroll-down-command
-             (lambda () (set-window-start nil away) (goto-char transcript)))
-        (should (= 4 (mevedel-view--scroll-return (selected-window))))
-        ,action)))
-  (action)
-  :doc "a later scroll showing the draft returns point to its offset"
-  (progn
-    (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
-    (should (= 4 (mevedel-view-user-state-test--draft-offset)))
-    (should-not (window-parameter nil 'mevedel-view-scroll-return)))
-  :doc "a deliberate command cancels the return"
-  (progn
-    (run 'forward-char #'ignore)
-    (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
-    (should (= transcript (point)))
-    (should-not (window-parameter nil 'mevedel-view-scroll-return)))
-  :doc "a return pending for another view does not move this view's point"
-  (mevedel-view-test--with-buffers
-    (dotimes (i 60)
-      (mevedel-view-test--insert-data
-       data-buf (format "Line %d of another response.\n" i) 'response))
-    (switch-to-buffer view-buf)
-    (mevedel-view--full-rerender)
-    (mevedel-view-test--insert-composer-draft
-     mevedel-view-user-state-test--draft 2)
-    (goto-char (point-min))
-    (search-forward "Line 20 ")
-    (let ((point (point))
-          (bottom (save-excursion
-                    (goto-char (point-max))
-                    (forward-line (- 1 (window-body-height)))
-                    (point))))
-      (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
-      (should (= point (point))))))
 
 (mevedel-deftest mevedel-view-user-state/live-reader ()
   ;; The graphical runner repeats every transition after a real wheel event
@@ -908,7 +793,7 @@ WINDOW defaults to the selected window, but need not be selected."
               (backward-char (length "[Manage]"))
               (let ((visit (point)))
                 (should (>= visit mevedel-view--status-marker))
-                (should (< visit (mevedel-view-prompt-boundary)))
+                (should (< visit (mevedel-view-transcript-tail)))
                 (dolist (window windows)
                   (set-window-point window visit)
                   (mevedel-view--set-viewport

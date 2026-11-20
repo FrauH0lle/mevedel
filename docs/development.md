@@ -586,8 +586,8 @@ multiline `>` composer draft survives. It explicitly enables and forces font
 lock, checks the assistant's native Markdown bold face after redisplay, and
 exports the frame. Fixture buffers have visible names: Emacs refuses to enable font
 lock for internal names beginning with a space. No face-copying workaround is
-needed. The existing graphical table, native viewport geometry and floating
-composer ERT suites and live mouse-event interleaving suites then run in that
+needed. The graphical table, native viewport geometry, docked composer and
+live mouse-event interleaving suites then run in that
 same graphical process. The mouse suite delivers press/release through `unread-command-events`
 and the command loop, with a tick or stream chunk between them; it checks queued
 and freshly resolved releases with and without explicit redisplay.
@@ -666,10 +666,10 @@ stand-ins that leave stray (including `setsid`-detached) processes, then check
 argument forwarding, the private environment and cleanup after success, a
 client killed before reporting, the session deadline and SIGTERM.
 
-### Terminal floating-composer check
+### Terminal docked-composer check
 
-The floating composer's main native cases (scroll-away and return, the focus
-cases and geometry exclusion) also run in terminal Emacs:
+The docked composer's native typing, send and history, and completion cases
+also run in terminal Emacs:
 
 ```bash
 npx @emacs-eask/cli run script terminal-check
@@ -682,7 +682,7 @@ It sends the child a real terminal focus-in report rather than stubbing
 `frame-focus-state`, and the child keeps its echo area at one line and
 warnings out of windows, so neither resizes the host between cases. The child
 selects the cases by ERT tag (`test/terminal-check.el`) from
-`test/test-mevedel-floating-composer-graphical.el`. Unexpected results **or
+`test/test-mevedel-view-composer-graphical.el`. Unexpected results **or
 skipped tests** fail the command. It needs no display, compositor or
 tree-sitter grammar; `ert.log` is printed rather than kept.
 
@@ -855,43 +855,6 @@ not a globally minimal multi-edit script. The replay has the same text and
 text properties, not equivalent hooks, overlays, markers, mode state, layout
 or redisplay. Its time is a text-mutation floor, not an achievable UI latency
 target or a graphical redisplay measurement.
-
-### Floating composer performance gate
-
-```bash
-python3 scripts/bench-floating-composer.py --rounds 6 --output /tmp/fc-raw.json
-python3 scripts/bench-floating-composer.py --report /tmp/fc-raw.json
-```
-
-Compares the floating composer ([ADR 0134](adr/0134-float-the-composer.md))
-with the option off. The runner byte-compiles the package and
-`benchmark/mevedel-floating-composer-bench.el` into a temporary directory and
-runs one private presenting KWin session (the graphical-check runner above).
-Its client starts three graphical Emacs processes: a presentation probe, the
-benchmark, and a second probe. The probes log Wayland traffic and must show
-completed frame callbacks; the benchmark itself runs unlogged. Nothing touches
-the running editor.
-
-A warm-up round precedes the rounds, which alternate scenario order. Each
-scenario gets a freshly mapped, focused frame and a fresh view, and drives real
-commands through the command loop. The scenarios are `off-inline` (the
-baseline, and the equal-visible-work control with the rail visible inline),
-`off-away`, `on-never`, `on-hidden` and `on-visible`. Workloads are typing,
-wrapped-draft deletion, 100 production stream chunks, 4 s idle with a request,
-without one and unfocused (a second frame showing another buffer holds focus),
-first show, and wheel crossings away and back. Unfocused idle runs before any
-crossing, so `on-never` has never created a floating-composer frame; crossings
-count each direction's commands separately, without the pauses between them.
-The spinner power policy is pinned to `full`, so rails animate at the normal
-rate unless the floating composer's own battery-ceiling rule applies.
-Latency runs from event delivery until no timer is due and redisplay finished.
-CPU is per-thread scheduler time for Emacs, the private KWin and its Xwayland;
-the Xwayland processes are found before the measured interval, since scanning
-every process would count as Emacs CPU.
-Counts cover redisplay cycles and floating-composer move/resize and show/hide
-calls. The report pairs each scenario with its baseline per round. It warns
-when a workload began with the view's frame unfocused or the view unattended;
-such a run does not measure the attended view.
 
 ### Reloading into a running Emacs
 

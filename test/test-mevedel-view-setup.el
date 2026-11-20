@@ -49,12 +49,14 @@
                       :name "skills")))
            (skill (mevedel-skill--create :name "review" :body "Review")))
       (setf (mevedel-session-skills session) (list skill))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (mevedel-view--setup view-buf data-buf)
       (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (font-lock-mode 1)
         (mevedel-view-test--insert-composer-draft
          "Run $review but keep $PATH literal")
         (with-current-buffer (mevedel-view-composer-buffer view-buf)
+          (font-lock-mode 1)
           (let ((start (mevedel-view-composer-draft-start view-buf))
                 (end (mevedel-view-composer-draft-end view-buf)))
             (font-lock-flush start end)
@@ -71,7 +73,7 @@
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (should (eq mevedel--data-buffer data-buf))
-      (should (mevedel-view-prompt-boundary-marker))
+      (should (mevedel-view-transcript-tail-marker))
       (should (derived-mode-p 'mevedel-surface-mode))
       (should (derived-mode-p 'mevedel-view-mode))
       (should-not buffer-read-only))

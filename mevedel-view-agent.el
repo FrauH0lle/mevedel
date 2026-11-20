@@ -148,20 +148,12 @@
 (defvar mevedel-view-mode-map)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
-(declare-function mevedel-view--position-screen-y
-                  "mevedel-view-composer" (position window &optional fully))
-(declare-function mevedel-view--restore-composer-anchors
-                  "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--transcript-gptel-send-blocked
                   "mevedel-view-composer" (&optional arg))
 (declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
-(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
-(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
-(declare-function mevedel-view-composer-window "mevedel-view-composer" (&optional view-window))
-(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
-(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
+(declare-function mevedel-view-transcript-tail "mevedel-view-composer" ())
+(declare-function mevedel-view-transcript-tail-marker "mevedel-view-composer" ())
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-apply-rendering-state
@@ -265,13 +257,6 @@ badges promptly."
 
 (defvar-local mevedel-view--agent-transcript-window nil
   "Side window currently displaying an agent transcript for this view buffer.")
-
-(defvar-local mevedel-view--agent-transcript-parent-anchors nil
-  "Parent composer anchors from before this inspection opened.
-Entries are (WINDOW . Y) in body-relative pixels, as
-`mevedel-view--composer-anchors' returns
-them.  Nested inspections inherit them, so returning restores the view
-the user left, whatever the inspection window did to its width.")
 
 (defvar mevedel-view--agent-transcript-data-kill-in-progress nil
   "Non-nil while transcript view/data kill hooks are already paired.")
@@ -625,55 +610,21 @@ growing header, and hover details are built only when shown."
                    (eq mevedel--data-buffer data-buffer)))
         (push buf views)))))
 
-(defun mevedel-view--agent-transcript-following-anchors
-    (anchors parent view-buffer)
-  "Return ANCHORS of PARENT windows that should regain their composer pixel Y.
-Call this before closing the inspection, while window layout still shows
-what the user last saw.  A window showing PARENT qualifies only when it
-shows the composer with point in it; one the user moved into history
-does not.  A window showing VIEW-BUFFER, the same-window inspection, always
-qualifies: it returns to PARENT when closed."
-  (when (buffer-live-p parent)
-    (with-current-buffer parent
-      (seq-filter
-       (lambda (anchor)
-         (let ((window (car anchor)))
-           (and (window-live-p window)
-                (or (eq (window-buffer window) view-buffer)
-                    (and (eq (window-buffer window) parent)
-                         (when-let* ((composer (mevedel-view-composer-window window)))
-                           (and (mevedel-view-composer-in-draft-p (window-point composer))
-                                (mevedel-view--position-screen-y
-                                 (mevedel-view-composer-draft-start) composer))))))))
-       anchors))))
-
 (defun mevedel-view--kill-agent-transcript-view
     (view-buffer &optional kill-retained)
   "Kill transcript inspection VIEW-BUFFER and disposable data.
-Also kill retained conversation data when KILL-RETAINED is non-nil.
-Closing the inspection's window widens or restores the parent view's
-windows, and their text rewraps.  Parent windows that, before closing,
-still show the composer with point in it return it to the pixel Y it
-had before the inspection opened instead of rising above empty space.  A
-window the user moved into history meanwhile keeps its start."
+Also kill retained conversation data when KILL-RETAINED is non-nil."
   (when (mevedel-view--agent-transcript-view-p view-buffer)
     (let ((windows (mevedel-view--windows 'visibility view-buffer))
-          data-buffer live-p transcript-info parent anchors)
+          data-buffer live-p transcript-info)
       (with-current-buffer view-buffer
         (setq data-buffer mevedel--data-buffer
               transcript-info mevedel-view--agent-transcript-info
-              parent mevedel-view--agent-transcript-parent-view
-              anchors mevedel-view--agent-transcript-parent-anchors
               live-p (plist-get mevedel-view--agent-transcript-info
                                 :live-buffer)))
-      (setq anchors (mevedel-view--agent-transcript-following-anchors
-                     anchors parent view-buffer))
       (dolist (win windows)
         (ignore-errors
           (quit-window nil win)))
-      (when (and windows anchors (buffer-live-p parent))
-        (with-current-buffer parent
-          (mevedel-view--restore-composer-anchors anchors)))
       (when (buffer-live-p view-buffer)
         (kill-buffer view-buffer))
       (when (and (not live-p)
@@ -765,7 +716,7 @@ window the user moved into history meanwhile keeps its start."
                   (copy-marker (car source) nil))))))
     (unless (mevedel-view-stream-in-flight-turn-start-position)
       (mevedel-view-stream-set-in-flight-turn-start
-       (mevedel-view-prompt-boundary-marker))
+       (mevedel-view-transcript-tail-marker))
       (setq mevedel-view--data-turn-start
             (with-current-buffer mevedel--data-buffer
               (copy-marker (point-max) nil))))))
@@ -991,17 +942,7 @@ Signals `user-error' when no transcript source can be opened."
     (when (and (buffer-live-p parent-view)
                (not (eq parent-view view-buf)))
       (with-current-buffer parent-view
-        (let* ((win mevedel-view--agent-transcript-window)
-               (shown (and (window-live-p win) (window-buffer win)))
-               ;; An inspection replacing another keeps the anchors from
-               ;; before the first one opened.
-               (anchors
-                (if (and (buffer-live-p shown)
-                         (buffer-local-value 'mevedel-view--agent-transcript-p
-                                             shown))
-                    (buffer-local-value
-                     'mevedel-view--agent-transcript-parent-anchors shown)
-                  (mevedel-view--composer-anchors))))
+        (let ((win mevedel-view--agent-transcript-window))
           (setq win
                 (cond
                  ((and (window-live-p win)
@@ -1030,8 +971,6 @@ Signals `user-error' when no transcript source can be opened."
                      (selected-window)))))
           (setq mevedel-view--agent-transcript-window
                 (and (window-live-p win) win))
-          (with-current-buffer view-buf
-            (setq mevedel-view--agent-transcript-parent-anchors anchors))
           (when (window-live-p win)
             (select-window win)
             (with-current-buffer view-buf
@@ -1269,7 +1208,7 @@ does not search the transcript."
 The return value is (POINTS . STALE-P), where STALE-P means a visible
 non-status handle existed but lacked usable source metadata."
   (let ((pos (point-min))
-        (limit (or (mevedel-view-prompt-boundary) (point-max)))
+        (limit (or (mevedel-view-transcript-tail) (point-max)))
         points
         stale-p)
     (while (< pos limit)
@@ -1354,7 +1293,7 @@ Return non-nil on success."
           ;; Preserve those rows and their fold state when replacing the handle.
           (setq rendering (plist-put rendering :hook-audits nil))
           (goto-char view-start)
-          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
+          (set-marker-insertion-type (mevedel-view-transcript-tail-marker) t)
           (unwind-protect
               (let ((ins-start (point)))
                 (delete-region view-start view-end)
@@ -1366,7 +1305,7 @@ Return non-nil on success."
                                      'mevedel-view-turn-id turn-id))
                 (when in-flight-after-section-p
                   (set-marker mevedel-view--in-flight-turn-start ins-start)))
-            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
+            (set-marker-insertion-type (mevedel-view-transcript-tail-marker) nil))
           t)))))
 
 (defun mevedel-view--refresh-agent-rendering-now (agent-path)

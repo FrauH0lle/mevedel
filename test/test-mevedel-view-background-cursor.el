@@ -205,32 +205,38 @@
           (delete-other-windows)
           (switch-to-buffer first-view)
           (mevedel-view-test--insert-composer-draft "first view draft" 2)
-          (let ((first-window (selected-window))
-                (second-window (split-window-right)))
+          (let* ((first-window (selected-window))
+                 (second-window (split-window-right))
+                 (first-composer (mevedel-view-composer-display first-window)))
+            (should (window-live-p first-composer))
             (select-window second-window)
             (switch-to-buffer view-buf)
             (mevedel-view-test--insert-composer-draft "second view draft" 5)
-            (with-current-buffer first-data
-              (should
-               (eq 'returned
-                   (mevedel-view-call-preserving-window-configuration
-                    (lambda ()
-                      (should (eq (current-buffer) first-data))
-                      (with-current-buffer first-view (mevedel-view--full-rerender))
-                      (with-current-buffer view-buf (mevedel-view--full-rerender))
-                      (delete-other-windows)
-                      (switch-to-buffer first-data)
-                      'returned))))
-              (should (eq (current-buffer) first-data)))
-            (should (eq (selected-window) second-window))
-            (should (eq (window-buffer first-window) first-view))
-            (should (eq (window-buffer second-window) view-buf))
-            (with-current-buffer first-view
-              (should (equal "first view draft" (mevedel-view-composer-draft-text)))
-              (should (= 2 (- (window-point (mevedel-view-composer-window first-window)) (mevedel-view-composer-draft-start)))))
-            (with-current-buffer view-buf
-              (should (equal "second view draft" (mevedel-view-composer-draft-text)))
-              (should (= 5 (- (window-point (mevedel-view-composer-window second-window)) (mevedel-view-composer-draft-start)))))))))))
+            (let ((second-composer (mevedel-view-composer-display second-window)))
+              (should (window-live-p second-composer))
+              (with-current-buffer first-data
+                (should
+                 (eq 'returned
+                     (mevedel-view-call-preserving-window-configuration
+                      (lambda ()
+                        (should (eq (current-buffer) first-data))
+                        (with-current-buffer first-view (mevedel-view--full-rerender))
+                        (with-current-buffer view-buf (mevedel-view--full-rerender))
+                        (delete-other-windows)
+                        (switch-to-buffer first-data)
+                        'returned))))
+                (should (eq (current-buffer) first-data)))
+              (should (eq (selected-window) second-window))
+              (should (eq (window-buffer first-window) first-view))
+              (should (eq (window-buffer second-window) view-buf))
+              (should (eq first-composer (mevedel-view-composer-window first-window)))
+              (should (eq second-composer (mevedel-view-composer-window second-window)))
+              (should (equal "first view draft" (mevedel-view-composer-draft-text first-view)))
+              (should (equal "second view draft" (mevedel-view-composer-draft-text view-buf)))
+              (should (= (window-point first-composer)
+                         (+ (mevedel-view-composer-draft-start first-view) 2)))
+              (should (= (window-point second-composer)
+                         (+ (mevedel-view-composer-draft-start view-buf) 5))))))))))
 
 (ert-deftest mevedel-view-window-configuration-same-view-two-windows ()
   "One view shown twice retains each window's distinct composer offset."
@@ -239,9 +245,14 @@
       (delete-other-windows)
       (switch-to-buffer view-buf)
       (mevedel-view-test--insert-composer-draft "shared view draft" 2)
-      (let ((first-window (selected-window))
-            (second-window (split-window-right)))
-        (set-window-point (mevedel-view-composer-window second-window) (+ (mevedel-view-composer-draft-start) 7))
+      (let* ((first-window (selected-window))
+             (second-window (split-window-right))
+             (first-composer (mevedel-view-composer-display first-window))
+             (second-composer (mevedel-view-composer-display second-window))
+             (start (mevedel-view-composer-draft-start)))
+        (should (and (window-live-p first-composer) (window-live-p second-composer)))
+        (should-not (eq first-composer second-composer))
+        (set-window-point second-composer (+ start 7))
         (with-current-buffer data-buf
           (mevedel-view-call-preserving-window-configuration
            (lambda ()
@@ -252,8 +263,11 @@
         (should (eq (selected-window) first-window))
         (should (eq (window-buffer first-window) view-buf))
         (should (eq (window-buffer second-window) view-buf))
-        (should (= 2 (- (window-point (mevedel-view-composer-window first-window)) (mevedel-view-composer-draft-start))))
-        (should (= 7 (- (window-point (mevedel-view-composer-window second-window)) (mevedel-view-composer-draft-start))))))))
+        (should (eq first-composer (mevedel-view-composer-window first-window)))
+        (should (eq second-composer (mevedel-view-composer-window second-window)))
+        (should (equal "shared view draft" (mevedel-view-composer-draft-text)))
+        (should (= (window-point first-composer) (+ start 2)))
+        (should (= (window-point second-composer) (+ start 7)))))))
 
 (provide 'test-mevedel-view-background-cursor)
 ;;; test-mevedel-view-background-cursor.el ends here

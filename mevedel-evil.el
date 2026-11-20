@@ -31,15 +31,8 @@
 ;; `mevedel-overlays'
 
 
-;; `mevedel-view'
-(defvar mevedel-view-mode-map)
-
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--active-composer-keymap "mevedel-view-composer" (&optional include-prompt))
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(declare-function mevedel-view--register-composer-keymap "mevedel-view-composer" ())
-(defvar mevedel-view--composer-keymap)
-(defvar mevedel-view--side-conversation-keymap)
+(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
 
 (defconst mevedel-evil--cockpit-modes
   '(mevedel-artifacts-list-mode mevedel-background-list-mode
@@ -176,52 +169,26 @@ conflicting native actions, preserving vanilla behavior in other states."
   "Install the loaded feature maps listed in ENTRY."
   (dolist (symbol (cdr entry))
     (when (and (boundp symbol) (keymapp (symbol-value symbol)))
-      (if (or (string-suffix-p "-mode-map" (symbol-name symbol))
-              (eq symbol 'mevedel-collaboration--share-map))
-          (mevedel-evil--adapt-map
-           (symbol-value symbol)
-           (memq symbol '(mevedel-view-mode-map mevedel-note-frame-mode-map)))
-        (mevedel-evil--overlay-map (symbol-value symbol))))))
+      (cond
+       ((memq symbol '(mevedel-view-mode-map mevedel-note-frame-mode-map
+                       mevedel-view--composer-keymap mevedel-view--side-conversation-keymap))
+        (mevedel-evil--adapt-map (symbol-value symbol) t))
+       ((or (string-suffix-p "-mode-map" (symbol-name symbol))
+            (eq symbol 'mevedel-collaboration--share-map))
+        (mevedel-evil--adapt-map (symbol-value symbol)))
+       (t (mevedel-evil--overlay-map (symbol-value symbol)))))))
 
 (defun mevedel-evil--fragment-maps (&rest maps)
   "Adapt native fragment MAPS before composition, once per map identity."
   (dolist (map maps)
     (when map (mevedel-evil--overlay-map map))))
 
-(defun mevedel-evil--in-composer-p ()
-  "Return non-nil in a live view's composer, including its prompt."
-  (and (fboundp 'mevedel-view--active-composer-keymap)
-       (mevedel-view--active-composer-keymap t)))
-
-(defun mevedel-evil--composer-keys ()
-  "Keep composer controls reachable when normal point sits on its prompt.
-An empty composer's overlay has no character on which Evil can leave its
-normal cursor.  Mirror its controls in the view's state maps, retaining
-the ordinary view action outside the composer."
-  ;; Evil may have loaded after the composer registered its fallback.
-  (mevedel-view--register-composer-keymap)
-  (dolist (entry (append (accessible-keymaps mevedel-view--composer-keymap)
-                         (accessible-keymaps mevedel-view--side-conversation-keymap)))
-    (let ((prefix (car entry)))
-      (unless (and (> (length prefix) 0) (eq (aref prefix 0) 'remap))
-        (map-keymap
-         (lambda (event command)
-           (when (commandp command)
-             (let* ((key (vconcat prefix (vector event)))
-                    (fallback (lookup-key mevedel-view-mode-map key)))
-               (evil-define-key* '(normal insert) mevedel-view-mode-map key
-                 `(menu-item "" ,command
-                             :filter ,(lambda (_action)
-                                        (if-let* ((map (mevedel-view--active-composer-keymap t)))
-                                            (let ((active (lookup-key map key)))
-                                              (and (commandp active) active))
-                                          (and (commandp fallback) fallback))))))))
-         (cdr entry))))))
-
 (defun mevedel-evil--insert-composer ()
   "Move past a read-only composer prompt when entering an editing state."
-  (when (mevedel-evil--in-composer-p)
-    (goto-char (max (point) (mevedel-view--input-start)))))
+  (when-let* (((derived-mode-p 'mevedel-composer-mode))
+              (start (mevedel-view-composer-draft-start))
+              ((< (point) start)))
+    (goto-char start)))
 
 (defun mevedel-evil--selection (function &rest args)
   "Call selection FUNCTION with ARGS using Evil's explicit visual range.
@@ -264,12 +231,8 @@ to cover whole lines.  Block selections are deliberately unsupported."
   (mevedel-instruction-replacement-end))
 
 (defun mevedel-evil--local-mode ()
-  "Keep composer precedence on enable and finalize replacements on disable."
-  (if evil-local-mode
-      ;; First activation can prepend Evil's emulation map after view setup.
-      (when (and (derived-mode-p 'mevedel-view-mode)
-                 (featurep 'mevedel-view-composer))
-        (mevedel-view--register-composer-keymap))
+  "Finalize replacements when disabling Evil."
+  (unless evil-local-mode
     (mevedel-instruction-replacement-end)))
 
 ;;;###autoload
@@ -285,7 +248,8 @@ is harmless.  No evil-collection dependency is needed."
     (setq mevedel-evil--installed t)
     (evil-set-initial-state 'mevedel-surface-mode 'insert)
     (dolist (mode (append mevedel-evil--cockpit-modes
-                          '(mevedel-view-mode mevedel-report-mode mevedel-notes-list-mode
+                          '(mevedel-view-mode mevedel-composer-mode
+                            mevedel-report-mode mevedel-notes-list-mode
                             mevedel-worktree-setup-mode)))
       (evil-set-initial-state mode 'normal))
     (dolist (entry mevedel-evil--map-features)
@@ -300,8 +264,6 @@ is harmless.  No evil-collection dependency is needed."
     (eval-after-load 'mevedel-view
       '(advice-add 'mevedel-view--display-fragment-keymap
                    :before #'mevedel-evil--fragment-maps))
-    (eval-after-load 'mevedel-view
-      '(eval-after-load 'mevedel-view-composer '(mevedel-evil--composer-keys)))
     (dolist (command '(mevedel-delete-instructions))
       (evil-set-command-property command :keep-visual t))
     (advice-add 'mevedel-delete-instructions :around #'mevedel-evil--selection)

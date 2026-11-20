@@ -138,9 +138,8 @@ Memory terms below are defined operationally in the [curated-memory](docs/memory
 - **conversation compaction** — Replacement of older model-visible transcript history with an anchored summary and a recent verbatim tail while retaining the original transcript on disk.
 - **compaction attempt** — One bounded attempt to produce and apply a compacted context. It emits `PreCompact`; successful application emits `PostCompact`, and only a root-session success begins a `SessionStart(compact)` context epoch. A retry is a new attempt.
 - **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
-- **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
-- **composer** — The view's editing surface where the user writes and submits a draft, with the rail directly above it. _Avoid_: prompt, prompt header
-- **floating composer** — A second presentation of the same composer, floating over the bottom of a view window while that window is scrolled away from the composer. It shows the one draft; it is never a copy. _Avoid_: sticky prompt, pinned prompt (that is the pinned prompt header)
+- **view buffer** — The compact rendered transcript buffer with status and interaction zones.
+- **composer** — The separate buffer where the user writes and submits a draft, docked below its owning view. _Avoid_: prompt, prompt header
 - **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Avoid “handler,” which refers to executable tool behavior.
 - **activity group** — A collapsible summary of consecutive routine tool calls, agent messages, and the transcript owner's background completions within one transcript scope; its members remain individually inspectable. Notices, individual-presentation rows, and scope boundaries end a group. _Avoid_: tool group, collapsed tools
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.

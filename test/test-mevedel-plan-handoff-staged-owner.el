@@ -126,7 +126,7 @@
                             ;; and settlement, with the new baseline effort.
                             (with-current-buffer view
                               (mevedel-view--clear-input)
-                              (insert "Ordinary baseline follow-up")
+                              (mevedel-view-composer-insert "Ordinary baseline follow-up")
                               (with-current-buffer (mevedel-view-composer-buffer)
                                 (mevedel-view-send)))
                             (let ((fsm (car sent)) (request mevedel--current-request))
@@ -221,7 +221,7 @@
                   (should (eq 'low (mevedel-session-reasoning-effort session)))
                   (with-current-buffer view
                     (mevedel-view--clear-input)
-                    (insert "Ordinary native-startup baseline follow-up")
+                    (mevedel-view-composer-insert "Ordinary native-startup baseline follow-up")
                     (with-current-buffer (mevedel-view-composer-buffer)
                       (mevedel-view-send)))
                   (let ((fsm (car sent)) (request mevedel--current-request))

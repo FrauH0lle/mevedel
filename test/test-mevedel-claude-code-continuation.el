@@ -10,6 +10,7 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 (require 'mevedel-claude-code)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-stream)
 
 (mevedel-deftest mevedel--send-request/claude-large-context (:quiet t)
@@ -141,8 +142,11 @@
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
         (unwind-protect
             (save-window-excursion
+              (mevedel--insert-user-turn "Earlier question")
+              (insert (propertize "Previous reply\n" 'gptel 'response))
               (setq view (mevedel-view--ensure buffer))
               (set-window-buffer (selected-window) view)
+              (with-current-buffer view (mevedel-view--full-rerender))
               (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                          (mevedel-engine-test--claude-launch
                           (lambda (_system _mcp _model _effort &optional _id hook)
@@ -182,20 +186,28 @@
                                                             (usage . ((inputTokens . 17) (cachedWriteTokens . 0) (outputTokens . 11))))))])))))))
                 (mevedel--insert-user-turn "Read the evidence")
                 (mevedel--send-request "Read the evidence")
-                (with-current-buffer view
-                  (goto-char (point-max))
-                  (insert draft))
-                (let ((window (selected-window))
-                      (start (window-start))
-                      (offset (with-current-buffer view (mevedel-view-test--composer-point-offset))))
-                  (mevedel-test--await 8 "Steering boundary did not settle"
-                    (not (mevedel-turn-busy-p buffer)))
-                  (with-current-buffer view
-                    (mevedel-view--render-stream-update buffer)
-                    (should (equal draft (mevedel-view-composer-draft-text)))
-                    (should (= offset (mevedel-view-test--composer-point-offset))))
-                  (should (eq window (selected-window)))
-                  (should (= start (window-start window)))))
+                (let* ((transcript (selected-window))
+                       (composer (should (mevedel-view-composer-display transcript)))
+                       (reader (with-current-buffer view
+                                 (goto-char (point-min))
+                                 (search-forward "Previous reply")
+                                 (line-beginning-position))))
+                  ;; Observe a surviving transcript row, not a tail caret.
+                  (set-window-point transcript reader)
+                  (set-window-start transcript reader)
+                  (with-selected-window composer
+                    (mevedel-view-test--insert-composer-draft draft 3)
+                    (let ((composer-start (window-start composer)))
+                      (mevedel-test--await 8 "Steering boundary did not settle"
+                        (not (mevedel-turn-busy-p buffer)))
+                      (with-current-buffer view
+                        (mevedel-view--render-stream-update buffer))
+                      (should (equal draft (mevedel-view-composer-draft-text view)))
+                      (should (= 3 (mevedel-view-test--composer-point-offset view)))
+                      (should (eq composer (selected-window)))
+                      (should (= reader (window-point transcript)))
+                      (should (= reader (window-start transcript)))
+                      (should (= composer-start (window-start composer)))))))
               (ert-info ((format "steering boundary=%S" mode))
                 (should stopped)
                 (should (= 1 terminals))

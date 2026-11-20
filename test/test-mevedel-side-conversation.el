@@ -533,14 +533,16 @@
         (with-current-buffer side-view
           (should (string-match-p "btw" (buffer-string)))
           (should-not (string-match-p "Parent prompt" (buffer-string)))
-          (should-not (string-match-p "Parent answer" (buffer-string)))
+          (should-not (string-match-p "Parent answer" (buffer-string))))
+        (with-current-buffer (mevedel-view-composer-buffer side-view)
           (should-not (memq #'mevedel-agent-capf
                             completion-at-point-functions))
           (mevedel-view-test--insert-composer-draft "@")
-          (let ((completion (mevedel-mention-capf)))
-            (should-not (member "@agent:" (nth 2 completion))))
-          (with-current-buffer (mevedel-view-composer-buffer)
-            (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))))
+          (let ((candidates (nth 2 (mevedel-mention-capf))))
+            (should (member "@file:" candidates))
+            (should-not (member "@agent:" candidates)))
+          (delete-region (mevedel-view-composer-draft-start)
+                         (mevedel-view-composer-draft-end))))
       (with-current-buffer data-buf
         (should (mevedel-session-plan-mode session))
         (should (equal "*** Parent prompt\nParent answer\n"
@@ -621,14 +623,13 @@
               (with-current-buffer side-data
                 (list :buffer side-data :position (copy-marker (point-max)))))
         (with-current-buffer side-view
-          (mevedel-view-test--insert-composer-draft draft)
-          (backward-char 3))
+          (mevedel-view-test--insert-composer-draft draft (- (length draft) 3)))
         (cl-labels
             ((check-view
               ()
               (with-current-buffer side-view
                 (let ((text (buffer-substring-no-properties
-                             (point-min) (mevedel-view-prompt-boundary))))
+                             (point-min) (mevedel-view-transcript-tail))))
                   (should (= 1 (cl-count "Unique side question"
                                          (split-string text "\n") :test #'equal)))
                   (should-not (string-match-p "System reminder\\|Parent prompt"
@@ -1223,7 +1224,7 @@
                               mevedel-view--interaction-overlays))
                     (text
                      (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary))))
+                      (point-min) (mevedel-view-transcript-tail))))
                 (should (overlayp overlay))
                 (should (overlay-get overlay 'mevedel-permission-prompt))
                 (should (string-search "allow once" text))
@@ -1319,7 +1320,7 @@
                      (string-search
                       "Permission Request"
                       (buffer-substring-no-properties
-                       (point-min) (mevedel-view-prompt-boundary)))))
+                       (point-min) (mevedel-view-transcript-tail)))))
                 (should-not result)
                 (should
                  (equal "before\n"
@@ -1329,7 +1330,7 @@
                 (with-current-buffer side-view
                   (let ((text
                          (buffer-substring-no-properties
-                          (point-min) (mevedel-view-prompt-boundary))))
+                          (point-min) (mevedel-view-transcript-tail))))
                     (should-not (string-search "Permission Request" text))
                     (should (string-search "ApplyPatch ·" text))
                     (should (string-search "M target.txt" text))
@@ -1907,7 +1908,7 @@
       (with-current-buffer side-view
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should-not (string-match-p "conversation compacted" text))
           (should-not (string-match-p "Only effective" text))))))
   :doc "discards the side with its parent without listing or persisting it"

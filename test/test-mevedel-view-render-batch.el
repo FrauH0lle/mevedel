@@ -56,6 +56,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
     (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))
   :doc "projects current history first and converges to synchronous output"
   (mevedel-batch-test--with-history
+    (goto-char (point-max))
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
       (mevedel-batch-test--start-projection view-buf)
       (should mevedel-view-render--batch)
@@ -210,21 +211,25 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (should (eql (buffer-modified-tick) (plist-get job :tool-state-tick)))
       (put-text-property 1 2 'mevedel-view-collapsed t)
       (should-not (eql (buffer-modified-tick) (plist-get job :tool-state-tick)))))
-  :doc "publication invalidates prepared tools after a newer draft edit"
-  (mevedel-batch-test--with-history
-    (mevedel-view-render-batched-full)
-    (cl-loop repeat 100
-             until (eq 'finish (plist-get mevedel-view-render--batch :prepare-stage))
-             do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
-    (let* ((job mevedel-view-render--batch)
-           (cache (plist-get job :tool-cache)))
-      (puthash 'sentinel t cache)
-      (mevedel-view-composer-insert " newer")
-      (mevedel-view-render--batch-step view-buf job)
-      (should-not (gethash 'sentinel cache))
-      (should (equal "> draft\nsecond line newer" (mevedel-view-composer-draft-text nil t)))
-      (cl-loop repeat 30 while mevedel-view-render--batch do
-               (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)))))
+  :doc "only transcript mutations invalidate prepared tools; newer draft edits survive"
+  (dolist (change-view '(nil t))
+    (mevedel-batch-test--with-history
+      (mevedel-view-render-batched-full)
+      (cl-loop repeat 100
+               until (eq 'finish (plist-get mevedel-view-render--batch :prepare-stage))
+               do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (let* ((job mevedel-view-render--batch)
+             (cache (plist-get job :tool-cache)))
+        (puthash 'sentinel t cache)
+        (mevedel-view-composer-insert " newer")
+        (when change-view
+          (with-silent-modifications
+            (put-text-property (point-min) (1+ (point-min)) 'mevedel-view-collapsed t)))
+        (mevedel-view-render--batch-step view-buf job)
+        (should (eq (not change-view) (gethash 'sentinel cache)))
+        (should (equal "> draft\nsecond line newer" (mevedel-view-composer-draft-text nil t)))
+        (cl-loop repeat 30 while mevedel-view-render--batch do
+                 (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/other-writers ()
   ,test
@@ -899,7 +904,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
 
 (defun mevedel-batch-test--turn-ids ()
   "Return rendered turn ids before the prompt boundary, in buffer order."
-  (let ((pos (point-min)) (limit (mevedel-view-prompt-boundary)) ids)
+  (let ((pos (point-min)) (limit (mevedel-view-transcript-tail)) ids)
     (while (< pos limit)
       (when-let* ((id (get-text-property pos 'mevedel-view-turn-id)))
         (unless (eq id (car ids)) (push id ids)))
@@ -983,8 +988,8 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (mevedel-batch-test--start-projection-showing view-buf "Response 0")
         (should (string-search "Loading conversation turn"
                                (buffer-substring-no-properties
-                                (- (mevedel-view-prompt-boundary) 80)
-                                (mevedel-view-prompt-boundary))))
+                                (- (mevedel-view-transcript-tail) 80)
+                                (mevedel-view-transcript-tail))))
         (cl-loop repeat 30 while mevedel-view-render--batch do
           (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
         (should (equal expected

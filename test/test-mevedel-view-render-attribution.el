@@ -123,7 +123,7 @@
       (with-current-buffer view-buf
         (should-not (string-match-p
                  "^Background event$"
-                 (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary)))))
+                 (buffer-substring-no-properties (point-min) (mevedel-view-transcript-tail)))))
       (mevedel-view-test--insert-data data-buf "Handled.\n" 'response)
       (goto-char (point-max))
       (mevedel--insert-local-user-turn "Now my question." nil nil nil t)
@@ -135,7 +135,7 @@
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((history (buffer-substring-no-properties
-                      (point-min) (mevedel-view-prompt-boundary))))
+                      (point-min) (mevedel-view-transcript-tail))))
         (should-not (string-match-p "Background event\\|Background work reported" history))
         (should (string-match-p "^You$" history))))))
 

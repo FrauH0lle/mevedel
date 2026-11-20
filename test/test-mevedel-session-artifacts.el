@@ -1290,7 +1290,7 @@ ENTRIES is an alist of logical names and their content strings."
                 (with-current-buffer view-buf
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
-                    (goto-char (mevedel-view-prompt-boundary))
+                    (goto-char (mevedel-view-transcript-tail))
                     (insert "Working view chrome\n"))
                   (set-buffer-modified-p t))
                 (cl-letf (((symbol-function 'read-file-name)

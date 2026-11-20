@@ -211,6 +211,8 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
+(defvar mevedel-composer--view)
 (declare-function mevedel-view--forward-input "mevedel-view-composer" t)
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-draft-start "mevedel-view-composer"
@@ -928,37 +930,39 @@ FROZEN-CONTEXT is the materialized gptel context plist."
 (defun mevedel-side-conversation-close ()
   "Close the current ephemeral /btw side conversation."
   (interactive)
-  (unless (bound-and-true-p mevedel-view--side-conversation-p)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
-  ;; Settle remote mutation authority before the ordinary close guard runs.
-  (when mevedel--session
-    (mevedel-execution-teardown-session mevedel--session))
-  (kill-buffer (current-buffer)))
+  (with-current-buffer (or (bound-and-true-p mevedel-composer--view) (current-buffer))
+    (unless (bound-and-true-p mevedel-view--side-conversation-p)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
+    ;; Settle remote mutation authority before the ordinary close guard runs.
+    (when mevedel--session
+      (mevedel-execution-teardown-session mevedel--session))
+    (kill-buffer (current-buffer))))
 
 (defun mevedel-side-conversation-send ()
   "Send the current side-composer prompt as an independent turn."
   (interactive)
-  (unless (bound-and-true-p mevedel-view--side-conversation-p)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
-  (unless (buffer-live-p mevedel--data-buffer)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Side conversation data has been discarded"))
-  (when (mevedel-side-conversation--busy-p mevedel--data-buffer)
-    (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "The /btw response is still active"))
-  (with-current-buffer mevedel--data-buffer
-    (when (mevedel-claude-code-backend-p gptel-backend)
-      (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
-        (mevedel-claude-code-btw-assert-open))))
-  (let* ((raw (mevedel-view--input-text))
-         (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
-    (when (string-empty-p raw)
-      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to send"))
-    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
-      (mevedel-side-conversation--validate-input raw))
-    (let ((input
-           (with-current-buffer mevedel--data-buffer
-             (mevedel-mentions-prepare-user-input raw session))))
-      (mevedel-view--forward-input
-       input :display-text raw :prompt-checked t))))
+  (with-current-buffer (or (bound-and-true-p mevedel-composer--view) (current-buffer))
+    (unless (bound-and-true-p mevedel-view--side-conversation-p)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "This is not a /btw side conversation"))
+    (unless (buffer-live-p mevedel--data-buffer)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Side conversation data has been discarded"))
+    (when (mevedel-side-conversation--busy-p mevedel--data-buffer)
+      (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "The /btw response is still active"))
+    (with-current-buffer mevedel--data-buffer
+      (when (mevedel-claude-code-backend-p gptel-backend)
+        (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+          (mevedel-claude-code-btw-assert-open))))
+    (let* ((raw (mevedel-view--input-text))
+           (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
+      (when (string-empty-p raw)
+        (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "Nothing to send"))
+      (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope session)
+        (mevedel-side-conversation--validate-input raw))
+      (let ((input
+             (with-current-buffer mevedel--data-buffer
+               (mevedel-mentions-prepare-user-input raw session))))
+        (mevedel-view--forward-input
+         input :display-text raw :prompt-checked t)))))
 
 (defun mevedel-side-conversation-open (&optional prompt)
   "Open this root buffer's side conversation and optionally send PROMPT."
@@ -985,16 +989,20 @@ FROZEN-CONTEXT is the materialized gptel context plist."
           (and side-data
                (buffer-local-value 'mevedel--view-buffer side-data))))
     (cl-labels
-        ((show-side
+        ((display-side (view)
+           (pop-to-buffer view)
+           (when-let* ((composer (mevedel-view-composer-display (selected-window))))
+             (select-window composer)))
+         (show-side
            (view)
            (let ((data (buffer-local-value 'mevedel--data-buffer view)))
              (when (and prompt (not (string-blank-p prompt)))
                (when (mevedel-side-conversation--busy-p data)
-                 (pop-to-buffer view)
+                 (display-side view)
                  (user-error "The /btw response is still active"))
                (with-current-buffer view
                  (unless (string-blank-p (mevedel-view-composer-draft-text view t))
-                   (pop-to-buffer view)
+                   (display-side view)
                    (user-error "The /btw composer already has a draft"))
                  (mevedel-view-composer-insert
                   prompt (mevedel-view-composer-draft-start view) view)
@@ -1004,7 +1012,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                          parent-draft (mevedel-view-composer-draft-text parent-view)))
                (with-current-buffer parent-view
                  (mevedel-view--clear-input)))
-             (pop-to-buffer view)
+             (display-side view)
              view)))
       (cond
        ((buffer-live-p side-view)

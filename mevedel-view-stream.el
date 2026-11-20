@@ -824,17 +824,6 @@ Newly inserted tool rows begin at phase zero."
               (mevedel-view--record-tool-sample start (caddr entry)))))
       (set-buffer-modified-p modified))))
 
-(defun mevedel-view--animation-window-frame (window)
-  "Return the frame whose palette animates WINDOW.
-A child frame whose `mevedel-view-animate-as-parent' parameter is non-nil
-counts as its parent: both show one palette, so the pair is no multi-frame
-display needing the glyph fallback."
-  (let* ((frame (window-frame window))
-         (parent (frame-parent frame)))
-    (if (and parent (frame-parameter frame 'mevedel-view-animate-as-parent))
-        parent
-      frame)))
-
 (defun mevedel-view--animation-buffer-frame ()
   "Return a visible display frame for this buffer, or `:multiple'.
 Before a span has been inserted, use portable glyphs when no frame or
@@ -842,7 +831,7 @@ more than one distinct frame can display the buffer."
   (let (found)
     (dolist (window (mevedel-view--windows 'visibility))
       (when (eq (frame-visible-p (window-frame window)) t)
-        (let ((frame (mevedel-view--animation-window-frame window)))
+        (let ((frame (window-frame window)))
           (if (and found (not (eq found frame)))
               (setq found :multiple)
             (unless found (setq found frame))))))
@@ -899,7 +888,7 @@ windows."
       (when (and (eq (frame-visible-p (window-frame window)) t)
                  (mevedel-view--animation-span-in-window-p
                   position end window))
-        (let ((frame (mevedel-view--animation-window-frame window)))
+        (let ((frame (window-frame window)))
           (when all (cl-pushnew frame frames))
           (if (and found (not (eq found frame)))
               (setq found :multiple)
@@ -915,42 +904,18 @@ windows."
                   target 'mevedel-view-inline-spinner-frame))
                mevedel-view--spinner-tool-targets)))
 
-(defun mevedel-view--spinner-label-power-policy ()
-  "Return the power policy for the request label's animation.
-While every attended window showing the label is a floating composer,
-return `save', the policy that always applies the battery ceiling; the
-user accepted the floating composer's cost only at that rate.  Otherwise
-return `mevedel-view-spinner-power-policy'."
-  (let ((target mevedel-view--spinner-label-target)
-        windows)
-    (when-let* ((start (car-safe target))
-                ((marker-position start)))
-      (dolist (window (mevedel-view--windows 'visibility))
-        (when (and (mevedel-view--window-attended-p window)
-                   (mevedel-view--animation-span-in-window-p
-                    (marker-position start) (marker-position (cdr target)) window))
-          (push window windows))))
-    (if (and windows
-             (cl-every (lambda (window)
-                         (window-parameter window 'mevedel-floating-composer))
-                       windows))
-        'save
-      mevedel-view-spinner-power-policy)))
-
-(defun mevedel-view--spinner-framerate (&optional policy)
-  "Return the spinner's effective frame rate under power POLICY.
-POLICY defaults to `mevedel-view-spinner-power-policy'."
+(defun mevedel-view--spinner-framerate ()
+  "Return the spinner's effective frame rate under the user's power policy."
   (mevedel-view-power-framerate
    mevedel-view-spinner-framerate
    mevedel-view-spinner-battery-framerate
-   (or policy mevedel-view-spinner-power-policy)
+   mevedel-view-spinner-power-policy
    mevedel-view-spinner-animate))
 
-(defun mevedel-view--spinner-visual-period (style &optional glyph-fallback policy)
+(defun mevedel-view--spinner-visual-period (style &optional glyph-fallback)
   "Return effective time between visual frames for STYLE, or nil.
-GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback.  POLICY
-overrides `mevedel-view-spinner-power-policy'."
-  (let ((rate (mevedel-view--spinner-framerate policy)))
+GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback."
+  (let ((rate (mevedel-view--spinner-framerate)))
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
            (cond ((and glyph-fallback (memq style '(shimmer breathe bounce)))
@@ -1115,24 +1080,19 @@ a window resize."
       (mevedel-view--recheck-spinner-after-redisplay))))
 
 (defun mevedel-view--sync-native-animation (main tools)
-  "Offload the visible MAIN label and TOOLS when native presentation is ready.
-The label animates under `mevedel-view--spinner-label-power-policy'."
+  "Offload the visible MAIN label and TOOLS when native presentation is ready."
   (let* ((rate (mevedel-view--spinner-framerate))
-         (main-rate (if main
-                        (mevedel-view--spinner-framerate
-                         (mevedel-view--spinner-label-power-policy))
-                      rate))
          (seconds (mevedel-view--animation-seconds))
          specs)
     (when (and (> rate 0) (not (mevedel-view--animation-frozen-p)))
-      (when (and main (> main-rate 0))
+      (when main
         (push (list mevedel-view--spinner-label-target mevedel-view-spinner-style
                     (buffer-substring-no-properties
                      (car mevedel-view--spinner-label-target)
                      (cdr mevedel-view--spinner-label-target))
                     'mevedel-view-spinner
                     (if (memq mevedel-view-spinner-style '(shimmer breathe bounce))
-                        (/ 1.0 main-rate) main)) specs))
+                        (/ 1.0 rate) main)) specs))
       (dolist (target tools)
         (when-let* ((period (mevedel-view--spinner-visual-period mevedel-view-tool-spinner-style)))
           (push (list target mevedel-view-tool-spinner-style
@@ -1235,8 +1195,7 @@ rechecked without changing the displayed animation phase."
                  (setq mevedel-view--spinner-main-color-p main-color)
                  (when main-visible
                    (mevedel-view--spinner-visual-period
-                    mevedel-view-spinner-style (not main-color)
-                    (mevedel-view--spinner-label-power-policy)))))
+                    mevedel-view-spinner-style (not main-color)))))
          (tool-targets (and visible
                             (cl-remove-if-not
                              (lambda (target)
@@ -1444,11 +1403,10 @@ animation or elapsed timer remains to notice the new colors."
                      (not (memq mevedel-view--spinner-label-target
                                 mevedel-view--native-animation-targets))
                      ;; Tool rows can wake the shared timer sooner than the
-                     ;; label's own period, such as its floating-composer ceiling.
+                     ;; label's own period.
                      (when-let* ((period (mevedel-view--spinner-visual-period
                                           mevedel-view-spinner-style
-                                          (not mevedel-view--spinner-main-color-p)
-                                          (mevedel-view--spinner-label-power-policy))))
+                                          (not mevedel-view--spinner-main-color-p))))
                        (let ((last mevedel-view--spinner-last-sample-seconds))
                          (not (and last (< 0 (- seconds last) (* 0.9 period))))))
                      (mevedel-view--animation-target-visible-p
@@ -1740,13 +1698,15 @@ POSITION may be an integer or marker."
         (copy-marker position nil)))
 
 (defun mevedel-view-stream--execution-view-buffer (data-buffer)
-  "Return the visible view backed by DATA-BUFFER, or nil."
+  "Return the transcript view backed by DATA-BUFFER, or nil."
   (and (buffer-live-p data-buffer)
        (cl-find-if
         (lambda (buffer)
           (and (buffer-live-p buffer)
                (eq data-buffer
-                   (buffer-local-value 'mevedel--data-buffer buffer))))
+                   (buffer-local-value 'mevedel--data-buffer buffer))
+               (with-current-buffer buffer
+                 (derived-mode-p 'mevedel-view-mode))))
         (buffer-list))))
 
 (defun mevedel-view-stream--cache-execution-progress (event)

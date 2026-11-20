@@ -11,6 +11,7 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-tool-ui)
@@ -21,12 +22,15 @@
   (dolist (location '(ask background composer))
     (mevedel-view-test--with-buffers
       (save-window-excursion
+        (delete-other-windows)
         (let* ((session (mevedel-session--create :name "cursor-jump" :root-buffer data-buf))
                (record (mevedel-agent-record--create
                         :id "pair-merge" :path "/root/pair-merge"
                         :parent-path "/root" :activity 'running))
                (mevedel-view-spinner-animate nil)
-               (mevedel-view-tool-boundary-render-delay 0))
+               (mevedel-view-tool-boundary-render-delay 0)
+               (transcript (selected-window))
+               composer answered)
           (setf (mevedel-session-agent-registry session)
                 (list (cons "/root/pair-merge" record)))
           (with-current-buffer data-buf
@@ -45,47 +49,50 @@
           (mevedel-view--render-status)
           (mevedel-view--start-spinner "Waiting for tools...")
           (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+          (setq composer (mevedel-view-composer-display transcript))
+          (should (window-live-p composer))
+          (select-window composer)
+          (should (= 4 (mevedel-view-test--composer-point-offset)))
           (with-current-buffer data-buf
             (mevedel-tool-ask-ui-show
-             #'ignore
+             (lambda (answer) (setq answered answer))
              [(:question "Does any sender wake the root?"
                          :options ["Yes, any sender wakes" "No, only child agents"])]))
-          (mevedel-view-jump-to-interaction)
+          (should (eq composer (selected-window)))
+          (should (= 4 (mevedel-view-test--composer-point-offset)))
+          (execute-kbd-macro (kbd "C-c C-j"))
+          (should (eq transcript (selected-window)))
           (should (get-text-property (point) 'mevedel-prompt-focus))
           (should (string-search "pair-merge" (buffer-string)))
-          (pcase location
-            ('background
-             (goto-char (point-min))
-             (search-forward "[Manage]")
-             (backward-char (length "[Manage]")))
-            ('composer (goto-char (+ (mevedel-view-composer-draft-start) 4))))
-          (let* ((before (point))
-                 (anchor (mevedel-view-zone-position-anchor before))
-                 (flight (marker-position mevedel-view--in-flight-turn-start)))
-            ,action
-            (ert-info ((format "location=%S before=%S after=%S in-flight=%S new-flight=%S status=%S focus=%S anchor=%S text=%S"
-                               location before (point) flight
-                               (and (markerp mevedel-view--in-flight-turn-start)
-                                    (marker-position mevedel-view--in-flight-turn-start))
-                               (marker-position mevedel-view--status-marker)
-                               (get-text-property (point) 'mevedel-prompt-focus) anchor
-                               (buffer-substring-no-properties
-                                (max (point-min) (- (point) 20))
-                                (min (point-max) (+ (point) 30)))))
-              (pcase location
-                ('ask
-                 (should (get-text-property (point) 'mevedel-prompt-focus))
-                 (should (assq (selected-window) mevedel-view--interaction-focus-return)))
-                ('background (should (looking-at-p "\\[Manage\\]")))
-                ('composer (should (= 4 (mevedel-view-test--composer-point-offset)))))
-              (when anchor
-                (should (= (point) (mevedel-view-zone-anchor-position anchor))))
-              (should (= (window-point (selected-window)) (point)))
-              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
-              (when (eq location 'ask)
-                (call-interactively (key-binding (kbd "RET")))
-                (call-interactively (key-binding (kbd "C-c C-c")))
-                (should (= 4 (mevedel-view-test--composer-point-offset))))))))))
+          (when (eq location 'background)
+            (goto-char (point-min))
+            (search-forward "[Manage]")
+            (backward-char (length "[Manage]")))
+          (let ((anchor (mevedel-view-zone-position-anchor (point))))
+            (should anchor)
+            (when (eq location 'composer) (select-window composer))
+            (let ((selected (selected-window))
+                  (draft-point (window-point composer))
+                  (draft-start (window-start composer)))
+              (with-current-buffer view-buf ,action)
+              (ert-info ((format "location=%S anchor=%S" location anchor))
+                (should (eq selected (selected-window)))
+                (with-current-buffer view-buf
+                  (should (= (window-point transcript)
+                             (mevedel-view-zone-anchor-position anchor)))
+                  (if (eq location 'background)
+                      (should (looking-at-p "\\[Manage\\]"))
+                    (should (get-text-property (window-point transcript)
+                                               'mevedel-prompt-focus))))
+                (should (= draft-point (window-point composer)))
+                (should (= draft-start (window-start composer)))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+                (when (eq location 'ask)
+                  (execute-kbd-macro (kbd "RET"))
+                  (execute-kbd-macro (kbd "C-c C-c"))
+                  (should (string-match-p "A1: Yes, any sender wakes" answered))
+                  (should (eq composer (selected-window)))
+                  (should (= 4 (mevedel-view-test--composer-point-offset)))))))))))
   (action)
   :doc "no-op user-state preservation keeps the Ask focus"
   (mevedel-view-call-preserving-user-view-state #'ignore)

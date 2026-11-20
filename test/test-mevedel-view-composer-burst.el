@@ -23,43 +23,54 @@
         (delete-other-windows)
         (mevedel-view-test--insert-composer-draft draft 3)
         (set-window-start nil (point-min) t)
-        ;; Inline-only below: the view's physical end is the draft end.
+        (goto-char (point-max))
         (let* ((window (selected-window))
+               (composer (mevedel-view-composer-display window))
                (height (window-body-height window))
-               (before-y (mevedel-view-test--composer-screen-y window))
-               (before-end-y (mevedel-view--position-screen-y (point-max) window))
-               (rows (if burst (* 3 height) 1)))
-          ;; Establish an actually non-full view with a visible draft.
-          (should before-y)
-          (should before-end-y)
-          (should (< before-end-y (- height 2)))
-          (mevedel-view-call-preserving-user-view-state
-           (lambda ()
-             (mevedel-view--call-with-render-boundaries-advancing
-              (lambda ()
-                (let ((inhibit-read-only t)
-                      (inhibit-modification-hooks t))
-                  (goto-char (mevedel-view--history-insertion-marker))
-                  (dotimes (n rows)
-                    (insert (format "incoming line %d\n" n))))))))
-          (should (equal draft (mevedel-view-composer-draft-text)))
-          (should (= 3 (mevedel-view-test--composer-point-offset)))
-          (should (= 3 (- (window-point (mevedel-view-composer-window window))
-                          (mevedel-view-composer-draft-start))))
-          (if burst
-              (progn
-                ;; Derive the last page independently with unit-height rows,
-                ;; not the production pixel viewport helper under test.
-                (should (= (window-start window)
-                           (save-excursion
-                             (goto-char (point-max))
-                             (vertical-motion (- (1- height)) window)
-                             (point))))
-                (should (= (1- height)
-                           (mevedel-view--position-screen-y (point-max) window))))
-            (should (= (point-min) (window-start window)))
-            (should (= (1+ before-y)
-                       (mevedel-view-test--composer-screen-y window))))))))
+               (rows (if burst (* 3 height) 1))
+               (composer-pos (+ (mevedel-view-composer-draft-start) 3)))
+          (set-window-point composer composer-pos)
+          (select-window composer)
+          (redisplay t)
+          (with-current-buffer view-buf
+            (let ((before-y (mevedel-view-test--composer-screen-y window))
+                  (before-end-y (mevedel-view--position-screen-y (point-max) window))
+                  (composer-edges (window-pixel-edges composer))
+                  (composer-start (window-start composer)))
+              (should before-y)
+              (should before-end-y)
+              (should (< before-end-y (- (cdr (mevedel-view--window-body-geometry window))
+                                         (* 2 (frame-char-height)))))
+              (mevedel-view-call-preserving-user-view-state
+               (lambda ()
+                 (mevedel-view--call-with-render-boundaries-advancing
+                  (lambda ()
+                    (let ((inhibit-read-only t)
+                          (inhibit-modification-hooks t))
+                      (goto-char (mevedel-view--history-insertion-marker))
+                      (dotimes (n rows)
+                        (insert (format "incoming line %d\n" n))))))))
+              (redisplay t)
+              (should (eq (selected-window) composer))
+              (should (equal composer-edges (window-pixel-edges composer)))
+              (should (= composer-start (window-start composer)))
+              (should (= before-y (mevedel-view-test--composer-screen-y window)))
+              (should (equal draft (mevedel-view-composer-draft-text)))
+              (should (= 3 (mevedel-view-test--composer-point-offset)))
+              (should (= composer-pos (window-point composer)))
+              (if burst
+                  (progn
+                    ;; Derive the last page by rows, independently of restoration.
+                    (should (= (window-start window)
+                               (save-excursion
+                                 (goto-char (point-max))
+                                 (vertical-motion (- (1- height)) window)
+                                 (point))))
+                    (should (= (* (1- height) (if noninteractive 1 (frame-char-height)))
+                               (mevedel-view--position-screen-y (point-max) window))))
+                (should (= (point-min) (window-start window)))
+                (should (= (+ before-end-y (if noninteractive 1 (frame-char-height)))
+                           (mevedel-view--position-screen-y (point-max) window))))))))))
   (burst draft)
   :doc "Oversized incoming growth fills the last page from a short view."
   t "draft"

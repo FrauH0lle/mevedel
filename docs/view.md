@@ -50,8 +50,13 @@ authoritative transcript.
   directive turns), tool results, hidden render-data blocks, and persisted
   gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
-  compact Markdown-rendered turns, status and interaction zones, and the
-  input zone.
+  compact Markdown-rendered turns, status and interaction zones, and the rail.
+- **Composer buffer**: `mevedel-composer-mode`. Holds the read-only input
+  prefix and one editable draft per view, with its own caret, undo, history,
+  and completion. It opens in a plain window below the view; submitting it
+  routes through the owning view to the data buffer. Closing the view kills
+  its composer. Agent transcript and historical segment displays have no
+  editable composer window.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Resident retained agents use their live conversation buffer
   whether running or idle; cold and historical agents use the saved transcript
@@ -1032,11 +1037,12 @@ interaction chrome around that transcript.
 |   Permission prompts, plan approvals, Ask,                    |
 |   pending input, approvals, and preview controls.            |
 +--------------------------------------------------------------+
-| Permanent composer rail                                      |
+| Permanent rail                                               |
 |   Mode badge, pending-action shortcut, and live turn activity.|
-+-------------------------- input marker ----------------------+
-| Input zone                                                   |
-|   Read-only input prompt, then editable composer body.        |
++-------------------------- transcript tail -------------------+
+
++-------------------------- composer window -------------------+
+| Read-only input prompt, then editable draft                  |
 +--------------------------------------------------------------+
 ```
 
@@ -1058,8 +1064,8 @@ Terminology:
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   pending input and controls that require user response.
-- **Composer rail**: the permanent, fragment-backed line directly above the
-  input prompt, with no intervening blank line. It shows the mode badge at
+- **Rail**: the permanent, fragment-backed line at the end of the
+  transcript. It shows the mode badge at
   rest, pending-action counts with an actionable `C-c C-j` hint, and foreground
   activity while a request runs. It does not start an animation timer while
   idle. The rail fits the narrowest window showing the view: activity yields
@@ -1076,11 +1082,8 @@ Terminology:
   ApplyPatch review decision, or direct request input. During those waits it
   reads `Waiting for input` and every indicator holds still. Queued
   Pending Inputs and an armed session fork do not pause active elapsed time.
-- **Input zone**: the read-only prompt prefix plus the editable composer.
-  **Composer** refers only to the editable unsent input body.
-  The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) starts the rail
-  above a `> ` prompt. The badge and draft start at fixed columns in every
-  mode, Ask included, so switching modes never moves the draft. Explicit and soft-wrapped continuation
+- **Composer**: the separate input buffer, not the pinned prompt header.
+  Explicit and soft-wrapped continuation
   lines are indented by the width of the prompt's last line, so the draft
   forms one aligned column.
   The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
@@ -1089,34 +1092,25 @@ Terminology:
   overlay's display-only suffix to align its cursor: Emacs does not apply
   `line-prefix` at end of buffer. Typing there removes that suffix.
 
-Only composer edits are undoable. Renders above the composer record their
-own undo entries, which Emacs never trims between commands: a busy view once
-held 24,000 entries and several megabytes, mostly text-property changes, and
-undoing one would rewrite read-only transcript. Asynchronous redraws, zone
-reconciliation, scheduled render flushes, and every command start therefore
-reduce the view's undo list to composer entries, shifted past the text
-renders inserted or removed above the input marker. An entry that cannot be
-placed ends the history there. Transcript inspection views and generated data
-buffers keep no undo history.
+Only composer edits are undoable. Transcript redraws no longer share the
+composer's undo list. Transcript inspection views and generated data buffers
+keep no undo history.
 Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
-Zone changes and re-renders preserve one active surface per window: point in a
-surviving visited interaction or status row takes priority, then a visible
-composer with that window's caret in it, then the logical reading position. Clicking or moving into
-history keeps the reading viewport even when the composer remains visible;
-another window editing the same composer keeps its independent composer anchor.
+Zone changes and re-renders preserve the surviving visited interaction or
+status row, or the logical reading position, in each transcript window. A
+composer window keeps its own caret and viewport independently.
 Anchors use body-relative pixels and native display
 geometry, including wrapping, remapped faces, inline images and partial vertical
 scrolling. Bounded fresh chrome measurements keep body coordinates and usable
 height consistent before redisplay, even when header or tab-line heights change.
-Logical positions are restored before the pixel anchor. A surviving
-composer anchor retains intentional blank space. A lost or truncated logical
+Logical positions are restored before the pixel anchor. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
 longer history lines and grows the character tail. Interaction-card visits repair
 only new blank pixels created below the buffer, retaining their prior blank area.
 Status-row visits do not fill new blank space: collapsing details keeps the
-visited row still rather than scrolling the transcript to hold the composer.
+visited row still.
 Surviving history readers keep their viewport through both growth and shrinkage
 below them. For other unanchored windows, a smaller character tail also permits
 clamping a start later than the last page backward; unchanged or growing tails
@@ -1999,26 +1993,9 @@ the width.
 
 ### Composer anchoring
 
-Chrome above the composer (status, interactions, progress) changes height while
-the user types. Unless the window visits an interaction card, a window showing
-the composer keeps its screen position across zone mutations and re-renders:
-growth above it scrolls the
-transcript up, and shrinkage reveals more transcript, as in a bottom-anchored
-terminal. While everything from the window start through the end of the draft
-still fits, the start is kept and free space below the composer is used first.
-When one large burst overflows that free space, restoration chooses the earlier
-of the saved composer viewport and the last full page. It consumes the remaining
-space instead of leaving the composer high above an empty tail.
-A window scrolled away from the composer keeps its own start, so reading history
-is not disturbed. Native visibility and pixel traversal account for remapped
-faces, images and partial vertical scrolling. A removed logical start instead
-fills the last page; a visited card keeps its row unless shrink creates new blank
-pixels. See ADR 0126 for the complete per-window policy.
-View buffers set `scroll-conservatively` to 101 and `scroll-margin` to
-0, so a draft growing past the window bottom scrolls one line instead of
-recentering. Measured in a terminal Emacs: with the previous top anchoring, the
-first status row added at the window bottom recentred the composer by thirteen
-rows and every later change moved it by one; anchored, it stays on its row.
+The composer is separate from transcript chrome, so a zone redraw does not
+anchor or reflow the draft. `scroll-conservatively` is 101 and `scroll-margin`
+is 0 in the composer, so adding a line scrolls without recentering it.
 
 A fragment is keyed by managed region identity, namespace, and id. It may
 also carry priority, label/body text, keymap/help text, activation metadata,
@@ -2848,7 +2825,7 @@ Waiting for input · 2m 14s
 ## Input History
 
 `mevedel-view-history.el` provides comint-style input history for the
-view input zone. `mevedel-view-composer.el` owns the editable input boundary,
+composer. `mevedel-view-composer.el` owns the editable input boundary,
 completion, prompt submission, and integration with that history ring. The
 related input bindings are:
 
@@ -2888,7 +2865,7 @@ syntax enabled so shared text-property objects remain readable. Transient read
 failures leave the canonical sidecar in place for a later retry; only malformed
 history is renamed aside.
 
-The input zone installs slash command completion, `$` skill completion,
+The composer installs slash command completion, `$` skill completion,
 and display-only skill argument hints. Root slash completion offers local
 commands; root `$` completion offers user-invocable skills. Both insert a
 real space after a completed root name. Command argument completion is

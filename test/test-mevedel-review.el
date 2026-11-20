@@ -1202,7 +1202,7 @@
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) (mevedel-view-prompt-boundary))))
+                     (point-min) (mevedel-view-transcript-tail))))
           (should (string-match-p "hook context added" text))
           (should-not (string-match-p "review startup context" text)))
         (goto-char (point-min))
@@ -1211,7 +1211,7 @@
         (should (string-match-p
                  "review startup context"
                  (buffer-substring-no-properties
-                  (point-min) (mevedel-view-prompt-boundary)))))))
+                  (point-min) (mevedel-view-transcript-tail)))))))
 
   :doc "does not prepare package evidence when the submit hook rejects"
   (mevedel-view-test--with-buffers

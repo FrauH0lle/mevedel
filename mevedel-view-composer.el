@@ -29,7 +29,6 @@
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
 (require 'mevedel-session-durability)
-(require 'mevedel-floating-composer)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-pending-inputs)
@@ -357,6 +356,8 @@
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+(defvar mevedel-view-mode-map)
+(defvar mevedel-view-zone-owned-properties)
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
 
@@ -612,36 +613,75 @@ their distinct labels."
 ;;
 ;;; Composer state and redraw preservation
 
-(defvar-local mevedel-view--input-marker nil
-  "Marker separating request progress from the input zone.
-Everything above this marker is read-only history/status/interaction
-chrome; everything at or below it belongs to the input zone.  The input
-zone starts with the read-only prompt prefix, followed by the editable
-composer body.")
+(defvar-local mevedel-view--transcript-tail nil
+  "Boundary after the managed transcript zones.")
 
-(defun mevedel-view-prompt-boundary-marker ()
-  "Return the current view's live zone boundary marker, or nil.
-Use this for marker choreography during writes, not to locate the draft.
-Unlike `mevedel-view-prompt-boundary', this does not recover drift."
-  (let ((marker mevedel-view--input-marker))
-    (when (and (markerp marker) (eq (marker-buffer marker) (current-buffer)))
-      marker)))
+(defun mevedel-view-transcript-tail-marker ()
+  "Return the view's transcript tail marker, or nil before setup."
+  (when (and (markerp mevedel-view--transcript-tail)
+             (eq (marker-buffer mevedel-view--transcript-tail) (current-buffer)))
+    mevedel-view--transcript-tail))
 
-(defun mevedel-view-prompt-boundary ()
-  "Return the current view's prompt/zone boundary position, or nil.
-Recover the layout boundary if it drifted.  The boundary is in the view,
-not at the editable start or end of the draft."
-  (mevedel-view--input-marker-position))
+(defun mevedel-view-transcript-tail ()
+  "Return the view's transcript tail position, or nil before setup."
+  (when-let* ((tail (mevedel-view-transcript-tail-marker)))
+    (marker-position tail)))
 
-(defun mevedel-view-composer-initialize-prompt ()
-  "Insert the inline prompt and return the new view zone boundary.
-Read-only agent views need the boundary but have no prompt."
-  (let ((start (point)))
-    (unless mevedel-view--agent-transcript-p
-      (insert (mevedel-view--input-prompt-string))
-      (mevedel-view--propertize-input-prompt start (point)))
-    (setq mevedel-view--input-marker (copy-marker start nil))
-    start))
+(defun mevedel-view-transcript-tail-initialize ()
+  "Initialize the transcript tail at point and return its position."
+  (setq mevedel-view--transcript-tail (point-marker))
+  (set-marker-insertion-type mevedel-view--transcript-tail t)
+  (point))
+
+(defvar-local mevedel-view--composer-buffer nil
+  "The buffer editing this view's draft.")
+
+(defvar-local mevedel-composer--view nil
+  "The transcript that owns this composer.")
+
+(defvar-local mevedel-composer--draft-start nil
+  "Marker after the composer's prompt prefix.")
+
+(defvar-local mevedel-composer--emulation-maps nil
+  "Draft bindings that outrank ordinary minor modes in the composer.")
+
+(define-derived-mode mevedel-composer-mode text-mode "Composer"
+  "Edit the draft of a mevedel conversation."
+  (unless (eq yank-excluded-properties t)
+    (setq-local yank-excluded-properties
+                (append mevedel-view-zone-owned-properties
+                        '(mevedel-view-interaction-id)
+                        yank-excluded-properties)))
+  (setq-local scroll-conservatively 101
+              scroll-margin 0))
+
+(defun mevedel-view-composer-kill ()
+  "Kill the composer belonging to the current view."
+  (when (buffer-live-p mevedel-view--composer-buffer)
+    (kill-buffer mevedel-view--composer-buffer)))
+
+(defun mevedel-view-composer-create ()
+  "Create the current editable view's composer without displaying it."
+  (unless mevedel-view--agent-transcript-p
+    (let ((view (current-buffer))
+          (data mevedel--data-buffer)
+          (side mevedel-view--side-conversation-p)
+          (directory default-directory))
+      (setq mevedel-view--composer-buffer
+            (generate-new-buffer (format "%s composer" (buffer-name))))
+      (unless side (mevedel-view-history-load mevedel--session))
+      (add-hook 'kill-buffer-hook #'mevedel-view--cancel-pending-submission nil t)
+      (with-current-buffer mevedel-view--composer-buffer
+        (mevedel-composer-mode)
+        (setq-local mevedel-composer--view view
+                    mevedel--data-buffer data
+                    mevedel-view--side-conversation-p side
+                    default-directory directory)
+        (insert (mevedel-view--input-prompt-string))
+        (mevedel-view--propertize-input-prompt (point-min) (point))
+        (setq mevedel-composer--draft-start (point-marker))
+        (setq buffer-undo-list nil)
+        (mevedel-view-composer-initialize)))))
 
 (defun mevedel-view-composer-buffer (&optional view)
   "Return the buffer holding VIEW's draft, or nil if it has no composer.
@@ -649,18 +689,35 @@ VIEW defaults to the current buffer.  This does not display the composer."
   (let ((view (or view (current-buffer))))
     (when (buffer-live-p view)
       (with-current-buffer view
-        (when (and (not mevedel-view--agent-transcript-p)
-                   (markerp mevedel-view--input-marker)
-                   (eq (marker-buffer mevedel-view--input-marker) view))
-          view)))))
+        (cond
+         ((buffer-live-p mevedel-view--composer-buffer)
+          mevedel-view--composer-buffer)
+         ((buffer-live-p mevedel-composer--view) view))))))
 
 (defun mevedel-view-composer-window (&optional view-window)
-  "Return the composer window for VIEW-WINDOW, defaulting to the selected one.
-Return nil if there is no corresponding window.  Do not change selection."
+  "Return the existing composer window directly below VIEW-WINDOW.
+VIEW-WINDOW defaults to the selected window.  Do not change selection."
   (let ((window (or view-window (selected-window))))
-    (when (and (window-live-p window)
-               (mevedel-view-composer-buffer (window-buffer window)))
-      window)))
+    (when (window-live-p window)
+      (if (buffer-local-value 'mevedel-composer--view (window-buffer window))
+          window
+        (when-let* ((composer (mevedel-view-composer-buffer (window-buffer window)))
+                    (below (window-in-direction 'below window))
+                    ((eq (window-buffer below) composer)))
+          below)))))
+
+(defun mevedel-view-composer-display (view-window)
+  "Display the draft below VIEW-WINDOW, without selecting either window."
+  (or (mevedel-view-composer-window view-window)
+      (when-let* ((view (window-buffer view-window))
+                  (composer (mevedel-view-composer-buffer view))
+                  ((not (buffer-local-value 'buffer-read-only composer)))
+                  ;; A too-small window still has a usable transcript.
+                  (window (condition-case nil
+                              (split-window view-window -4 'below)
+                            (error nil))))
+        (set-window-buffer window composer)
+        window)))
 
 (defvar-local mevedel-view--armed-session-fork nil
   "Stable fork-point target armed for the next model-bound submission.")
@@ -671,27 +728,25 @@ Return nil if there is no corresponding window.  Do not change selection."
 (defvar-local mevedel-view--armed-session-fork-overlay nil
   "Overlay dimming the turns an armed session fork leaves out.")
 
-(defvar-local mevedel-view--historical-composer-overlay nil
-  "Overlay hiding the live composer during archived segment inspection.")
-
 (defun mevedel-view-composer-session-fork-armed-p ()
   "Return non-nil when this view has an armed historical session fork."
   (and mevedel-view--armed-session-fork t))
 
 (defun mevedel-view-composer-set-historical-visible (visible)
   "Show the live composer when VISIBLE, otherwise hide and lock it."
-  (when (overlayp mevedel-view--historical-composer-overlay)
-    (delete-overlay mevedel-view--historical-composer-overlay)
-    (setq mevedel-view--historical-composer-overlay nil))
-  (if visible
-      (setq buffer-read-only nil)
-    (setq mevedel-view--historical-composer-overlay
-          (make-overlay
-           (mevedel-view--input-marker-position) (point-max)
-           (current-buffer) t t))
-    (overlay-put mevedel-view--historical-composer-overlay
-                 'invisible 'mevedel-view-historical-composer)
-    (setq buffer-read-only t)))
+  (unless mevedel-view--agent-transcript-p
+    (setq buffer-read-only (not visible)))
+  (when-let* ((composer (mevedel-view-composer-buffer)))
+    (let ((view (current-buffer)))
+      (with-current-buffer composer
+        (setq buffer-read-only (not visible)))
+      (if visible
+          (dolist (window (get-buffer-window-list view nil t))
+            (mevedel-view-composer-display window))
+        (dolist (window (get-buffer-window-list composer nil t))
+          (if (one-window-p t (window-frame window))
+              (set-window-buffer window view)
+            (delete-window window)))))))
 
 (defvar-keymap mevedel-view--armed-session-fork-map
   :doc "Keymap for the armed session-fork interaction row."
@@ -710,7 +765,7 @@ Return nil if there is no corresponding window.  Do not change selection."
       (when mevedel-view--armed-session-fork-return-point
         (goto-char
          (min mevedel-view--armed-session-fork-return-point
-              (mevedel-view--input-marker-position)))))
+              (mevedel-view-transcript-tail)))))
     (setq mevedel-view--armed-session-fork-return-point nil)
     t))
 
@@ -724,7 +779,7 @@ calls this again to place the overlay on the new text."
   (when-let* ((cutoff (plist-get mevedel-view--armed-session-fork
                                  :transcript-cutoff)))
     (let ((pos (point-min))
-          (limit (mevedel-view--input-marker-position))
+          (limit (mevedel-view-transcript-tail))
           start end)
       (while (< pos limit)
         (let ((next (or (next-single-property-change
@@ -750,11 +805,12 @@ calls this again to place the overlay on the new text."
 (defun mevedel-view-cancel-composer-state ()
   "Cancel the active composer edit or fork."
   (interactive)
-  (cond
-   (mevedel-view--armed-session-fork
-    (mevedel-view-cancel-session-fork))
-   (mevedel-view--pending-input-edit
-    (mevedel-pending-inputs-cancel-edit))))
+  (with-current-buffer (or mevedel-composer--view (current-buffer))
+    (cond
+     (mevedel-view--armed-session-fork
+      (mevedel-view-cancel-session-fork))
+     (mevedel-view--pending-input-edit
+      (mevedel-pending-inputs-cancel-edit)))))
 
 (defun mevedel-view--arm-session-fork (fork-type)
   "Arm FORK-TYPE from the settled assistant response at point."
@@ -814,6 +870,8 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   (interactive)
   (mevedel-view--arm-session-fork 'worktree))
 
+(declare-function mevedel-view-jump-to-interaction "mevedel-view-interaction" ())
+
 (defvar-keymap mevedel-view--composer-keymap
   :doc "Keymap active over the editable composer body."
   "C-<tab>" #'mevedel-view-toggle-plan-mode
@@ -822,6 +880,7 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "C-c C-c" #'mevedel-pending-inputs-save-edit
   "C-c C-e" #'mevedel-pending-inputs-open
   "C-c C-k" #'mevedel-view-cancel-composer-state
+  "C-c C-j" #'mevedel-view-jump-to-interaction
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-r" #'mevedel-view-resume-pending
   "C-c C-u" #'mevedel-view-history-clear-input
@@ -844,54 +903,6 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
 (define-key mevedel-view--composer-keymap
             [remap move-beginning-of-line]
             #'mevedel-view-history-beginning-of-line)
-
-(defun mevedel-view--active-composer-keymap (&optional include-prompt)
-  "Return the composer map at point, or nil outside editable input.
-INCLUDE-PROMPT also accepts point on the read-only input prompt, for modal
-editing whose normal cursor cannot sit after an empty prompt."
-  (when (and (derived-mode-p 'mevedel-view-mode)
-             (not mevedel-view--agent-transcript-p)
-             (markerp mevedel-view--input-marker)
-             (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
-             (>= (point) (if include-prompt
-                             (marker-position mevedel-view--input-marker)
-                           (mevedel-view--input-start))))
-    (if mevedel-view--side-conversation-p
-        mevedel-view--side-conversation-keymap
-      mevedel-view--composer-keymap)))
-
-(defun mevedel-view--composer-routing-map ()
-  "Build a filtered keyboard map from the current composer entry points.
-Bindings below each entry point resolve from the authoritative map at lookup."
-  (let ((map (make-sparse-keymap)))
-    (dolist (source (list mevedel-view--composer-keymap
-                         mevedel-view--side-conversation-keymap))
-      (map-keymap
-       (lambda (event _binding)
-         (let ((key (vector event)))
-           (define-key map key
-                       `(menu-item "" nil
-                                   :filter ,(lambda (_)
-                                              (when-let* ((active
-                                                           (mevedel-view--active-composer-keymap)))
-                                                (lookup-key active key)))))))
-       source))
-    map))
-
-(defvar-local mevedel-view--composer-keys-enabled nil
-  "Non-nil when this buffer owns an interactive composer.")
-
-(defvar mevedel-view--composer-emulation-maps nil
-  "Keyboard fallback below contextual property maps and above minor modes.")
-
-(defun mevedel-view--register-composer-keymap ()
-  "Refresh composer entry points and register before other emulation maps."
-  (setq mevedel-view--composer-emulation-maps
-        `((mevedel-view--composer-keys-enabled . ,(mevedel-view--composer-routing-map))))
-  (setq emulation-mode-map-alists
-        (cons 'mevedel-view--composer-emulation-maps
-              (remq 'mevedel-view--composer-emulation-maps
-                    emulation-mode-map-alists))))
 
 (defvar-local mevedel-view--composer-display-overlay nil
   "Presentation overlay over the editable composer.
@@ -963,61 +974,6 @@ This covers the interval before the prompt has been accepted and before
   "Return non-nil when point is in the editable composer."
   (mevedel-view--position-in-input-region-p (point)))
 
-(defun mevedel-view--call-preserving-input-point (thunk)
-  "Call THUNK, preserving point's offset inside the composer.
-Redraws for spinners, agent status, and interaction prompts insert
-or delete text above the editable input.  When the user is typing in
-the composer, restore point by its input-relative offset after THUNK
-finishes."
-  (let* ((buffer (current-buffer))
-         (preserve-p (mevedel-view--point-in-input-region-p))
-         (offset (and preserve-p
-                      (- (point) (mevedel-view--input-start))))
-         result)
-    (unwind-protect
-        (setq result (funcall thunk))
-      (when (and preserve-p
-                 (buffer-live-p buffer))
-        (with-current-buffer buffer
-          (when (and (markerp mevedel-view--input-marker)
-                     (marker-buffer mevedel-view--input-marker))
-            (goto-char
-             (min (point-max)
-                  (+ (mevedel-view--input-start)
-                     (max 0 offset))))))))
-    result))
-
-(defun mevedel-view--call-preserving-input-text (thunk)
-  "Call THUNK without allowing it to mutate editable composer text.
-History/status rendering should only change text above
-`mevedel-view--input-marker'.  This guard restores the input body if a
-late callback accidentally inserts transcript content below the prompt."
-  (let* ((preserve-p
-          (and (not mevedel-view--agent-transcript-p)
-               (markerp mevedel-view--input-marker)
-               (marker-buffer mevedel-view--input-marker)))
-         (text (and preserve-p
-                    (progn
-                      (mevedel-mention-bindings-copy-text
-                       (buffer-substring
-                        (mevedel-view--input-start) (point-max))))))
-         result)
-    (let ((inhibit-modification-hooks t))
-      (setq result (funcall thunk)))
-    (when (and preserve-p
-               (markerp mevedel-view--input-marker)
-               (marker-buffer mevedel-view--input-marker))
-      (let* ((start (mevedel-view--input-start))
-             (current (mevedel-mention-bindings-copy-text
-                       (buffer-substring start (point-max)))))
-        (unless (equal-including-properties current text)
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t))
-            (delete-region start (point-max))
-            (goto-char start)
-            (insert text)))))
-    result))
-
 (defun mevedel-view--render-anchor-identity (pos)
   "Return POS's source start, section role and child discriminator.
 Disclosure keys keep grouped rows' standalone roles and distinguish
@@ -1057,9 +1013,8 @@ across one lands in different content whenever lengths shift above or
 around it.  A managed fragment's semantic anchor or the transcript source
 map (section identity
 plus offset into its rendered run) identifies the same content after
-the redraw.  Composer positions are handled by input offsets and
-return nil here.  With WINDOW, POS is its start; managed zone offsets
-then count screen rows rather than characters.
+the redraw.  With WINDOW, POS is its start; managed zone offsets then
+count screen rows rather than characters.
 
 REGION, a cons (START . END), says that the redraw replaces START..END.
 A POS outside it is not part of the redraw, so a marker follows it: it
@@ -1069,8 +1024,7 @@ advancing marker so the anchor finds the region's new end.  Release the
 returned anchor with `mevedel-view--release-render-anchor'."
   (when (and (integer-or-marker-p pos)
              (>= pos (point-min))
-             (< pos (point-max))
-             (not (mevedel-view--position-in-input-region-p pos)))
+             (< pos (point-max)))
     (cond
      ((and region (< pos (car region))) (list 'marker (copy-marker pos)))
      ((and region (>= pos (cdr region))) (list 'marker (copy-marker pos t)))
@@ -1123,7 +1077,7 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
        (when (and (not pos) id)
          (let ((scan (or (mevedel-view-stream-in-flight-turn-start-position)
                          (point-min)))
-               (limit (mevedel-view--input-start)))
+               (limit (point-max)))
            (while (and (not pos) (< scan limit))
              (let ((source (get-text-property scan 'mevedel-view-source)))
                (when (and (eq (get-text-property scan 'mevedel-view-type)
@@ -1143,12 +1097,7 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
     (`(source ,identity ,nth ,offset . ,region)
      ;; A region anchor counts runs from the replaced region's start and
      ;; ends where the text after it now begins.
-     (let ((limit (cond
-                   (region (min (point-max) (nth 1 region)))
-                   ((and (markerp mevedel-view--input-marker)
-                         (marker-buffer mevedel-view--input-marker))
-                    (mevedel-view--input-start))
-                   (t (point-max))))
+     (let ((limit (if region (min (point-max) (nth 1 region)) (point-max)))
            (pos (if region (min (car region) (point-max)) (point-min)))
            (count 0)
            found done)
@@ -1205,20 +1154,6 @@ Search rendered runs from ORIGIN, default `point-min', before LIMIT."
                 best-size (- end start)))
         (setq pos next)))
     best))
-
-(defun mevedel-view--transcript-position-backstop (position)
-  "Return POSITION, or the transcript's last character if it is in the composer.
-For a position that was in the transcript before a redraw: when its
-content vanished, a fallback must not put the reader into the draft,
-where the next keystroke would edit it."
-  (if (not (mevedel-view--position-in-input-region-p position))
-      position
-    (max (point-min)
-         (1- (if (and (markerp mevedel-view--status-marker)
-                      (marker-position mevedel-view--status-marker)
-                      (< mevedel-view--status-marker (mevedel-view--input-start)))
-                 (marker-position mevedel-view--status-marker)
-               (mevedel-view--input-start))))))
 
 (defun mevedel-view--window-body-geometry (window)
   "Return WINDOW's fresh (TOP . HEIGHT) in pixels before or after redisplay.
@@ -1301,22 +1236,6 @@ restoration, including numeric no-ops."
       (unless (zerop vscroll)
         (set-window-vscroll window vscroll t t)))))
 
-(defun mevedel-view--composer-anchors ()
-  "Return (WINDOW . Y) for each window editing the visible composer.
-Y is a pixel coordinate relative to the window body.
-Windows with point outside the composer or scrolled away from it keep
-their own reading position, even when the composer is still visible."
-  (let (anchors)
-    (when (and (markerp mevedel-view--input-marker)
-               (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
-      (dolist (window (mevedel-view--windows 'geometry))
-        (when-let* (((mevedel-view--position-in-input-region-p
-                     (window-point window)))
-                    (y (mevedel-view--position-screen-y
-                       (mevedel-view--input-start) window)))
-          (push (cons window y) anchors))))
-    anchors))
-
 (defun mevedel-view--history-reader-windows ()
   "Return displayed windows whose caret is in the current transcript.
 Capture this before mutation: a disappearing interaction must not become
@@ -1326,46 +1245,6 @@ a history reader just because its fallback point lands in the transcript."
     (seq-filter
      (lambda (window) (< (window-point window) mevedel-view--status-marker))
      (mevedel-view--windows 'geometry))))
-
-(defun mevedel-view--restore-composer-anchors (anchors)
-  "Put the composer back at its pixel Y in each window of ANCHORS.
-Text added or removed above the composer then scrolls the transcript
-instead of moving the composer, as in a bottom-anchored terminal.
-Like a terminal that is not yet full, a window whose current start still
-shows everything through the end of the draft keeps that start when text
-grows above: free space below the composer is used before scrolling."
-  (when (and anchors (markerp mevedel-view--input-marker)
-             (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
-    (let ((input-start (mevedel-view--input-start)))
-      (pcase-dolist (`(,window . ,y) anchors)
-        (when (and (window-live-p window)
-                   (eq (window-buffer window) (current-buffer)))
-          (let* ((anchored (mevedel-view--viewport-at-y window input-start y))
-                 (current (window-start window))
-                 (growing (or (< current (car anchored))
-                              (and (= current (car anchored))
-                                   (< (window-vscroll window t) (cdr anchored))))))
-            (unless (and growing
-                         (mevedel-view--window-shows-end-p window))
-              ;; A burst that overflows a short view must consume its free
-              ;; space, not preserve an anchor beyond the last full page.
-              (when growing
-                (let* ((end (point-max))
-                       (last-y (max 0 (- (cdr (mevedel-view--window-body-geometry window))
-                                         (with-selected-window window
-                                           (save-excursion
-                                             (goto-char end)
-                                             (line-pixel-height))))))
-                       (last-page (mevedel-view--viewport-at-y window end last-y)))
-                  (when (or (> (car anchored) (car last-page))
-                            (and (= (car anchored) (car last-page))
-                                 (> (cdr anchored) (cdr last-page))))
-                    (setq anchored last-page))))
-              (mevedel-view--set-viewport window anchored))))))))
-
-(defun mevedel-view--window-shows-end-p (window)
-  "Return non-nil when WINDOW currently shows all of the final screen line."
-  (mevedel-view--position-screen-y (point-max) window t))
 
 (defun mevedel-view--window-tail-lengths ()
   "Return (WINDOW . LENGTH) entries for displayed windows.
@@ -1378,7 +1257,7 @@ LENGTH counts characters from the window start to `point-max'."
   "Fill the last page when text below a restored start shrank.
 TAILS contains (WINDOW . LENGTH) entries captured before mutation by
 `mevedel-view--window-tail-lengths'.  Compare against restored starts,
-after semantic and composer anchoring.  Unchanged or growing tails keep
+after semantic anchoring.  Unchanged or growing tails keep
 their reading position, including deliberate space below the buffer.
 FORCE lists windows whose logical start was lost; fill their last page
 regardless of character-tail length after anchoring.
@@ -1433,84 +1312,6 @@ last row separately because an empty EOF has no text pixel size."
              window (point-max)
              (+ (car row) (- current blank))))))
 
-(defconst mevedel-view--transient-repair-seconds 0.1
-  "Seconds within which a growth repair is too recent for a click to target.
-Below human reaction time: input already queued when a transient growth is
-reversed this soon was aimed at the viewport before the repair.")
-
-(defun mevedel-view--repair-window-growth (window)
-  "Fill space newly exposed by a height increase of WINDOW.
-Equal widths and the same buffer let the previous blank area be inferred
-from the height delta.  The first size change also remembers its original
-height and viewport.  While nothing else moves the viewport, returning to
-that height restores it, in either order: a shrink then growth exposes
-nothing new, and a growth then shrink undoes its repair.  Only growth
-beyond both the original height and any height already repaired counts as
-newly exposed.
-Only windows with point in the editable composer fill new space; transcript
-and status readers keep their native viewport.
-Pending input keeps the viewport, except when undoing a repair made within
-`mevedel-view--transient-repair-seconds'.
-Record geometry only on size changes, not on ordinary redisplays.
-Redisplay has settled both heights, so read them from the same native
-source: a fresh measurement that lags the old one fakes or hides a change."
-  (let* ((old-height (window-old-body-pixel-height window))
-         (height (window-body-height window t))
-         (width (window-body-width window t))
-         (viewport (cons (window-start window) (window-vscroll window t)))
-         (composer (and (markerp mevedel-view--input-marker)
-                        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
-                        (>= (window-point window) (mevedel-view--input-start))))
-         ;; :height and :viewport are the original geometry, :shown the
-         ;; viewport last observed or set here, :accounted the tallest height
-         ;; whose blank space is already settled, :repaired the last repair time.
-         (state (window-parameter window 'mevedel-view--size-baseline)))
-    (unless (and state
-                 (eq (plist-get state :buffer) (current-buffer))
-                 (= (plist-get state :width) width)
-                 (equal (plist-get state :shown) viewport))
-      (setq state nil))
-    (if (or (not composer)
-            (not (and (eq (window-old-buffer window) (current-buffer))
-                      (> old-height 0)
-                      (= width (window-old-body-pixel-width window)))))
-        (setq state nil)
-      (unless (or state (= height old-height))
-        (setq state (list :buffer (current-buffer) :width width
-                          :height old-height :viewport viewport :shown viewport
-                          :accounted old-height :repaired nil)))
-      (cond
-       ((not state))
-       ((= height (plist-get state :height))
-        ;; A round trip: the window shows its original height again.  A
-        ;; queued click can target a long-shown repair, but not one reversed
-        ;; faster than anyone could aim at it.
-        (let ((repaired (plist-get state :repaired)))
-          (unless (or (equal viewport (plist-get state :viewport))
-                      (and (input-pending-p)
-                           (not (and repaired
-                                     (< (- (float-time) repaired)
-                                        mevedel-view--transient-repair-seconds)))))
-            (mevedel-view--set-viewport window (plist-get state :viewport))))
-        (setq state nil))
-       ((> height old-height)
-        (let ((accounted (plist-get state :accounted)))
-          ;; A queued click already carries a resolved position.  Do not move
-          ;; its viewport before the command loop consumes it.  Nil
-          ;; CHECK-TIMERS keeps this observation safe inside redisplay's hook.
-          (unless (input-pending-p)
-            (when-let* ((blank (mevedel-view--window-blank-pixels window)))
-              (mevedel-view--restore-window-blank-pixels
-               window (max 0 (- blank (max 0 (- height accounted)))))))
-          (let ((after (cons (window-start window) (window-vscroll window t))))
-            ;; Date the first departure from the original viewport: restoring
-            ;; undoes every repair since then, not just the latest.
-            (unless (or (equal after viewport) (plist-get state :repaired))
-              (setq state (plist-put state :repaired (float-time))))
-            (setq state (plist-put state :shown after)
-                  state (plist-put state :accounted (max accounted height))))))))
-    (set-window-parameter window 'mevedel-view--size-baseline state)))
-
 (defun mevedel-view--preserve-text-scale-blanks (function &rest arguments)
   "Call text-scale FUNCTION with ARGUMENTS, repairing only new view blanks.
 Capture before the face remapping changes, including programmatic calls and
@@ -1529,184 +1330,6 @@ the anonymous repeat-map commands used by `text-scale-adjust'."
 (with-eval-after-load 'face-remap
   (advice-add 'text-scale-mode :around #'mevedel-view--preserve-text-scale-blanks))
 
-(defvar-local mevedel-view--draft-window-state nil
-  "Blank pixels before a draft command, or `preserving' during a render.")
-
-(defvar mevedel-view--draft-command-buffer nil
-  "View whose draft transaction is armed by the current command's pre-hook.")
-
-(defun mevedel-view--finish-draft-command ()
-  "End the armed draft transaction, even when the command switched buffers."
-  (let ((buffer mevedel-view--draft-command-buffer))
-    ;; Repair is outside command scope, including mutations it might trigger.
-    (setq mevedel-view--draft-command-buffer nil)
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (mevedel-view--restore-draft-window-state)))))
-
-(defun mevedel-view--begin-draft-command ()
-  "Arm draft capture for this view, draining any unfinished prior command."
-  (mevedel-view--finish-draft-command)
-  (setq mevedel-view--draft-command-buffer (current-buffer)))
-
-(defvar mevedel-view--scroll-origins nil
-  "View windows before scrolling: (WINDOW BUFFER START VSCROLL OFFSET).
-OFFSET is the window point's composer offset, or nil for a history reader.")
-
-(defun mevedel-view--scroll-command-p (command)
-  "Return non-nil when COMMAND only scrolls the window.
-Other-window scrolling and touchpad momentum lack the `scroll-command'
-property carried by commands that scroll the selected window."
-  (and (symbolp command)
-       (or (get command 'scroll-command)
-           (memq command '(scroll-other-window scroll-other-window-down
-                           pixel-scroll-start-momentum)))))
-
-(defun mevedel-view--note-scroll-origin ()
-  "Remember the draft position a scroll command may displace point from.
-Capture each view window: wheel scrolling and commands that scroll another
-window can target a non-selected view, even from a different buffer.
-Any other command in the selected window drops a pending return: the user
-moved point deliberately."
-  (setq mevedel-view--scroll-origins nil)
-  (if (mevedel-view--scroll-command-p this-command)
-      (walk-windows
-       (lambda (window)
-         (with-current-buffer (window-buffer window)
-           (when (and (derived-mode-p 'mevedel-view-mode)
-                      (not mevedel-view--agent-transcript-p))
-             (push (list window (current-buffer)
-                         (window-start window) (window-vscroll window t)
-                         (and (mevedel-view--position-in-input-region-p
-                               (window-point window))
-                              (- (window-point window) (mevedel-view--input-start))))
-                   mevedel-view--scroll-origins))))
-       'nomini t)
-    (set-window-parameter nil 'mevedel-view-scroll-return nil)))
-
-(defun mevedel-view--scroll-return (window)
-  "Return the draft offset pending for WINDOW's buffer, or nil.
-The return is recorded with its buffer: one left by a buffer WINDOW
-showed earlier does not apply."
-  (when-let* ((pending (window-parameter window 'mevedel-view-scroll-return))
-              ((eq (car pending) (window-buffer window))))
-    (cdr pending)))
-
-(defun mevedel-view--return-from-scroll ()
-  "Return point to the draft once scrolling shows its position again.
-Emacs keeps point visible, so scrolling away moves it onto transcript or
-chrome rows.  Restore only windows whose viewport actually scrolled, using
-their own buffer and window point, without changing the selected window."
-  (let ((origins mevedel-view--scroll-origins))
-    (setq mevedel-view--scroll-origins nil)
-    (pcase-dolist (`(,window ,buffer ,start ,vscroll ,origin) origins)
-      (when (and (window-live-p window)
-                 (eq (window-buffer window) buffer)
-                 (or (/= start (window-start window))
-                     (/= vscroll (window-vscroll window t))))
-        (with-current-buffer buffer
-          (when (and origin
-                     (not (mevedel-view--position-in-input-region-p
-                           (window-point window))))
-            (set-window-parameter window 'mevedel-view-scroll-return
-                                  (cons buffer origin)))
-          (when-let* ((offset (mevedel-view--scroll-return window))
-                      (target (min (point-max) (+ (mevedel-view--input-start) offset)))
-                      ((mevedel-view--position-screen-y target window t)))
-            (set-window-point window target)
-            (set-window-parameter window 'mevedel-view-scroll-return nil)))))))
-
-(defun mevedel-view--draft-deletion-keeps-height-p (beg end)
-  "Return non-nil if deleting BEG to END cannot unwrap a plain draft line.
-Be conservative about remapped faces and display properties.  Graphical
-windows require a monospaced default font, so proportional fonts cannot
-defeat the character-width bound."
-  (and (< beg end)
-       (not face-remapping-alist)
-       (not buffer-display-table)
-       (not line-prefix)
-       (not wrap-prefix)
-       (save-excursion
-         (goto-char beg)
-         (let ((start (pos-bol))
-               (limit (pos-eol))
-               (properties '(display invisible face font-lock-face composition
-                             line-prefix wrap-prefix before-string after-string)))
-           (and (<= end limit)
-                ;; Tabs, controls and font fallback need the exact repair path.
-                (not (string-match-p "[^ -~]"
-                                     (buffer-substring-no-properties start limit)))
-                (not (seq-some
-                      (lambda (property)
-                        (or (text-property-not-all
-                             (max start (mevedel-view--input-start)) limit property nil)
-                            (seq-some (lambda (overlay)
-                                        (and (not (and (eq overlay mevedel-view--composer-display-overlay)
-                                                       (memq property '(line-prefix wrap-prefix))))
-                                             (overlay-get overlay property)))
-                                      (overlays-in start limit))))
-                      properties))
-                (seq-every-p
-                 (lambda (window)
-                   (and (< (+ (- limit start)
-                              (if (overlayp mevedel-view--composer-display-overlay)
-                                  (length (overlay-get mevedel-view--composer-display-overlay
-                                                       'line-prefix))
-                                0))
-                           (- (window-body-width window) 2))
-                        (or (not (display-graphic-p (window-frame window)))
-                            (eql 100 (font-get (face-attribute
-                                               'default :font (window-frame window))
-                                              :spacing)))))
-                 (mevedel-view--windows 'geometry)))))))
-
-(defun mevedel-view--capture-draft-window-state (beg end)
-  "Capture blank pixels before the first composer mutation at BEG.
-Capture insertions too: commands such as `transpose-lines' insert before
-deleting.  Their temporary growth is not the original viewport state.
-Ordinary self-insertion cannot shrink the draft and skips geometry capture;
-overwrite and auto-fill still capture.  Short plain deletions through END
-also skip capture when they cannot change display height."
-  (unless mevedel-view--draft-window-state
-    (when (and (not (and (eq mevedel-view--draft-command-buffer (current-buffer))
-                        (= beg end)
-                        (eq this-command 'self-insert-command)
-                        (not overwrite-mode)
-                        (not auto-fill-function)))
-               (markerp mevedel-view--input-marker)
-               (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
-               (>= beg (marker-position mevedel-view--input-marker))
-               (not (mevedel-view--draft-deletion-keeps-height-p beg end)))
-      (setq mevedel-view--draft-window-state
-            (mapcar (lambda (window)
-                      (cons window (or (mevedel-view--window-blank-pixels window) 0)))
-                    (mevedel-view--windows 'geometry))))))
-
-(defun mevedel-view--restore-draft-window-state (&rest changes)
-  "Repair net draft shrink, preserving history readers and existing blanks.
-When called from `after-change-functions' with CHANGES during a command,
-wait for `post-command-hook'.  Explicit wrappers call without CHANGES."
-  (when (and (consp mevedel-view--draft-window-state)
-             (not (and changes
-                       (eq mevedel-view--draft-command-buffer (current-buffer)))))
-    (let ((state mevedel-view--draft-window-state))
-      (setq mevedel-view--draft-window-state nil)
-      (pcase-dolist (`(,window . ,blank) state)
-        (when (and (window-live-p window)
-                   (eq (window-buffer window) (current-buffer)))
-          (mevedel-view--restore-window-blank-pixels window blank))))))
-
-(defun mevedel-view--call-preserving-draft-window-state (thunk)
-  "Call THUNK replacing draft or prompt text as a single viewport mutation."
-  (when (and (markerp mevedel-view--input-marker)
-             (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
-    (mevedel-view--capture-draft-window-state
-     (marker-position mevedel-view--input-marker) (point-max)))
-  (unwind-protect
-      (let ((mevedel-view--draft-window-state 'preserving))
-        (funcall thunk))
-    (mevedel-view--restore-draft-window-state)))
-
 (defun mevedel-view--call-preserving-window-state
     (thunk &optional positions-preserved region)
   "Call THUNK while preserving each displayed window's browsing state.
@@ -1722,9 +1345,7 @@ so a position inside re-rendered text returns to the same content
 rather than to the same numeric offset; a position whose anchor cannot
 be resolved after BODY is quietly clamped to the buffer.  The buffer
 mark, active-region state, and selection direction are preserved with
-point.  When either endpoint is in the editable composer, preserve it
-by offset from `mevedel-view--input-start' so streaming text inserted
-above the composer does not strand it in rendered transcript text.
+point.
 With POSITIONS-PRESERVED, THUNK owns exact point, mark and window-start
 relocation (for example, table cell splicing).  Keep viewport policy but
 do not override that relocation or classify its old offsets as lost.
@@ -1733,10 +1354,8 @@ text.  Markers then follow positions outside it, and anchors inside it are
 found without scanning the rest of the buffer."
   (let* ((region (and region (cons (copy-marker (car region))
                                    (copy-marker (cdr region) t))))
-         (anchors (mevedel-view--composer-anchors))
          (readers (mevedel-view--history-reader-windows))
          (tails (mevedel-view--window-tail-lengths))
-         (mevedel-view--draft-window-state 'preserving)
          lost-starts visited-windows
          (mevedel-view--pww-selected-window (selected-window))
          (mevedel-view--pww-current-buffer (current-buffer))
@@ -1750,15 +1369,6 @@ found without scanning the rest of the buffer."
                 mevedel-view--pww-current-mark nil region)))
          (mevedel-view--pww-mark-active mark-active)
          (mevedel-view--pww-deactivate-mark deactivate-mark)
-         (mevedel-view--pww-current-input-offset
-          (and (mevedel-view--point-in-input-region-p)
-	       (- (point) (mevedel-view--input-start))))
-         (mevedel-view--pww-mark-input-offset
-          (and mevedel-view--pww-current-mark
-	       (mevedel-view--position-in-input-region-p
-                mevedel-view--pww-current-mark)
-	       (- mevedel-view--pww-current-mark
-                  (mevedel-view--input-start))))
          (mevedel-view--pww-saved
           (mapcar (lambda (w)
                     (with-current-buffer mevedel-view--pww-current-buffer
@@ -1769,30 +1379,18 @@ found without scanning the rest of the buffer."
                         (list w
 			      wp
 			      ws
-			      (and (mevedel-view--position-in-input-region-p wp)
-                                   (- wp (mevedel-view--input-start)))
 			      (= wp (point-max))
 			      (mevedel-view--position-render-anchor wp nil region)
 			      (mevedel-view--position-render-anchor ws w region)
-			      ;; A tall draft can start the window inside the
-			      ;; composer; text above must not shift that view.
-			      (and (mevedel-view--position-in-input-region-p ws)
-	                           (- ws (mevedel-view--input-start)))
                               (and visit-y
                                    (list visit visit-y
                                          (and (eq (car visit) 'interaction)
                                               (or (mevedel-view--window-blank-pixels w) 0))))))))
                   (mevedel-view--windows 'geometry))))
-    (cl-flet ((resolve-position (position input-offset anchor)
-                (cond
-                 ((and input-offset
-		       (markerp mevedel-view--input-marker)
-		       (marker-buffer mevedel-view--input-marker))
-                  (+ (mevedel-view--input-start) (max 0 input-offset)))
-                 (t (mevedel-view--transcript-position-backstop
-                     (min (point-max)
-                          (or (mevedel-view--render-anchor-position anchor)
-                              position)))))))
+    (cl-flet ((resolve-position (position anchor)
+                (min (point-max)
+                     (or (mevedel-view--render-anchor-position anchor)
+                         position))))
              (unwind-protect (funcall thunk)
                ;; Restoration can fail too; detach this call's markers anyway.
                (unwind-protect
@@ -1801,18 +1399,16 @@ found without scanning the rest of the buffer."
 		       (unless positions-preserved
 			 (let ((restored-current-point
 				(resolve-position mevedel-view--pww-current-point
-						  mevedel-view--pww-current-input-offset
 						  mevedel-view--pww-current-anchor)))
 			   (goto-char (min (point-max) restored-current-point))))
 		       (dolist (entry mevedel-view--pww-saved)
-			 (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
-					   ,wp-anchor ,ws-anchor ,ws-input-offset ,visit)
+			 (pcase-let ((`(,w ,wp ,ws ,at-bottom ,wp-anchor ,ws-anchor ,visit)
 				      entry))
 			   (when (and (window-live-p w)
 				      (eq (window-buffer w) mevedel-view--pww-current-buffer))
 			     (unless positions-preserved
 			       (let ((restored-point
-				      (resolve-position wp input-offset wp-anchor)))
+				      (resolve-position wp wp-anchor)))
 				 (when restored-point
 				   (set-window-point w (min (point-max) restored-point)))
 				 (when (eq w mevedel-view--pww-selected-window)
@@ -1820,15 +1416,12 @@ found without scanning the rest of the buffer."
 			       (let* ((anchored-start
 				       (mevedel-view--render-anchor-position ws-anchor t))
 				      (restored-start
-				       (or (and ws-input-offset
-						(+ (mevedel-view--input-start) ws-input-offset))
-					   anchored-start
-					   ws)))
+				       (or anchored-start ws)))
 				 (when (and ws-anchor (not anchored-start))
 				   (push w lost-starts))
 				 (when (and restored-start (<= restored-start (point-max)))
 				   (set-window-start w restored-start t)))
-			       (when (and at-bottom (not input-offset))
+			       (when at-bottom
 				 (save-selected-window
 				   (select-window w)
 				   (goto-char (point-max))
@@ -1847,17 +1440,13 @@ found without scanning the rest of the buffer."
 			  (min
 			   (point-max)
 			   (resolve-position mevedel-view--pww-current-mark
-					     mevedel-view--pww-mark-input-offset
 					     mevedel-view--pww-mark-anchor)))
 			 (setq mark-active mevedel-view--pww-mark-active
 			       deactivate-mark mevedel-view--pww-deactivate-mark))
-		       (mevedel-view--restore-composer-anchors
-			(seq-remove (lambda (anchor) (memq (car anchor) visited-windows)) anchors))
 		       (mevedel-view--clamp-window-starts
 			(seq-remove (lambda (tail)
 				      (or (memq (car tail) visited-windows)
-						  (and (or (assq (car tail) anchors)
-                                                           (memq (car tail) readers))
+					  (and (memq (car tail) readers)
 					       (not (memq (car tail) lost-starts)))))
 				    tails)
 			lost-starts)
@@ -1866,8 +1455,8 @@ found without scanning the rest of the buffer."
                    (mevedel-view--release-render-anchor mevedel-view--pww-current-anchor)
                    (mevedel-view--release-render-anchor mevedel-view--pww-mark-anchor)
                    (dolist (entry mevedel-view--pww-saved)
-                     (mevedel-view--release-render-anchor (nth 5 entry))
-                     (mevedel-view--release-render-anchor (nth 6 entry)))
+                     (mevedel-view--release-render-anchor (nth 4 entry))
+                     (mevedel-view--release-render-anchor (nth 5 entry)))
                    (set-marker (car region) nil)
                    (set-marker (cdr region) nil)))))))
 
@@ -1897,29 +1486,30 @@ caller's buffer, not in a displayed view."
 
 (defun mevedel-view--call-with-render-boundaries-advancing (thunk)
   "Call THUNK while zone boundary markers advance across insertions."
-  (let ((status-type (and (markerp mevedel-view--status-marker)
+  (let* ((tail (mevedel-view-transcript-tail-marker))
+         (status-type (and (markerp mevedel-view--status-marker)
                           (marker-insertion-type mevedel-view--status-marker)))
         (interaction-type
          (and (markerp mevedel-view--interaction-marker)
               (marker-insertion-type mevedel-view--interaction-marker)))
-        (input-type (and (markerp mevedel-view--input-marker)
-                         (marker-insertion-type mevedel-view--input-marker))))
+        (tail-type (and (markerp tail)
+                         (marker-insertion-type tail))))
     (unwind-protect
         (progn
           (when (markerp mevedel-view--status-marker)
             (set-marker-insertion-type mevedel-view--status-marker t))
           (when (markerp mevedel-view--interaction-marker)
             (set-marker-insertion-type mevedel-view--interaction-marker t))
-          (when (markerp mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t))
+          (when (markerp tail)
+            (set-marker-insertion-type tail t))
           (funcall thunk))
       (when (markerp mevedel-view--status-marker)
         (set-marker-insertion-type mevedel-view--status-marker status-type))
       (when (markerp mevedel-view--interaction-marker)
         (set-marker-insertion-type mevedel-view--interaction-marker
                                    interaction-type))
-      (when (markerp mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+      (when (markerp tail)
+        (set-marker-insertion-type tail tail-type)))))
 
 (defmacro mevedel-view--with-render-boundaries-advancing (&rest body)
   "Execute BODY while zone boundary markers advance across insertions."
@@ -1931,111 +1521,16 @@ caller's buffer, not in a displayed view."
   "Call THUNK, a view write the user did not command; return its value.
 This is the entry every asynchronous view writer uses: timers, process
 output, stream chunks, deferred and batched renders.  Around THUNK it keeps
-what the user sees and edits:
-
-- the composer's text and properties, even when no window shows the view;
-- point and mark, by offset inside the composer and by semantic anchor in
-  the transcript and managed chrome;
-- every displaying window's point and viewport, under the composer
-  policy: a window editing the visible composer keeps its screen row, a
-  history reader keeps its reading position, a window visiting an
-  interaction card or status row keeps that row, and a lost start fills
-  the last page.
+transcript point and mark, and each window's reading or visited-row
+viewport.  A lost start fills the last page.  The separate composer is
+outside this write.
 
 REGION, a cons (START . END), promises that THUNK replaces only that text.
 Anchors inside it are then resolved locally instead of scanning the
-buffer, so frequent small writers stay cheap.
-
-Command-driven writes use the draft command transaction instead, table
-splices map positions by cell, and zone reconciliation applies the same
-policy itself; `mevedel-view-call-preserving-window-configuration'
-additionally restores frame layout."
-  (prog1 (mevedel-view--call-preserving-window-state
-          (lambda () (mevedel-view--call-preserving-input-text thunk))
-          nil region)
-    (mevedel-view--sanitize-undo)))
-
-
-;;
-;;; Composer undo
-
-(defun mevedel-view--composer-undo-list (list boundary)
-  "Return undo LIST reduced to composer edits, in current positions.
-
-BOUNDARY is the current composer start.  Renders change the text above
-it and Emacs records those changes too: undoing one would try to rewrite
-read-only transcript, and property changes alone once kept tens of
-thousands of entries alive per view.  Walking from newest to oldest, each
-render insertion or deletion above the composer moves older positions,
-so composer entries are shifted into current positions and render entries
-dropped, as are modification-flag entries, which a never-saved view does
-not need.  An entry of unknown shape ends the history, since its positions
-can no longer be trusted."
-  (let ((delta 0) (bound boundary) result)
-    (catch 'done
-      (dolist (entry list)
-        (pcase entry
-          ('nil (when (and result (car result)) (push nil result)))
-          ((and (pred integerp) pos)
-           (when (>= pos bound) (push (+ pos delta) result)))
-          ;; The view is never saved and forces itself unmodified after
-          ;; every change, so each render would add one of these forever.
-          (`(t . ,_) nil)
-          ((and `(,(and (pred integerp) beg) . ,(and (pred integerp) end)))
-           (if (>= beg bound)
-               (push (cons (+ beg delta) (+ end delta)) result)
-             (when (> end bound) (throw 'done nil))
-             ;; A render insertion: older positions sat before it.
-             (setq delta (+ delta (- end beg))
-                   bound (- bound (- end beg)))))
-          ((and `(,(and (pred stringp) text) . ,(and (pred integerp) pos)))
-           (if (and (>= (abs pos) bound)
-                    ;; Reversing the new prompt's insertion puts the old
-                    ;; prompt deletion exactly at the temporary boundary.
-                    ;; It is still chrome, not a deletion from the draft.
-                    (not (and (= (abs pos) bound)
-                              (get-text-property 0 'mevedel-view-prompt text))))
-               (push (cons text (if (< pos 0) (- pos delta) (+ pos delta))) result)
-             ;; A render deletion.  Older positions sat after its text.
-             (setq delta (- delta (length text))
-                   bound (+ bound (length text)))))
-          (`(nil ,prop ,value ,(and (pred integerp) beg) . ,(and (pred integerp) end))
-           (cond ((>= beg bound)
-                  (push (append (list nil prop value (+ beg delta)) (+ end delta))
-                        result))
-                 ((> end bound) (throw 'done nil))))
-          ((and `(,(and (pred markerp) marker) . ,(pred integerp)))
-           (when (and (marker-buffer marker)
-                      (>= (marker-position marker) boundary))
-             (push entry result)))
-          (_ (throw 'done nil)))))
-    (while (and result (null (car result))) (pop result))
-    ;; A command that only moved point leaves a group holding nothing but
-    ;; its position; kept, such groups accumulated for as long as the view
-    ;; lived.  Undo has nothing to do in them.
-    (let (kept group)
-      (dolist (entry (nreverse result))
-        (if entry
-            (push entry group)
-          (when (seq-some #'consp group)
-            (setq kept (append (list nil) group kept)))
-          (setq group nil)))
-      (when (seq-some #'consp group)
-        (setq kept (append group kept)))
-      (while (and kept (null (car kept))) (pop kept))
-      (nreverse kept))))
-
-(defun mevedel-view--sanitize-undo ()
-  "Keep only composer edits on the current view's undo list."
-  (when (and (derived-mode-p 'mevedel-view-mode)
-             (consp buffer-undo-list))
-    (if (or mevedel-view--agent-transcript-p
-            (not (and (markerp mevedel-view--input-marker)
-                      (marker-buffer mevedel-view--input-marker))))
-        (setq buffer-undo-list nil)
-      (setq buffer-undo-list
-            (mevedel-view--composer-undo-list
-             buffer-undo-list (mevedel-view--input-start))))))
+buffer, so frequent small writers stay cheap."
+  (mevedel-view--call-preserving-window-state
+   (lambda () (let ((inhibit-modification-hooks t)) (funcall thunk)))
+   nil region))
 
 
 ;;
@@ -2068,60 +1563,33 @@ and other input properties remain untouched."
               (setq pos next))))))))
 
 (defun mevedel-view-composer-initialize ()
-  "Initialize composer editing support in the current chat view."
-  (setq mevedel-view--composer-keys-enabled (not mevedel-view--agent-transcript-p))
-  ;; A transcript inspection view has nothing a user could undo.
-  (when mevedel-view--agent-transcript-p (buffer-disable-undo))
-  (unless mevedel-view--agent-transcript-p
-    (mevedel-view--register-composer-keymap)
-    ;; Renders between commands leave their own entries; drop them before
-    ;; a command such as `undo' can see them.
-    (add-hook 'pre-command-hook #'mevedel-view--sanitize-undo nil t)
-    (setq-local mevedel-mentions-agent-enabled-p
-                (not mevedel-view--side-conversation-p))
-    (mevedel-mentions-install)
-    (jit-lock-register #'mevedel-view--fontify-composer)
-    (mevedel-view--install-dnd)
-    (add-hook 'completion-at-point-functions
-              #'mevedel-resource-capf nil t)
-    (add-hook 'after-change-functions
-              #'mevedel-view--refresh-skill-argument-hint-after-change
-              nil t)
-    (add-hook 'before-change-functions #'mevedel-view--note-draft-deletion nil t)
-    (add-hook 'after-change-functions
-              #'mevedel-view--offer-follow-up-after-draft-change nil t)
-    (unless mevedel-view--side-conversation-p
-      (mevedel-view-history-load mevedel--session)
-      (add-hook 'completion-at-point-functions
-                #'mevedel-view-slash-capf nil t)
-      ;; Bound the $skill matcher to the draft: it runs per
-      ;; refontification, and scanning the transcript prefix cost
-      ;; hundreds of milliseconds per keystroke on a long session.
-      (mevedel-skills-install-font-lock #'mevedel-view-composer-draft-start)
-      (add-hook 'post-command-hook
-                #'mevedel-view--refresh-skill-argument-hint nil t))
-    (add-hook 'kill-buffer-hook
-              #'mevedel-view--cancel-pending-submission nil t)
-    (setq mevedel-view--composer-display-overlay
-          (make-overlay
-           (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)
-           (current-buffer) nil t))
-    (add-hook 'after-change-functions #'mevedel-view--update-composer-end nil t)
-    (add-hook 'before-change-functions
-              #'mevedel-view--capture-draft-window-state nil t)
-    (add-hook 'after-change-functions
-              #'mevedel-view--restore-draft-window-state 90 t)
-    (add-hook 'pre-command-hook #'mevedel-view--begin-draft-command -90 t)
-    ;; Scrolling can target this view from a different selected buffer.
-    (add-hook 'pre-command-hook #'mevedel-view--note-scroll-origin)
-    (add-hook 'post-command-hook #'mevedel-view--return-from-scroll)
-    ;; A command can leave this buffer before post-command-hook runs.
-    (add-hook 'post-command-hook
-              #'mevedel-view--finish-draft-command 90)
-    (add-hook 'window-size-change-functions
-              #'mevedel-view--repair-window-growth nil t)
-    (mevedel-floating-composer-setup)
-    (mevedel-view--update-composer-indent)))
+  "Install editing support in the new composer."
+  (use-local-map mevedel-view-mode-map)
+  (setq mevedel-composer--emulation-maps
+        `((mevedel-composer--view . ,(if mevedel-view--side-conversation-p
+                                       mevedel-view--side-conversation-keymap
+                                     mevedel-view--composer-keymap))))
+  (setq-local emulation-mode-map-alists
+              (cons 'mevedel-composer--emulation-maps emulation-mode-map-alists))
+  (setq-local mevedel-mentions-agent-enabled-p
+              (not mevedel-view--side-conversation-p))
+  (mevedel-mentions-install)
+  (jit-lock-register #'mevedel-view--fontify-composer)
+  (mevedel-view--install-dnd)
+  (add-hook 'completion-at-point-functions #'mevedel-resource-capf nil t)
+  (add-hook 'after-change-functions
+            #'mevedel-view--refresh-skill-argument-hint-after-change nil t)
+  (add-hook 'before-change-functions #'mevedel-view--note-draft-deletion nil t)
+  (add-hook 'after-change-functions
+            #'mevedel-view--offer-follow-up-after-draft-change nil t)
+  (unless mevedel-view--side-conversation-p
+    (add-hook 'completion-at-point-functions #'mevedel-view-slash-capf nil t)
+    (mevedel-skills-install-font-lock #'mevedel-view-composer-draft-start)
+    (add-hook 'post-command-hook #'mevedel-view--refresh-skill-argument-hint nil t))
+  (setq mevedel-view--composer-display-overlay
+        (make-overlay (point) (point-max) (current-buffer) nil t))
+  (add-hook 'after-change-functions #'mevedel-view--update-composer-end nil t)
+  (mevedel-view--update-composer-indent))
 
 ;;
 ;;; Input forwarding
@@ -2156,49 +1624,6 @@ ATTRIBUTION names who the turn speaks for when that is not the user."
     (mevedel-view-stream-begin-turn
      turn-start data-turn-start no-spinner)))
 
-(defun mevedel-view--prompt-start-position ()
-  "Return the start of the read-only input prompt, or nil."
-  (let* ((marker-pos
-          (and (markerp mevedel-view--input-marker)
-               (eq (marker-buffer mevedel-view--input-marker)
-                   (current-buffer))
-               (marker-position mevedel-view--input-marker)))
-         (pos
-          (if (and marker-pos
-                   (< marker-pos (point-max))
-                   (get-text-property marker-pos 'mevedel-view-prompt))
-              marker-pos
-            (text-property-any
-             (point-min) (point-max) 'mevedel-view-prompt t))))
-    (when pos
-      (while (and (> pos (point-min))
-                  (get-text-property (1- pos) 'mevedel-view-prompt))
-        (setq pos (1- pos)))
-      pos)))
-
-(defun mevedel-view--input-marker-position ()
-  "Return the recovered start position of the input prompt.
-When prompt text properties survive but zone markers have drifted past
-that prompt into the editable composer, repair the marker ordering so
-later prompt refreshes do not operate on the draft body."
-  (if-let* ((prompt-start (mevedel-view--prompt-start-position)))
-      (progn
-        (when (and (markerp mevedel-view--input-marker)
-                   (marker-buffer mevedel-view--input-marker)
-                   (not (= (marker-position mevedel-view--input-marker)
-                           prompt-start)))
-          (set-marker mevedel-view--input-marker prompt-start))
-        (dolist (marker (list mevedel-view--status-marker
-                              mevedel-view--interaction-marker))
-          (when (and (markerp marker)
-                     (marker-buffer marker)
-                     (let ((pos (marker-position marker)))
-                       (and pos (> pos prompt-start))))
-            (set-marker marker prompt-start)))
-        prompt-start)
-    (and (markerp mevedel-view--input-marker)
-         (marker-position mevedel-view--input-marker))))
-
 (defun mevedel-view-refresh-associated-input-prompt ()
   "Refresh the view prompt associated with the current buffer, if any.
 Callable from either half of a view/data pair: prompt-affecting state
@@ -2215,30 +1640,12 @@ changes land in the data buffer, and the prompt lives in the view."
       (with-current-buffer view-buf
         (mevedel-view-refresh-input-prompt)))))
 
-(defun mevedel-view--input-start (&optional observe)
-  "Return the buffer position where the user's editable input begins.
-This is the position immediately after the read-only `> ' prompt that
-follows `mevedel-view--input-marker'.  OBSERVE leaves zone markers alone."
-  (save-excursion
-    (goto-char (or (if observe
-                       (mevedel-view--prompt-start-position)
-                     (mevedel-view--input-marker-position))
-                   mevedel-view--input-marker))
-    (while (get-text-property (point) 'mevedel-view-prompt)
-      (forward-char 1))
-    (point)))
-
-(defun mevedel-view-composer-draft-start (&optional view observe)
+(defun mevedel-view-composer-draft-start (&optional view)
   "Return the first editable position of VIEW's draft, or nil if absent.
-VIEW defaults to the current buffer.  Ignore narrowing.
-If OBSERVE is non-nil, leave view-side layout markers unchanged."
+VIEW defaults to the current buffer.  Ignore narrowing."
   (when-let* ((buffer (mevedel-view-composer-buffer view)))
-    (with-current-buffer buffer
-      (if (buffer-narrowed-p)
-          (save-restriction
-            (widen)
-            (mevedel-view--input-start observe))
-        (mevedel-view--input-start observe)))))
+    (marker-position
+     (buffer-local-value 'mevedel-composer--draft-start buffer))))
 
 (defun mevedel-view-composer-draft-end (&optional view)
   "Return the position just after VIEW's draft, or nil if absent.
@@ -2258,8 +1665,8 @@ in which case omit properties only.  VIEW defaults to the current buffer."
         (if (buffer-narrowed-p)
             (save-restriction
               (widen)
-              (funcall substring (mevedel-view--input-start) (point-max)))
-          (funcall substring (mevedel-view--input-start) (point-max)))))))
+              (funcall substring mevedel-composer--draft-start (point-max)))
+          (funcall substring mevedel-composer--draft-start (point-max)))))))
 
 (defun mevedel-view-composer-in-draft-p (position &optional view)
   "Return non-nil if POSITION is a valid caret position in VIEW's draft.
@@ -2302,62 +1709,40 @@ overriding read-only protections."
     (with-current-buffer buffer
       (save-restriction
         (widen)
-        (mevedel-view--call-preserving-draft-window-state
-         (lambda ()
-           (atomic-change-group
-             (let ((start (mevedel-view--input-start)))
-               (delete-region start (point-max))
-               (goto-char start)
-               (insert text)
-               (point)))))))))
+        (barf-if-buffer-read-only)
+        (atomic-change-group
+          (delete-region mevedel-composer--draft-start (point-max))
+          (goto-char mevedel-composer--draft-start)
+          (insert text)
+          (point))))))
 
 (defun mevedel-view-refresh-input-prompt ()
-  "Refresh the input prompt to reflect the current permission mode."
+  "Refresh the composer prefix and the view's request progress."
   (interactive)
-  (unless mevedel-view--agent-transcript-p
-    (when (and (markerp mevedel-view--input-marker)
-               (marker-buffer mevedel-view--input-marker))
-      (mevedel-view--call-preserving-draft-window-state
-       (lambda ()
-         (mevedel-view--call-preserving-input-point
-	  (lambda ()
-            (let* ((start (mevedel-view--input-marker-position))
-                   (end (mevedel-view--input-start))
-                   (status-type
-                    (and (markerp mevedel-view--status-marker)
-			 (marker-insertion-type mevedel-view--status-marker)))
-                   (interaction-type
-                    (and (markerp mevedel-view--interaction-marker)
-			 (marker-insertion-type mevedel-view--interaction-marker)))
-                   (input-type (marker-insertion-type mevedel-view--input-marker)))
-              (save-excursion
-		(goto-char start)
-		(unwind-protect
-                    (let ((inhibit-read-only t))
-                      (when (markerp mevedel-view--status-marker)
-			(set-marker-insertion-type
-			 mevedel-view--status-marker nil))
-                      (when (markerp mevedel-view--interaction-marker)
-			(set-marker-insertion-type
-			 mevedel-view--interaction-marker nil))
-                      (set-marker-insertion-type mevedel-view--input-marker nil)
-                      (delete-region start end)
-                      (insert (mevedel-view--input-prompt-string))
-                      (mevedel-view--propertize-input-prompt start (point)))
-		  (when (markerp mevedel-view--status-marker)
-                    (set-marker-insertion-type
-                     mevedel-view--status-marker status-type))
-		  (when (markerp mevedel-view--interaction-marker)
-                    (set-marker-insertion-type
-                     mevedel-view--interaction-marker interaction-type))
-		  (set-marker-insertion-type
-                   mevedel-view--input-marker input-type)))
-              (when (overlayp mevedel-view--composer-display-overlay)
-		(move-overlay
-		 mevedel-view--composer-display-overlay
-		 (mevedel-view--input-start) (point-max))
-		(mevedel-view--update-composer-indent))
-              (mevedel-view--render-request-progress)))))))))
+  (with-current-buffer (or mevedel-composer--view (current-buffer))
+    (when-let* ((composer (mevedel-view-composer-buffer)))
+      (let ((prefix (mevedel-view--input-prompt-string)))
+        (with-current-buffer composer
+          (save-restriction
+            (widen)
+            (unless (equal prefix
+                           (buffer-substring-no-properties
+                            (point-min) mevedel-composer--draft-start))
+              (let ((inhibit-read-only t)
+                    (offset (- (point) mevedel-composer--draft-start)))
+                (with-silent-modifications
+                  (delete-region (point-min) mevedel-composer--draft-start)
+                  (goto-char (point-min))
+                  (insert prefix)
+                  (mevedel-view--propertize-input-prompt (point-min) (point))
+                  (set-marker mevedel-composer--draft-start (point))
+                  (move-overlay mevedel-view--composer-display-overlay
+                                (point) (point-max))
+                  (mevedel-view--update-composer-indent))
+                (goto-char (max (point-min)
+                                (+ offset mevedel-composer--draft-start)))))))))
+    (unless mevedel-view--agent-transcript-p
+      (mevedel-view--render-request-progress))))
 
 (defun mevedel-view-cycle-permission-mode ()
   "Cycle the current session's permission mode from the view buffer."
@@ -2472,12 +1857,10 @@ When FORCE is non-nil, replace the current draft unconditionally."
               (equal (mevedel-view-composer-draft-text view t)
                      (substring-no-properties text)))
       (with-current-buffer (mevedel-view-composer-buffer view)
-        (mevedel-view--call-preserving-draft-window-state
-         (lambda ()
-           (let ((inhibit-read-only t))
-             (with-silent-modifications
-               (mevedel-view-composer-replace text view)))
-           (mevedel-view--update-composer-end)))
+        (let ((inhibit-read-only t))
+          (with-silent-modifications
+            (mevedel-view-composer-replace text view)))
+        (mevedel-view--update-composer-end)
         (goto-char
          (min (mevedel-view-composer-draft-end view)
               (+ (mevedel-view-composer-draft-start view)
@@ -3068,10 +2451,11 @@ SNAPSHOT is the exact Source composer state transferred on publication."
 (defun mevedel-view-send ()
   "Send the current root or ephemeral side-conversation composer text."
   (interactive)
-  (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
-    (if mevedel-view--side-conversation-p
-        (mevedel-side-conversation-send)
-      (mevedel-view--send-root))))
+  (with-current-buffer (or mevedel-composer--view (current-buffer))
+    (mevedel-with-diagnostic-errors (mevedel-diagnostic-scope (current-buffer))
+      (if mevedel-view--side-conversation-p
+          (mevedel-side-conversation-send)
+        (mevedel-view--send-root)))))
 
 (defun mevedel-view--send-root (&optional steering-input)
   "Send the current composer text to the LLM via the data buffer.
@@ -3582,15 +2966,13 @@ asynchronous preparation ran is left alone instead of cleared."
          (funcall after-insert))
        ;; Render the user's message in the view after the data source is
        ;; known, but before the model request starts.
-       (mevedel-view--call-preserving-draft-window-state
-        (lambda ()
-          (let ((turn-start
-                 (mevedel-view--insert-user-message
-                  (or display-text input) nil hook-context
-                  prompt-summary-body prompt-summary-source
-                  hook-audits-with-source guest-attribution user-source)))
-            (mevedel-view-stream-begin-turn turn-start data-turn-start)
-            (mevedel-view--clear-submitted-input submitted-draft))))
+       (let ((turn-start
+              (mevedel-view--insert-user-message
+               (or display-text input) nil hook-context
+               prompt-summary-body prompt-summary-source
+               hook-audits-with-source guest-attribution user-source)))
+         (mevedel-view-stream-begin-turn turn-start data-turn-start)
+         (mevedel-view--clear-submitted-input submitted-draft))
        (with-current-buffer mevedel--data-buffer
          (mevedel-view--activate-dropped-file-grants
           dropped-file-grants session)
@@ -3665,12 +3047,12 @@ asynchronous preparation ran is left alone instead of cleared."
 (defun mevedel-view-abort ()
   "Abort the active request from the view buffer."
   (interactive)
-  (mevedel-view--ensure-interactive-chat-view)
-  (mevedel-view--cancel-pending-submission)
-  (mevedel-view--stop-request-progress)
-  (when-let* ((data-buf mevedel--data-buffer)
-              (_ (buffer-live-p data-buf)))
-    (mevedel-view--abort-data-buffer data-buf)))
+  (with-current-buffer (or mevedel-composer--view (current-buffer))
+    (mevedel-view--ensure-interactive-chat-view)
+    (mevedel-view--cancel-pending-submission)
+    (mevedel-view--stop-request-progress)
+    (when (buffer-live-p mevedel--data-buffer)
+      (mevedel-view--abort-data-buffer mevedel--data-buffer))))
 
 
 (provide 'mevedel-view-composer)

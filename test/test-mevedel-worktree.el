@@ -2333,7 +2333,7 @@
                              "Wait for the user's next prompt" text)))))
               (with-current-buffer view-buffer
                 (let ((text (buffer-substring-no-properties
-                             (point-min) (mevedel-view-prompt-boundary))))
+                             (point-min) (mevedel-view-transcript-tail))))
                   (should (string-match-p
                            "Purpose: fix the parser" text))
                   (should-not mevedel-view--in-flight-turn-start)

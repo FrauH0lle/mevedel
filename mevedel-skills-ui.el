@@ -1535,8 +1535,11 @@ and the transcript prefix made each one cost seconds on a long session.")
 
 (defun mevedel-skills--fontify-dollar-keyword (end)
   "Find a known `$skill' mention before END for font-lock."
-  (when-let* ((session (and (bound-and-true-p mevedel--session)
-                            mevedel--session))
+  (when-let* ((session (or (bound-and-true-p mevedel--session)
+                          (and (boundp 'mevedel--data-buffer)
+                               (buffer-live-p mevedel--data-buffer)
+                               (buffer-local-value 'mevedel--session
+                                                   mevedel--data-buffer))))
               (origin (max (point-min)
                            (or (and mevedel-skills--font-lock-origin
                                     (funcall

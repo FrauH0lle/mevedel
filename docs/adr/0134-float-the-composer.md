@@ -1,8 +1,9 @@
 # Float the composer as a second window on the view buffer
 
-Status: accepted. Amends the scroll-away rules of
-[ADR 0126](0126-keep-the-composer-still.md) as described under "Cursor and
-scrolling".
+Status: superseded by the [separate composer buffer](../view.md#buffer-roles).
+The child frame clipped completion and command popups; the composer now
+uses a window in the transcript's frame. The following record describes the
+former design, which amended [ADR 0126](0126-keep-the-composer-still.md).
 
 ## Decision
 

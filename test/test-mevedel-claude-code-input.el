@@ -14,6 +14,7 @@
 (require 'mevedel-claude-code-context)
 (require 'mevedel-acp)
 (require 'mevedel-init)
+(require 'mevedel-view-composer)
 
 (mevedel-deftest mevedel-view-send/claude-busy (:quiet t)
   (mevedel-engine-test--with-claude-session
@@ -22,12 +23,12 @@
           (progn
             (setf (mevedel-engine-info request) '(:external-history t))
             (setq view (mevedel-view--ensure buffer))
-            (with-current-buffer view
+            (save-window-excursion
+              (set-window-buffer (selected-window) view)
+              (select-window (should (mevedel-view-composer-display (selected-window))))
               (dolist (input '("> Keep this next\nwith its second line" "Then continue"))
-                (goto-char (point-max))
-                (insert input)
-                (with-current-buffer (mevedel-view-composer-buffer)
-                  (mevedel-view-send))
+                (mevedel-view-composer-insert input)
+                (execute-kbd-macro (kbd "C-c RET"))
                 (should (equal "" (mevedel-view-composer-draft-text)))))
             ;; A busy Claude turn takes the composer as steering, like HTTP.
             (let ((entries (mevedel-session-pending-steering session)))

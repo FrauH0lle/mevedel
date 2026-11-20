@@ -128,16 +128,19 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--navigation
   (:doc "M-p / M-n preserve bindings in recalled and incomplete input")
   (mevedel-view-history-test--with-view
+    (with-current-buffer view-buf
+      (mevedel-view-history-add "first")
+      (mevedel-view-history-add
+       (mevedel-view-history-test--bound-input
+        "second with $alpha" "alpha" "/tmp/sent/SKILL.md")))
     (with-current-buffer (mevedel-view-composer-buffer view-buf)
       (mevedel-view-composer-insert
        (mevedel-view-history-test--bound-input
         "draft with $alpha" "alpha" "/tmp/draft/SKILL.md")
        nil view-buf)
-      (mevedel-view-history-add "first")
-      (mevedel-view-history-add
-       (mevedel-view-history-test--bound-input
-        "second with $alpha" "alpha" "/tmp/sent/SKILL.md"))
       (mevedel-view-history-previous)
+      (should-not mevedel-view-history--ring)
+      (should (eql 0 (buffer-local-value 'mevedel-view-history--index view-buf)))
       (let* ((input (mevedel-view-history--input-text))
              (start (string-match "\\$alpha" input)))
         (should (equal "second with $alpha" input))
@@ -186,9 +189,9 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--restore-incomplete
   (:doc "M-n restores typed-but-unsent input after history browsing")
   (mevedel-view-history-test--with-view
+    (with-current-buffer view-buf (mevedel-view-history-add "sent"))
     (with-current-buffer (mevedel-view-composer-buffer view-buf)
       (mevedel-view-composer-insert "draft" nil view-buf)
-      (mevedel-view-history-add "sent")
       (mevedel-view-history-previous)
       (should (equal "sent" (mevedel-view-history--input-text)))
       (mevedel-view-history-next)
@@ -213,12 +216,13 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--isearch
   (:doc "M-r incrementally searches, cycles matches, and restores on C-g")
   (mevedel-view-history-test--with-view
+    (with-current-buffer view-buf
+      (mevedel-view-history-add "match older")
+      (mevedel-view-history-add "match newer"))
     (with-current-buffer (mevedel-view-composer-buffer view-buf)
       ;; `read-key' updates this global even for simulated input.
       (let ((last-nonmenu-event last-nonmenu-event))
         (mevedel-view-composer-insert "draft" nil view-buf)
-        (mevedel-view-history-add "match older")
-        (mevedel-view-history-add "match newer")
         (let ((unread-command-events
                (append (list ?m ?a ?\M-r ?\r) unread-command-events)))
           (mevedel-view-history-search))
@@ -242,31 +246,27 @@ Binds `data-buf' and `view-buf'."
         (should (equal "draft" (mevedel-view-history--input-text)))))))
 
 (mevedel-deftest mevedel-view-history--browse-picker
-  (:doc "C-c C-l restores the stored binding in a detached draft")
+  (:doc "C-c C-l recalls a view entry into the native draft only")
   (mevedel-view-history-test--with-view
-    (with-temp-buffer
-      (let ((draft-buf (current-buffer)))
-        (mevedel-view--setup draft-buf data-buf)
-        (with-current-buffer view-buf
-          (mevedel-view-history-add
-           (mevedel-view-history-test--bound-input
-            "use $alpha" "alpha" "/tmp/browse/SKILL.md"))
-          (goto-char (point-min))
-          (let ((transcript (buffer-string))
-                (reader-point (point)))
-            (cl-letf (((symbol-function 'completing-read)
-                       (lambda (&rest _) "use $alpha"))
-                      ((symbol-function 'mevedel-view-composer-buffer)
-                       (lambda (&optional _view) draft-buf)))
-              (mevedel-view-history-browse)
-              (let ((input (mevedel-view-composer-draft-text)))
-                (should (equal "use $alpha" input))
-                (should (equal "/tmp/browse/SKILL.md"
-                               (plist-get (get-text-property
-                                           4 'mevedel-mention-binding input)
-                                          :source-file)))))
-            (should (= reader-point (point)))
-            (should (equal transcript (buffer-string)))))))))
+    (with-current-buffer view-buf
+      (mevedel-view-history-add
+       (mevedel-view-history-test--bound-input
+        "use $alpha" "alpha" "/tmp/browse/SKILL.md"))
+      (goto-char (point-min))
+      (let ((transcript (buffer-string))
+            (reader-point (point)))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest _) "use $alpha")))
+            (mevedel-view-history-browse))
+          (let ((input (mevedel-view-composer-draft-text)))
+            (should (equal "use $alpha" input))
+            (should (equal "/tmp/browse/SKILL.md"
+                           (plist-get (get-text-property
+                                       4 'mevedel-mention-binding input)
+                                      :source-file)))))
+        (should (= reader-point (point)))
+        (should (equal transcript (buffer-string)))))))
 
 (mevedel-deftest mevedel-view-history--ret-dispatch
   (:doc "plain RET inserts input newline; display and descriptors keep RET actions")
@@ -738,7 +738,7 @@ Binds `data-buf' and `view-buf'."
     (with-current-buffer view-buf
       (mevedel-view-history-add "before rewind")
       (let ((inhibit-read-only t))
-        (delete-region (point-min) (mevedel-view-prompt-boundary))
+        (delete-region (point-min) (mevedel-view-transcript-tail))
         (goto-char (point-min))
         (insert "rewound transcript\n"))
       (should (equal '("before rewind")

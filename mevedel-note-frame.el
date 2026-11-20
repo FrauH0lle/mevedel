@@ -53,6 +53,8 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view-composer-display "mevedel-view-composer" (view-window))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--rendered-turn-starts "mevedel-view-render" ())
@@ -357,14 +359,14 @@ display type, and recreates it otherwise."
     (unless (and (frame-live-p frame)
                  (eq (frame-parent frame) parent)
                  (eq graphic (display-graphic-p frame))
-                 (window-live-p (frame-root-window frame)))
+                 (window-live-p (frame-first-window frame)))
       (when (frame-live-p frame) (delete-frame frame))
       (setq frame
             (make-frame
              `((name . "mevedel-note")
                (width . 0) (height . 0) (visibility . nil)
                ,@params))))
-    (let ((window (frame-root-window frame)))
+    (let ((window (frame-first-window frame)))
       (set-window-dedicated-p window nil)
       (set-window-buffer window buffer)
       (set-window-parameter window 'no-delete-other-windows t)
@@ -564,6 +566,7 @@ an ordinary window when child frames are unavailable."
           (setq mevedel-note-frame--origin
                 (copy-marker (overlay-start note))))
         (set-frame-size frame (car size) (cdr size) t)
+        (mevedel-view-composer-display (frame-first-window frame))
         (set-frame-position frame
                             (or (car anchor)
                                 (/ (- (frame-pixel-width parent)

@@ -23,13 +23,6 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-floating-composer'
-(declare-function mevedel-floating-composer-leave "mevedel-floating-composer" ())
-(declare-function mevedel-floating-composer-return "mevedel-floating-composer"
-                  (window position))
-(declare-function mevedel-floating-composer-reveal "mevedel-floating-composer"
-                  (window start position))
-
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
@@ -103,7 +96,8 @@
 (declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
 (declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
 (declare-function mevedel-view-composer-window "mevedel-view-composer" (&optional view-window))
-(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-transcript-tail "mevedel-view-composer" ())
+(defvar mevedel-composer--view)
 (defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-control-transfer'
@@ -474,7 +468,7 @@ snapshot taken at registration."
 (defun mevedel-view--interaction-region-end ()
   "Return the end boundary for fragment-managed interaction text."
   (let ((progress-start (mevedel-view--request-progress-region-start))
-        (input-pos (mevedel-view-prompt-boundary)))
+        (input-pos (mevedel-view-transcript-tail)))
     (or (and progress-start
              (or (not input-pos) (<= progress-start input-pos))
              progress-start)
@@ -645,16 +639,31 @@ composer.  Repeating the command cycles outward through the pending
 cards and wraps.  Other windows do not move.
 Remember this window's draft position and return there on settlement only
 if the window is still visiting that interaction.  Reveal hidden Plan
-approvals as needed.  From the floating composer, visit the card in its
-host, above the floating composer."
+approvals as needed."
   (interactive)
+  (if-let* ((view (bound-and-true-p mevedel-composer--view)))
+      (let* ((composer (selected-window))
+             (window (window-in-direction 'above composer))
+             (offset (and (mevedel-view-composer-in-draft-p (point))
+                          (- (point) (mevedel-view-composer-draft-start)))))
+        (unless (and window (eq (window-buffer window) view)
+                     (eq (mevedel-view-composer-window window) composer))
+          (mevedel-diagnostic-user-error (mevedel-diagnostic-scope view)
+                                        "No paired transcript window"))
+        (with-current-buffer view
+          (mevedel-view--jump-to-interaction window nil offset))
+        (select-window window))
+    (mevedel-view--jump-to-interaction
+     (selected-window) (get-text-property (point) 'mevedel-view-interaction-id) nil)))
+
+(defun mevedel-view--jump-to-interaction (window current offset)
+  "Visit the next card in WINDOW after CURRENT, retaining draft OFFSET."
   (when-let* ((session (mevedel-view--session))
               (entry (mevedel-session-pending-plan-approval session))
               ((plist-get entry :hidden)))
     (plist-put entry :hidden nil)
     (mevedel-plan-approval-render session))
-  (let* ((current (get-text-property (point) 'mevedel-view-interaction-id))
-         (pairs (nreverse
+  (let* ((pairs (nreverse
                  (seq-filter
                   (lambda (pair)
                     (memq (plist-get (cdr pair) :kind)
@@ -664,13 +673,8 @@ host, above the floating composer."
          (bounds (and pair (mevedel-view-zone-fragment-bounds
                             'interaction (car pair)))))
     (unless bounds (mevedel-diagnostic-user-error (mevedel-diagnostic-scope (current-buffer)) "No pending question or approval"))
-    (mevedel-floating-composer-leave)
-    (let* ((window (selected-window))
-           (saved (assq window mevedel-view--interaction-focus-return))
-           (offset (if (and (eq (mevedel-view-composer-window window) window)
-                            (mevedel-view-composer-in-draft-p (point)))
-                       (- (point) (mevedel-view-composer-draft-start))
-                     (and saved (equal current (cadr saved)) (nth 2 saved))))
+    (let* ((saved (assq window mevedel-view--interaction-focus-return))
+           (offset (or offset (and saved (equal current (cadr saved)) (nth 2 saved))))
            (position (or (text-property-any
                           (plist-get bounds :start) (plist-get bounds :end)
                           'mevedel-prompt-focus t)
@@ -681,8 +685,7 @@ host, above the floating composer."
         (push (list window (car pair) offset)
               mevedel-view--interaction-focus-return))
       (goto-char position)
-      (set-window-point window position)
-      (mevedel-floating-composer-reveal window (plist-get bounds :start) position))))
+      (set-window-point window position))))
 
 (defun mevedel-view--interaction-focused-visits ()
   "Return saved visits whose windows still point inside their interaction.
@@ -708,11 +711,10 @@ Never move a window that left its visited card or focus a newly arriving one."
         (when-let* ((composer (mevedel-view-composer-window window))
                     (position (min (mevedel-view-composer-draft-end)
                                    (+ (mevedel-view-composer-draft-start) offset))))
-          ;; A draft off screen returns to the floating composer instead.
-          (unless (mevedel-floating-composer-return window position)
-            (set-window-point composer position)
-            (when (eq composer (selected-window))
-              (goto-char position))))))))
+          (set-window-point composer position)
+          (when (eq window (selected-window))
+            ;; The renderer still has work to do in the transcript buffer.
+            (save-current-buffer (select-window composer))))))))
 
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays.
@@ -995,7 +997,7 @@ can still build isolated fragments."
                      (current-buffer))
                  (marker-position mevedel-view--interaction-marker))
       (error "View interaction marker is not live"))
-    (let* ((input-pos (mevedel-view-prompt-boundary))
+    (let* ((input-pos (mevedel-view-transcript-tail))
            (status-pos (mevedel-view--status-anchor))
            (interaction-pos (marker-position
                              mevedel-view--interaction-marker)))

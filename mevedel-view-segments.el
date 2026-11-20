@@ -57,7 +57,7 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-set-historical-visible
                   "mevedel-view-composer" (visible))
-(declare-function mevedel-view-prompt-boundary "mevedel-view-composer" ())
+(declare-function mevedel-view-transcript-tail "mevedel-view-composer" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-capture-segment-state
@@ -254,7 +254,7 @@ When SOURCE-POS is non-nil, verify its prompt before replacing the view."
 (defun mevedel-view-segments--prompt-header (buffer source-pos)
   "Find the rendered header for BUFFER's prompt at SOURCE-POS."
   (let ((pos (point-min))
-        (limit (mevedel-view-prompt-boundary))
+        (limit (mevedel-view-transcript-tail))
         found)
     (while (and (< pos limit) (not found))
       (let* ((context (get-text-property pos 'mevedel-view-turn-context))

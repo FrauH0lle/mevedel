@@ -38,27 +38,17 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clamp-window-starts "mevedel-view-composer"
                   (tails &optional force))
-(declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--keep-native-vscroll "mevedel-view-composer" ())
 (declare-function mevedel-view--history-reader-windows "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
-(declare-function mevedel-view--restore-composer-anchors
-                  "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--restore-window-blank-pixels
                   "mevedel-view-composer" (window blank))
-(declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (declare-function mevedel-view--set-viewport "mevedel-view-composer" (window viewport))
 (declare-function mevedel-view--viewport-at-y "mevedel-view-composer" (window position y))
 (declare-function mevedel-view--window-blank-pixels "mevedel-view-composer" (window))
 (declare-function mevedel-view--window-tail-lengths "mevedel-view-composer" ())
-(declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
-(declare-function mevedel-view-composer-draft-end "mevedel-view-composer" (&optional view))
-(declare-function mevedel-view-composer-draft-start "mevedel-view-composer" (&optional view))
-(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
-(declare-function mevedel-view-composer-in-draft-p "mevedel-view-composer" (position &optional view))
-(declare-function mevedel-view-composer-replace "mevedel-view-composer" (text &optional view))
-(declare-function mevedel-view-prompt-boundary-marker "mevedel-view-composer" ())
+(declare-function mevedel-view-transcript-tail-marker "mevedel-view-composer" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
@@ -618,7 +608,7 @@ the zone or losing the table discards the proof."
   "Call THUNK with lower view markers advancing appropriately for ZONE."
   (let* ((markers (list (bound-and-true-p mevedel-view--status-marker)
                         (bound-and-true-p mevedel-view--interaction-marker)
-                        (mevedel-view-prompt-boundary-marker)))
+                        (mevedel-view-transcript-tail-marker)))
          (old-types (mapcar (lambda (marker)
                               (and (markerp marker)
                                    (marker-insertion-type marker)))
@@ -636,58 +626,31 @@ the zone or losing the table discards the proof."
                    (set-marker-insertion-type marker type)))
                markers old-types))))
 
-(defun mevedel-view-zone--draft-offset (position start end)
-  "Return POSITION's offset in the inline draft from START to END, or nil."
-  (and start (<= start position end) (- position start)))
-
 (defun mevedel-view-zone--capture-view-state ()
-  "Capture composer text, point, and displayed-window state."
-  (let* ((inline (eq (mevedel-view-composer-buffer) (current-buffer)))
-         (start (and inline (mevedel-view-composer-draft-start)))
-         (end (and inline (mevedel-view-composer-draft-end))))
-    (list
-     :input (mevedel-view-composer-draft-text nil t)
-     :point (copy-marker (point) t)
-     :mark (and (mark t) (copy-marker (mark t) t))
-     :mark-active mark-active
-     :deactivate-mark deactivate-mark
-     :point-offset (mevedel-view-zone--draft-offset (point) start end)
-     :selected-window (selected-window)
-     :windows
-     (cl-loop for window in (mevedel-view--windows 'geometry)
-              for window-point = (window-point window)
-              collect (list window (copy-marker window-point t)
-                            (copy-marker (window-start window) t)
-                            (mevedel-view-zone--draft-offset
-                             window-point start end))))))
+  "Capture point, mark and displayed-window positions."
+  (list
+   :point (copy-marker (point) t)
+   :mark (and (mark t) (copy-marker (mark t) t))
+   :mark-active mark-active
+   :deactivate-mark deactivate-mark
+   :selected-window (selected-window)
+   :windows
+   (mapcar (lambda (window)
+             (list window (copy-marker (window-point window) t)
+                   (copy-marker (window-start window) t)))
+           (mevedel-view--windows 'geometry))))
 
 (defun mevedel-view-zone--restore-view-state (state)
-  "Restore composer text, point, and displayed windows from STATE."
-  (when-let* ((input (plist-get state :input))
-              (current (mevedel-view-composer-draft-text nil t)))
-    (unless (equal input current)
-      (mevedel-view-zone--call-mutating
-       (lambda () (mevedel-view-composer-replace input)))))
-  (let* ((inline (eq (mevedel-view-composer-buffer) (current-buffer)))
-         (start (and inline (mevedel-view-composer-draft-start)))
-         (end (and inline (mevedel-view-composer-draft-end))))
-    (goto-char
-     (if (and start (plist-get state :point-offset))
-         (min end (+ start (plist-get state :point-offset)))
-       (min (point-max) (plist-get state :point))))
-    (dolist (entry (plist-get state :windows))
-      (pcase-let ((`(,window ,window-point ,window-start ,input-offset) entry))
-        (when (and (window-live-p window)
-                   (eq (window-buffer window) (current-buffer)))
-          (set-window-point
-           window
-           (if (and start input-offset)
-               (min end (+ start input-offset))
-             (min (point-max) window-point)))
-          (when (and window-start (<= window-start (point-max)))
-            (set-window-start window window-start t))
-          (when (eq window (plist-get state :selected-window))
-            (goto-char (window-point window)))))))
+  "Restore point, mark and displayed windows from STATE."
+  (goto-char (min (point-max) (plist-get state :point)))
+  (pcase-dolist (`(,window ,window-point ,window-start) (plist-get state :windows))
+    (when (and (window-live-p window)
+               (eq (window-buffer window) (current-buffer)))
+      (set-window-point window (min (point-max) window-point))
+      (when (and window-start (<= window-start (point-max)))
+        (set-window-start window window-start t))
+      (when (eq window (plist-get state :selected-window))
+        (goto-char (window-point window)))))
   (when-let* ((mark (plist-get state :mark)))
     (set-marker (mark-marker) (min (point-max) mark)))
   (setq mark-active (plist-get state :mark-active)
@@ -701,10 +664,7 @@ the zone or losing the table discards the proof."
         (inhibit-redisplay t)
         result)
     (unwind-protect
-        (progn
-          (setq result
-                (mevedel-view-zone--call-with-marker-types zone thunk))
-          (mevedel-view--sanitize-undo))
+        (setq result (mevedel-view-zone--call-with-marker-types zone thunk))
       (unwind-protect
           (mevedel-view-zone--restore-view-state state)
         (set-marker (plist-get state :point) nil)
@@ -907,18 +867,16 @@ its sub-anchor or offset no longer exists, rather than clamping it."
   "Return an anchor for POSITION when it visits a managed row, or nil.
 Interaction cards and status rows (background work, tasks, notices) are
 rows a user visits deliberately: a redraw keeps such a row's screen
-position instead of applying the composer or reading-start policy."
+position instead of applying the reading-start policy."
   (and (memq (get-text-property position 'mevedel-view-zone-namespace)
              '(interaction status))
        (mevedel-view-zone-position-anchor position)))
 
-(defun mevedel-view-zone--capture-logical-state (zone region composer-anchors)
+(defun mevedel-view-zone--capture-logical-state (zone region)
   "Capture logical positions and each window's viewport policy for ZONE REGION.
 REGION may be nil on first render.  A visible interaction or status
 visit anchors point's screen row, even when another zone is being
-reconciled.  Only
-visiting windows pay for the bounded display-row measurement.
-COMPOSER-ANCHORS identify other windows whose visible composer stays still."
+reconciled.  Only visiting windows pay for the display-row measurement."
   (list
    :point (and region
                (mevedel-view-zone--fragment-position-state zone region (point)))
@@ -928,25 +886,21 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
    (mapcar
     (lambda (window)
       (let* ((position (window-point window))
-             (composer (assq window composer-anchors))
-             (visit (and (not (and (eq (mevedel-view-composer-buffer) (current-buffer))
-                                   (mevedel-view-composer-in-draft-p position)))
-                         (mevedel-view-zone-visit-anchor position)))
+             (visit (mevedel-view-zone-visit-anchor position))
              (y (and visit (mevedel-view--position-screen-y position window))))
         (list window
               (and region (mevedel-view-zone--fragment-position-state
                            zone region position))
               (and region (mevedel-view-zone--fragment-position-state
                            zone region (window-start window) window))
-              composer visit y
+              visit y
               (and y (eq (car visit) 'interaction)
                    (or (mevedel-view--window-blank-pixels window) 0)))))
     (mevedel-view--windows 'geometry))))
 
 (defun mevedel-view-zone--restore-logical-state (zone state)
   "Restore positions for ZONE STATE, returning (VISITED-WINDOWS LOST-STARTS).
-Composer windows leave start restoration to their composer anchor.  A
-surviving visible interaction visit keeps point's screen row instead.
+A surviving visible visit keeps point's screen row.
 Other windows retain their logical or marker-backed reading starts."
   (when-let* ((position (mevedel-view-zone--restore-fragment-position
                          zone (plist-get state :point))))
@@ -956,7 +910,7 @@ Other windows retain their logical or marker-backed reading starts."
     (set-marker (mark-marker) position))
   (let (visited-windows lost-starts)
     (dolist (window-state (plist-get state :windows))
-      (pcase-let ((`(,window ,point-state ,start-state ,composer ,visit ,y ,blank)
+      (pcase-let ((`(,window ,point-state ,start-state ,visit ,y ,blank)
                    window-state))
         (when (and (window-live-p window)
                    (eq (window-buffer window) (current-buffer)))
@@ -978,7 +932,7 @@ Other windows retain their logical or marker-backed reading starts."
               (when blank
                 (mevedel-view--restore-window-blank-pixels window blank))
               (push window visited-windows))
-             ((not composer)
+             (t
               (when-let* ((position (or start
                                        (mevedel-view-zone--restore-fragment-position
                                         zone start-state))))
@@ -1010,11 +964,9 @@ live zone text keeps its current bounds until reconciliation finishes."
         (if (or (mevedel-view-zone--absent-p zone region fragments)
                 (and region (mevedel-view-zone--unchanged-p region zone text)))
             region
-          (let* ((composer-anchors (and (eq (mevedel-view-composer-buffer) (current-buffer))
-					(mevedel-view--composer-anchors)))
-		 (readers (mevedel-view--history-reader-windows))
+          (let* ((readers (mevedel-view--history-reader-windows))
 		 (logical-state (mevedel-view-zone--capture-logical-state
-				 zone region composer-anchors))
+				 zone region))
 		 (window-tails (mevedel-view--window-tail-lengths))
 		 owned-p)
             (if (and (null fragments) (null region))
@@ -1055,17 +1007,11 @@ live zone text keeps its current bounds until reconciliation finishes."
                     (mevedel-view-zone--restore-trailing-overlays region trailing)))))
             (pcase-let ((`(,visited-windows ,lost-starts)
 			 (mevedel-view-zone--restore-logical-state zone logical-state)))
-              (setq composer-anchors
-                    (seq-remove (lambda (anchor)
-				  (memq (car anchor) visited-windows))
-				composer-anchors))
-              (mevedel-view--restore-composer-anchors composer-anchors)
               ;; A lost logical start fills the last page even if anchoring
               ;; exposes longer lines and therefore increases the character tail.
               (mevedel-view--clamp-window-starts
                (seq-remove (lambda (tail)
-                             (or (and (or (assq (car tail) composer-anchors)
-                                          (memq (car tail) readers))
+                             (or (and (memq (car tail) readers)
                                       (not (memq (car tail) lost-starts)))
 				 (memq (car tail) visited-windows)))
 			   window-tails)

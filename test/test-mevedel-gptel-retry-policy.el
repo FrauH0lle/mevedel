@@ -57,7 +57,7 @@ Bind request, backend, fsm, state and info for assertions."
                    (mevedel-view--setup view-buf data-buf)
                    (with-current-buffer view-buf
                      (mevedel-view-stream-begin-turn
-                      (mevedel-view-prompt-boundary-marker)
+                      (mevedel-view-transcript-tail-marker)
                       (with-current-buffer data-buf (copy-marker (point-max))))
                      (mevedel-view-test--insert-composer-draft
                       "> quoted\nsecond line" 4))

@@ -28,7 +28,7 @@ The current buffer is the owning view."
 (mevedel-deftest mevedel-view-zone-redraw-invariants ()
   ,test
   (test)
-  :doc "property changes preserve semantic anchors, composer point and sanitized undo"
+  :doc "property changes preserve semantic anchors, composer point and disabled transcript undo"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
@@ -42,13 +42,11 @@ The current buffer is the owning view."
              (anchored-position (+ (overlay-start region) 2))
              (anchor (mevedel-view-zone-position-anchor anchored-position))
              (position (mevedel-view-zone-preservation-test--caret-offset)))
-        (buffer-enable-undo)
-        (setq buffer-undo-list nil)
         (funcall render 'italic)
         (should (= anchored-position (mevedel-view-zone-anchor-position anchor)))
         (should (eq 'italic (get-text-property anchored-position 'face)))
         (should (= position (mevedel-view-zone-preservation-test--caret-offset)))
-        (should-not buffer-undo-list)
+        (should (eq buffer-undo-list t))
         (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
   :doc "an elapsed tick preserves a leading-> multiline draft, undo, zone anchors and foreign overlays"
@@ -60,7 +58,8 @@ The current buffer is the owning view."
             (mevedel-view-spinner-style 'static)
             (mevedel-view-tool-spinner-style 'static)
             (mevedel-view-spinner-power-policy 'full))
-        (cl-letf (((symbol-function 'current-time) (lambda () now))
+        (cl-letf (((symbol-function 'frame-focus-state) (lambda (&optional _) t))
+                  ((symbol-function 'current-time) (lambda () now))
                   ((symbol-function 'float-time)
                    (lambda (&optional time) (funcall float (or time now)))))
           (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
@@ -68,7 +67,7 @@ The current buffer is the owning view."
            'status mevedel-view--status-marker mevedel-view--status-marker
            '((:namespace status :id task :body "Task")))
           (mevedel-view-zone-reconcile
-           'interaction mevedel-view--interaction-marker (mevedel-view-prompt-boundary-marker)
+           'interaction mevedel-view--interaction-marker (mevedel-view-transcript-tail-marker)
            '((:namespace interaction :id card :body "Question")))
           (mevedel-view--start-spinner "Working...")
           (setq mevedel-view--spinner-start-time (seconds-to-time 988.25))
@@ -78,6 +77,7 @@ The current buffer is the owning view."
                  (line (make-overlay (overlay-end region) (point-max)))
                  (position (mevedel-view-zone-preservation-test--caret-offset))
                  (composer (mevedel-view-composer-buffer view-buf))
+                 undo
                  (anchored-position (+ (overlay-start region) 2))
                  (anchor (mevedel-view-zone-position-anchor anchored-position))
                  (regions (mapcar (lambda (zone)
@@ -88,8 +88,9 @@ The current buffer is the owning view."
               (buffer-enable-undo)
               (setq buffer-undo-list nil)
               (mevedel-view-composer-insert "x" (point) view-buf)
-              (undo-boundary))
+              (setq undo buffer-undo-list))
             (setq now (seconds-to-time 1001.25))
+            (unless noninteractive (redisplay t))
             (mevedel-view--spinner-tick)
             (should (= (1+ position) (mevedel-view-zone-preservation-test--caret-offset)))
             (should (equal "> drxaft\nsecond line" (mevedel-view-composer-draft-text)))
@@ -102,9 +103,7 @@ The current buffer is the owning view."
               (should (= (nth 1 state) (overlay-start (car state))))
               (should (= (nth 2 state) (overlay-end (car state)))))
             (with-current-buffer composer
-              (should (equal buffer-undo-list
-                             (mevedel-view--composer-undo-list
-                              buffer-undo-list (mevedel-view-composer-draft-start view-buf))))
+              (should (equal undo buffer-undo-list))
               (undo-start)
               (undo-more 1))
             (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
@@ -182,7 +181,7 @@ The current buffer is the owning view."
                          (end (next-single-property-change
                                start 'mevedel-view-interaction-id nil (point-max))))
                     (list (buffer-substring-no-properties start end)
-                          (- (mevedel-view-prompt-boundary) start)))))
+                          (- (mevedel-view-transcript-tail) start)))))
                (offset (mevedel-view-zone-preservation-test--caret-offset)))
           (funcall render "one")
           (let ((before (funcall card-state)))
