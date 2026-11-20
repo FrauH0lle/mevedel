@@ -20,6 +20,12 @@ failed" makes the conversation continue itself when the time comes.
   permissions, so it grants nothing the conversation does not already hold.
   Invalid timing, a time not in the future, an expiry not after the time and a
   51st pending wake-up are tool errors at creation, not failures at fire time.
+- **Model and effort per wake-up.** `create` takes an optional `model` and
+  `effort`, validated at creation like an Agent's. They travel in the `WAKE_UP`
+  record's metadata and become the woken turn's request-local model policy
+  (the pending request context a skill uses), so the session's saved selection,
+  preset and permission mode are unchanged. A mixed batch keeps the session's
+  selection rather than guessing which override wins.
 - **Recurring timing.** An interval has a one-minute minimum and its next run
   is timed from the actual firing, so missed runs never catch up: a laptop that
   slept through five runs receives one, annotated as overdue. Cron supports

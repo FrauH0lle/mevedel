@@ -248,6 +248,79 @@ for each started turn; `mevedel-schedule-test--settle' runs offered work."
       (should-not (mevedel-schedule-pending session))
       (should (= 1 (length submitted))))))
 
+(defmacro mevedel-schedule-test--with-woken-policies (&rest body)
+  "Run BODY with models `sch-main' (the session's) and `sch-cheap' registered.
+`policies' collects (MODEL-NAME EFFORT) as each woken turn would resolve them,
+after which the stub drains the pending request context like admission does."
+  (declare (indent 0) (debug t))
+  `(let ((gptel--known-backends nil)
+         policies)
+     (gptel-make-openai "sch" :key "k" :models '(sch-main sch-cheap))
+     (put 'sch-cheap :reasoning-effort '(member low high))
+     (with-current-buffer data-buf
+       (setq-local gptel-backend (gptel-get-backend "sch")
+                   gptel-model 'sch-main))
+     (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
+                (lambda (&rest _)
+                  (let ((policy (mevedel-skills-request-model-policy)))
+                    (push (list (gptel--model-name (plist-get policy :model))
+                                (plist-get policy :effort))
+                          policies)
+                    (setq-local mevedel-skills--pending-request-context nil)))))
+       ,@body)))
+
+(mevedel-deftest mevedel-schedule-run-due/model-and-effort ()
+  ,test
+  (test)
+  :doc "a wake-up's model and effort apply to its turn only, not to the session's selection"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-test--with-woken-policies
+      (with-current-buffer data-buf
+        (mevedel-schedule-create session data-buf "5m" "cheap check" nil
+                                 "sch:sch-cheap" "low")
+        (mevedel-schedule-create session data-buf "10m" "ordinary check"))
+      (setq now (+ now 300))
+      (mevedel-schedule-run-due)
+      (mevedel-schedule-test--settle)
+      (should (equal '(("sch-cheap" low)) policies))
+      (should (eq 'sch-main (buffer-local-value 'gptel-model data-buf)))
+      (should-not (buffer-local-value 'mevedel-skills--pending-request-context data-buf))
+      ;; The next turn returns to the session's model.
+      (mevedel-agent-control-clear-context-mailbox session)
+      (setq now (+ now 300))
+      (mevedel-schedule-run-due)
+      (mevedel-schedule-test--settle)
+      (should (equal '(("sch-main" nil) ("sch-cheap" low)) policies))))
+
+  :doc "a turn that also answers a wake-up without an override runs on the session's model"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-test--with-woken-policies
+      (with-current-buffer data-buf
+        (mevedel-schedule-create session data-buf "5m" "cheap check" nil
+                                 "sch:sch-cheap" "low")
+        (mevedel-schedule-create session data-buf "5m" "ordinary check"))
+      (setq now (+ now 300))
+      (mevedel-schedule-run-due)
+      (mevedel-schedule-test--settle)
+      (should policies)
+      (should (cl-every (lambda (policy) (equal '("sch-main" nil) policy)) policies))))
+
+  :doc "an unavailable model or an unsupported effort is an error at creation"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-test--with-woken-policies
+      (with-current-buffer data-buf
+        (dolist (case '(("sch:missing" nil "not registered")
+                        ("sch:sch-cheap" "extreme" "unsupported")
+                        ("sch:sch-main" "low" "does not support")))
+          (ert-info ((format "%S" case))
+            (should (string-search
+                     (nth 2 case)
+                     (cadr (should-error
+                            (mevedel-schedule-create
+                             session data-buf "5m" "x" nil (nth 0 case) (nth 1 case))
+                            :type 'user-error))))))
+        (should-not (mevedel-session-schedules session))))))
+
 (mevedel-deftest mevedel-schedule--rearm ()
   ,test
   (test)

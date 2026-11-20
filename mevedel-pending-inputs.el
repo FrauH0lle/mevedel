@@ -88,6 +88,13 @@
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight)
 
+;; `mevedel-schedule'
+(declare-function mevedel-schedule-wake-request-context "mevedel-schedule" (session))
+(autoload 'mevedel-schedule-wake-request-context "mevedel-schedule")
+
+;; `mevedel-skills-invoke'
+(defvar mevedel-skills--pending-request-context)
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-schedule-continuation
                   "mevedel-goal"
@@ -1476,16 +1483,23 @@ runs under the session's current permission settings."
                     (mevedel-pending-inputs--event-wake-view data-buffer))
                 (eq session (buffer-local-value 'mevedel--session data-buffer)))
        (with-current-buffer data-buffer
+         (when-let* ((context (mevedel-schedule-wake-request-context session)))
+           (setq-local mevedel-skills--pending-request-context context))
          (setq mevedel-view--pending-guest-attribution
                (list :type 'background-event))
          (unwind-protect
-             (mevedel--submit-generated-turn
-              mevedel-pending-inputs--event-trigger
-              mevedel-pending-inputs--event-trigger nil nil
-              (if (cl-find 'WAKE_UP (mevedel-agent-control-context-mailbox session)
-                           :key (lambda (record) (plist-get record :type)))
-                  'scheduled-wake
-                'background-event))
+             (condition-case err
+                 (mevedel--submit-generated-turn
+                  mevedel-pending-inputs--event-trigger
+                  mevedel-pending-inputs--event-trigger nil nil
+                  (if (cl-find 'WAKE_UP (mevedel-agent-control-context-mailbox session)
+                               :key (lambda (record) (plist-get record :type)))
+                      'scheduled-wake
+                    'background-event))
+               ;; Admission drains the override; a start that failed must
+               ;; not leave it for a later turn.
+               (error (setq-local mevedel-skills--pending-request-context nil)
+                      (signal (car err) (cdr err))))
            ;; Consumed where the prompt is inserted; a start that
            ;; failed before that must not label a later prompt.
            (setq mevedel-view--pending-guest-attribution nil)))))))

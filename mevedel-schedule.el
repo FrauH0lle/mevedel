@@ -33,7 +33,10 @@
                   "mevedel-agent-control" (session key function))
 (autoload 'mevedel-agent-control-commit-session "mevedel-agent-control")
 (autoload 'mevedel-agent-control-enqueue-wake-up "mevedel-agent-control")
+(declare-function mevedel-agent-control-context-mailbox
+                  "mevedel-agent-control" (context))
 (autoload 'mevedel-agent-control-notify "mevedel-agent-control")
+(autoload 'mevedel-agent-control-context-mailbox "mevedel-agent-control")
 
 ;; `mevedel-background-list'
 (declare-function mevedel-background-list-refresh-session
@@ -46,6 +49,15 @@
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-models'
+(declare-function mevedel-model-parse-selector "mevedel-models" (value))
+(declare-function mevedel-model-parse-effort "mevedel-models" (value))
+(declare-function mevedel-model-resolve-workload "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
+(autoload 'mevedel-model-parse-selector "mevedel-models")
+(autoload 'mevedel-model-parse-effort "mevedel-models")
+(autoload 'mevedel-model-resolve-workload "mevedel-models")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
@@ -285,6 +297,8 @@ An interval is timed from AFTER, so runs missed in between never catch up."
            ('cron (stringp (plist-get timing :expression)))))
        (integerp (plist-get entry :created-at))
        (integerp (plist-get entry :due))
+       (let ((model (plist-get entry :model)) (effort (plist-get entry :effort)))
+         (and (or (null model) (stringp model)) (or (null effort) (stringp effort))))
        (let ((expires (plist-get entry :expires-at)))
          (or (null expires) (integerp expires)))
        (pcase (plist-get entry :status)
@@ -322,14 +336,17 @@ An interval is timed from AFTER, so runs missed in between never catch up."
   (when (fboundp 'mevedel-background-list-refresh-session)
     (mevedel-background-list-refresh-session session buffer)))
 
-(defun mevedel-schedule-create (session buffer when note &optional expires)
+(defun mevedel-schedule-create (session buffer when note &optional expires model effort)
   "Create a wake-up in SESSION, whose root data buffer is BUFFER.
 WHEN is the timing text accepted by `mevedel-schedule-parse-timing'.  NOTE
 is the text the woken turn receives.  EXPIRES, a one-shot timing text, is
 when a still-undelivered wake-up stops mattering; a recurring wake-up
 expires after `mevedel-schedule-recurring-expiry' by default and at most
 `mevedel-schedule-max-recurring-expiry' after creation.  The wake-up is
-committed with the session before this returns it."
+committed with the session before this returns it.
+MODEL (a tier or BACKEND:MODEL) and EFFORT run the woken turn on another
+model or effort; both are checked now, in the current buffer, so an
+unavailable model or unsupported effort is an error here, not at fire time."
   (unless (and (stringp note) (string-match-p "\\S-" note))
     (user-error "Wake-up note must not be blank"))
   (when (> (length note) mevedel-schedule-max-note-length)
@@ -356,6 +373,11 @@ committed with the session before this returns it."
                       :due due
                       :expires-at expires-at
                       :status 'pending)))
+    (when (or model effort)
+      (mevedel-model-resolve-workload
+       nil (mevedel-model-parse-selector model) (mevedel-model-parse-effort effort))
+      (setq entry (append entry (and model (list :model model))
+                          (and effort (list :effort effort)))))
     (when (and expires-at (<= expires-at due))
       (user-error "Wake-up expiry %s is not after its time %s"
                   (mevedel-schedule-format-time expires-at)
@@ -454,8 +476,31 @@ A buffer following a session whose lease another client holds never fires."
     (append (list :schedule-id (plist-get entry :id)
                   :scheduled-at (mevedel-schedule-format-time (plist-get entry :due))
                   :fired-at (mevedel-schedule-format-time now))
+            (and (plist-get entry :model) (list :model (plist-get entry :model)))
+            (and (plist-get entry :effort) (list :effort (plist-get entry :effort)))
             (when (>= late mevedel-schedule-overdue-threshold)
               (list :overdue-by (mevedel--duration-label late))))))
+
+(defun mevedel-schedule-wake-request-context (session)
+  "Return the request context for SESSION's woken turn, or nil.
+The turn runs on a wake-up's model and effort only when every unread root
+record is a WAKE_UP asking for that same override; any other mail answered
+by the same turn keeps the session's selection.  The result is for
+`mevedel-skills--pending-request-context'."
+  (let* ((metas (mapcar (lambda (record)
+                          (and (eq 'WAKE_UP (plist-get record :type))
+                               (or (plist-get record :meta) '(:none t))))
+                        (mevedel-agent-control-context-mailbox session)))
+         (first (car metas)))
+    (when (and first
+               (or (plist-get first :model) (plist-get first :effort))
+               (cl-every (lambda (meta)
+                           (and meta
+                                (equal (plist-get meta :model) (plist-get first :model))
+                                (equal (plist-get meta :effort) (plist-get first :effort))))
+                         metas))
+      (list :model (mevedel-model-parse-selector (plist-get first :model))
+            :effort (mevedel-model-parse-effort (plist-get first :effort))))))
 
 (defun mevedel-schedule--expire (session entry now)
   "Return SESSION's schedules with ENTRY recorded as expired at NOW."

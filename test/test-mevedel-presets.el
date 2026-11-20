@@ -359,8 +359,18 @@
              (active
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
         (should (equal '("ApplyPatch" "Bash" "Eval" "Glob" "Grep" "Monitor" "Notify" "Read"
-                         "ToolCall" "ToolSearch" "WriteStdin")
+                         "Schedule" "ToolCall" "ToolSearch" "WriteStdin")
                        (sort active #'string<))))))
+
+  :doc "offers Schedule in the implementation preset's native roster"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (let* ((metadata (mevedel-preset--resolved-metadata 'mevedel-implement))
+           (resolved (mevedel-tool-resolve (plist-get metadata :tool-specs))))
+      (should (member "Schedule"
+                      (mapcar #'mevedel-tool-name (plist-get resolved :active))))))
 
   :doc "defers task, agent, and shared editing tools in the implementation preset"
   (let ((mevedel-preset--registry nil)

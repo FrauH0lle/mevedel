@@ -32,3 +32,7 @@ pending wake-ups.
   decisions, and runs with the session's current permissions.
 - `list` shows pending and expired wake-ups; `cancel` removes one by `id`.
   At most 50 may be pending.
+- A frequent check can run cheaper: pass `model` (a tier such as `fast`, or
+  `BACKEND:MODEL`) and `effort` to `create`. Only the model and effort change;
+  an unavailable model or unsupported effort is an error. Omit both for the
+  session's own.

@@ -23,18 +23,30 @@
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 
 (defun mevedel-tool-schedule--entry-json (entry)
-  "Return wake-up ENTRY as a JSON-serializable plist."
+  "Return wake-up ENTRY as a JSON-serializable plist.
+Its model and effort are listed only when they differ from the session's."
   (let ((expires (plist-get entry :expires-at))
-        (timing (plist-get entry :timing)))
-    (list :id (plist-get entry :id)
-          :time (mevedel-schedule-format-time (plist-get entry :due))
-          :repeat (pcase (plist-get timing :kind)
-                    ('interval (concat "every " (mevedel--duration-label
-                                                 (plist-get timing :seconds))))
-                    ('cron (plist-get timing :expression)))
-          :note (plist-get entry :note)
-          :expires (and expires (mevedel-schedule-format-time expires))
-          :status (symbol-name (plist-get entry :status)))))
+        (timing (plist-get entry :timing))
+        (model (plist-get entry :model))
+        (effort (plist-get entry :effort)))
+    (append (list :id (plist-get entry :id)
+                  :time (mevedel-schedule-format-time (plist-get entry :due))
+                  :repeat (pcase (plist-get timing :kind)
+                            ('interval (concat "every " (mevedel--duration-label
+                                                         (plist-get timing :seconds))))
+                            ('cron (plist-get timing :expression)))
+                  :note (plist-get entry :note)
+                  :expires (and expires (mevedel-schedule-format-time expires))
+                  :status (symbol-name (plist-get entry :status)))
+            (and model
+                 (not (equal model (and gptel-backend gptel-model
+                                        (format "%s:%s" (gptel-backend-name gptel-backend)
+                                                (gptel--model-name gptel-model)))))
+                 (list :model model))
+            (and effort
+                 (not (equal effort (and (bound-and-true-p gptel-reasoning-effort)
+                                         (format "%s" gptel-reasoning-effort))))
+                 (list :effort effort)))))
 
 (defun mevedel-tool-schedule--result (key value)
   "Return a tool result reporting KEY as VALUE with the current local time."
@@ -59,7 +71,8 @@
         :created
         (mevedel-tool-schedule--entry-json
          (mevedel-schedule-create session buffer (plist-get args :when)
-                                  (plist-get args :note) (plist-get args :expires)))))
+                                  (plist-get args :note) (plist-get args :expires)
+                                  (plist-get args :model) (plist-get args :effort)))))
       ("list"
        (mevedel-tool-schedule--result
         :schedules
@@ -90,6 +103,10 @@
                 "For create: what the woken turn should do, written for yourself.")
           (expires string :optional
                    "For create: optional duration or local time after which an undelivered wake-up is dropped.")
+          (model string :optional
+                 "For create: run the woken turn on this model: a tier (fast, balanced, strong) or BACKEND:MODEL. Omit for the session's.")
+          (effort string :optional
+                  "For create: reasoning effort for the woken turn. Omit for the session's.")
           (id string :optional "For cancel: the wake-up id."))
    :read-only-p t
    :groups (util)))

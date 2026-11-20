@@ -100,6 +100,40 @@
       (should (equal (list entry)
                      (mevedel-tool-schedule-test--persisted root session)))))
 
+  :doc "stores a wake-up's model and effort, lists them only when they differ from the session's, and rejects bad ones"
+  (mevedel-tool-schedule-test--with-request
+    (put 'schedule-test-cheap :reasoning-effort '(member low high))
+    (gptel-make-openai "schedule-models" :key "test"
+                       :models '(schedule-test-cheap schedule-test-main))
+    (setq-local gptel-backend (gptel-get-backend "schedule-models")
+                gptel-model 'schedule-test-main)
+    (let ((outcome (mevedel-tool-schedule-test--call
+                    "(Schedule :action \"create\" :when \"20m\" :note \"poll\" :model \"schedule-models:schedule-test-cheap\" :effort \"low\")"))
+          (entry (car (mevedel-session-schedules session))))
+      (ert-info ((format "%S" outcome))
+        (should (eq 'success (plist-get outcome :status))))
+      (should (string-search "schedule-test-cheap" (plist-get outcome :result)))
+      (should (equal '("schedule-models:schedule-test-cheap" "low")
+                     (list (plist-get entry :model) (plist-get entry :effort))))
+      (should (equal (mevedel-session-schedules session)
+                     (mevedel-tool-schedule-test--persisted root session))))
+    ;; The session's own model is not worth listing.
+    (mevedel-tool-schedule-test--call
+     "(Schedule :action \"create\" :when \"1h\" :note \"same\" :model \"schedule-models:schedule-test-main\")")
+    (let ((listed (plist-get (mevedel-tool-schedule-test--call "(Schedule :action \"list\")")
+                             :result)))
+      (should (string-match-p "\"model\":\"schedule-models:schedule-test-cheap\"" listed))
+      (should (string-match-p "\"effort\":\"low\"" listed))
+      (should (= 2 (length (split-string listed "\"model\":")))))
+    (dolist (case '(("(Schedule :action \"create\" :when \"5m\" :note \"x\" :model \"schedule-models:missing\")" . "not registered")
+                    ("(Schedule :action \"create\" :when \"5m\" :note \"x\" :model \"schedule-models:schedule-test-cheap\" :effort \"extreme\")" . "unsupported")
+                    ("(Schedule :action \"create\" :when \"5m\" :note \"x\" :effort \"low\")" . "does not support")))
+      (ert-info ((car case))
+        (let ((outcome (mevedel-tool-schedule-test--call (car case))))
+          (should-not (eq 'success (plist-get outcome :status)))
+          (should (string-search (cdr case) (plist-get outcome :result))))))
+    (should (= 2 (length (mevedel-session-schedules session)))))
+
   :doc "accepts an absolute local time and an expiry after it"
   (mevedel-tool-schedule-test--with-request
     (let ((outcome (mevedel-tool-schedule-test--call

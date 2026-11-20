@@ -1678,7 +1678,8 @@ request after restart.
 
 `Schedule` lets the root conversation wake itself later with a note for its
 future self ([ADR 0135](adr/0135-wake-sessions-through-schedules.md)). It is
-discoverable in the `util` group, hidden from retained agents, and rejected by
+in the standard implementation preset's native roster and the `util` group,
+hidden from retained agents, and rejected by
 the handler for any owner other than `/root`; a child agent asks the root to
 schedule. Wake-ups need no approval card.
 
@@ -1708,6 +1709,18 @@ time in an hour the clock skips fires at the first valid minute after the gap
 (02:30 on a spring-forward night fires at 03:00), and a time in an hour the
 clock repeats fires once, at its first occurrence. Fire times are stored as
 absolute seconds, so a later zone change does not move a computed run.
+
+A polling wake-up can run cheaper: `create` also takes an optional `model` (a
+tier or `BACKEND:MODEL`, as for `Agent`) and `effort`. Both are
+checked at creation against the model that would run, so an unavailable model
+or an unsupported effort is a tool error, never a silent fallback. The entry
+keeps them, `list` shows them when they differ from the session's, and the
+woken turn runs on them as a request-local override: the session's saved
+selection, preset and current permission mode are untouched, and the next turn
+uses the session's model again. A turn answers its unread mail as one request,
+so the override applies only when every unread root record is a wake-up asking
+for the same model and effort; any other mail in the batch keeps the session's
+selection.
 
 When a wake-up comes due, one `WAKE_UP` record enters the root mailbox:
 `<agent-message type="WAKE_UP" sender="/root" recipient="/root"
