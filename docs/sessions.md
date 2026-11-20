@@ -294,13 +294,13 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.16`, including recovery issues, retained input and pause state,
-naming input, closed chats (`:chapters`),
+The closed sidecar schema is `v0.6.0`, including recovery issues, retained input
+and pause state, naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 for an artifact's own conversation, that artifact's id (`:dedicated-artifact`),
 and its [wake-ups and their recent outcomes](tools.md#schedule) (`:schedules`).
-Other schemas are rejected by the runtime loader; older sessions are converted
-only by the [explicit migration](#explicit-session-migration). Recovery records
+Other schemas are rejected by both the runtime loader and the
+[standalone migration command](#explicit-session-migration). Recovery records
 contain issue messages, never credentials.
 Every retained-agent registry entry includes `:working-directory`: `nil` means
 no override, while an absolute target-native directory string retains that
@@ -601,9 +601,8 @@ not delete them. Numbered agent compaction archives still receive a physical
 recovery copy before the live buffer is rewritten. File-workspace
 sessions use the same lease and publication tree.  A session directory
 containing both a `.lock` and a lease, or a persisted authority profile that
-disagrees with its workspace category, is rejected rather than guessed; a
-`.lock` or plain sidecar without a lease is an unmigrated file session (see
-[explicit migration](#explicit-session-migration)).
+disagrees with its workspace category, is rejected rather than guessed.
+A `.lock` or plain sidecar without a lease is not supported.
 
 Resume marks stale running executions in closed segments as lost or archived and
 republishes those segments. It still reads the segment text, but skips restoring
@@ -1080,11 +1079,10 @@ A missing identity is an error.  An identity mismatch requires explicit
 confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
-identity. Superseded sidecar shapes are not migrated during resume; the
-[explicit migration](#explicit-session-migration) runs separately.
+identity. Resume rejects superseded sidecar shapes.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.16`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.6.0`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project and file-workspace sessions persist `portable`.  Portable sessions
@@ -1375,10 +1373,8 @@ by this change.
 Snapshot contents remain raw and owner-only. Readers resolve the names in the
 checkpoint index; saving does not rewrite existing archived history.
 
-Sessions no longer publish `artifacts/...` logical entries. The
-[artifact migration](#legacy-artifacts) moves the content of a
-session published before the store into it and drops those entries from the
-converted copy.
+Sessions do not publish `artifacts/...` logical entries. Artifact contents
+reside in the [workspace artifact store](view.md#artifact-store).
 
 Retained idle agents remain registry entries until their first conversation access;
 resume eagerly hydrates only active abandoned turns needed for partial-response
@@ -2659,151 +2655,33 @@ unreadable-store warning is shown only once while the failure lasts.
 ### Explicit session migration
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-sessions.el)
-accepts a session directory or project root and upgrades sessions **in place**
-to the latest format. Close the selected session, or every session in the
-project, and keep them closed throughout migration. From the repository root:
+accepts a session directory, a project root, or its `.mevedel/sessions`
+directory. The migration chain is empty: the command checks closed sessions,
+accepts `v0.6.0` without rewriting or backing up the originals, and rejects
+other versions. It does not import per-session artifacts. Close every selected
+session and keep it closed throughout the check. From the repository root:
 
 ```bash
-# Migrate every session in a project:
+# Check every session in a project:
 npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
   -f mevedel-migrate-session-main -- /path/to/project
 
-# Or migrate one session:
+# Or check one session:
 npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
   -f mevedel-migrate-session-main -- /path/to/project/.mevedel/sessions/SESSION-ID
 ```
 
-There are no version selectors, prompts, separate artifact-migration commands,
-or manual directory swaps. `--help` prints usage. The command reports each
-session's outcome and the backup path when it changes a session. It exits zero
-when every selected session is migrated, already current, or closed before
-ever being saved; any failed session makes the exit status nonzero. A project
-run continues past individual conversion failures. Unsupported versions are
-failures, not successful skips. A live session or pending recovery aborts the
-whole run before any session is changed.
+`--help` prints usage. The command reports each session's outcome and exits
+nonzero on failure. A project run continues past individual validation
+failures, but a live session or pending recovery aborts the whole run before
+staging. An expired active lease counts as closed. A released lease with no
+publication is reported as empty.
 
-Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12,
-v0.5.13, v0.5.14, v0.5.15 and v0.5.16; the current target is v0.5.16. Versions v0.5.7 and v0.5.8 are not
-supported. Each source follows an ordered chain of version-to-next-version
-steps. The script checks that the chain ends at the runtime codec's current
-format. To retire old support, remove the oldest prefix of steps and their
-unused conversion functions; the first remaining source becomes the minimum
-supported version. Retained steps do not need rewriting. Runtime readers and
-writers still accept only the current schema.
-
-File sessions used a PID lock (`.lock`, plain transcript files) before they
-moved to the portable lease within v0.5.15. Like the Worktree retry repair,
-this conversion follows the session's shape rather than its version: a
-closed `pid-lock` sidecar becomes `portable`, and the converted copy publishes
-transcripts, agent transcripts, file history and plans as one immutable
-generation under a lease it then releases. Plans and numbered compaction
-archives retain their plain copies for resource readers and recovery. Retained
-execution spools under `tool-results/executions/`, hidden control state and
-`*-log.el` diagnostic logs stay plain files outside the publication. The runtime
-does not read unmigrated file sessions: the chooser lists them as unsupported
-and resume refuses them, both naming this script.
-
-#### Safety and backups
-
-Conversion validates a private staging copy, preserves session identity and
-transcript bytes, and updates retained publication sidecars and their
-checksums. Before installing the result, it rechecks that the source has not
-changed. It moves the original to a unique backup outside session discovery,
-then installs the converted copy at the original path. An ordinary installation
-failure restores the original path; backups are never overwritten. Already
-current sessions are not rewritten or backed up. A migration lock prevents two
-script invocations from operating on the same sessions directory concurrently.
-Backups are hidden siblings named `.migration-backup-SESSION-ID-*/session`;
-temporary staging parents are `.migration-stage-*`, and the lock is
-`.migration-lock`. If a process is killed during the rename window, inspect
-those locations and restore the original session path before retrying; do not
-open both copies as writable sessions. A lock left by a killed migration must
-be removed only after checking that the migration process has stopped.
-
-Migration refuses PID locks, live leases, pending recovery, invalid metadata,
-checksum mismatches, symlinks and special files. An active lease past its expiry,
-as a crashed Emacs leaves it, counts as closed. Publication collection can
-leave an older retained manifest naming data files it removed, and older
-generations may hold unsupported sidecars. The copy drops such unreadable
-retained manifests, and a portable session's stale fixed sidecar, while keeping
-their data files. The published head itself must be complete and convertible.
-A released lease naming no head is a session closed before it ever saved and
-has nothing to migrate. A failed conversion leaves the original session in
-place and removes its staging copy. Backups are retained for manual inspection
-and removal, not opened or migrated automatically.
-
-#### Preserved state and format defaults
-
-Conversion preserves native-history references, titles, naming states,
-attachments and already-durable recovery state. A Goal predating
-incomplete-usage tracking gains an explicit complete-usage flag; an invalid
-Goal refuses conversion instead of being dropped silently by the runtime
-loader. Fields an older format never persisted start empty: queued input
-before v0.5.10, attachments before v0.5.11 unless imported below, naming input
-before v0.5.12, and chat boundaries before v0.5.13. Retained agents from before
-v0.5.14 gain an explicit `:working-directory nil`; migration does not guess a
-per-agent override from the root directory or transcript location. A legacy
-record already containing that field is refused instead of overwritten.
-v0.5.15 consolidates frozen `mode-constraints`, `full-auto-mode`, and
-`full-auto-mode-exit` reminder recipes into one argument-free `mode-constraints`
-recipe, preserving all other reminders and their order. Invalid legacy mode
-recipes refuse conversion. Runtime readers accept only the current recipe shape;
-close and explicitly migrate older sessions before reopening them.
-v0.5.16 adds an empty wake-up store (`:schedules nil`); a legacy sidecar that
-already names `:schedules` is refused instead of overwritten.
-Unsaved queues and earlier
-chat titles cannot be reconstructed. Retrying an old attempted title asks for
-a description rather than guessing from history. Migration makes no model
-requests, creates no worktrees, and does not resume interrupted native turns.
-
-The fork-first Worktree handoff changed within v0.5.13, so migration also
-checks its saved retry shape even when the top-level version is current. A
-summary retry without a recorded summary or target changes to fork-first
-preparation, preserving the accepted plan and selection. Here retries and
-current fork-first retries remain unchanged. A legacy retry with a cached
-summary or prepared target is refused because its effects cannot be inferred
-safely. Recover that handoff manually; migration neither deletes the target nor
-resets or replays implementation.
-
-#### Legacy artifacts
-
-The same command imports pre-v0.5.11 per-session artifacts into the project's
-[artifact store](view.md#artifact-store), attaches their ids to the converted
-session, and removes its old `artifacts/` folder and manifest entries. The
-session is not made their dedicated session. Project ownership is inferred
-from the session's location under `PROJECT/.mevedel/sessions/`; a detached
-session holding legacy artifacts is refused rather than writing to a guessed
-project. A store-aware session still holding legacy artifacts is also refused
-rather than losing existing attachments. Artifact imports require every
-session in that project to be closed, even when the command selects only one
-session, because they write the shared store. Metadata-only single-session
-migration does not require closing unrelated sessions.
-
-Portable artifacts come from verified publications, never fixed caches. PID
-session artifact enumeration excludes hidden files and backups; links anywhere
-in a session are refused before importing. Files retain their payload names
-and bytes; whiteboards and documents retain their ids unless a fork's copy
-diverged. Identical fork copies reuse the same imported artifact. Each new
-artifact starts with one version, with bookkeeping in `.state/ID/`. Legacy
-artifact comments are not carried over: discussions replaced them without a
-migration. Unrecognized files in the reserved `artifacts/shared-editing/`
-namespace refuse migration rather than being silently discarded.
-
-Metadata validation precedes store imports. A failed import leaves the source
-session unchanged; completed imports may remain in the store and are reused
-on retry only while their payload or shared-item state still matches the
-legacy source. A changed source or imported artifact, or a missing imported
-payload, refuses the retry rather than overwriting either copy or attaching
-stale content. Resolve that difference before retrying. Interrupted individual
-imports remove their incomplete new item.
-
-#### Workspace instructions
-
-The session migration script does not import old instruction snapshots or
-convert format-1 workspace stores. Notes use the current format-2
-[workspace store](adr/0130-keep-instructions-in-a-workspace-store.md).
-Unsupported stores and exports are refused; old per-session snapshots remain
-untouched and are ignored by ordinary resume.
+Validation uses a private staging copy and checks metadata and publication
+checksums. It refuses PID locks, symlinks and special files. A `.migration-lock`
+serializes runs in the same sessions directory; temporary staging parents are
+named `.migration-stage-*`. Remove a lock left behind by an interrupted run
+only after checking that the process has stopped.
 
 ### Incompatible session inspection
 
@@ -3265,8 +3143,8 @@ repository's common exclude file. The generated entries are:
 ### Locking
 
 Project and file-workspace sessions use the same portable `.lease/` generations
-for concurrent-edit protection. They never create `.lock` files; existing PID
-sessions require [explicit migration](#explicit-session-migration).
+for concurrent-edit protection. They never create `.lock` files. PID-lock
+sessions are unsupported.
 There is no runtime PID-lock acquisition, release, cleanup, or transcript-reader
 branch. Workspace-free sessions remain process-local and carry no durable authority.
 Same-user, same-host proven dead or reused holders of `active` or `claiming`

@@ -48,7 +48,7 @@ starts a fresh session for each run.
   once, at its first occurrence. One-shot local times and cron follow the same
   rule, and fire times are stored as absolute seconds.
 - **Store as truth.** The session's persisted state holds its wake-ups
-  (`:schedules`, sidecar format v0.5.16, added by an explicit migration step).
+  (`:schedules`).
   Each entry keeps its timing, the absolute due time in seconds, the note, an
   optional absolute expiry and a status. Creating or cancelling commits the
   sidecar before the tool returns and restores the previous store on failure.

@@ -8,9 +8,8 @@ Project and file-workspace sessions use one persisted `:authority-mode portable`
 profile.  The profile is valid for both local and TRAMP access
 to the same execution target.  Ownership is a renewable `.lease/`; committed
 state is addressed by an immutable publication head.  Sessions do not create
-`.lock`; a `.lock` or plain sidecar without a lease is an unmigrated file
-session that only the migration script reads.  Sessions persist and validate
-a non-empty target incarnation.
+`.lock`; a `.lock` or plain sidecar without a lease is not supported.
+Sessions persist and validate a non-empty target incarnation.
 
 Every lease record names its holder by host identity (boot ID, machine ID,
 PID namespace), user ID, PID and process start ticks.  A client of the same
@@ -80,7 +79,7 @@ reservation, or an expired
 active or claiming record without unsettled mutation) must also have its last
 renewal older than the cap. A missing `.lease` directory and unreadable or
 unsupported generation records are unknown authority and keep the session.
-An unmigrated session with no PID lock is not evidence of a modern, abandoned
+An old session with no PID lock is not evidence of a modern, abandoned
 session. Known carrier scratch payloads are not
 generation records; observation and election preserve them, and deletion still
 proves the unfiltered name set. Their names do not prove producer termination.
@@ -126,12 +125,8 @@ the session after approved capture omissions or recovery abandonment completed.
 
 A missing or contradictory authority profile is an error. The session codec
 accepts one current format without automatic migration or a dual reader. The
-explicit [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-sessions.el)
-upgrades supported closed sessions through ordered version steps and validates
-their Goals. It validates a separate staging copy, then installs it in place
-while retaining the original as a backup outside session discovery. This
-standalone migration does not change the runtime authority or codec contract. See
-[Sessions](../sessions.md) for the current storage contract.
+[standalone migration command](../sessions.md#explicit-session-migration)
+has no upgrade steps and does not convert PID-lock sessions.
 
 ## Decision history
 
@@ -139,8 +134,8 @@ The same 2026-11-14 change removed the runtime PID-lock implementation after
 moving file sessions to the lease. Keeping unused branches made tests and
 callers select obsolete fixed-path storage and bypass the publication contract.
 Durable fixtures now exercise real lease ownership and committed artifacts;
-workspace-free fixtures carry no durable authority. Legacy PID sidecars remain
-input data only for the standalone migration script. That step did not remove
+workspace-free fixtures carry no durable authority. Legacy PID sidecars then
+remained input data only for the standalone migration script. That step did not remove
 the lease takeover restriction: forced takeover of a live or foreign holder
 remained unavailable until the confirmed-takeover amendment below.
 
@@ -153,8 +148,7 @@ Removing the PID-specific paths intentionally changes these interactions:
   rather than offering to delete the directory during resume. Confirmed
   Discard is the separate destructive action and retains its authority checks.
 - Cleanup no longer exempts a pre-lease `.lock` because it names this Emacs
-  or an apparently dead PID. Such evidence refuses cleanup unchanged; close
-  the session and run the standalone migration script first.
+  or an apparently dead PID. Such evidence refuses cleanup unchanged.
 - Resume no longer salvages orphan fixed transcripts by advancing the segment
   counter. The lease publishes transcript and counter in one generation, so
   the old transcript-before-sidecar crash ordering cannot occur. Arbitrarily
@@ -230,8 +224,8 @@ same-host dead holder moved into the lease as described above, so those
 confirmation. That first step did not reproduce the PID lock's forced break;
 the confirmed-takeover amendment above adds it. Without that explicit command,
 uncertain holders and `publishing` leases still wait for expiry and the
-applicable confirmation. Existing PID-lock file sessions convert through the
-migration script.
+applicable confirmation. At the time, existing PID-lock file sessions could
+convert through the migration script.
 
 The 2026-11-18 change moved warm local root settlement to the publication
 queue. It favors shorter editor stalls over faster completion. In a matched
@@ -249,8 +243,9 @@ The original migration commands required separate session/artifact invocations,
 new destination directories, and a manual swap. The user requested a single
 automation-friendly command taking a session or project directory, together
 with version steps whose oldest prefix can be retired. The unified script now
-owns those mechanics and backup handling; runtime compatibility remains
-explicitly out of scope.
+retains those mechanics and backup handling. The steps were removed before
+the rename because no saved sessions carry over. Runtime compatibility remains
+out of scope.
 
 ADR 0100 introduced the portable profile in session format v0.5.2, replacing
 transport-selected ownership for project sessions. It initially described file
