@@ -747,8 +747,10 @@ A hook that stops the turn pauses the Goal through here as well."
 (defun mevedel-goal-capture-request (fsm)
   "Capture active Goal attribution on root request FSM exactly once."
   (let* ((info (mevedel-engine-info fsm))
+         (context (plist-get info :context))
          (buffer (plist-get info :buffer)))
     (when (and (not (plist-member info :mevedel-goal-id))
+               (not (and (listp context) (eq (plist-get context :turn-trigger) 'scheduled-wake)))
                (not (or (plist-get info :mevedel-agent-invocation)
                         (mevedel-tools--buffer-local-agent-invocation buffer)))
                (not (mevedel-goal--context-summary-request-p info))

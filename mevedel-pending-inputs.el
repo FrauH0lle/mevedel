@@ -41,6 +41,8 @@
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-context-mailbox
+                  "mevedel-agent-control" (context))
 (declare-function mevedel-agent-control-root-waiting-p
                   "mevedel-agent-control" (session))
 (declare-function mevedel-agent-control-wake-root-user
@@ -1479,7 +1481,11 @@ runs under the session's current permission settings."
          (unwind-protect
              (mevedel--submit-generated-turn
               mevedel-pending-inputs--event-trigger
-              mevedel-pending-inputs--event-trigger nil nil 'background-event)
+              mevedel-pending-inputs--event-trigger nil nil
+              (if (cl-find 'WAKE_UP (mevedel-agent-control-context-mailbox session)
+                           :key (lambda (record) (plist-get record :type)))
+                  'scheduled-wake
+                'background-event))
            ;; Consumed where the prompt is inserted; a start that
            ;; failed before that must not label a later prompt.
            (setq mevedel-view--pending-guest-attribution nil)))))))

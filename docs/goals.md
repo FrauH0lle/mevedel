@@ -299,8 +299,9 @@ A due [wake-up](tools.md#schedule), like agent mail, a Monitor event or a
 background command's completion, starts a background-event turn with fixed
 trigger text, never the continuation text. It does not resume a paused,
 blocked, or budget-limited Goal, which stays as it was, and its settlement
-schedules no continuation for one. While a Goal is active, that turn is
-captured and charged to it like every root turn.
+schedules no continuation for one. A turn started for a scheduled wake-up
+is not captured or charged to an active Goal, even when it delivers other
+mail in the same batch. A turn started for other mail alone still counts.
 
 All mevedel-admitted native gptel backends first use
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery):

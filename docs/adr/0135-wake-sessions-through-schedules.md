@@ -52,10 +52,9 @@ failed" makes the conversation continue itself when the time comes.
   composer draft, pending decisions, queued or paused follow-ups and recovery
   blockers, and coalesces with other unread mail into one turn.
 - **Background event, not a Goal turn.** The woken turn uses the fixed
-  background-event trigger, never the Goal continuation text, so it neither
-  resumes a paused or blocked Goal nor counts as a continuation. Root turns
-  started while a Goal is active are still charged to that Goal, as every root
-  turn is.
+  background-event prompt, never the Goal continuation text. It neither
+  resumes a paused or blocked Goal nor counts toward an active Goal, even
+  when the wake-up shares the turn with other unread mail.
 - **Expiry and lateness.** A firing past its expiry costs no model turn: the
   entry stays in the store as `expired` until cancelled, and the 20 most recent
   expired entries are kept. A late but unexpired firing is delivered once with

@@ -3065,9 +3065,9 @@ its own, a [Monitor](tools.md#monitor) reports, or a
 (see terminal delivery in [tools](tools.md)). Idle work runs in a fixed order:
 queued follow-ups, then one background-event turn, then Goal continuation,
 which is offered only after a turn settles successfully with nothing earlier
-waiting. A failed background-event turn does not wake again. Follow-up and
-background-event turns are not continuation turns, but while a Goal is active
-every root turn, these included, is charged to it ([Goals](goals.md)). A
+waiting. A failed background-event turn does not wake again. Follow-ups and
+background events count toward an active [Goal](goals.md), except when the
+background turn starts for a scheduled wake-up, alone or with other mail. A
 background-event turn waits for an idle transport and then rechecks every
 follow-up hold below, plus queued follow-ups and any pending permission, Ask,
 or Plan interaction, so it never replaces a draft or interrupts a decision;
