@@ -1547,8 +1547,8 @@ last row separately because an empty EOF has no text pixel size."
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
 With FOLLOW-OUTPUT, windows showing the end continue to show it unless
-they have a surviving visible row visit.  Other windows retain their
-reading viewport.
+they have a surviving visit to a visible tool row or managed row.
+Other windows retain their reading viewport.
 
 Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
@@ -1593,7 +1593,12 @@ found without scanning the rest of the buffer."
                         (list w
 			      wp
 			      ws
-				      (and follow-output (pos-visible-in-window-p old-end w))
+				      (and follow-output
+                                           (pos-visible-in-window-p old-end w)
+                                           (if (and (memq (get-text-property wp 'mevedel-view-type)
+                                                          '(tool-summary tool-child))
+                                                    (pos-visible-in-window-p wp w t))
+                                               'tool t))
 			      (mevedel-view--position-render-anchor wp nil region)
 			      (mevedel-view--position-render-anchor ws w region)
                               (and visit-y
@@ -1622,10 +1627,14 @@ found without scanning the rest of the buffer."
 			   (when (and (window-live-p w)
 				      (eq (window-buffer w) mevedel-view--pww-current-buffer))
 			     (unless positions-preserved
-			       (let ((restored-point
-				      (if (= wp old-end)
-				          (point-max)
-				        (resolve-position wp wp-anchor))))
+				       (let* ((anchored-point (mevedel-view--render-anchor-position wp-anchor))
+                                              (restored-point (if (= wp old-end)
+                                                                  (point-max)
+                                                                (or anchored-point wp))))
+                                         (when (and (eq following 'tool) anchored-point
+                                                    (memq (get-text-property anchored-point 'mevedel-view-type)
+                                                          '(tool-summary tool-child)))
+                                           (setq following nil))
 				 (when restored-point
 				   (set-window-point w (min (point-max) restored-point)))
 				 (when (eq w mevedel-view--pww-selected-window)

@@ -698,6 +698,45 @@ WINDOW defaults to the selected window, but need not be selected."
         (should (pos-visible-in-window-p (point-max) transcript))
         (should (eq composer (selected-window)))))))
 
+(ert-deftest mevedel-view-user-state/stream-keeps-visited-tool-row ()
+  (mevedel-view-user-state-test--with-view
+    (mevedel-view-user-state-test--begin-turn data-buf)
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"last.el\"))\n\nTool detail\n"
+     '(tool . "last-tool"))
+    (mevedel-view--render-stream-update data-buf)
+    (goto-char (point-min))
+    (search-forward "Read: last.el")
+    (beginning-of-line)
+    (mevedel-view-toggle-section)
+    (let ((window (selected-window))
+          (position (point))
+          (visible (symbol-function 'pos-visible-in-window-p))
+          followed)
+      (set-window-start window (line-beginning-position) t)
+      (should (eq (get-text-property position 'mevedel-view-type) 'tool-summary))
+      (cl-letf (((symbol-function 'pos-visible-in-window-p)
+                 (lambda (&optional pos win partial)
+                   (or (and (eq win window) (memq pos (list position (point-max))))
+                       (funcall visible pos win partial))))
+                ((symbol-function 'mevedel-view-transcript-show-end)
+                 (lambda (win) (when (eq win window) (setq followed t)))))
+        (mevedel-view-user-state-test--add-chunk data-buf "\nThe next response chunk.\n")
+        (mevedel-view--render-stream-update data-buf)
+        (should-not followed)
+        (should (looking-at-p ".*Read: last\\.el"))
+        (should (save-excursion (search-forward "Tool detail" nil t)))
+        (setq position (point))
+        (with-current-buffer data-buf
+          (goto-char (point-max))
+          (search-backward "(:name \"Read\"")
+          (let ((start (point)))
+            (search-forward "Tool detail\n")
+            (delete-region start (point))))
+        (mevedel-view--render-stream-update data-buf)
+        (should followed)
+        (should-not (string-search "Read: last.el" (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-user-state/live-reader ()
   ;; The graphical runner repeats every transition after a real wheel event
   ;; in the command loop, including one targeting the non-selected window.

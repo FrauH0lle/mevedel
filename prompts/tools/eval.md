@@ -39,7 +39,7 @@ its value and output.
   Eval returns an `execution_id`: poll with WriteStdin, list with ListExecutions,
   or kill the child with StopExecution. Non-empty input is refused. Root-owned
   completion wakes an idle root; polling just to keep work moving is unnecessary.
-  No automatic timeout. Live rejects `yield_time_ms`.
+  No automatic timeout. Live runs inline and ignores `yield_time_ms`.
 - `Result:` prints the value with `%S`; `STDOUT:` holds `print`/`prin1`/`princ`
   output; `MESSAGES:` holds `message` text, still visible to the user in live
   mode. Errors retain prior output and include a bounded `BACKTRACE:`. Large

@@ -1848,11 +1848,17 @@ the execution boundary owns the session's single unavailable warning"
   (should-error
    (mevedel-tool-exec--eval #'ignore (list))
    :type 'error)
-  :doc "rejects a live yield interval and fresh TTY"
-  (dolist (args '((:expression "1" :yield_time_ms 250)
-                  (:expression "1" :mode "live" :yield_time_ms 10000)
-                  (:expression "1" :mode "fresh" :tty t)))
-    (should-error (mevedel-tool-exec--eval #'ignore args)))
+  :doc "live Eval runs inline even when the caller supplies child defaults"
+  (let (reply)
+    (mevedel-tool-exec--eval
+     (lambda (result) (setq reply result))
+     '(:expression "(+ 1 2)" :mode "live" :reset :json-false
+       :preserve_ui t :yield_time_ms 10000 :sandbox_permissions "use_default"
+       :additional_permissions (:network :json-false :file_system (:read [] :write []))))
+    (should (string-search "Result:\n3" (plist-get reply :result)))
+    (should-not (plist-get (plist-get reply :render-data) :execution-id)))
+  :doc "rejects fresh TTY"
+  (should-error (mevedel-tool-exec--eval #'ignore '(:expression "1" :mode "fresh" :tty t)))
   :doc "fresh yielding polls the same result as inline completion and labels Eval"
   (let* ((mevedel-sandbox-mode 'off)
          (temporary-file-directory default-directory)
@@ -2147,6 +2153,16 @@ the execution boundary owns the session's single unavailable warning"
         (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
         (should (string-search "error(\"failing frame\")" trace))
         (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars)))))
+  :doc "limits the number of frames passed to the backtrace formatter"
+  (let ((frames (make-list (1+ mevedel-tool-exec--eval-backtrace-frames)
+                           (car (backtrace-get-frames))))
+        rendered)
+    (cl-letf (((symbol-function 'backtrace-get-frames) (lambda () frames))
+              ((symbol-function 'backtrace-to-string)
+               (lambda (frames) (setq rendered frames) "trace")))
+      (should (string-suffix-p mevedel-tool-exec--eval-backtrace-marker
+                               (mevedel-tool-exec--eval-capture-backtrace))))
+    (should (equal rendered (seq-take frames mevedel-tool-exec--eval-backtrace-frames))))
   :doc "visibly truncates deep and overlong backtraces in both modes"
   (dolist (mode '("live" "fresh"))
     (dolist (expression
@@ -2162,8 +2178,6 @@ the execution boundary owns the session's single unavailable warning"
           (should trace)
           (setq trace (car (split-string trace "\n\n\\(?:Execution:\\|\\[sandbox:\\)")))
           (should (<= (length trace) mevedel-tool-exec--eval-backtrace-chars))
-          (should (<= (length (split-string trace "\n" t))
-                      (1+ mevedel-tool-exec--eval-backtrace-frames)))
           (should (string-suffix-p mevedel-tool-exec--eval-backtrace-marker trace))))))
   :doc "returns fresh errors with unreadable error data"
   (let (result envelope)

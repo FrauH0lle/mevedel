@@ -1183,8 +1183,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         (mode (mevedel-tool-exec-permission-eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (when (and (eq mode 'live) (plist-get args :yield_time_ms))
-      (error "Parameter yield_time_ms is valid only with mode fresh or sandbox"))
     (when (eq (plist-get args :tty) t)
       (error "Eval does not support TTY execution"))
     (let* ((session (mevedel-queue--current-session))
