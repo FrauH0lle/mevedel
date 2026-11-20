@@ -195,6 +195,9 @@
                   "mevedel-view-composer" (position &optional view))
 (declare-function mevedel-view-composer-create "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-kill "mevedel-view-composer" ())
+(declare-function mevedel-composer-refresh-transcript-position
+                  "mevedel-view-composer" (transcript start))
+(declare-function mevedel-view-pair-toggle-focus "mevedel-view-pair" ())
 (declare-function mevedel-view--install-dnd "mevedel-view-input-files" ())
 (declare-function mevedel-view-transcript-tail-initialize
                   "mevedel-view-composer" ())
@@ -717,6 +720,7 @@ above the prompt boundary."
   "C-c C-k" #'mevedel-view-abort
   "C-c C-j" #'mevedel-view-jump-to-interaction
   "C-c C-o" #'mevedel-menu
+  "C-c C-SPC" #'mevedel-view-pair-toggle-focus
   "C-c C-q" #'mevedel-pending-inputs-clear)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
@@ -802,6 +806,8 @@ and request progress row.  An editable view owns a separate composer buffer.
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
             #'mevedel-view--resume-on-window-scroll nil t)
+  (add-hook 'window-scroll-functions
+            #'mevedel-composer-refresh-transcript-position nil t)
   ;; Keep pixel scrolling a forced redisplay start would drop under the caret.
   (add-hook 'pre-redisplay-functions #'mevedel-view--note-redisplay-vscroll nil t)
   (add-hook 'window-scroll-functions #'mevedel-view--restore-redisplay-vscroll nil t)

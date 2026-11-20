@@ -17,6 +17,12 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 
+(defun mevedel-view-composer-graphical--settle ()
+  "Finish native window notifications and the fit they defer."
+  (redisplay t)
+  (sit-for 0.02)
+  (redisplay t))
+
 (defmacro mevedel-view-composer-graphical--with-chat (&rest body)
   "Show a real chat and run BODY with its `data-buf' and `view-buf'."
   (declare (indent 0) (debug t))
@@ -50,7 +56,7 @@
                (mevedel-view--setup view-buf data-buf)
                (with-current-buffer view-buf (mevedel-view--full-rerender))
                (mevedel--display-chat-buffer data-buf)
-               (redisplay t)
+               (mevedel-view-composer-graphical--settle)
                ,@body)
            (mevedel-chat-discard-buffers data-buf t)
            (when (buffer-live-p view-buf) (kill-buffer view-buf))

@@ -209,6 +209,7 @@
                                    (point-min) (+ (point-min) 3)
                                    'mevedel-view-spinner-frame t)))
                         (should cell)
+                        (should (pos-visible-in-window-p cell editor))
                         (let ((sample (get-text-property cell 'display)))
                           (should (stringp sample))
                           (should
@@ -438,6 +439,10 @@
       (with-current-buffer composer
         (should (string-search "C-c C-z close\n> " (buffer-string)))
         (mevedel-view-test--insert-composer-draft draft))
+      (when (display-graphic-p)
+        (redisplay t)
+        (sit-for 0.02)
+        (redisplay t))
       (let ((selected (selected-window))
             (position (mevedel-view-test--composer-point-offset view))
             (start (window-start (selected-window))))

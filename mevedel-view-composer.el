@@ -25,6 +25,7 @@
 
 ;; Composer dispatch uses runtime sequence functions as well as CL macros.
 (require 'cl-lib)
+(require 'face-remap)
 
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
@@ -649,18 +650,160 @@ their distinct labels."
 (defvar-local mevedel-composer--emulation-maps nil
   "Draft bindings that outrank ordinary minor modes in the composer.")
 
+(defvar-local mevedel-composer--fit-timer nil
+  "Deferred fit for this draft's displayed docks.")
+
+(defface mevedel-composer-rule
+  '((t :inherit (shadow default) :box nil :underline nil :overline t))
+  "Rule across the top of the docked composer."
+  :group 'mevedel)
+
+(defface mevedel-composer-back-to-bottom
+  '((t :inherit (shadow mode-line-inactive) :box nil))
+  "Button for returning to the end of the paired transcript."
+  :group 'mevedel)
+
+(defun mevedel-composer-back-to-bottom (event)
+  "Show the end of the transcript paired with EVENT's composer window."
+  (interactive "e")
+  (when-let* ((dock (posn-window (event-start event)))
+              ((window-live-p dock))
+              ((eq (mevedel-view-composer-window dock) dock))
+              (transcript (mevedel-view-transcript-window dock)))
+    (mevedel-view-transcript-show-end transcript)
+    (with-current-buffer (window-buffer dock)
+      (force-mode-line-update))))
+
+(defconst mevedel-composer--bottom-button
+  (propertize " ↓ Back to bottom "
+              'face 'mevedel-composer-back-to-bottom
+              'mouse-face 'highlight
+              'help-echo "mouse-1: show the transcript end"
+              'local-map (define-keymap
+                           "<mouse-1>" #'mevedel-composer-back-to-bottom
+                           "<header-line> <mouse-1>" #'mevedel-composer-back-to-bottom))
+  "Right-aligned button used when the paired transcript is scrolled up.")
+
+(defvar mevedel-view-table--font-generation)
+(defvar mevedel-view-table--fontset-generation)
+
+(defun mevedel-composer--hidden-label (window)
+  "Return a cached label for draft screen lines hidden above WINDOW."
+  (let ((start (window-start window))
+        (draft (and mevedel-composer--draft-start
+                    (marker-position mevedel-composer--draft-start))))
+    (if (and start draft (> start draft))
+        (let* ((cache (window-parameter window 'mevedel-composer-hidden))
+               (key (list (current-buffer) (buffer-chars-modified-tick) start
+                          (window-body-width window t) (window-hscroll window)
+                          face-remapping-alist
+                          (bound-and-true-p mevedel-view-table--font-generation)
+                          (bound-and-true-p mevedel-view-table--fontset-generation))))
+          (if (equal key (car cache))
+              (cdr cache)
+            (let* ((prompt (save-excursion
+                             (goto-char draft)
+                             (line-beginning-position)))
+                   (count (count-screen-lines prompt start nil window))
+                   (label (if (zerop count) ""
+                            (propertize (format " ↑ %d more " count) 'face 'shadow))))
+              (set-window-parameter window 'mevedel-composer-hidden
+                                    (cons (copy-tree key) label))
+              label)))
+      "")))
+
+(defun mevedel-composer--top-line ()
+  "Draw the separator, hidden draft count, and transcript jump button."
+  (let* ((window (selected-window))
+         (more (mevedel-composer--hidden-label window))
+         (transcript (mevedel-view-transcript-window window))
+         (button (if (and transcript (not (mevedel-view-transcript-end-visible-p transcript)))
+                     mevedel-composer--bottom-button ""))
+         (gap (- (window-total-width window) (string-width more) (string-width button))))
+    (concat more
+            (if (display-graphic-p)
+                (propertize " " 'display `(space :align-to (- right ,(string-width button))))
+              (make-string (max 0 gap) ?─))
+            button
+            ;; Emacs paints header lines across the body fringe.
+            (when (display-graphic-p)
+              (concat (propertize " " 'display '(space :align-to right-fringe))
+                      (propertize " " 'face 'fringe 'display '(space :width right-fringe)))))))
+
+(defun mevedel-composer-refresh-transcript-position (transcript _start)
+  "Refresh the dock's jump button after TRANSCRIPT scrolls."
+  (when-let* ((dock (mevedel-view-composer-window transcript)))
+    (with-current-buffer (window-buffer dock)
+      (force-mode-line-update))))
+
+(defun mevedel-view-composer-height (draft pair chrome line)
+  "Fit DRAFT inside a third of PAIR, keeping CHROME and at least one LINE.
+All heights use the same units; CHROME includes the rail.  A tiny pair
+can exceed the cap to keep the dock usable."
+  (max (+ chrome line) (min (+ chrome draft) (/ pair 3))))
+
+(defun mevedel-composer--fit (dock transcript)
+  "Fit DOCK to its draft at its current width, taking space from TRANSCRIPT."
+  (let* ((height (window-pixel-height dock))
+         (line (frame-char-height (window-frame dock)))
+         (pair (+ height (window-pixel-height transcript)))
+         (frame-chrome (- height (window-body-height dock t)))
+         (chrome (+ frame-chrome line))
+         ;; Measure one extra row to distinguish a full body from a capped one.
+         (limit (+ line (max (* 2 line) (- (/ pair 3) frame-chrome))))
+         (text (cdr (window-text-pixel-size dock (point-min) (point-max) nil limit)))
+         (target (mevedel-view-composer-height (- text line) pair chrome line))
+         (delta (- target height)))
+    (unless (zerop delta)
+      (let ((follow (mevedel-view-transcript-end-visible-p transcript))
+            (window-min-height 1)
+            (window-resize-pixelwise t)
+            (window-combination-resize nil))
+        (window-preserve-size dock nil nil)
+        (unwind-protect
+            (let ((step (window-resizable dock delta nil nil t)))
+              (unless (zerop step)
+                (window-resize dock step nil nil t)))
+          (window-preserve-size dock nil t))
+        (when follow (mevedel-view-transcript-show-end transcript))))
+    (when (and (<= text (window-body-height dock t))
+               (> (window-start dock) (point-min)))
+      (set-window-start dock (point-min)))))
+
+(defun mevedel-composer--fit-displayed (buffer)
+  "Fit BUFFER's surviving docks after edit and window hooks finish."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq mevedel-composer--fit-timer nil)
+      (dolist (dock (get-buffer-window-list buffer nil t))
+        (when-let* ((transcript (mevedel-view-transcript-window dock)))
+          (mevedel-composer--fit dock transcript))))))
+
+(defun mevedel-composer--queue-fit (&rest _)
+  "Coalesce draft edits and size changes into one fit outside redisplay."
+  (unless (or noninteractive mevedel-composer--fit-timer)
+    (setq mevedel-composer--fit-timer
+          (run-at-time 0 nil #'mevedel-composer--fit-displayed (current-buffer)))))
+
 (define-derived-mode mevedel-composer-mode text-mode "Composer"
   "Edit the draft of a mevedel conversation."
+  (setq-local header-line-format '(:eval (mevedel-composer--top-line)))
+  (dolist (face '(header-line header-line-inactive))
+    (face-remap-add-relative face 'mevedel-composer-rule))
   (add-hook 'window-buffer-change-functions #'mevedel-view-stream-composer-window-change nil t)
   (add-hook 'window-size-change-functions #'mevedel-view-stream-composer-window-change nil t)
   (add-hook 'window-scroll-functions #'mevedel-view-stream-composer-window-change nil t)
+  (add-hook 'window-buffer-change-functions #'mevedel-composer--queue-fit nil t)
+  (add-hook 'window-size-change-functions #'mevedel-composer--queue-fit nil t)
+  (add-hook 'after-change-functions #'mevedel-composer--queue-fit nil t)
   (unless (eq yank-excluded-properties t)
     (setq-local yank-excluded-properties
                 (append mevedel-view-zone-owned-properties
                         '(mevedel-view-interaction-id)
                         yank-excluded-properties)))
   (setq-local scroll-conservatively 101
-              scroll-margin 0))
+              scroll-margin 0
+              other-window-scroll-default #'mevedel-view-transcript-window))
 
 (defun mevedel-view-composer-kill ()
   "Kill the composer belonging to the current view."
@@ -867,6 +1010,9 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "C-c C-e" #'mevedel-pending-inputs-open
   "C-c C-k" #'mevedel-view-cancel-composer-state
   "C-c C-j" #'mevedel-view-jump-to-interaction
+  "C-c C-SPC" #'mevedel-view-pair-toggle-focus
+  "C-M-v" #'scroll-other-window
+  "C-M-S-v" #'scroll-other-window-down
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-r" #'mevedel-view-resume-pending
   "C-c C-u" #'mevedel-view-history-clear-input

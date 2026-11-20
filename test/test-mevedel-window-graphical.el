@@ -221,7 +221,10 @@ Bind parent, frame and window for BODY, which runs in the view buffer."
                     (* lines (frame-char-height parent)) t))
   ;; The fixture bypasses note display; do not let deferred repair change the
   ;; body height between the pinned and unpinned samples.
-  (should (window-live-p (mevedel-view-composer-display (frame-first-window frame)))))
+  (should (window-live-p (mevedel-view-composer-display (frame-first-window frame))))
+  (redisplay t)
+  (sit-for 0.02)
+  (redisplay t))
 
 (defun mevedel-window-graphical-test--rows (window)
   "Return WINDOW's displayed chrome after redisplay.

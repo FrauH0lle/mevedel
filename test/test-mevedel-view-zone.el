@@ -468,12 +468,18 @@ The current buffer is the owning view."
                                     (make-list 3 (make-string 50 ?x)) "\n"))))
       (let ((dock (mevedel-view-composer-display (selected-window))))
         (should dock)
-        (should (> (window-body-height dock) 2))
-        (should (= 1 (mevedel-view-test--composer-screen-y dock)))
-        (mevedel-view-zone-clear 'interaction)
-        (should (= 1 (mevedel-view-test--composer-screen-y dock)))
-        (should (= (+ 4 (mevedel-view-composer-draft-start)) (window-point dock)))
-        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
+        ;; Give the two-line draft blank rows independently of the initial fit.
+        (window-preserve-size dock nil nil)
+        (window-resize dock 2)
+        (window-preserve-size dock nil t)
+        (let ((height (window-body-height dock)))
+          (should (> height 3)) ; rail and two draft rows
+          (should (= 1 (mevedel-view-test--composer-screen-y dock)))
+          (mevedel-view-zone-clear 'interaction)
+          (should (= height (window-body-height dock)))
+          (should (= 1 (mevedel-view-test--composer-screen-y dock)))
+          (should (= (+ 4 (mevedel-view-composer-draft-start)) (window-point dock)))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))))))
 
   :doc "a start inside a growing card anchors independently of the dock"
   (mevedel-view-test--with-buffers

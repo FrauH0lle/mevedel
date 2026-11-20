@@ -438,6 +438,9 @@
                   (goto-char (point-min))
                   (dotimes (n 100) (insert (format "History line %d.\n" n))))
                 (mevedel-view-test--insert-composer-draft draft)
+                (redisplay t)
+                (sit-for 0.02)
+                (redisplay t)
                 (mevedel-view--set-viewport
                  window
                  (mevedel-view--viewport-at-y
@@ -450,6 +453,8 @@
                 (switch-to-buffer view-buf)
                 (set-window-buffer (split-window-right) data-buf)
                 (goto-char (point-min))
+                (redisplay t)
+                (sit-for 0.02)
                 (redisplay t)
                 (when (eq change 'frame-grow)
                   ;; A pixelwise frame configure rounds the minibuffer to a
@@ -506,6 +511,8 @@
                              (should (= target (frame-text-height reader-frame)))
                              (should (= mini-lines
                                         (window-body-height (minibuffer-window reader-frame)))))))
+                        (sit-for 0.02)
+                        (redisplay t)
                         (ert-info ((format "Change %S, native size-hook calls: %S" change calls))
                           (should calls)
                           (should (= total (window-pixel-height window)))

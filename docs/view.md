@@ -66,10 +66,18 @@ authoritative transcript.
 | `C-x 2` / `C-x 3` | Splits outside the pair; the new transcript gets its own dock. |
 | `C-x b` | Changes the transcript's buffer; the draft stays with its view. |
 | `C-x o` | Cycles through windows normally, including the composer. |
+| `C-c C-SPC` | Moves focus between the transcript and its composer. |
+| `C-M-v` / `C-M-S-v` in the composer | Pages the paired transcript forward or backward without leaving the draft. |
 
-The composer keeps its height when other windows resize. Popups normally open
-outside the pair. After a window layout changes, a deferred repair removes
-orphan docks and restores missing ones without selecting the repaired dock.
+The composer grows from one draft line plus its rail and chrome up to a third
+of the pair. At the cap it scrolls with the caret and shows `↑ N more` when
+draft lines are hidden above. Its top rule (`─` in a terminal) offers
+`↓ Back to bottom` only while the paired transcript is off its end. The mode
+line is below the composer, not between the two windows.
+
+Popups normally open outside the pair. After a window layout changes, a
+deferred repair removes orphan docks and restores missing ones without
+selecting the repaired dock.
 A transcript remains usable when its window is too short for a dock.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Resident retained agents use their live conversation buffer

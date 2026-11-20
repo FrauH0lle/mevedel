@@ -22,7 +22,8 @@
   "Timer coalescing pending frame repairs.")
 
 (defconst mevedel-view-pair--transcript-rules
-  '((split-window . mevedel-view-pair--split)
+  '((mode-line-format . none)
+    (split-window . mevedel-view-pair--split)
     (delete-window . mevedel-view-pair--delete)))
 
 (defconst mevedel-view-pair--composer-rules
@@ -78,6 +79,15 @@ WINDOW defaults to the selected window and may be either pair member."
               ((mevedel-view-pair--matches-p transcript dock)))
     dock))
 
+(defun mevedel-view-pair-toggle-focus ()
+  "Move focus between this transcript and its composer."
+  (interactive)
+  (when-let* ((window (selected-window))
+              (dock (mevedel-view-composer-window window)))
+    (select-window (if (eq window dock)
+                       (mevedel-view-transcript-window dock)
+                     dock))))
+
 (defun mevedel-view-pair--install-rules (window rules)
   "Set RULES on WINDOW, saving previous values for when it is reused."
   (set-window-parameter
@@ -86,7 +96,9 @@ WINDOW defaults to the selected window and may be either pair member."
              (cons (car rule) (window-parameter window (car rule))))
            rules))
   (dolist (rule rules)
-    (set-window-parameter window (car rule) (cdr rule))))
+    (set-window-parameter window (car rule) (cdr rule)))
+  (with-current-buffer (window-buffer window)
+    (force-mode-line-update)))
 
 (defun mevedel-view-pair--unbind (window)
   "Set aside mevedel's rules on WINDOW, leaving unrelated rules alone."
@@ -104,7 +116,9 @@ WINDOW defaults to the selected window and may be either pair member."
       (when (eq (window-dedicated-p window) t)
         (set-window-dedicated-p window nil)))
     (set-window-parameter window 'mevedel-view-pair--role nil)
-    (set-window-parameter window 'mevedel-view-pair--previous nil)))
+    (set-window-parameter window 'mevedel-view-pair--previous nil)
+    (with-current-buffer (window-buffer window)
+      (force-mode-line-update))))
 
 (defun mevedel-view-pair--bind (transcript dock)
   "Install the pair rules for TRANSCRIPT and DOCK once."

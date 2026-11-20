@@ -241,6 +241,7 @@
            (other (split-root-window-below)))
       (set-window-buffer other (get-buffer-create "*scratch*"))
       (select-window other)
+      (mevedel-view-composer-graphical--settle)
       (let ((draft-height (window-pixel-height composer))
             (transcript-height (window-pixel-height transcript)))
         (mevedel-view-composer-graphical--keys "C-u 5 C-x ^" 'enlarge-window)

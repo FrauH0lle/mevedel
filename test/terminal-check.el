@@ -84,7 +84,7 @@
         (princ (format "Terminal check FAILED (%s)\n" status))
         (kill-emacs 1))
       (with-current-buffer screen
-        (dolist (drawn '("An earlier response." "unsent draft"))
+        (dolist (drawn '("An earlier response." "unsent draft" "──────────"))
           (goto-char (point-min))
           (unless (search-forward drawn nil t)
             (princ (format "Terminal check FAILED: %S never drawn\n" drawn))
@@ -112,8 +112,7 @@ command loop decodes it, so wait from a timer, not a loop."
                 warning-minimum-level :emergency)
           (dolist (file '("test-mevedel-view-composer-graphical.el"
                           "test-mevedel-view-pair-graphical.el"))
-            (load (file-name-concat mevedel-terminal-check--root "test" file)
-                  nil t))
+            (load (file-name-concat mevedel-terminal-check--root "test" file) nil t))
           (let ((stats (ert-run-tests-batch mevedel-terminal-check--selector)))
             (cl-loop for test across (ert--stats-tests stats)
                      for result = (ert-test-most-recent-result test)

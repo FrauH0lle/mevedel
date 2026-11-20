@@ -41,7 +41,9 @@
            (setq-local mevedel--session (mevedel-session--create :name "test"))
            (let ((dock (mevedel-view-composer-display (selected-window))))
              (window-resize dock 8)
-             (select-window dock))
+             (select-window dock)
+             ;; The negative control wraps onto a row the normal draft does not need.
+             (setq-local window-size-fixed 'height))
            (dolist (mode '(ask edits full-auto ask))
              (mevedel-view--clear-input)
              (goto-char (point-max))

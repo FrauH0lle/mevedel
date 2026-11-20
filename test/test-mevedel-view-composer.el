@@ -86,6 +86,14 @@ Pass VIEW explicitly to composer bounds used inside BODY."
                  :body (mapconcat (lambda (n) (format "  row %d\n" n))
                                   (number-sequence 1 count) ""))))))
 
+(ert-deftest mevedel-view-composer-height-budget ()
+  "Fit one draft row plus chrome, without giving a tall draft the transcript."
+  (should (= 4 (mevedel-view-composer-height 0 30 3 1)))
+  (should (= 6 (mevedel-view-composer-height 3 30 3 1)))
+  (should (= 10 (mevedel-view-composer-height 40 32 3 1)))
+  (should (= 4 (mevedel-view-composer-height 40 8 3 1)))
+  (should (= 106 (mevedel-view-composer-height 900 320 48 16))))
+
 (mevedel-deftest mevedel-view--history-reader-viewport
   (:doc "A history reader keeps its viewport through status growth and shrink")
   (mevedel-view-test--with-buffers
