@@ -3,8 +3,9 @@
 ;;; Commentary:
 
 ;; One model tool creates, lists and cancels the root conversation's one-shot
-;; wake-ups.  It is visible to root requests only; a child agent asks the root
-;; to schedule instead.  `mevedel-schedule' owns timing, storage and firing.
+;; and recurring wake-ups.  It is visible to root requests only; a child agent
+;; asks the root to schedule instead.  `mevedel-schedule' owns timing, storage
+;; and firing.
 
 ;;; Code:
 
@@ -18,11 +19,19 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (autoload 'mevedel-current-origin "mevedel-turn")
 
+;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
+
 (defun mevedel-tool-schedule--entry-json (entry)
   "Return wake-up ENTRY as a JSON-serializable plist."
-  (let ((expires (plist-get entry :expires-at)))
+  (let ((expires (plist-get entry :expires-at))
+        (timing (plist-get entry :timing)))
     (list :id (plist-get entry :id)
           :time (mevedel-schedule-format-time (plist-get entry :due))
+          :repeat (pcase (plist-get timing :kind)
+                    ('interval (concat "every " (mevedel--duration-label
+                                                 (plist-get timing :seconds))))
+                    ('cron (plist-get timing :expression)))
           :note (plist-get entry :note)
           :expires (and expires (mevedel-schedule-format-time expires))
           :status (symbol-name (plist-get entry :status)))))
@@ -76,7 +85,7 @@
    :args ((action string :required "What to do."
                   :enum ["create" "list" "cancel"])
           (when string :optional
-                "For create: a duration such as 20m or 1h30m, or a local time such as 2026-11-21 10:00.")
+                "For create: a duration such as 20m or a local time such as 2026-11-21 10:00; every 20m or a cron expression such as 0 9 * * 1-5 to repeat.")
           (note string :optional
                 "For create: what the woken turn should do, written for yourself.")
           (expires string :optional

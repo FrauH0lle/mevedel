@@ -1685,18 +1685,37 @@ schedule. Wake-ups need no approval card.
 `action` is `create`, `list` or `cancel`. `create` requires `when` and a
 non-blank `note` of at most 4,000 characters. `when` is a duration (`20m`,
 `1h30m`; units `d`, `h`, `m`, `s`, optionally prefixed by `in`) or a local time
-`YYYY-MM-DD HH:MM[:SS]`; an ISO 8601 offset or `Z` selects another zone. The
-optional `expires` takes the same forms and must be later than the wake-up
-itself. Unparseable timing, a zero duration, a time not in the future, an
-expiry not after the time, and a 51st pending wake-up are tool errors. `cancel`
-removes one wake-up by `id`, pending or expired. Every result is JSON carrying
-the affected entry or the list, each with `id`, `time`, `note`, `expires` and
-`status`, plus the current local time as `now`.
+`YYYY-MM-DD HH:MM[:SS]` for one wake-up; an ISO 8601 offset or `Z` selects
+another zone. A recurring wake-up takes `every` and a duration of at least a
+minute, timed from the previous run, or a 5-field cron expression (minute,
+hour, day of month, month, day of week) in local time with values, `*`,
+ranges, steps and lists; day of week 7 is Sunday like 0, and when both day
+fields are restricted a day matching either fires. Cron names, `L`, `W` and
+`?` are rejected. The optional `expires` is a duration or local time and must
+be later than the wake-up's first time; a recurring wake-up expires 7 days
+after creation by default and an explicit expiry may be at most 30 days away.
+Unparseable timing, an impossible date, a zero duration or sub-minute
+interval, a time not in the future, a cron expression that never fires, an
+expiry not after the time or beyond the recurring cap, and a 51st pending
+wake-up are tool errors. `cancel` removes one wake-up by `id`, pending or
+expired. Every result is JSON carrying the affected entry or the list, each
+with `id`, `time` (the next run), `repeat` (`every 20m 00s`, the cron
+expression, or null), `note`, `expires` and `status`, plus the current local
+time as `now`.
+
+Local times follow one daylight-saving rule for one-shot and cron timing: a
+time in an hour the clock skips fires at the first valid minute after the gap
+(02:30 on a spring-forward night fires at 03:00), and a time in an hour the
+clock repeats fires once, at its first occurrence. Fire times are stored as
+absolute seconds, so a later zone change does not move a computed run.
 
 When a wake-up comes due, one `WAKE_UP` record enters the root mailbox:
 `<agent-message type="WAKE_UP" sender="/root" recipient="/root"
 schedule_id="..." scheduled_at="..." fired_at="...">` followed by the note,
 with `overdue_by` added when it fired at least a minute late, as after sleep.
+A recurring wake-up stays pending after each firing with its next run computed
+from the actual firing time, so runs missed during sleep or while the session
+was closed arrive as one overdue record, never as a burst.
 Like a background command's completion it wakes an idle root through the
 background-event path, holds for a running turn, a composer draft, pending
 decisions, queued or paused follow-ups and recovery blockers, coalesces with

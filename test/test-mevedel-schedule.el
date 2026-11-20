@@ -126,6 +126,33 @@ for each started turn; `mevedel-schedule-test--settle' runs offered work."
       (should (string-search "fired_at=\"2026-11-20T13:45:00+01:00\"" block))
       (should (string-search "overdue_by=\"25m 00s\"" block))))
 
+  :doc "a recurring wake-up re-arms from its run; missed runs fire once, annotated"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-create session data-buf "every 20m" "Babysit PR 412")
+    (setq now (+ now 1200))
+    (mevedel-schedule-run-due)
+    (should (= 1 (length (mevedel-schedule-test--wake-ups session))))
+    (should (= (+ now 1200) (plist-get (car (mevedel-schedule-pending session)) :due)))
+    (should (= 1 (length (mevedel-schedule-test--timers))))
+    ;; Asleep for two hours: five runs were missed.
+    (setq now (+ now 7200))
+    (mevedel-schedule-run-due)
+    (let ((records (mevedel-schedule-test--wake-ups session)))
+      (should (= 2 (length records)))
+      (should (string-search "overdue_by=\"1h 40m\""
+                             (mevedel-tools--message-delivery-block (car (last records))))))
+    (should (= (+ now 1200) (plist-get (car (mevedel-schedule-pending session)) :due))))
+
+  :doc "a cron wake-up re-arms for its next calendar time"
+  (mevedel-schedule-test--with-session
+    (mevedel-schedule-create session data-buf "0 9 * * 1-5" "Morning CI summary")
+    ;; Fri 13:00 -> Mon 2026-11-23 09:00 CET, then Tue 09:00.
+    (should (= 1795420800 (plist-get (car (mevedel-schedule-pending session)) :due)))
+    (setq now 1795420800)
+    (mevedel-schedule-run-due)
+    (should (= 1 (length (mevedel-schedule-test--wake-ups session))))
+    (should (= 1795507200 (plist-get (car (mevedel-schedule-pending session)) :due))))
+
   :doc "a firing past its expiry is recorded as expired without mail or a turn"
   (mevedel-schedule-test--with-session
     (mevedel-schedule-create session data-buf "20m" "Check CI" "30m")

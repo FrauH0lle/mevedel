@@ -2,15 +2,18 @@
 
 ;;; Commentary:
 
-;; A wake-up is a schedule whose target is its own session: a due time and a
-;; note the root conversation wrote for its future self.  The session's
-;; persisted state is the source of truth for its wake-ups.
+;; A wake-up is a schedule whose target is its own session: a timing (one-shot,
+;; fixed interval or local-time cron) and a note the root conversation wrote
+;; for its future self.  The session's persisted state is the source of truth
+;; for its wake-ups.  Next-run calculation is pure: it reads only the timing,
+;; a reference time and the local time zone.
 ;;
 ;; One Emacs-wide timer is armed for the earliest pending wake-up across the
 ;; open root buffers that hold one, and re-armed whenever that set changes;
 ;; nothing polls while idle.  Every decision reads `mevedel-schedule-clock'.
 ;; A due wake-up becomes one WAKE_UP record in the root mailbox, committed
-;; together with its removal from the store, and wakes an idle root through
+;; together with its removal from the store, or for a recurring one its next
+;; due time computed from the firing time, and wakes an idle root through
 ;; the ordinary background-event path and its holds.  A wake-up past its
 ;; optional expiry is kept as `expired' instead, without a model turn.
 
@@ -68,6 +71,12 @@
 (defconst mevedel-schedule-retry-delay 60
   "Seconds before retrying a session whose wake-up delivery failed.")
 
+(defconst mevedel-schedule-recurring-expiry (* 7 86400)
+  "Seconds after creation a recurring wake-up expires by default.")
+
+(defconst mevedel-schedule-max-recurring-expiry (* 30 86400)
+  "Most seconds after creation a recurring wake-up may run.")
+
 (defvar mevedel-schedule-clock #'float-time
   "Function returning the current time in seconds since the epoch.
 Every scheduling decision reads this one clock.")
@@ -93,6 +102,95 @@ Every scheduling decision reads this one clock.")
   "Return SECONDS as an ISO 8601 local time with its UTC offset."
   (format-time-string "%FT%T%:z" seconds))
 
+(defun mevedel-schedule--resolve-local (wall)
+  "Return the absolute seconds of local wall-clock time WALL.
+WALL counts seconds as if local time were UTC.  A time in an hour that
+daylight saving repeats resolves to its first occurrence; a time in an hour
+it skips resolves to the first valid minute after the gap."
+  (let (time)
+    (while (not (setq time
+                      (cl-loop for offset in (list (car (current-time-zone (- wall 86400)))
+                                                   (car (current-time-zone (+ wall 86400))))
+                               for candidate = (- wall offset)
+                               when (= offset (car (current-time-zone candidate)))
+                               minimize candidate)))
+      (setq wall (* 60 (1+ (floor wall 60)))))
+    time))
+
+(defconst mevedel-schedule--cron-fields
+  '(("minute" 0 59) ("hour" 0 23) ("day-of-month" 1 31) ("month" 1 12)
+    ("day-of-week" 0 7))
+  "Name, lowest and highest value of each cron field, in order.")
+
+(defun mevedel-schedule--parse-cron-field (text name low high)
+  "Return the values cron field TEXT allows, or t for \"*\".
+NAME, LOW and HIGH describe the field for validation and errors."
+  (if (equal text "*")
+      t
+    (let (values)
+      (dolist (part (split-string text ","))
+        (unless (string-match
+                 "\\`\\(?:\\*\\|\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)\\(?:/\\([0-9]+\\)\\)?\\'"
+                 part)
+          (user-error "Invalid cron %s field %S" name text))
+        (let* ((from (if (match-beginning 1) (string-to-number (match-string 1 part)) low))
+               (step (if (match-beginning 3) (string-to-number (match-string 3 part)) 1))
+               (to (cond ((match-beginning 2) (string-to-number (match-string 2 part)))
+                         ((and (match-beginning 1) (not (match-beginning 3))) from)
+                         (t high))))
+          (unless (and (<= low from to high) (> step 0))
+            (user-error "Cron %s field %S is outside %d-%d or has a zero step"
+                        name text low high))
+          (cl-loop for value from from to to by step do (push value values))))
+      ;; Day of week 7 is Sunday, like 0.
+      (when (equal name "day-of-week")
+        (setq values (cl-substitute 0 7 values)))
+      (sort (delete-dups values) #'<))))
+
+(defun mevedel-schedule--parse-cron (text)
+  "Return 5-field cron expression TEXT as a list of field values.
+Signal `user-error' for syntax this scheduler does not support."
+  (let ((case-fold-search nil)
+        (fields (split-string text)))
+    (cond
+     ((/= 5 (length fields))
+      (user-error "Cron expression %S needs 5 fields" text))
+     ((string-match-p "[A-Za-z]\\{3\\}" text)
+      (user-error "Cron names such as MON or JAN are not supported; use numbers: %s" text))
+     ((string-match-p "[LW?]" text)
+      (user-error "Cron L, W and ? are not supported: %s" text)))
+    (cl-mapcar (lambda (field spec) (apply #'mevedel-schedule--parse-cron-field field spec))
+               fields mevedel-schedule--cron-fields)))
+
+(defun mevedel-schedule--cron-next (text after)
+  "Return cron expression TEXT's first local fire time later than AFTER, or nil.
+A day matches when its month does and, if both day fields are restricted,
+either of them does; otherwise both."
+  (pcase-let* ((`(,minutes ,hours ,days ,months ,weekdays)
+                (mevedel-schedule--parse-cron text))
+               (allows (lambda (values value) (or (eq values t) (memq value values))))
+               (start (* 60 (1+ (floor (+ after (car (current-time-zone after))) 60))))
+               (day (* 86400 (floor start 86400))))
+    ;; Eight years reach the next leap day even under a weekday restriction.
+    (cl-loop repeat (* 8 366)
+             for date = (decode-time day t)
+             when (and (funcall allows months (decoded-time-month date))
+                       (if (or (eq days t) (eq weekdays t))
+                           (and (funcall allows days (decoded-time-day date))
+                                (funcall allows weekdays (decoded-time-weekday date)))
+                         (or (memq (decoded-time-day date) days)
+                             (memq (decoded-time-weekday date) weekdays))))
+             thereis (cl-loop for hour in (if (eq hours t) (number-sequence 0 23) hours)
+                              thereis
+                              (cl-loop for minute in (if (eq minutes t)
+                                                         (number-sequence 0 59)
+                                                       minutes)
+                                       for wall = (+ day (* 3600 hour) (* 60 minute))
+                                       for time = (and (>= wall start)
+                                                       (mevedel-schedule--resolve-local wall))
+                                       thereis (and time (> time after) time)))
+             do (cl-incf day 86400))))
+
 (defun mevedel-schedule--parse-duration (text)
   "Return the seconds in duration TEXT such as \"1h30m\", or nil."
   (let ((case-fold-search nil)
@@ -108,7 +206,8 @@ Every scheduling decision reads this one clock.")
 
 (defun mevedel-schedule--parse-absolute (text)
   "Return the seconds of local time TEXT, \"YYYY-MM-DD HH:MM[:SS]\", or nil.
-An ISO 8601 offset or Z selects another zone."
+An ISO 8601 offset or Z selects another zone.  An impossible date or time
+such as February 31 is nil."
   (when-let* ((decoded
                (condition-case nil
                    (iso8601-parse
@@ -117,35 +216,56 @@ An ISO 8601 offset or Z selects another zone."
                  (error nil)))
               ((decoded-time-year decoded))
               ((decoded-time-hour decoded)))
-    (unless (decoded-time-second decoded)
-      (setf (decoded-time-second decoded) 0))
-    (truncate (float-time (encode-time decoded)))))
+    (let* ((zone (decoded-time-zone decoded))
+           (fields (list (or (decoded-time-second decoded) 0) (decoded-time-minute decoded)
+                         (decoded-time-hour decoded) (decoded-time-day decoded)
+                         (decoded-time-month decoded) (decoded-time-year decoded)))
+           (wall (time-convert (encode-time (append fields '(nil nil t))) 'integer)))
+      ;; `encode-time' silently normalizes an impossible date to a later one.
+      (when (equal fields (take 6 (decode-time wall t)))
+        (if zone (- wall zone) (mevedel-schedule--resolve-local wall))))))
 
 (defun mevedel-schedule-parse-timing (text now)
   "Return the timing TEXT names at clock seconds NOW, or signal `user-error'.
-TEXT is a duration such as \"20m\" or \"1h30m\" (units d, h, m, s), or a
-local time \"YYYY-MM-DD HH:MM[:SS]\".  A one-shot timing is the plist
-\(:kind once :at SECONDS)."
+TEXT is a duration such as \"20m\" or \"1h30m\" (units d, h, m, s) or a
+local time \"YYYY-MM-DD HH:MM[:SS]\", both one-shot \(:kind once :at
+SECONDS); \"every\" and a duration of at least a minute, \(:kind interval
+:seconds SECONDS); or a 5-field cron expression in local time, \(:kind cron
+:expression TEXT)."
   (unless (and (stringp text) (string-match-p "\\S-" text))
     (user-error "Schedule timing must not be blank"))
   (let* ((text (string-trim text))
-         (seconds (mevedel-schedule--parse-duration text))
-         (at (cond
-              ((null seconds)
-               (or (mevedel-schedule--parse-absolute text)
-                   (user-error "Unrecognized schedule timing %S; use a duration such as 20m or a local time such as 2026-11-21 10:00"
-                               text)))
-              ((> seconds 0) (+ now seconds))
-              (t (user-error "Schedule duration must be positive: %s" text)))))
-    (unless (> at now)
-      (user-error "Schedule time %s is not in the future"
-                  (mevedel-schedule-format-time at)))
-    (list :kind 'once :at at)))
+         (seconds (mevedel-schedule--parse-duration text)))
+    (cond
+     ((string-match "\\`every +\\(.*\\)\\'" text)
+      (let ((interval (mevedel-schedule--parse-duration (match-string 1 text))))
+        (unless (and interval (>= interval 60))
+          (user-error "Schedule interval must be a duration of at least one minute: %s" text))
+        (list :kind 'interval :seconds interval)))
+     ((and (null seconds) (= 5 (length (split-string text))))
+      (unless (mevedel-schedule--cron-next text now)
+        (user-error "Cron expression %S never fires" text))
+      (list :kind 'cron :expression text))
+     (t
+      (let ((at (cond
+                 ((null seconds)
+                  (or (mevedel-schedule--parse-absolute text)
+                      (user-error "Unrecognized schedule timing %S; use a duration such as 20m, a local time such as 2026-11-21 10:00, every 20m, or a cron expression such as 0 9 * * 1-5"
+                                  text)))
+                 ((> seconds 0) (+ now seconds))
+                 (t (user-error "Schedule duration must be positive: %s" text)))))
+        (unless (> at now)
+          (user-error "Schedule time %s is not in the future"
+                      (mevedel-schedule-format-time at)))
+        (list :kind 'once :at at))))))
 
 (defun mevedel-schedule-next-run (timing after)
-  "Return TIMING's first fire time later than clock seconds AFTER, or nil."
+  "Return TIMING's first fire time later than clock seconds AFTER, or nil.
+An interval is timed from AFTER, so runs missed in between never catch up."
   (pcase (plist-get timing :kind)
     ('once (let ((at (plist-get timing :at))) (and (> at after) at)))
+    ('interval (+ after (plist-get timing :seconds)))
+    ('cron (mevedel-schedule--cron-next (plist-get timing :expression) after))
     (kind (error "Unknown schedule timing: %S" kind))))
 
 
@@ -158,8 +278,11 @@ local time \"YYYY-MM-DD HH:MM[:SS]\".  A one-shot timing is the plist
        (cl-evenp (length entry))
        (stringp (plist-get entry :id))
        (stringp (plist-get entry :note))
-       (eq 'once (plist-get (plist-get entry :timing) :kind))
-       (integerp (plist-get (plist-get entry :timing) :at))
+       (let ((timing (plist-get entry :timing)))
+         (pcase (plist-get timing :kind)
+           ('once (integerp (plist-get timing :at)))
+           ('interval (natnump (plist-get timing :seconds)))
+           ('cron (stringp (plist-get timing :expression)))))
        (integerp (plist-get entry :created-at))
        (integerp (plist-get entry :due))
        (let ((expires (plist-get entry :expires-at)))
@@ -200,10 +323,12 @@ local time \"YYYY-MM-DD HH:MM[:SS]\".  A one-shot timing is the plist
     (mevedel-background-list-refresh-session session buffer)))
 
 (defun mevedel-schedule-create (session buffer when note &optional expires)
-  "Create a one-shot wake-up in SESSION, whose root data buffer is BUFFER.
+  "Create a wake-up in SESSION, whose root data buffer is BUFFER.
 WHEN is the timing text accepted by `mevedel-schedule-parse-timing'.  NOTE
-is the text the woken turn receives.  EXPIRES, timing text of the same
-form, is when a still-undelivered wake-up stops mattering.  The wake-up is
+is the text the woken turn receives.  EXPIRES, a one-shot timing text, is
+when a still-undelivered wake-up stops mattering; a recurring wake-up
+expires after `mevedel-schedule-recurring-expiry' by default and at most
+`mevedel-schedule-max-recurring-expiry' after creation.  The wake-up is
 committed with the session before this returns it."
   (unless (and (stringp note) (string-match-p "\\S-" note))
     (user-error "Wake-up note must not be blank"))
@@ -216,9 +341,13 @@ committed with the session before this returns it."
                 mevedel-schedule-max-pending))
   (let* ((now (mevedel-schedule-now))
          (timing (mevedel-schedule-parse-timing when now))
+         (recurring (not (eq 'once (plist-get timing :kind))))
          (due (mevedel-schedule-next-run timing now))
-         (expires-at (and expires
-                          (plist-get (mevedel-schedule-parse-timing expires now) :at)))
+         (expires-at (if expires
+                         (or (plist-get (mevedel-schedule-parse-timing expires now) :at)
+                             (user-error "Wake-up expiry must be a duration or local time: %s"
+                                         expires))
+                       (and recurring (+ now mevedel-schedule-recurring-expiry))))
          (previous (mevedel-session-schedules session))
          (entry (list :id (mevedel-schedule--new-id session)
                       :note (string-trim note)
@@ -231,6 +360,9 @@ committed with the session before this returns it."
       (user-error "Wake-up expiry %s is not after its time %s"
                   (mevedel-schedule-format-time expires-at)
                   (mevedel-schedule-format-time due)))
+    (when (and recurring (> expires-at (+ now mevedel-schedule-max-recurring-expiry)))
+      (user-error "A recurring wake-up must expire within 30 days, not at %s"
+                  (mevedel-schedule-format-time expires-at)))
     (setf (mevedel-session-schedules session) (append previous (list entry)))
     (mevedel-schedule--commit session previous)
     (mevedel-schedule--changed session buffer)

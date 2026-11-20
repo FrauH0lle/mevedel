@@ -110,6 +110,35 @@
       (should (= 1795251600 (plist-get entry :due)))
       (should (= 1795258800 (plist-get entry :expires-at)))))
 
+  :doc "a recurring wake-up persists its timing and expires after 7 days by default"
+  (mevedel-tool-schedule-test--with-request
+    (let* ((outcome (mevedel-tool-schedule-test--call
+                     "(Schedule :action \"create\" :when \"every 20m\" :note \"Babysit PR 412\")"))
+           (cron (mevedel-tool-schedule-test--call
+                  "(Schedule :action \"create\" :when \"0 9 * * 1-5\" :note \"Morning summary\" :expires \"30d\")"))
+           (entries (mevedel-session-schedules session)))
+      (should (eq 'success (plist-get outcome :status)))
+      (should (string-search "\"repeat\":\"every 20m 00s\"" (plist-get outcome :result)))
+      (should (string-search "\"repeat\":\"0 9 * * 1-5\"" (plist-get cron :result)))
+      (should (equal '((:kind interval :seconds 1200) (:kind cron :expression "0 9 * * 1-5"))
+                     (mapcar (lambda (entry) (plist-get entry :timing)) entries)))
+      ;; 7 and 30 days after 2026-11-20 13:00.
+      (should (equal '(1795780800 1797768000)
+                     (mapcar (lambda (entry) (plist-get entry :expires-at)) entries)))
+      (should (equal entries (mevedel-tool-schedule-test--persisted root session)))))
+
+  :doc "short intervals, cron names, a recurring expiry past 30 days and a recurring expiry are tool errors"
+  (mevedel-tool-schedule-test--with-request
+    (dolist (case '(("(Schedule :action \"create\" :when \"every 30s\" :note \"x\")" . "at least one minute")
+                    ("(Schedule :action \"create\" :when \"0 9 * * MON\" :note \"x\")" . "names")
+                    ("(Schedule :action \"create\" :when \"every 1h\" :note \"x\" :expires \"31d\")" . "30 days")
+                    ("(Schedule :action \"create\" :when \"20m\" :note \"x\" :expires \"every 1h\")" . "expiry")))
+      (ert-info ((car case))
+        (let ((outcome (mevedel-tool-schedule-test--call (car case))))
+          (should-not (eq 'success (plist-get outcome :status)))
+          (should (string-search (cdr case) (plist-get outcome :result))))))
+    (should-not (mevedel-session-schedules session)))
+
   :doc "invalid timing, a past time, a blank note, a late expiry and a 51st wake-up are tool errors"
   (mevedel-tool-schedule-test--with-request
     (dolist (case '(("(Schedule :action \"create\" :when \"soon\" :note \"x\")" . "Unrecognized")
