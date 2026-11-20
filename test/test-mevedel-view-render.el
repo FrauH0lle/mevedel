@@ -2754,13 +2754,13 @@
             (copy-marker (mevedel-view-transcript-tail)))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max) nil)))
-      (mevedel-view--start-spinner "Thinking...")
+      (mevedel-view--start-spinner "Render in progress")
       (mevedel-view--full-rerender)
-      (should (mevedel-view--request-progress-visible-p))
+      (should (string-search "Render in progress" (mevedel-view-test--rail-text)))
+      (should-not (string-search "Render in progress" (buffer-string)))
       (mevedel-view--stop-spinner)
-      (let ((text (mevedel-view-render-test--view-text)))
-        (should (string-match-p "Prompt" text))
-        (should-not (string-match-p "Thinking" text)))))
+      (should-not (string-search "Render in progress" (mevedel-view-test--rail-text)))
+      (should (string-search "Prompt" (mevedel-view-render-test--view-text)))))
 
   :doc "reanchors to current assistant when mailbox follows the in-flight turn"
   (mevedel-view-test--with-buffers

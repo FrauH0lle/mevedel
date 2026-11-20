@@ -122,8 +122,6 @@
 (declare-function mevedel-view--start-spinner-timer "mevedel-view-stream" (&optional resumed))
 (declare-function mevedel-view--render-request-progress
                   "mevedel-view-stream" nil)
-(declare-function mevedel-view--request-progress-region-start
-		  "mevedel-view-stream" nil)
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-fragment-bounds
@@ -467,13 +465,7 @@ snapshot taken at registration."
 
 (defun mevedel-view--interaction-region-end ()
   "Return the end boundary for fragment-managed interaction text."
-  (let ((progress-start (mevedel-view--request-progress-region-start))
-        (input-pos (mevedel-view-transcript-tail)))
-    (or (and progress-start
-             (or (not input-pos) (<= progress-start input-pos))
-             progress-start)
-        input-pos
-        (point-max))))
+  (or (mevedel-view-transcript-tail) (point-max)))
 
 (defun mevedel-view--interaction-descriptor-pairs ()
   "Return live interaction descriptor pairs in display order.
@@ -642,12 +634,9 @@ if the window is still visiting that interaction.  Reveal hidden Plan
 approvals as needed."
   (interactive)
   (if-let* ((view (bound-and-true-p mevedel-composer--view)))
-      (let* ((composer (selected-window))
-             (window (window-in-direction 'above composer))
-             (offset (and (mevedel-view-composer-in-draft-p (point))
-                          (- (point) (mevedel-view-composer-draft-start)))))
-        (unless (and window (eq (window-buffer window) view)
-                     (eq (mevedel-view-composer-window window) composer))
+      (let ((window (mevedel-view-transcript-window))
+            (offset (max 0 (- (point) (mevedel-view-composer-draft-start)))))
+        (unless window
           (mevedel-diagnostic-user-error (mevedel-diagnostic-scope view)
                                         "No paired transcript window"))
         (with-current-buffer view
@@ -684,7 +673,6 @@ approvals as needed."
       (when offset
         (push (list window (car pair) offset)
               mevedel-view--interaction-focus-return))
-      (goto-char position)
       (set-window-point window position))))
 
 (defun mevedel-view--interaction-focused-visits ()

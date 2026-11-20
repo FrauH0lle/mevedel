@@ -489,12 +489,8 @@
         (with-current-buffer view-buf
           (should (equal "queued\nmessage"
                          (mevedel-view-composer-draft-text nil t)))
-          (let ((rail (mevedel-view-zone-region 'progress)))
-            (should (overlayp rail))
-            (should (string-match-p
-                     "Editing follow-up 1"
-                     (buffer-substring-no-properties
-                      (overlay-start rail) (overlay-end rail)))))
+          (should (string-search "Editing follow-up 1"
+                                 (mevedel-view-test--rail-text)))
           (should-error (with-current-buffer (mevedel-view-composer-buffer)
                           (mevedel-view-send)) :type 'user-error)
           (should-error (with-current-buffer (mevedel-view-composer-buffer)

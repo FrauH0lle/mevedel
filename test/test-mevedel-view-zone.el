@@ -469,9 +469,9 @@ The current buffer is the owning view."
       (let ((dock (mevedel-view-composer-display (selected-window))))
         (should dock)
         (should (> (window-body-height dock) 2))
-        (should (= 0 (mevedel-view-test--composer-screen-y dock)))
+        (should (= 1 (mevedel-view-test--composer-screen-y dock)))
         (mevedel-view-zone-clear 'interaction)
-        (should (= 0 (mevedel-view-test--composer-screen-y dock)))
+        (should (= 1 (mevedel-view-test--composer-screen-y dock)))
         (should (= (+ 4 (mevedel-view-composer-draft-start)) (window-point dock)))
         (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 

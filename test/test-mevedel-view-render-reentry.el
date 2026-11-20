@@ -313,18 +313,20 @@
                                ('progress
                                 (mevedel-view--update-spinner
                                  "Nonempty reentrant progress" 'request)))
+                             (should (equal-including-properties before (buffer-string)))
                              (if (eq ',zone 'progress)
-                                 (let ((region (mevedel-view-zone-region 'progress)))
-                                   (should region)
-                                   (should (< (overlay-start region) (overlay-end region))))
-                               (should (equal-including-properties before (buffer-string)))
+                                 (should (string-search "Nonempty reentrant progress"
+                                                        (mevedel-view-test--rail-text)))
                                (should-not (mevedel-view-zone-region ',zone))
                                (should (assoc ',zone mevedel-view-render--pending)))))))))
             (pcase ',render
               ('full (mevedel-view--full-rerender))
               ('incremental (mevedel-view-render-live-update data-buf))))
           (should entered)
-          (should (mevedel-view-zone-region ',zone))
+          (if (eq ',zone 'progress)
+              (should (string-search "Nonempty reentrant progress"
+                                     (mevedel-view-test--rail-text)))
+            (should (mevedel-view-zone-region ',zone)))
           (should (= 1 (mevedel-view-test--count-substring
                         "Unique response body" (buffer-string))))
           (let ((end (mevedel-view-composer-draft-end))
@@ -344,7 +346,7 @@
               (should (equal prompt (buffer-substring-no-properties (point-min) start)))
               (should (= start (overlay-start mevedel-view--composer-display-overlay)))
               (should (= end (overlay-end mevedel-view--composer-display-overlay)))
-              (let ((position (point-min)))
+              (let ((position (+ (point-min) 4)))
                 (while (< position start)
                   (should (get-text-property position 'mevedel-view-prompt))
                   (should-not (invisible-p position))
@@ -357,7 +359,7 @@
                 (should-not (get-char-property position 'line-prefix))
                 (should-not (get-char-property position 'wrap-prefix))
                 (setq position (1+ position))))
-            (dolist (name '(status interaction progress))
+            (dolist (name '(status interaction))
               (when-let* ((region (mevedel-view-zone-region name)))
                 (should (<= mevedel-view--status-marker
                             (overlay-start region) (overlay-end region) tail))))

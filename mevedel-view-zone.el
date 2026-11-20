@@ -205,12 +205,14 @@ unrelated redraw changes their height.")
 
 (defun mevedel-view-zone-width ()
   "Return the narrowest body width of the windows showing this buffer.
-Without such a window, return the selected window's body width.  Chrome
-that fits in it stays one screen row per line in every window."
+Without such a window use the selected window's width, or the frame's
+when that window is a composer."
   (let ((windows (mevedel-view--windows 'geometry)))
-    (if windows
-        (apply #'min (mapcar #'window-body-width windows))
-      (window-body-width))))
+    (cond
+     (windows (apply #'min (mapcar #'window-body-width windows)))
+     ((eq (buffer-local-value 'major-mode (window-buffer)) 'mevedel-composer-mode)
+      (frame-width))
+     (t (window-body-width)))))
 
 (defun mevedel-view-zone--on-window-change (_window)
   "Run `mevedel-view-zone-width-change-functions' if the zone width changed."

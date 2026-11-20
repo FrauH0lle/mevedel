@@ -203,17 +203,19 @@
                     (wait 0.6)
                     (with-current-buffer view
                       (should (string-search chunk (buffer-string)))
-                      (let ((sample (get-char-property
-                                     (car mevedel-view--spinner-label-target) 'display window)))
-                        (should sample)
-                        (should
-                         (cl-loop repeat 12
-                                  do (wait 0.04)
-                                  thereis (not (equal sample
-                                                      (get-char-property
-                                                       (car mevedel-view--spinner-label-target)
-                                                       'display window))))))
                       (should (equal draft (mevedel-view-composer-draft-text))))
+                    (with-current-buffer (window-buffer editor)
+                      (let ((cell (text-property-any
+                                   (point-min) (+ (point-min) 3)
+                                   'mevedel-view-spinner-frame t)))
+                        (should cell)
+                        (let ((sample (get-text-property cell 'display)))
+                          (should (stringp sample))
+                          (should
+                           (cl-loop repeat 12
+                                    do (wait 0.04)
+                                    thereis (not (equal sample
+                                                        (get-text-property cell 'display))))))))
                     (should (= draft-point (window-point editor)))
                     (should (= draft-start (window-start editor)))
                     (should (= draft-row (cdr (posn-col-row (posn-at-point draft-point editor)))))

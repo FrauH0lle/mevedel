@@ -912,6 +912,21 @@ handler chain would, so staged reminder entries reach the data."
       (mevedel-reminders--handle-inject fsm))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
+(defun mevedel-view-test--rail-text (&optional view)
+  "Return the displayed first line of VIEW's composer, or nil without one."
+  (require 'mevedel-view-composer)
+  (when-let* ((composer (mevedel-view-composer-buffer view)))
+    (with-current-buffer composer
+      (save-excursion
+        (goto-char (point-min))
+        (let (pieces)
+          (while (not (eolp))
+            (when-let* ((display (get-text-property (point) 'display))
+                        ((stringp display)))
+              (push display pieces))
+            (forward-char))
+          (apply #'concat (nreverse pieces)))))))
+
 (defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
   "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
   (require 'mevedel-view-composer)

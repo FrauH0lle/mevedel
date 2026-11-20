@@ -620,6 +620,8 @@
                   (setq-local mevedel--current-request nil))
                 (mevedel-view--setup view data)
                 (set-window-buffer (selected-window) view)
+                (should (mevedel-view-composer-display (selected-window)))
+                (redisplay t)
                 (with-current-buffer view
                   (mevedel-view-test--insert-composer-draft draft 3)
                   (mevedel-view--update-spinner "Preparing implementation..." owner)

@@ -66,6 +66,7 @@
                     mevedel-view--render-stream-update
                     mevedel-view-render-live-update
                     mevedel-view--spinner-tick
+                    mevedel-view--write-request-rail
                     mevedel-view-zone-reconcile
                     mevedel-view--realign-on-window-change))
     (unless (byte-code-function-p (symbol-function symbol))
@@ -91,11 +92,14 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
            (mevedel-view-composer-insert mevedel-gate--draft)
            (let* ((composer-window (mevedel-view-composer-display (selected-window)))
                   (composer (mevedel-view-composer-buffer view))
-                  (target (if (eq scenario 'composer-keystroke) composer view))
+                  (target (if (eq scenario 'stream-chunk) view composer))
                   (offset 4)
                   (chunk " fixed stream chunk.")
-                  (reconciles 0)
-                  (reconcile (symbol-function 'mevedel-view-zone-reconcile))
+                  (writes 0)
+                  (writer-symbol (if (eq scenario 'zone-tick)
+                                     'mevedel-view--write-request-rail
+                                   'mevedel-view-zone-reconcile))
+                  (writer (symbol-function writer-symbol))
                   update result)
              (unless (and composer-window (eq (window-buffer composer-window) composer))
                (error "Fixture composer is not displayed"))
@@ -133,7 +137,9 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                 (mevedel-view--ensure-request-progress)
                 (setq mevedel-view--spinner-last-second 1000)
                 (setq now (seconds-to-time 1001.25))
-                (setq update #'mevedel-view--spinner-tick))
+                (setq update (lambda ()
+                               (with-current-buffer view
+                                 (mevedel-view--spinner-tick)))))
                (_ (error "Unknown allocation scenario: %s" scenario)))
              (set-window-start
               (selected-window)
@@ -143,10 +149,10 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                 (point)))
              (redisplay t)
              (let ((tick (buffer-modified-tick target)))
-               (cl-letf (((symbol-function 'mevedel-view-zone-reconcile)
+               (cl-letf (((symbol-function writer-symbol)
                           (lambda (&rest args)
-                            (cl-incf reconciles)
-                            (apply reconcile args))))
+                            (cl-incf writes)
+                            (apply writer args))))
                  ;; Keep benchmark timers on the real clock.  Only the update
                  ;; itself sees the deterministic semantic-tick clock.
                  (let ((operation update))
@@ -180,12 +186,11 @@ Every invocation owns a fresh view; warmups cannot grow the measured turn."
                                           (mevedel-view--history-insertion-marker) t))
                   (error "Stream fixture skipped the appended chunk")))
                ('zone-tick
-                (unless (and (> reconciles 0)
-                             (save-excursion
-                               (let ((boundary (mevedel-view-transcript-tail)))
-                                 (goto-char (- boundary 100))
-                                 (search-forward "13s" boundary t))))
-                  (error "Zone tick skipped elapsed metadata reconciliation"))))
+                (unless (and (> writes 0)
+                             (with-current-buffer composer
+                               (equal " · 13s"
+                                      (get-text-property (+ (point-min) 2) 'display))))
+                  (error "Zone tick skipped elapsed rail repaint"))))
              result)))))))
 
 (defun mevedel-allocation-gate-run ()

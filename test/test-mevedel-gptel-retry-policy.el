@@ -252,8 +252,8 @@ Bind request, backend, fsm, state and info for assertions."
       (should (equal "Codex temporarily unavailable: retry 1/10"
                      mevedel-view--spinner-status))
       (should (eq 'provider-retry mevedel-view--spinner-owner))
-      (should (mevedel-view--request-progress-visible-p))
-      (should (string-match-p "Codex temporarily unavailable: retry 1/10" (buffer-string)))
+      (should (string-search "Codex temporarily unavailable: retry 1/10"
+                             (mevedel-view-test--rail-text)))
       (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
       (should (= 4 (mevedel-view-test--composer-point-offset)))))
 
@@ -263,11 +263,12 @@ Bind request, backend, fsm, state and info for assertions."
     (plist-put info :mevedel-retry-state (copy-sequence state))
     (with-current-buffer view-buf
       (let ((before (buffer-string))
+            (rail (mevedel-view-test--rail-text))
             (generation mevedel-view--spinner-generation))
         (mevedel-gptel-retry--status state "Stale retry status")
         (should (equal before (buffer-string)))
+        (should (equal rail (mevedel-view-test--rail-text)))
         (should (= generation mevedel-view--spinner-generation))
-        (should (mevedel-view--request-progress-visible-p))
         (should-not mevedel-view--spinner-status)
         (should-not mevedel-view--spinner-owner)
         (should-not mevedel-view--spinner-timer)
@@ -281,6 +282,7 @@ Bind request, backend, fsm, state and info for assertions."
       (with-current-buffer view-buf
         (mevedel-view-stream-stop)
         (let ((before (buffer-string))
+              (rail (mevedel-view-test--rail-text))
               (generation mevedel-view--spinner-generation))
           (mevedel-gptel-retry--callback
            state stale
@@ -290,8 +292,8 @@ Bind request, backend, fsm, state and info for assertions."
            "old response" stale)
           (should-not called)
           (should (equal before (buffer-string)))
+          (should (equal rail (mevedel-view-test--rail-text)))
           (should (= generation mevedel-view--spinner-generation))
-          (should (mevedel-view--request-progress-visible-p))
           (should-not mevedel-view--spinner-status)
           (should-not mevedel-view--spinner-owner)
           (should-not mevedel-view--spinner-timer)
@@ -313,8 +315,9 @@ Bind request, backend, fsm, state and info for assertions."
     (with-current-buffer view-buf
       (should (equal "Thinking..." mevedel-view--spinner-status))
       (should (eq 'request mevedel-view--spinner-owner))
-      (should (mevedel-view--request-progress-visible-p))
-      (should-not (string-match-p "Retrying provider request" (buffer-string)))
+      (should (string-search "Working" (mevedel-view-test--rail-text)))
+      (should-not (string-search "Retrying provider request"
+                                 (mevedel-view-test--rail-text)))
       (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
       (should (= 4 (mevedel-view-test--composer-point-offset)))))
 

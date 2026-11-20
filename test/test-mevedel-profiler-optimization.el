@@ -119,6 +119,7 @@
    (lambda (data view)
      (with-current-buffer data (mevedel-benchmark--projection-history))
      (with-current-buffer view
+       (should (mevedel-view-composer-display (selected-window)))
        (mevedel-view-test--insert-composer-draft "> benchmark draft\nsecond line" 4)
        (let ((composer (mevedel-view-composer-window)))
          (set-window-point composer

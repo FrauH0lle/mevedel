@@ -492,6 +492,9 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--render-request-progress
                   "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-composer-window-change
+                  "mevedel-view-stream" (window &optional start))
+(autoload 'mevedel-view-stream-composer-window-change "mevedel-view-stream")
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-begin-turn
@@ -647,6 +650,9 @@ their distinct labels."
 
 (define-derived-mode mevedel-composer-mode text-mode "Composer"
   "Edit the draft of a mevedel conversation."
+  (add-hook 'window-buffer-change-functions #'mevedel-view-stream-composer-window-change nil t)
+  (add-hook 'window-size-change-functions #'mevedel-view-stream-composer-window-change nil t)
+  (add-hook 'window-scroll-functions #'mevedel-view-stream-composer-window-change nil t)
   (unless (eq yank-excluded-properties t)
     (setq-local yank-excluded-properties
                 (append mevedel-view-zone-owned-properties
@@ -677,8 +683,14 @@ their distinct labels."
                     mevedel--data-buffer data
                     mevedel-view--side-conversation-p side
                     default-directory directory)
-        (insert (mevedel-view--input-prompt-string))
-        (mevedel-view--propertize-input-prompt (point-min) (point))
+        ;; Display cells keep draft undo positions stable when the rail changes.
+        (insert (propertize "   " 'display "") "\n")
+        (add-text-properties (point-min) (point)
+                             '(read-only t front-sticky (read-only)
+                               rear-nonsticky t))
+        (let ((start (point)))
+          (insert (mevedel-view--input-prompt-string))
+          (mevedel-view--propertize-input-prompt start (point)))
         (setq mevedel-composer--draft-start (point-marker))
         (setq buffer-undo-list nil)
         (mevedel-view-composer-initialize)))))
@@ -705,6 +717,19 @@ VIEW-WINDOW defaults to the selected window.  Do not change selection."
                     (below (window-in-direction 'below window))
                     ((eq (window-buffer below) composer)))
           below)))))
+
+(defun mevedel-view-transcript-window (&optional window)
+  "Return WINDOW's transcript window without selecting or displaying it.
+WINDOW defaults to the selected window."
+  (let ((window (or window (selected-window))))
+    (when (window-live-p window)
+      (with-current-buffer (window-buffer window)
+        (if mevedel-composer--view
+            (when-let* ((above (window-in-direction 'above window))
+                        ((eq (window-buffer above) mevedel-composer--view))
+                        ((eq (mevedel-view-composer-window above) window)))
+              above)
+          (when (derived-mode-p 'mevedel-view-mode) window))))))
 
 (defun mevedel-view-composer-display (view-window)
   "Display the draft below VIEW-WINDOW, without selecting either window."
@@ -1722,7 +1747,7 @@ overriding read-only protections."
           (point))))))
 
 (defun mevedel-view-refresh-input-prompt ()
-  "Refresh the composer prefix and the view's request progress."
+  "Refresh the composer prefix and its request rail."
   (interactive)
   (with-current-buffer (or mevedel-composer--view (current-buffer))
     (when-let* ((composer (mevedel-view-composer-buffer)))
@@ -1730,22 +1755,23 @@ overriding read-only protections."
         (with-current-buffer composer
           (save-restriction
             (widen)
-            (unless (equal prefix
-                           (buffer-substring-no-properties
-                            (point-min) mevedel-composer--draft-start))
-              (let ((inhibit-read-only t)
-                    (offset (- (point) mevedel-composer--draft-start)))
-                (with-silent-modifications
-                  (delete-region (point-min) mevedel-composer--draft-start)
-                  (goto-char (point-min))
-                  (insert prefix)
-                  (mevedel-view--propertize-input-prompt (point-min) (point))
-                  (set-marker mevedel-composer--draft-start (point))
-                  (move-overlay mevedel-view--composer-display-overlay
-                                (point) (point-max))
-                  (mevedel-view--update-composer-indent))
-                (goto-char (max (point-min)
-                                (+ offset mevedel-composer--draft-start)))))))))
+            (let ((start (save-excursion (goto-char (point-min))
+                                         (line-beginning-position 2))))
+              (unless (equal prefix (buffer-substring-no-properties
+                                     start mevedel-composer--draft-start))
+                (let ((inhibit-read-only t)
+                      (offset (- (point) mevedel-composer--draft-start)))
+                  (with-silent-modifications
+                    (delete-region start mevedel-composer--draft-start)
+                    (goto-char start)
+                    (insert prefix)
+                    (mevedel-view--propertize-input-prompt start (point))
+                    (set-marker mevedel-composer--draft-start (point))
+                    (move-overlay mevedel-view--composer-display-overlay
+                                  (point) (point-max))
+                    (mevedel-view--update-composer-indent))
+                  (goto-char (max (point-min)
+                                  (+ offset mevedel-composer--draft-start))))))))))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view--render-request-progress))))
 

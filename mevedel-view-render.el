@@ -368,10 +368,6 @@
                   "mevedel-view-stream" (start end previous))
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
-(declare-function mevedel-view--forget-request-progress-region
-                  "mevedel-view-stream" ())
-(declare-function mevedel-view--repair-request-progress-separator
-                  "mevedel-view-stream" ())
 (declare-function mevedel-view--retire-pending-tool-rows
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--schedule-tool-boundary-render
@@ -380,8 +376,6 @@
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-animation-frame
                   "mevedel-view-animation" (style label seconds face &optional frame))
-(declare-function mevedel-view--spinner-region-p
-                  "mevedel-view-stream" (start end))
 (declare-function mevedel-view-stream-in-flight-turn-start-position
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-set-in-flight-turn-start
@@ -964,26 +958,6 @@ With prefix argument CLEAR, erase the trace buffer first."
                  preview)
                t t))))))
 
-(defun mevedel-view--debug-spinner-state ()
-  "Return a plist describing the current request-progress region."
-  (let ((ov (mevedel-view-zone-region 'progress)))
-    (cond
-     ((not (overlayp ov)) nil)
-     ((not (overlay-buffer ov)) '(:detached t))
-     (t
-      (let ((start (overlay-start ov))
-            (end (overlay-end ov))
-            (buf (overlay-buffer ov)))
-        (append
-         (list :buffer (buffer-name buf)
-               :start start
-               :end end
-               :spinner-text-p
-               (and (eq buf (current-buffer))
-                    (mevedel-view--spinner-region-p start end)))
-         (when (eq buf (current-buffer))
-           (list :region (mevedel-view--debug-region start end)))))))))
-
 (defun mevedel-view--debug-fragment-position (position)
   "Return managed-fragment coordinates for POSITION, or nil."
   (when (and (integer-or-marker-p position)
@@ -1034,7 +1008,6 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
             :in-flight in-flight
             :data-turn-start data-start
             :pending mevedel-view--pending-tool-calls
-            :spinner (mevedel-view--debug-spinner-state)
             :live-tail live-tail
             :data-buffer (and (buffer-live-p data-buf)
                               (buffer-name data-buf))
@@ -4138,19 +4111,6 @@ loses its running count.  Return non-nil when anything changed."
         (unless (string-empty-p str)
           str)))))
 
-(defun mevedel-view--request-progress-anchor ()
-  "Return where the foreground request progress row should be inserted.
-Request progress lives after status and interaction rows, directly
-before the input zone.  Fall back to the history boundary only when the
-input boundary cannot be recovered."
-  (or (let ((input-pos (and (mevedel-view-transcript-tail-marker)
-                            (mevedel-view-transcript-tail))))
-        (and input-pos
-             (<= (point-min) input-pos)
-             (<= input-pos (point-max))
-             input-pos))
-      (mevedel-view--history-boundary-target)))
-
 (defmacro mevedel-view-render--with-boundaries-advancing (&rest body)
   "Execute BODY while view zone boundary markers advance."
   (declare (indent 0) (debug t))
@@ -4699,13 +4659,7 @@ operations call their owned implementations rather than entering here again."
                   ;; or replacement behind it.  Report the first error only
                   ;; after every still-current intention has been drained.
                   (while mevedel-view-render--pending
-                    (run (pop mevedel-view-render--pending)))
-                  ;; Writers change how the transcript ends without
-                  ;; redrawing the rail below it.
-                  (unless failure
-                    (condition-case err
-                        (mevedel-view--repair-request-progress-separator)
-                      (error (setq failure err)))))
+                    (run (pop mevedel-view-render--pending))))
                 (if failure (signal (car failure) (cdr failure)) result))
             (setq mevedel-view-render--owner nil
                   mevedel-view-render--pending nil)))))))
@@ -8078,7 +8032,6 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
               (marker-position (mevedel-view-transcript-tail-marker)))
      :state (mevedel-view--debug-state data-buf))
     (delete-region (point-min) (mevedel-view-transcript-tail-marker))
-    (mevedel-view--forget-request-progress-region)
     (goto-char (point-min))
     (insert (mevedel-view--header-string session-data-buf))
     (if historical-p

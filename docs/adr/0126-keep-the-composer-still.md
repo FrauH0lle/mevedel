@@ -12,6 +12,11 @@ sticky follow flag. An output write leaves the viewport alone if the new end
 still fits. If not, it brings the last page into view without selecting the
 transcript or disturbing the dock's draft.
 
+The first line of the composer is a permanent rail for the mode badge,
+pending actions and request activity. Its fixed cells repaint without moving
+draft or undo positions. The transcript keeps its status and interaction zones
+at the end; their width is independent of composer windows.
+
 Zone reconciliation and its enclosing render transaction restore logical
 positions first and then apply the viewport rule for each window:
 

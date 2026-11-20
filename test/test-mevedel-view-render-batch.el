@@ -971,14 +971,15 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should-not (string-search "Loading conversation turn" (buffer-string))))))
 
-(mevedel-deftest mevedel-view--repair-request-progress-separator ()
+(mevedel-deftest mevedel-view-render/batch-rail-isolation ()
   ,test
   (test)
-  :doc "the rail separator follows the transcript end once placeholders fill"
+  :doc "filling transcript placeholders leaves the idle rail and draft unchanged"
   (mevedel-batch-test--with-history
     (save-window-excursion
       (set-window-buffer (selected-window) view-buf)
-      (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
+      (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
+            (rail (mevedel-view-test--rail-text)))
         (goto-char (point-min))
         (search-forward "Response 0 with target text")
         (set-window-start nil (line-beginning-position) t)
@@ -994,16 +995,10 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
           (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
         (should (equal expected
                        (buffer-substring-no-properties (point-min) (point-max))))
+        (should (equal rail (mevedel-view-test--rail-text)))
         (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
         (should (= (+ (mevedel-view-composer-draft-start) 4)
-                   (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
-  :doc "a rail whose separator is current is not redrawn"
-  (mevedel-batch-test--with-history
-    (let (redrawn)
-      (cl-letf (((symbol-function 'mevedel-view--render-request-progress)
-                 (lambda () (setq redrawn t))))
-        (mevedel-view--repair-request-progress-separator))
-      (should-not redrawn))))
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (provide 'test-mevedel-view-render-batch)
 ;;; test-mevedel-view-render-batch.el ends here

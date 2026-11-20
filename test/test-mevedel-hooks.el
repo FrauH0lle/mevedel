@@ -3282,16 +3282,10 @@
               (should (equal "> quoted\nsecond line"
                              (mevedel-view-composer-draft-text)))
               (should (= 4 (mevedel-view-test--composer-point-offset)))
-              (should (string-match-p
-                       "Running PreToolUse hook"
-                       (buffer-substring-no-properties
-                        (point-min) (mevedel-view-transcript-tail))))
-              ;; Agents are counted by the background-work panel, not
-              ;; the progress footer.
-              (should-not (string-match-p
-                           "agent"
-                           (buffer-substring-no-properties
-                            (point-min) (mevedel-view-transcript-tail)))))
+              (let ((rail (mevedel-view-test--rail-text)))
+                (should (string-match-p "Running PreToolUse hook" rail))
+                ;; Agents are counted by the background-work panel, not the rail.
+                (should-not (string-match-p "agent" rail))))
             (funcall handler-finish nil)
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"

@@ -152,11 +152,6 @@ Return (VIEW-WINDOW . READER)."
   (mevedel-view-user-state-test--add-chunk data-buf "Streaming response begins.\n")
   (mevedel-view--render-stream-update data-buf))
 
-(defun mevedel-view-user-state-test--rail ()
-  "Return the text of the permanent composer rail."
-  (let ((region (mevedel-view-zone-region 'progress)))
-    (buffer-substring-no-properties (overlay-start region) (overlay-end region))))
-
 (defun mevedel-view-user-state-test--register-agent (data-buf)
   "Register a tool rendering an agent handle and add two calls to DATA-BUF."
   (mevedel-tool-register
@@ -206,29 +201,33 @@ Return (VIEW-WINDOW . READER)."
     (should (string-search "Final settled text." (buffer-string))))
   :doc "starting request progress keeps the draft, composer row and reader"
   nil
-  (let ((rail (mevedel-view-user-state-test--rail)))
+  (let ((rail (mevedel-view-test--rail-text)))
     (mevedel-view--start-spinner "Thinking...")
-    (should-not (equal rail (mevedel-view-user-state-test--rail))))
+    (should-not (equal rail (mevedel-view-test--rail-text))))
   :doc "a request status update keeps the draft, composer row and reader"
   (mevedel-view--start-spinner "Thinking...")
   (progn
     (mevedel-view--update-spinner "Running a much longer status label" 'request)
-    (should (string-search "much longer status" (buffer-string))))
+    (should (string-search "much longer status" (mevedel-view-test--rail-text))))
   :doc "stopping request progress keeps the draft, composer row and reader"
   (mevedel-view--start-spinner "Thinking...")
-  (let ((rail (mevedel-view-user-state-test--rail)))
+  (let ((rail (mevedel-view-test--rail-text)))
     (mevedel-view--stop-spinner)
-    (should-not (equal rail (mevedel-view-user-state-test--rail))))
+    (should-not (equal rail (mevedel-view-test--rail-text))))
   :doc "a semantic spinner tick keeps the draft, composer row and reader"
   (progn
     (mevedel-view--start-spinner "Working...")
     (setq mevedel-view--spinner-start-time (seconds-to-time 988.0)
           mevedel-view--spinner-last-second 1000)
     (mevedel-view--ensure-request-progress))
-  (progn
+  (let ((transcript-tick (buffer-chars-modified-tick)))
     (setq clock 1001.0)
-    (mevedel-view--spinner-tick)
-    (should (string-search "13s" (buffer-string))))
+    ;; The same callback can also update visible execution rows.
+    (cl-letf (((symbol-function 'mevedel-view--background-metadata-visible-p)
+               #'ignore))
+      (mevedel-view--spinner-tick))
+    (should (string-search "13s" (mevedel-view-test--rail-text)))
+    (should (= transcript-tick (buffer-chars-modified-tick))))
   :doc "a background elapsed tick keeps the draft, composer row and reader"
   nil
   (progn
@@ -276,7 +275,7 @@ Return (VIEW-WINDOW . READER)."
       ;; The injection must have run exactly once inside the outer writer.
       (should (= 1 entered))
       (should (string-search "Nested chunk." (buffer-string)))
-      (should (string-search "Nested status" (buffer-string)))))
+      (should (string-search "Nested status" (mevedel-view-test--rail-text)))))
   (inner condition nested outer)
   :doc "rail reconciliation nested inside a streamed chunk"
   mevedel-view--render-turn t
@@ -285,7 +284,7 @@ Return (VIEW-WINDOW . READER)."
     (mevedel-view-user-state-test--add-chunk data-buf "Nested chunk.\n")
     (mevedel-view--render-stream-update data-buf))
   :doc "a streamed chunk nested inside rail reconciliation"
-  mevedel-view-zone--reconcile (eq (car args) (mevedel-view-zone-region 'progress))
+  mevedel-view--render-request-progress t
   (progn
     (mevedel-view-user-state-test--add-chunk data-buf "Nested chunk.\n")
     (mevedel-view--render-stream-update data-buf))
@@ -376,29 +375,19 @@ REGION promises that THUNK replaces only that text."
   (progn
     (setq clock 1001.0)
     (mevedel-view-execution-tick)
-    (should (string-search "2m 33s" (buffer-string))))
-  :doc "a semantic rail tick replaces only the rail"
-  (progn
-    (mevedel-view--start-spinner "Working...")
-    (setq mevedel-view--spinner-start-time (seconds-to-time 988.0)
-          mevedel-view--spinner-last-second 1000)
-    (mevedel-view--ensure-request-progress))
-  (progn
-    (setq clock 1001.0)
-    (mevedel-view--spinner-tick)
-    (should (string-search "13s" (buffer-string)))))
+    (should (string-search "2m 33s" (buffer-string)))))
 
 (mevedel-deftest mevedel-view-user-state/request-progress-width ()
   (mevedel-view-user-state-test--with-view
     (mevedel-view--start-spinner "Thinking about a fairly long status label")
     (let* ((windows (mevedel-view-user-state-test--arrange))
-           (rail (mevedel-view-user-state-test--rail)))
+           (rail (mevedel-view-test--rail-text)))
       ;; A narrower window now shows the view: the rail must refit and can
       ;; rewrap, while every window keeps the user's state.
       (with-selected-window (car windows) (split-window-right))
       (mevedel-view-user-state-test--preserves windows
         ,action
-        (should-not (equal rail (mevedel-view-user-state-test--rail))))))
+        (should-not (equal rail (mevedel-view-test--rail-text))))))
   (action)
   :doc "a status update refits the rail to a narrower window"
   (mevedel-view--update-spinner "Running another fairly long status label" 'request)

@@ -53,6 +53,7 @@ The current buffer is the owning view."
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
+      (should (mevedel-view-composer-display (selected-window)))
       (let ((now (seconds-to-time 1000.25))
             (float (symbol-function 'float-time))
             (mevedel-view-spinner-style 'static)
@@ -73,12 +74,12 @@ The current buffer is the owning view."
           (setq mevedel-view--spinner-start-time (seconds-to-time 988.25))
           (mevedel-view--ensure-request-progress)
           (setq mevedel-view--spinner-last-second 1000)
-          (let* ((region (mevedel-view-zone-region 'progress))
-                 (line (make-overlay (overlay-end region) (point-max)))
+          (let* ((interaction (mevedel-view-zone-region 'interaction))
+                 (line (make-overlay (overlay-start interaction) (overlay-end interaction)))
                  (position (mevedel-view-zone-preservation-test--caret-offset))
                  (composer (mevedel-view-composer-buffer view-buf))
                  undo
-                 (anchored-position (+ (overlay-start region) 2))
+                 (anchored-position (+ (overlay-start interaction) 2))
                  (anchor (mevedel-view-zone-position-anchor anchored-position))
                  (regions (mapcar (lambda (zone)
                                     (let ((other (mevedel-view-zone-region zone)))
@@ -95,10 +96,9 @@ The current buffer is the owning view."
             (should (= (1+ position) (mevedel-view-zone-preservation-test--caret-offset)))
             (should (equal "> drxaft\nsecond line" (mevedel-view-composer-draft-text)))
             (should (= anchored-position (mevedel-view-zone-anchor-position anchor)))
-            (should (= (overlay-end region) (overlay-start line)))
-            (should (save-excursion
-                      (goto-char (overlay-start region))
-                      (search-forward "13s" (overlay-end region) t)))
+            (should (= (overlay-start interaction) (overlay-start line)))
+            (should (= (overlay-end interaction) (overlay-end line)))
+            (should (string-search "13s" (mevedel-view-test--rail-text)))
             (dolist (state regions)
               (should (= (nth 1 state) (overlay-start (car state))))
               (should (= (nth 2 state) (overlay-end (car state)))))

@@ -1045,7 +1045,7 @@
                        (mevedel-view-zone-region 'interaction))
                       (mevedel-view--header-end-position)))))))
 
-  :doc "managed interaction region excludes request-progress spinner"
+  :doc "the request spinner is on the composer, not in the interaction transcript"
   (let ((mevedel-view-spinner-animate nil))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
@@ -1055,15 +1055,8 @@
                :entry 'permission-entry :activate #'ignore))
         (mevedel-view--start-spinner "Working...")
         (should (overlayp (mevedel-view-zone-region 'interaction)))
-        (should (overlayp (mevedel-view-zone-region 'progress)))
-        (should (<= (overlay-end (mevedel-view-zone-region 'interaction))
-                    (overlay-start
-                     (mevedel-view-zone-region 'progress))))
-        (should-not (string-match-p
-                     "Working"
-                     (buffer-substring-no-properties
-                      (overlay-start (mevedel-view-zone-region 'interaction))
-                      (overlay-end (mevedel-view-zone-region 'interaction))))))))
+        (should (string-search "Working" (mevedel-view-test--rail-text)))
+        (should-not (string-search "Working" (buffer-string))))))
 
   :doc "clear-for-rebuild removes rebuild-owned fragment text"
   (mevedel-view-test--with-buffers

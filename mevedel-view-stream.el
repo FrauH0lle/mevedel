@@ -115,6 +115,7 @@
 (autoload 'mevedel-view--composer-mode-badge "mevedel-view-composer")
 (declare-function mevedel-view-composer-buffer "mevedel-view-composer" (&optional view))
 (autoload 'mevedel-view-composer-buffer "mevedel-view-composer")
+(defvar mevedel-composer--view)
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-count-label
@@ -145,8 +146,6 @@
                   "mevedel-view-render" (table key value counter-symbol))
 (declare-function mevedel-view--debug-log
                   "mevedel-view-render" (event &rest data))
-(declare-function mevedel-view--debug-spinner-state
-                  "mevedel-view-render" ())
 (declare-function mevedel-view--debug-state
                   "mevedel-view-render" (&optional data-buf start end))
 (declare-function mevedel-view--history-insertion-marker
@@ -155,8 +154,6 @@
                   "mevedel-view-render" (data-buffer tool-use-id))
 (declare-function mevedel-view--render-live-region
                   "mevedel-view-render" (data-buf settle-p &optional start end))
-(declare-function mevedel-view--request-progress-anchor
-                  "mevedel-view-render" ())
 (declare-function mevedel-view--retire-pending-decorations
                   "mevedel-view-render" (start end))
 (declare-function mevedel-view-render-invalidate-live-tail
@@ -343,7 +340,9 @@ Once a freeze has latched its resting phases, native samples are stale."
   (when (and (featurep 'mevedel-view-native)
              (not mevedel-view--spinner-frozen-seconds))
     (dolist (target mevedel-view--native-animation-targets)
-      (when-let* ((seconds (mevedel-view-native-sample target)))
+      (when-let* ((buffer (marker-buffer (car target)))
+                  (seconds (with-current-buffer buffer
+                             (mevedel-view-native-sample target))))
         (if (eq target mevedel-view--spinner-label-target)
             (setq mevedel-view--spinner-last-sample-seconds seconds)
           (when (marker-position (car target))
@@ -362,7 +361,7 @@ Once a freeze has latched its resting phases, native samples are stale."
              (if target
                  ;; Use the displayed sample even after its window disappears.
                  ;; Prepared color samples carry faces; fallback glyphs do not.
-                 (let ((display (get-text-property (car target) 'display)))
+                 (let ((display (mevedel-view--animation-target-property target 'display)))
                    (or (memq target mevedel-view--native-animation-targets)
                        (and (stringp display) (> (length display) 0)
                             (get-text-property 0 'face display))))
@@ -436,86 +435,91 @@ the view has already inserted the in-flight markers."
                   (buffer-live-p buf)
                   (buffer-local-value 'mevedel--current-request buf))))))
 
-(defun mevedel-view--request-progress-visible-p ()
-  "Return non-nil when a request-progress fragment is visible."
-  (let ((ov (mevedel-view-zone-region 'progress)))
-    (and (overlayp ov)
-         (eq (overlay-buffer ov) (current-buffer))
-         (overlay-start ov)
-         (overlay-end ov)
-         (text-property-any (overlay-start ov) (overlay-end ov)
-                            'mevedel-view-zone-namespace
-                            'progress))))
-
-(defun mevedel-view--request-progress-region-start ()
-  "Return the start of the visible request-progress region, or nil."
-  (and (mevedel-view--request-progress-visible-p)
-       (mevedel-view-zone-start 'progress)))
-
-(defun mevedel-view--request-progress-fragments (body)
-  "Return the permanent rail fragment containing BODY."
-  (list (list :namespace 'progress
-              :id 'request
-              :priority 0
-              :body body
-              :keymap mevedel-view--display-map
-              :navigatable nil)))
-
 (defun mevedel-view--render-request-progress ()
-  "Render the permanent composer rail, changing text only on semantic updates.
-Inside an owned projection, point is the projection's insertion cursor, not
-a reader position: keep it, and let the projection restore reader state.
-Elsewhere, reconciliation's semantic restoration is authoritative."
-  (let ((cursor (and mevedel-view-render--owner (point-marker))))
-    (unwind-protect
-        (when (mevedel-view-composer-buffer)
-          (let* ((display-status
-                  (and mevedel-view--spinner-status
-                       (mevedel-view--spinner-display-status
-                        mevedel-view--spinner-status)))
-                 (badge (mevedel-view--composer-mode-badge))
-                 (attention (mevedel-view--interaction-count-label t))
-                 (windows (mevedel-view--windows 'geometry))
-                 (width (max 1 (1- (if windows
-                                       (apply #'min (mapcar #'window-body-width windows))
-                                     (window-body-width)))))
-                 (prefix (mevedel-view--request-progress-prefix))
-                 (render-state (list display-status badge attention width prefix)))
-            (unless (and (equal render-state
-                                mevedel-view--spinner-rendered-state)
-                         (mevedel-view-zone-region 'progress))
-              (let ((anchor (mevedel-view--request-progress-anchor)))
-                (mevedel-view-zone-reconcile
-                 'progress anchor anchor
-                 (mevedel-view--request-progress-fragments
-                  (concat prefix
-                          (mevedel-view--format-composer-rail
-                           badge attention width mevedel-view--spinner-status
-                           display-status))))
-                (setq mevedel-view--spinner-rendered-state
-                      render-state)
-                (mevedel-view--capture-request-animation-target)))))
-      (when cursor
-        (goto-char cursor)
-        (set-marker cursor nil)))))
+  "Update the composer's first line without changing text or undo positions."
+  (when-let* ((composer (mevedel-view-composer-buffer)))
+    (let* ((status mevedel-view--spinner-status)
+           (display-status (and status (mevedel-view--spinner-display-status status)))
+           (badge (mevedel-view--composer-mode-badge))
+           (attention (mevedel-view--interaction-count-label t))
+           (windows (mevedel-view--windows 'visibility composer))
+           (width (max 1 (1- (if windows
+                                 (apply #'min (mapcar #'window-body-width windows))
+                               (frame-width)))))
+           (state (list display-status badge attention width)))
+      (unless (equal-including-properties state mevedel-view--spinner-rendered-state)
+        (let* ((frame (mevedel-view--animation-buffer-frame composer))
+               (line (mevedel-view--format-composer-rail
+                      badge attention width status display-status frame)))
+          (mevedel-view--write-request-rail composer line)
+          (setq mevedel-view--spinner-sample-frame frame
+                mevedel-view--spinner-rendered-state state))))))
 
-(defun mevedel-view--forget-request-progress-region ()
-  "Forget the request-progress region after a larger redraw deleted it."
-  (mevedel-view-zone-forget 'progress)
-  (mevedel-view--release-animation-targets
-   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
-  (setq mevedel-view--spinner-rendered-state nil
-        mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil
-        mevedel-view--spinner-sample-frame nil))
+(defun mevedel-view--write-request-rail (composer line)
+  "Paint LINE on COMPOSER's fixed badge, activity and metadata cells."
+  (let* ((end (1- (length line)))
+         (label (text-property-any 0 end 'mevedel-view-spinner-frame t line))
+         (suffix (and label (next-single-property-change
+                             label 'mevedel-view-spinner-frame line end)))
+         (metadata (and suffix (< suffix end) (substring line suffix end)))
+         (new-targets (and label (not mevedel-view--spinner-label-target)))
+         label-target metadata-target)
+    (with-current-buffer composer
+      (save-restriction
+        (widen)
+        (let ((start (point-min)))
+          (when new-targets
+            (setq label-target (cons (copy-marker (+ start 1)) (copy-marker (+ start 2)))
+                  metadata-target (cons (copy-marker (+ start 2)) (copy-marker (+ start 3)))))
+          (with-silent-modifications
+            (put-text-property start (+ start 1) 'display (substring line 0 (or label end)))
+            (add-text-properties (+ start 1) (+ start 2)
+                                 (list 'display (if label (get-text-property label 'display line) "")
+                                       'mevedel-view-spinner-frame (and label t)
+                                       'mevedel-view-spinner-label
+                                       (and label (substring-no-properties line label suffix))))
+            (add-text-properties (+ start 2) (+ start 3)
+                                 (list 'display (or metadata "")
+                                       'mevedel-view-spinner-status
+                                       (and label (get-text-property end 'mevedel-view-spinner-status line))))))))
+    (when new-targets
+      (setq mevedel-view--spinner-label-target label-target
+            mevedel-view--spinner-metadata-target metadata-target))))
 
-(defun mevedel-view--request-progress-mutation-region ()
-  "Return the view text a request-progress redraw can replace.
-The rail is reconciled at its anchor, from wherever its live region is."
-  (let ((anchor (mevedel-view--request-progress-anchor))
-        (zone (mevedel-view-zone-region 'progress)))
-    (cons (min anchor (if zone (overlay-start zone) anchor))
-          (max anchor (if zone (overlay-end zone) anchor)))))
+(defun mevedel-view--animation-target-property (target property)
+  "Read PROPERTY at TARGET's start, even outside a buffer restriction."
+  (when-let* ((start (car-safe target)) (buffer (marker-buffer start)))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (get-text-property start property)))))
+
+(defun mevedel-view--rail-animation-label (target)
+  "Return the activity label stored on TARGET's composer cell."
+  (mevedel-view--animation-target-property target 'mevedel-view-spinner-label))
+
+(defun mevedel-view--paint-rail-sample (start sample)
+  "Paint SAMPLE on the fixed rail cell at START."
+  (with-current-buffer (marker-buffer start)
+    (let ((pos (marker-position start)))
+      (unless (equal-including-properties sample (get-text-property pos 'display))
+        (with-silent-modifications
+          (put-text-property pos (1+ pos) 'display sample))))))
+
+(defun mevedel-view--rearm-composer-spinner ()
+  "Recheck the animation timer of the current composer's owning view."
+  (when (buffer-live-p mevedel-composer--view)
+    (with-current-buffer mevedel-composer--view
+      (mevedel-view--start-spinner-timer t))))
+
+(defun mevedel-view-stream-composer-window-change (_window &optional start)
+  "Refit the rail after layout changes and recheck animation visibility.
+With START (a scroll notification), wait for redisplay before doing any work."
+  (when (buffer-live-p mevedel-composer--view)
+    (with-current-buffer mevedel-composer--view
+      (unless start (mevedel-view--render-request-progress))
+      (when (mevedel-view--spinner-active-p)
+        (mevedel-view--recheck-spinner-after-redisplay)))))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -564,10 +568,11 @@ Background work is counted by the panel right above, not here."
          (elapsed (mevedel-view--spinner-elapsed-label)))
     (string-join (delq nil (list base elapsed)) " · ")))
 
-(defun mevedel-view--format-spinner-line (status &optional face display-status width)
+(defun mevedel-view--format-spinner-line (status &optional face display-status width frame)
   "Return propertized spinner line for STATUS.
 FACE defaults to `mevedel-view-spinner'.  When WIDTH is non-nil, drop
-elapsed metadata before truncating the activity to fit that many columns."
+elapsed metadata before truncating the activity to fit that many columns.
+FRAME selects the display palette for the animated label."
   (let* ((face (or face 'mevedel-view-spinner))
          (display-status (or display-status
                              (mevedel-view--spinner-display-status status)))
@@ -576,7 +581,7 @@ elapsed metadata before truncating the activity to fit that many columns."
                  (mevedel-view--spinner-base-status status)))
          (metadata (substring display-status (length base)))
          (base (replace-regexp-in-string "[\n\r\t]+" " " base))
-         (frame (mevedel-view--animation-buffer-frame))
+         (frame (or frame (mevedel-view--animation-buffer-frame)))
          (seconds (mevedel-view--animation-display-seconds))
          (sample (mevedel-view-animation-frame
                   mevedel-view-spinner-style base seconds face frame)))
@@ -600,7 +605,7 @@ elapsed metadata before truncating the activity to fit that many columns."
                             'rear-nonsticky '(read-only keymap))))
     (concat label
             (propertize (concat metadata "\n")
-                        'font-lock-face face
+                        'face face
                         'mevedel-view-spinner-status
                         (mevedel-view--spinner-base-status status)
                         'read-only t
@@ -608,43 +613,20 @@ elapsed metadata before truncating the activity to fit that many columns."
                         'front-sticky '(read-only keymap)
                         'rear-nonsticky '(read-only keymap))))))
 
-(defun mevedel-view--request-progress-prefix ()
-  "Return separator text before the request progress row."
-  (let* ((pos (or (mevedel-view-zone-start 'progress)
-                  (mevedel-view--request-progress-anchor)))
-         (prefix
-          (cond
-           ((or (null pos) (<= pos (point-min))) nil)
-           ((eq (char-before pos) ?\n)
-            (unless (and (> pos (1+ (point-min)))
-                         (eq (char-before (1- pos)) ?\n))
-              "\n"))
-           (t "\n\n"))))
-    (when prefix
-      (propertize prefix
-                  'font-lock-face 'mevedel-view-spinner
-                  'mevedel-view-spinner-separator t
-                  'read-only t
-                  'keymap mevedel-view--display-map
-                  'front-sticky '(read-only keymap)
-                  'rear-nonsticky '(read-only keymap)))))
+(defun mevedel-view--click-rail-attention (event)
+  "Visit the next pending card from the composer clicked in EVENT."
+  (interactive "e")
+  (select-window (posn-window (event-start event)))
+  (mevedel-view-jump-to-interaction))
 
-(defun mevedel-view--repair-request-progress-separator ()
-  "Redraw the rail when the text above it now needs another separator.
-The separator depends on how the text before the rail ends, which any
-transcript writer can change without redrawing the rail.  A stale one
-leaves an extra blank line, or none, until some later rail update
-removes it and moves the transcript a row again."
-  (when (and mevedel-view--spinner-rendered-state
-             (mevedel-view-zone-region 'progress)
-             (not (equal (nth 4 mevedel-view--spinner-rendered-state)
-                         (mevedel-view--request-progress-prefix))))
-    (mevedel-view--render-request-progress)))
+(defvar-keymap mevedel-view--rail-attention-map
+  "<mouse-1>" #'mevedel-view--click-rail-attention
+  "<mouse-2>" #'mevedel-view--click-rail-attention)
 
-(defun mevedel-view--format-composer-rail (badge attention width status display-status)
+(defun mevedel-view--format-composer-rail (badge attention width status display-status &optional frame)
   "Format a one-line rail within WIDTH columns.
 BADGE and actionable ATTENTION take priority over STATUS and DISPLAY-STATUS.
-Only activity is animated; the controls remain ordinary interactive text."
+Only activity is animated; FRAME selects its display palette."
   (let* ((badge (truncate-string-to-width
                  (replace-regexp-in-string "[\n\r\t]+" " " badge)
                  (max 1 (- width (if attention (min 12 (/ width 2)) 0)))
@@ -666,8 +648,9 @@ Only activity is animated; the controls remain ordinary interactive text."
                         (truncate-string-to-width "⚠ C-c C-j" available
                                                   nil nil "…"))))
               (propertize text
-                          'font-lock-face 'warning
+                          'face 'warning
                           'mouse-face 'highlight
+                          'keymap mevedel-view--rail-attention-map
                           'help-echo (concat attention "; C-c C-j to visit")
                           'mevedel-view-zone-activate
                           #'mevedel-view-jump-to-interaction)))))
@@ -677,7 +660,7 @@ Only activity is animated; the controls remain ordinary interactive text."
     (if (and status (>= room 13))
         (concat badge " · "
                 (mevedel-view--format-spinner-line
-                 status nil display-status (- room 3)))
+                 status nil display-status (- room 3) frame))
       (concat badge "\n"))))
 
 (defun mevedel-view--spinner-active-p ()
@@ -695,38 +678,6 @@ collection, which mevedel defers while busy, and slows every edit there."
     (when (consp target)
       (when (markerp (car target)) (set-marker (car target) nil))
       (when (markerp (cdr target)) (set-marker (cdr target) nil)))))
-
-(defun mevedel-view--capture-request-animation-target ()
-  "Remember the label and metadata spans after a semantic progress render."
-  (mevedel-view--release-animation-targets
-   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
-  (setq mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil
-        mevedel-view--spinner-sample-frame nil)
-  (when-let* ((region (mevedel-view-zone-region 'progress))
-              (pos (text-property-any (overlay-start region)
-                                      (overlay-end region)
-                                      'mevedel-view-spinner-frame t)))
-    (let ((label-end (or (next-single-property-change
-                          pos 'mevedel-view-spinner-frame nil
-                          (overlay-end region))
-                         (overlay-end region)))
-          (metadata-end (1- (overlay-end region))))
-      ;; Text streamed in just before the row lands at the label's start.
-      ;; A start marker that stayed put took it into the span, whose start
-      ;; then lacked the label property: the label read as hidden and froze
-      ;; until the next semantic render, most of the time while a reply
-      ;; streamed.  Rewrites of the label itself recapture these markers.
-      (setq mevedel-view--spinner-label-target
-            (cons (copy-marker pos t) (copy-marker label-end t))
-            mevedel-view--spinner-sample-frame
-            (mevedel-view--animation-buffer-frame))
-      ;; The fragment ends with a newline.  Its suffix can remain visible
-      ;; after horizontal scrolling hides the decorative label.
-      (when (< label-end metadata-end)
-        (setq mevedel-view--spinner-metadata-target
-              (cons (copy-marker label-end)
-                    (copy-marker metadata-end t)))))))
 
 (defun mevedel-view--capture-tool-animation-targets (start end)
   "Remember the running tool spans the live render drew in START..END."
@@ -824,12 +775,13 @@ Newly inserted tool rows begin at phase zero."
               (mevedel-view--record-tool-sample start (caddr entry)))))
       (set-buffer-modified-p modified))))
 
-(defun mevedel-view--animation-buffer-frame ()
-  "Return a visible display frame for this buffer, or `:multiple'.
+(defun mevedel-view--animation-buffer-frame (&optional buffer)
+  "Return a visible display frame for BUFFER, or `:multiple'.
+BUFFER defaults to the current buffer.
 Before a span has been inserted, use portable glyphs when no frame or
 more than one distinct frame can display the buffer."
   (let (found)
-    (dolist (window (mevedel-view--windows 'visibility))
+    (dolist (window (mevedel-view--windows 'visibility buffer))
       (when (eq (frame-visible-p (window-frame window)) t)
         (let ((frame (window-frame window)))
           (if (and found (not (eq found frame)))
@@ -850,22 +802,23 @@ whether to animate must cost less than the decorative update itself."
   "Return non-nil when TARGET is a visible span marked PROPERTY.
 If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
   (when-let* ((start (car-safe target))
-              ((eq (marker-buffer start) (current-buffer)))
+              (buffer (marker-buffer start))
               (pos (marker-position start))
-              ((if any-value
-                   (get-text-property pos property)
-                 (eq (get-text-property pos property) t))))
+              (value (with-current-buffer buffer
+                       (and (<= (point-min) pos (1- (point-max)))
+                            (get-text-property pos property))))
+              ((or any-value (eq value t))))
     (cl-some (lambda (window)
                (and (mevedel-view--window-attended-p window)
                     (mevedel-view--animation-span-in-window-p
                      pos (marker-position (cdr target)) window)))
-             (mevedel-view--windows 'visibility))))
+             (mevedel-view--windows 'visibility buffer))))
 
 (defun mevedel-view--spinner-metadata-visible-p ()
   "Return non-nil when the request's elapsed suffix is on screen."
-  (mevedel-view--animation-target-visible-p
-   mevedel-view--spinner-metadata-target
-   'mevedel-view-spinner-status t))
+  (let ((target mevedel-view--spinner-metadata-target))
+    (and (mevedel-view--animation-target-visible-p target 'mevedel-view-spinner-status t)
+         (not (equal "" (mevedel-view--animation-target-property target 'display))))))
 
 (defun mevedel-view--background-metadata-visible-p ()
   "Return non-nil when a running background row is on screen and attended."
@@ -884,7 +837,7 @@ windows."
   (let ((position (marker-position (car target)))
         (end (marker-position (cdr target)))
         found frames)
-    (dolist (window (mevedel-view--windows 'visibility))
+    (dolist (window (mevedel-view--windows 'visibility (marker-buffer (car target))))
       (when (and (eq (frame-visible-p (window-frame window)) t)
                  (mevedel-view--animation-span-in-window-p
                   position end window))
@@ -968,7 +921,10 @@ has once settled; spans without one use `mevedel-view-ephemeral'."
 
 (defun mevedel-view--stop-spinner-timer ()
   "Stop the buffer-local spinner animation timer."
-  (when (featurep 'mevedel-view-native) (mevedel-view-native-stop))
+  (when (featurep 'mevedel-view-native)
+    (mevedel-view-native-stop)
+    (when-let* ((composer (mevedel-view-composer-buffer)))
+      (with-current-buffer composer (mevedel-view-native-stop))))
   (setq mevedel-view--native-animation-targets nil)
   (when (timerp mevedel-view--spinner-timer)
     (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
@@ -994,21 +950,15 @@ neither the status row nor the composer is rebuilt."
         (let ((target mevedel-view--spinner-label-target))
           (if (mevedel-view--animation-target-visible-p
                target 'mevedel-view-spinner-frame)
-              (let* ((start (marker-position (car target)))
-                     (end (marker-position (cdr target)))
+              (let* ((start (car target))
                      (style mevedel-view-spinner-style)
-                     (label (buffer-substring-no-properties start end))
+                     (label (mevedel-view--rail-animation-label target))
                      (display-frame (mevedel-view--animation-target-frame
                                      target (eq style 'dots)))
                      (frame (mevedel-view-animation-frame
                              style label seconds 'mevedel-view-spinner
                              display-frame)))
-                (unless (equal-including-properties
-                         frame (get-text-property start 'display))
-                  (let ((inhibit-read-only t)
-                        (buffer-undo-list t))
-                    (with-silent-modifications
-                      (mevedel-view--put-decorative-display start end frame))))
+                (mevedel-view--paint-rail-sample start frame)
                 (setq mevedel-view--spinner-last-sample-seconds seconds
                       mevedel-view--spinner-sample-frame display-frame))
             (setq pending t))))
@@ -1081,26 +1031,30 @@ a window resize."
 
 (defun mevedel-view--sync-native-animation (main tools)
   "Offload the visible MAIN label and TOOLS when native presentation is ready."
-  (let* ((rate (mevedel-view--spinner-framerate))
-         (seconds (mevedel-view--animation-seconds))
-         specs)
+  (let ((rate (mevedel-view--spinner-framerate))
+        (seconds (mevedel-view--animation-seconds))
+        (composer (mevedel-view-composer-buffer))
+        main-spec tool-specs)
     (when (and (> rate 0) (not (mevedel-view--animation-frozen-p)))
       (when main
-        (push (list mevedel-view--spinner-label-target mevedel-view-spinner-style
-                    (buffer-substring-no-properties
-                     (car mevedel-view--spinner-label-target)
-                     (cdr mevedel-view--spinner-label-target))
+        (setq main-spec
+              (list mevedel-view--spinner-label-target mevedel-view-spinner-style
+                    (mevedel-view--rail-animation-label mevedel-view--spinner-label-target)
                     'mevedel-view-spinner
                     (if (memq mevedel-view-spinner-style '(shimmer breathe bounce))
-                        (/ 1.0 rate) main)) specs))
+                        (/ 1.0 rate) main))))
       (dolist (target tools)
         (when-let* ((period (mevedel-view--spinner-visual-period mevedel-view-tool-spinner-style)))
           (push (list target mevedel-view-tool-spinner-style
                       (mevedel-view--tool-animation-label target)
-                      (mevedel-view--tool-animation-face target) period) specs))))
+                      (mevedel-view--tool-animation-face target) period) tool-specs))))
     (setq mevedel-view--native-animation-targets
           (when (or (not noninteractive) (featurep 'mevedel-view-native))
-            (mevedel-view-native-sync specs seconds #'mevedel-view--start-spinner-timer)))
+            (append (when composer
+                      (with-current-buffer composer
+                        (mevedel-view-native-sync (and main-spec (list main-spec)) seconds
+                                                  #'mevedel-view--rearm-composer-spinner)))
+                    (mevedel-view-native-sync tool-specs seconds #'mevedel-view--start-spinner-timer))))
     mevedel-view--native-animation-targets))
 
 (defun mevedel-view--arm-spinner-timer (timer plan)
@@ -1184,9 +1138,7 @@ rechecked without changing the displayed animation phase."
                           (memq mevedel-view-spinner-style
                                 '(shimmer breathe bounce))
                           (let* ((target mevedel-view--spinner-label-target)
-                                 (label (buffer-substring-no-properties
-                                         (marker-position (car target))
-                                         (marker-position (cdr target)))))
+                                 (label (mevedel-view--rail-animation-label target)))
                             (mevedel-view-animation-color-available-p
                              mevedel-view-spinner-style label
                              'mevedel-view-spinner
@@ -1385,9 +1337,7 @@ animation or elapsed timer remains to notice the new colors."
                         mevedel-view--spinner-label-target
                         'mevedel-view-spinner-frame)
                        (mevedel-view--spinner-metadata-visible-p)))
-          (mevedel-view-call-preserving-user-view-state
-           (lambda () (mevedel-view--ensure-request-progress))
-           (mevedel-view--request-progress-mutation-region)))
+          (mevedel-view--render-request-progress))
         ;; Theme/face changes can turn a color bank into a glyph fallback (or
         ;; back).  Re-evaluate the actual cadence only on this semantic tick.
         (mevedel-view--start-spinner-timer))))
@@ -1413,9 +1363,8 @@ animation or elapsed timer remains to notice the new colors."
                       mevedel-view--spinner-label-target
                       'mevedel-view-spinner-frame))
             (let* ((target mevedel-view--spinner-label-target)
-                   (start (marker-position (car target)))
-                   (end (marker-position (cdr target)))
-                   (label (buffer-substring-no-properties start end))
+                   (start (car target))
+                   (label (mevedel-view--rail-animation-label target))
                    (style mevedel-view-spinner-style)
                    (display-frame (mevedel-view--animation-target-frame
                                    target (eq style 'dots))))
@@ -1427,9 +1376,7 @@ animation or elapsed timer remains to notice the new colors."
                               display-frame)))
                   (setq mevedel-view--spinner-last-sample-seconds seconds)
                   (setq mevedel-view--spinner-sample-frame display-frame)
-                  (unless (equal-including-properties
-                           frame (get-text-property start 'display))
-                    (mevedel-view--put-decorative-display start end frame))))))
+                  (mevedel-view--paint-rail-sample start frame)))))
           (when (and moving (mevedel-view--spinner-visual-period
                              mevedel-view-tool-spinner-style))
             (dolist (target mevedel-view--spinner-tool-targets)
@@ -1474,19 +1421,8 @@ STATUS defaults to \"Thinking...\"."
   (cl-incf mevedel-view--spinner-generation)
   (setq mevedel-view--spinner-status (or status "Thinking...")
         mevedel-view--spinner-owner 'request)
-  ;; Reconciliation restores semantic positions inside the replaced rail;
-  ;; see `mevedel-view--render-request-progress' for nested projections.
   (mevedel-view--render-request-progress)
   (mevedel-view--start-spinner-timer))
-
-(defun mevedel-view--spinner-region-p (start end)
-  "Return non-nil when START..END still contain spinner text."
-  (and start
-       end
-       (< start end)
-       (text-property-any start end
-                          'font-lock-face
-                          'mevedel-view-spinner)))
 
 (defun mevedel-view--update-spinner (status &optional owner)
   "Update request progress to show STATUS text owned by OWNER."
@@ -1545,7 +1481,6 @@ Return non-nil when the status was restored."
   "Return the permanent rail to idle and release request animation."
   (mevedel-view--debug-log
    'spinner-stop-delete
-   :spinner (mevedel-view--debug-spinner-state)
    :state (mevedel-view--debug-state mevedel--data-buffer))
   (when-let* ((session
                (and (buffer-live-p mevedel--data-buffer)
@@ -2156,7 +2091,7 @@ render draws the calls settled; until then their rows keep running."
         (setq mevedel-view--pending-tool-calls
               (delq entry mevedel-view--pending-tool-calls)))
       (unless (or mevedel-view--pending-tool-calls
-                  (mevedel-view--request-progress-visible-p))
+                  (mevedel-view--request-progress-active-p))
         (if mevedel-view-execution--elapsed-targets
             (mevedel-view--start-spinner-timer)
           (mevedel-view--stop-spinner-timer)))

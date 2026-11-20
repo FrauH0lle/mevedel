@@ -715,10 +715,7 @@ Pass VIEW explicitly to composer bounds used inside BODY."
               (should (eq 'edits mevedel-permission-mode))
               (should (eq saved
                           (default-toplevel-value 'mevedel-permission-mode)))
-              (should (string= "\n[edits]\n"
-                       (buffer-substring-no-properties
-                        (mevedel-view-zone-start 'progress)
-                        (mevedel-view-transcript-tail))))
+              (should (string-prefix-p "[edits]" (mevedel-view-test--rail-text)))
               (should (equal "> first\nsecond"
                              (mevedel-view-composer-draft-text nil t))))
             (with-current-buffer view-buf
@@ -800,10 +797,7 @@ Pass VIEW explicitly to composer bounds used inside BODY."
         (should (mevedel-session-plan-mode session))
         (should (eq 'full-auto
                     (mevedel-session-permission-mode session)))
-        (should (string= "\n[Plan · full-auto]\n"
-                       (buffer-substring-no-properties
-                        (mevedel-view-zone-start 'progress)
-                        (mevedel-view-transcript-tail))))
+        (should (string-prefix-p "[Plan · full-auto]" (mevedel-view-test--rail-text)))
         (should (equal "> first\nsecond"
                        (mevedel-view-composer-draft-text nil t)))
         (should-not (mevedel-view-toggle-plan-mode))
@@ -1634,10 +1628,7 @@ Pass VIEW explicitly to composer bounds used inside BODY."
   (let ((mevedel-permission-mode 'ask))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
-        (should (string= "\n[ask]\n"
-                       (buffer-substring-no-properties
-                        (mevedel-view-zone-start 'progress)
-                        (mevedel-view-transcript-tail)))))))
+        (should (string-prefix-p "[ask]" (mevedel-view-test--rail-text))))))
 
   :doc "refresh preserves input text and updates the mode"
   (mevedel-view-test--with-buffers
@@ -1646,10 +1637,7 @@ Pass VIEW explicitly to composer bounds used inside BODY."
                                      (mevedel-view-composer-draft-start))
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[full-auto]\n"
-                       (buffer-substring-no-properties
-                        (mevedel-view-zone-start 'progress)
-                        (mevedel-view-transcript-tail))))
+      (should (string-prefix-p "[full-auto]" (mevedel-view-test--rail-text)))
       (should (string= "draft" (mevedel-view-composer-draft-text nil t)))))
 
   :doc "refresh preserves a multiline draft starting with a literal >"
@@ -1659,10 +1647,7 @@ Pass VIEW explicitly to composer bounds used inside BODY."
                                      (mevedel-view-composer-draft-start))
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[full-auto]\n"
-                       (buffer-substring-no-properties
-                        (mevedel-view-zone-start 'progress)
-                        (mevedel-view-transcript-tail))))
+      (should (string-prefix-p "[full-auto]" (mevedel-view-test--rail-text)))
       (should (string= "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
       (should-not (get-text-property (mevedel-view-composer-draft-start)
                                      'mevedel-view-prompt)))))
@@ -4632,7 +4617,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (let ((text (buffer-string)))
             (should (string-match-p "hook context added" text))
             (should-not (string-match-p "PONYTAIL MODE ACTIVE" text)))
-          (search-backward "hook context added")
+          (goto-char (point-min))
+          (search-forward "hook context added")
           (mevedel-view-toggle-section)
           (should (string-match-p "SessionStart" (buffer-string)))
           (should (string-match-p "PONYTAIL MODE ACTIVE - level: full"

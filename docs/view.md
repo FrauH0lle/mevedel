@@ -50,8 +50,9 @@ authoritative transcript.
   directive turns), tool results, hidden render-data blocks, and persisted
   gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
-  compact Markdown-rendered turns, status and interaction zones, and the rail.
-- **Composer buffer**: `mevedel-composer-mode`. Holds the read-only input
+  compact Markdown-rendered turns, and the status and interaction zones at its end.
+- **Composer buffer**: `mevedel-composer-mode`. Its first line is the read-only
+  rail (mode badge, request activity, and pending actions). Below it are the input
   prefix and one editable draft per view, with its own caret, undo, history,
   and completion. It opens in a plain window below the view; submitting it
   routes through the owning view to the data buffer. Closing the view kills
@@ -1122,16 +1123,10 @@ retain their position. Equal-length reflow alone does not trigger that fallback.
 Reader ownership is captured before mutation, so removing a visited interaction
 does not mistake its fallback point for a surviving history reader.
 
-Spinner start, update, and stop leave logical-position restoration to zone
-reconciliation. They do not restore raw saved markers over it: a selection
-inside the permanent progress rail survives status replacement, while a draft
-and its reading position in another window remain intact.
-The exception is a rail redraw nested inside an owned projection, such as a
-status update made while a full render is fontifying. There point is the
-projection's insertion cursor, not a reader position, so the rail keeps it
-exactly and the enclosing projection restores reader state when it finishes.
-Treating that cursor as a composer offset would move it past the new rail and
-append the rest of the history below the chrome.
+The rail fits the narrowest composer window. Status and interaction chrome fit
+the narrowest transcript window, not the dock. Rail updates change display
+properties on fixed cells, so activity and pending-count changes never shift
+the draft, its undo positions, or the transcript's insertion cursor.
 
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
@@ -1153,10 +1148,10 @@ arriving card moves only the transcript above it (ADR 0126). The pending-input
 card stays pinned next to the composer. A descriptor re-registered under the
 same id, as rebuilds do, keeps its place; one that closed and returns arrives
 anew.
-`C-c C-j` (or the rail's pending-action text) explicitly visits the pending
-interaction nearest the composer, the one waiting longest, and repeated
-presses cycle outward. It remembers the invoking window's draft offset;
-settlement returns there only while point remains in that interaction.
+`C-c C-j` from the composer visits the longest-waiting pending interaction
+in the paired transcript window. Repeated presses cycle through pending
+cards. Settlement returns to the invoking composer's draft offset if the
+transcript window is still visiting that card.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.
 A descriptor whose UI holds live editable state supplies `:body` as a
@@ -2157,14 +2152,15 @@ resumed render runs through the same preserving wrappers.
 Every asynchronous writer outside zone reconciliation goes through one entry,
 `mevedel-view-call-preserving-user-view-state`: live and settled stream
 updates, full and batched rerenders, latest-turn and tool-row refreshes,
-agent handle refreshes, terminal breadcrumbs, request-rail ticks and
-background elapsed ticks. It preserves point, mark and every window's logical viewport or visited row
+agent handle refreshes, terminal breadcrumbs and background elapsed ticks.
+It preserves point, mark and every window's logical viewport or visited row
 ([ADR 0126](adr/0126-keep-the-composer-still.md)). Output writes additionally
 keep the end visible in windows that already showed it. Draft text and undo
-stay in their separate buffer. Status, interaction and rail zones reconcile
+stay in their separate buffer. Status and interaction zones reconcile
 through `mevedel-view-zone-reconcile`, which applies their viewport rules
-without an extra preservation wrapper. Table splices use their exact cell
-mapping for positions and share the viewport policy.
+without an extra preservation wrapper. The rail only repaints display
+properties in the composer. Table splices use their exact cell mapping for
+positions and share the viewport policy.
 
 The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
@@ -2189,8 +2185,8 @@ A caller that replaces one known span passes it as a region: markers follow
 positions outside the span, advancing over text inserted at its end, and only
 positions inside it take a semantic anchor whose runs are counted from the
 span's start. Markers also stay correct if the redraw removes orphaned zone
-text elsewhere. Targeted tool-row refreshes, request-rail
-ticks and terminal breadcrumb insertion use this, so their reader preservation
+text elsewhere. Targeted tool-row refreshes and terminal breadcrumb insertion
+use this, so their reader preservation
 is proportional to the changed span rather than to the transcript.
 Restoring an existing mark updates its marker directly, preserving activation
 state without running mark-activation hooks. A redraw must not schedule editor
