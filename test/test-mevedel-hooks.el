@@ -3280,23 +3280,23 @@
             (funcall slow-callback)
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"
-                             (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))
+                             (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))
               (should (string-match-p
                        "Running PreToolUse hook"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               ;; Agents are counted by the background-work panel, not
               ;; the progress footer.
               (should-not (string-match-p
                            "agent"
                            (buffer-substring-no-properties
-                            (point-min) mevedel-view--input-marker))))
+                            (point-min) (mevedel-view-prompt-boundary)))))
             (funcall handler-finish nil)
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"
-                             (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))
+                             (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))
               (should (equal "Working..." mevedel-view--spinner-status))
               (should (eq 'request mevedel-view--spinner-owner)))
             (should-not hook-result)))

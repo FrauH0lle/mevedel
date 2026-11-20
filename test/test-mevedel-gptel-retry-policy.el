@@ -57,17 +57,10 @@ Bind request, backend, fsm, state and info for assertions."
                    (mevedel-view--setup view-buf data-buf)
                    (with-current-buffer view-buf
                      (mevedel-view-stream-begin-turn
-                      mevedel-view--input-marker
+                      (mevedel-view-prompt-boundary-marker)
                       (with-current-buffer data-buf (copy-marker (point-max))))
-                     (let ((start (mevedel-view--input-start))
-                           (inhibit-read-only t))
-                       (goto-char start)
-                       (insert "> quoted\nsecond line")
-                       (remove-text-properties
-                        start (point)
-                        '(read-only nil mevedel-view-prompt nil font-lock-face nil
-                          face nil front-sticky nil rear-nonsticky nil))
-                       (goto-char (+ start 4))))
+                     (mevedel-view-test--insert-composer-draft
+                      "> quoted\nsecond line" 4))
                    ,@body)
                (when (buffer-live-p view-buf)
                  (with-current-buffer view-buf (mevedel-view-stream-stop))
@@ -261,8 +254,8 @@ Bind request, backend, fsm, state and info for assertions."
       (should (eq 'provider-retry mevedel-view--spinner-owner))
       (should (mevedel-view--request-progress-visible-p))
       (should (string-match-p "Codex temporarily unavailable: retry 1/10" (buffer-string)))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= 4 (- (point) (mevedel-view--input-start))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset)))))
 
   :doc "status: replaced sample owner cannot revive stopped UI or disturb the composer"
   (test-mevedel-retry-policy--with-view
@@ -278,8 +271,8 @@ Bind request, backend, fsm, state and info for assertions."
         (should-not mevedel-view--spinner-status)
         (should-not mevedel-view--spinner-owner)
         (should-not mevedel-view--spinner-timer)
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start)))))))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
   :doc "status: retired attempt callback cannot revive root retry progress"
   (test-mevedel-retry-policy--with-view
@@ -302,8 +295,8 @@ Bind request, backend, fsm, state and info for assertions."
           (should-not mevedel-view--spinner-status)
           (should-not mevedel-view--spinner-owner)
           (should-not mevedel-view--spinner-timer)
-          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-          (should (= 4 (- (point) (mevedel-view--input-start))))))))
+          (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+          (should (= 4 (mevedel-view-test--composer-point-offset)))))))
 
   :doc "status: recovered output restores the progress status the retry replaced"
   (test-mevedel-retry-policy--with-view
@@ -322,8 +315,8 @@ Bind request, backend, fsm, state and info for assertions."
       (should (eq 'request mevedel-view--spinner-owner))
       (should (mevedel-view--request-progress-visible-p))
       (should-not (string-match-p "Retrying provider request" (buffer-string)))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= 4 (- (point) (mevedel-view--input-start))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset)))))
 
   :doc "status: recovered tool-only sample restores progress on entering TOOL"
   (test-mevedel-retry-policy--with-view
@@ -356,8 +349,8 @@ Bind request, backend, fsm, state and info for assertions."
     (with-current-buffer view-buf
       (should-not (eq 'provider-retry mevedel-view--spinner-owner))
       (should-not (string-match-p "Retrying provider request" (buffer-string)))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= 4 (- (point) (mevedel-view--input-start)))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
 (mevedel-deftest mevedel-gptel-retry--parse-stream ()
   ,test

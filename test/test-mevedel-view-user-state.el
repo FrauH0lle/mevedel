@@ -107,20 +107,26 @@ Return (COMPOSER . READER)."
     (unless noninteractive (redisplay t))
     (cons composer reader)))
 
+(defun mevedel-view-user-state-test--draft-offset ()
+  "Return the caret offset from the draft start, read in the composer buffer."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) (mevedel-view-composer-draft-start view)))))
+
 (defun mevedel-view-user-state-test--observe (windows)
   "Return what the user sees in WINDOWS, a (COMPOSER . READER) pair."
   (unless noninteractive (redisplay t))
-  (let ((composer (car windows))
+  (let ((composer (mevedel-view-composer-window (car windows)))
         (reader (cdr windows))
-        (start (mevedel-view--input-start)))
+        (start (mevedel-view-composer-draft-start)))
     (cl-flet ((line-at (position)
                 (save-excursion
                   (goto-char position)
                   (list (buffer-substring-no-properties
                          (line-beginning-position) (line-end-position))
                         (- position (line-beginning-position))))))
-      (list :draft (mevedel-view--input-text)
-            :point (- (point) start)
+      (list :draft (mevedel-view-composer-draft-text)
+            :point (mevedel-view-user-state-test--draft-offset)
             :composer-point (- (window-point composer) start)
             :composer-y (mevedel-view--position-screen-y start composer)
             :reader-point (line-at (window-point reader))
@@ -475,7 +481,7 @@ REGION promises that THUNK replaces only that text."
                          (- lines (if mevedel-view-execution--selected-agent 0 4)))))
             (should (eq selected (selected-window)))
             (should (equal mevedel-view-user-state-test--draft
-                           (mevedel-view--input-text))))
+                           (mevedel-view-composer-draft-text))))
           (unless ,toggle
             (should-not (string-search "/root/worker" (buffer-string)))
             (should-not (string-search "/root/finished-" (buffer-string))))))))
@@ -505,7 +511,7 @@ REGION promises that THUNK replaces only that text."
       ;; The composer sits mid-window with blank space below it, as after
       ;; `recenter' or an earlier shrink.
       (save-excursion
-        (goto-char (mevedel-view--input-start))
+        (goto-char (mevedel-view-composer-draft-start))
         (recenter 20))
       (redisplay t)
       (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window)))
@@ -516,7 +522,7 @@ REGION promises that THUNK replaces only that text."
         (mevedel-view-user-state-test--activate-row "Inspect runner")
         (redisplay t)
         (should (looking-at-p "  ▸ Running"))
-        (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))
+        (should (equal mevedel-view-user-state-test--draft (mevedel-view-composer-draft-text)))
         (should (= start (window-start)))
         (should (= position (window-point)))
         (should (equal row-y (mevedel-view--position-screen-y
@@ -549,7 +555,7 @@ WINDOW defaults to the selected window, but need not be selected."
       (unless noninteractive (redisplay t))
       (should (looking-at-p (regexp-quote "[Manage]")))
       (should (equal y (mevedel-view--position-screen-y (point) (selected-window))))
-      (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))))
+      (should (equal mevedel-view-user-state-test--draft (mevedel-view-composer-draft-text)))))
   (action)
   :doc "a background row arriving above a visited [Manage] row keeps that row still"
   (progn
@@ -593,7 +599,7 @@ WINDOW defaults to the selected window, but need not be selected."
       (mevedel-view-user-state-test--with-view
         (mevedel-view-test--insert-composer-draft
          mevedel-view-user-state-test--draft 4)
-        (save-excursion (goto-char (point-max)) (recenter -1))
+        (save-excursion (goto-char (mevedel-view-composer-draft-end)) (recenter -1))
         (redisplay t)
         (dotimes (_ 3) (mevedel-view-user-state-test--wheel 'wheel-up))
         ;; Emacs keeps point visible, so it left the composer for chrome rows.
@@ -606,8 +612,8 @@ WINDOW defaults to the selected window, but need not be selected."
             (mevedel-view-user-state-test--wheel 'wheel-down)
             (cl-incf notches)))
         (should (mevedel-view--position-screen-y (point-max) (selected-window) t))
-        (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start)))))))
+        (should (equal mevedel-view-user-state-test--draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-user-state-test--draft-offset))))))
   (redraw)
   :doc "scrolling away from the composer and back returns point to the draft"
   nil
@@ -641,7 +647,8 @@ WINDOW defaults to the selected window, but need not be selected."
                   (reader-start (window-start reader)))
               (dotimes (_ ,up-count) ,up)
               (with-current-buffer view-buf
-                (should (< (window-point composer) (mevedel-view--input-start))))
+                (should (< (window-point (mevedel-view-composer-window composer))
+                              (mevedel-view-composer-draft-start))))
               (let ((notches 0))
                 (while (and (< notches 8)
                             (with-current-buffer view-buf
@@ -652,8 +659,9 @@ WINDOW defaults to the selected window, but need not be selected."
               (with-current-buffer view-buf
                 (should (mevedel-view--position-screen-y (point-max) composer t))
                 (should (equal mevedel-view-user-state-test--draft
-                               (mevedel-view--input-text)))
-                (should (= 4 (- (window-point composer) (mevedel-view--input-start)))))
+                               (mevedel-view-composer-draft-text)))
+                (should (= 4 (- (window-point (mevedel-view-composer-window composer))
+                                (mevedel-view-composer-draft-start)))))
               (should-not (window-parameter composer 'mevedel-view-scroll-return))
               (should (eq reader (selected-window)))
               (should (= reader-point (window-point reader)))
@@ -730,7 +738,7 @@ WINDOW defaults to the selected window, but need not be selected."
   :doc "a later scroll showing the draft returns point to its offset"
   (progn
     (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
-    (should (= 4 (- (point) (mevedel-view--input-start))))
+    (should (= 4 (mevedel-view-user-state-test--draft-offset)))
     (should-not (window-parameter nil 'mevedel-view-scroll-return)))
   :doc "a deliberate command cancels the return"
   (progn
@@ -828,7 +836,7 @@ WINDOW defaults to the selected window, but need not be selected."
 			    (window-point reader) reader)))
 	  (should (eq selected-window (selected-window)))
 	  (should (equal mevedel-view-user-state-test--draft
-			 (mevedel-view--input-text)))))))
+			 (mevedel-view-composer-draft-text)))))))
   (selected needle chunk)
   :doc "selected reader at paragraph end survives growth"
   t "stable ending." " More text."
@@ -900,7 +908,7 @@ WINDOW defaults to the selected window, but need not be selected."
               (backward-char (length "[Manage]"))
               (let ((visit (point)))
                 (should (>= visit mevedel-view--status-marker))
-                (should (< visit (mevedel-view--input-start)))
+                (should (< visit (mevedel-view-prompt-boundary)))
                 (dolist (window windows)
                   (set-window-point window visit)
                   (mevedel-view--set-viewport
@@ -938,7 +946,7 @@ WINDOW defaults to the selected window, but need not be selected."
                   (redisplay t)
                   (should (eq (selected-window) (if ,right right left)))
                   (should (equal mevedel-view-user-state-test--draft
-                                 (mevedel-view--input-text)))
+                                 (mevedel-view-composer-draft-text)))
                   (dolist (window windows)
                     (should (= visit (window-point window))))
                   (should

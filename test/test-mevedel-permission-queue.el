@@ -1514,7 +1514,7 @@
               (should-not outcomes)
               (should (= 3 (length (mevedel-session-permission-queue session))))
               (let* ((text (buffer-substring-no-properties
-                            (point-min) mevedel-view--input-marker))
+                            (point-min) (mevedel-view-prompt-boundary)))
                      (agent-pos (string-search
                                  "Blocked   agent    /root/verifier" text))
                      (prompt-pos (string-search
@@ -1528,7 +1528,7 @@
                 (save-excursion
                   (goto-char (point-min))
                   (search-forward "3 permissions pending"
-                                  mevedel-view--input-marker)
+                                  (mevedel-view-prompt-boundary))
                   (should (eq 'interaction
                               (get-text-property
                                (match-beginning 0)
@@ -1794,8 +1794,7 @@
                          :buffer agent-buf)))
           (setf (mevedel-session-permission-mode session) 'ask)
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert draft))
+            (mevedel-view-test--insert-composer-draft draft))
           (let ((mevedel-permission-rules nil)
                 (mevedel-permission-mode 'ask)
                 (hook
@@ -1815,7 +1814,7 @@
               (should (= 3 (length (mevedel-session-permission-queue session))))
               (setf (mevedel-session-permission-mode session) 'ask)
               (with-current-buffer view-buf
-                (should (equal draft (mevedel-view--input-text)))
+                (should (equal draft (mevedel-view-composer-draft-text nil t)))
                 (let* ((entry (car (mevedel-session-permission-queue session)))
                        (id (mevedel-queue--entry-metadata-get entry :interaction-id))
                        (ov (gethash id mevedel-view--interaction-overlays))
@@ -1835,7 +1834,7 @@
                     (should (equal before (car (plist-get entry :resource-selection-cell))))
                     (should-not (mevedel-session-resource-grants session))
                     (should-not results)
-                    (should (equal draft (mevedel-view--input-text))))
+                    (should (equal draft (mevedel-view-composer-draft-text nil t))))
                   (cl-letf (((symbol-function 'completing-read)
                              (lambda (_prompt collection &rest _)
                                (should (assoc choice collection))
@@ -1843,7 +1842,7 @@
                     (call-interactively
                      (lookup-key (overlay-get ov 'keymap) "g")))
                   (should-not results)
-                  (should (equal draft (mevedel-view--input-text)))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))
                   (setq ov (gethash id mevedel-view--interaction-overlays))
                   (should (string-match-p
                            (regexp-quote choice)
@@ -1861,12 +1860,12 @@
                     (should (string-match-p (regexp-quote choice) body))
                     (should (string-match-p "admission: ask" body))
                     (should (string-match-p "outside the allowed roots" body)))
-                  (should (equal draft (mevedel-view--input-text)))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))
                   (goto-char (overlay-start ov))
                   (call-interactively
                    (lookup-key (overlay-get ov 'keymap) approval))
                   (funcall stale-callback 'allow-once))
-                (should (equal draft (mevedel-view--input-text))))
+                (should (equal draft (mevedel-view-composer-draft-text nil t))))
               (should (= (if (and covered-p (not hook-event)) 2 1)
                          (length results)))
               (should (cl-every (lambda (result)
@@ -1989,7 +1988,7 @@
                                        (eq (plist-get event :event) 'permission-displayed)))
                                 events)))))
               (with-current-buffer view-buf
-                (should (equal draft (mevedel-view--input-text)))))))
+                (should (equal draft (mevedel-view-composer-draft-text nil t)))))))
       (mevedel-permission-queue-abort-all session)
       (mevedel-execution-teardown-session session)
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
@@ -2093,8 +2092,7 @@
                              (setq-local temporary-file-directory (file-name-concat root "tmp")))
                            (mevedel-view--setup view-buf data-buf)
                            (with-current-buffer view-buf
-                             (goto-char (mevedel-view--input-start))
-                             (insert "> keep this draft\nand its second line"))
+                             (mevedel-view-test--insert-composer-draft "> keep this draft\nand its second line"))
                            (let ((mevedel-permission-rules nil)
                                  (mevedel-permission-reviewer 'user))
                              (cl-letf (((symbol-function 'mevedel--prompt-block-face)
@@ -2142,7 +2140,7 @@
                                                   (call-interactively (lookup-key (overlay-get ov 'keymap) "g")))
                                                 (setq ov (gethash id mevedel-view--interaction-overlays)))
                                               (should (equal "> keep this draft\nand its second line"
-                                                             (mevedel-view--input-text)))
+                                                             (mevedel-view-composer-draft-text nil t)))
                                               (goto-char (overlay-start ov))
                                               (call-interactively
                                                (lookup-key (overlay-get ov 'keymap) (kbd approval))))))
@@ -2535,8 +2533,7 @@
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert draft))
+            (mevedel-view-test--insert-composer-draft draft))
           (cl-letf (((symbol-function 'mevedel--prompt-block-face)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
@@ -2575,14 +2572,14 @@
             (should (equal "request-2"
                            (plist-get (car q) :request-id))))
           (with-current-buffer view-buf
-            (should (equal draft (mevedel-view--input-text)))
+            (should (equal draft (mevedel-view-composer-draft-text nil t)))
             (let* ((entry (car (mevedel-session-permission-queue session)))
                    (id (mevedel-queue--entry-metadata-get entry :interaction-id))
                    (overlay (gethash id mevedel-view--interaction-overlays)))
               (mevedel--prompt--settle overlay 'aborted)
               (mevedel--prompt--settle overlay 'aborted))
             (should-not (mevedel-session-permission-queue session))
-            (should (equal draft (mevedel-view--input-text))))
+            (should (equal draft (mevedel-view-composer-draft-text nil t))))
           (mevedel-permission-queue-sweep-request "request-1" session)
           (mevedel-permission-queue-abort-all session)
           (should (= 2 (length outcomes)))

@@ -22,24 +22,24 @@
   :doc "Word overlays do not hide unrelated composer keyboard commands"
   (mevedel-view-test--with-buffers
     (save-window-excursion
-      (switch-to-buffer view-buf)
-      (insert "`word`\nsecond line")
-      (let* ((start (mevedel-view--input-start))
+      (mevedel-view-composer-insert "`word`\nsecond line" nil view-buf)
+      (switch-to-buffer (mevedel-view-composer-buffer view-buf))
+      (let* ((start (mevedel-view-composer-draft-start view-buf))
              (word (make-overlay (1+ start) (+ start 5)))
              (context-map (define-keymap "<mouse-3>" #'ignore)))
         (overlay-put word 'keymap context-map)
         (goto-char (+ start 2))
         (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
         (execute-kbd-macro (kbd "C-c C-u"))
-        (should (equal (mevedel-view--input-text) "")))))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "")))))
 
   :doc "Contextual property maps retain their own keys and compose prefixes"
   (dolist (kind '(overlay text-property local-map))
     (mevedel-view-test--with-buffers
       (save-window-excursion
-        (switch-to-buffer view-buf)
-        (insert "`word`\nsecond line")
-        (let* ((start (mevedel-view--input-start))
+        (mevedel-view-composer-insert "`word`\nsecond line" nil view-buf)
+        (switch-to-buffer (mevedel-view-composer-buffer view-buf))
+        (let* ((start (mevedel-view-composer-draft-start view-buf))
                (map (define-keymap "C-c x" #'backward-char
                                   "<mouse-3>" #'ignore)))
           (if (eq kind 'overlay)
@@ -71,18 +71,20 @@
             (should (eq (key-binding (kbd "C-c RET")) #'forward-char))
             (execute-kbd-macro (kbd "C-c RET"))
             (should (= (point) (+ start 3))))
-          (should (equal (mevedel-view--input-text) "`word`\nsecond line"))))))
+          (should (equal (mevedel-view-composer-draft-text view-buf t)
+                         "`word`\nsecond line"))))))
 
   :doc "Lookup tracks current point, prefixes, meta events and command remapping"
   (mevedel-view-test--with-buffers
     (save-window-excursion
-      (switch-to-buffer view-buf)
+      (switch-to-buffer (mevedel-view-composer-buffer view-buf))
       (use-local-map (copy-keymap (current-local-map)))
       (local-set-key (kbd "C-z") #'move-beginning-of-line)
       (local-set-key (kbd "C-c x") #'forward-char)
-      (insert "`word`\nsecond line")
-      (let ((start (mevedel-view--input-start)))
-        (dolist (position (list start (1+ start) (+ start 3) (+ start 6) (point-max)))
+      (mevedel-view-composer-insert "`word`\nsecond line" nil view-buf)
+      (let ((start (mevedel-view-composer-draft-start view-buf)))
+        (dolist (position (list start (1+ start) (+ start 3) (+ start 6)
+                                (mevedel-view-composer-draft-end view-buf)))
           (goto-char position)
           (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
           (should (eq (key-binding (kbd "ESC p")) #'mevedel-view-history-previous))
@@ -94,6 +96,7 @@
         (goto-char (+ start 3))
         (execute-kbd-macro (kbd "C-z"))
         (should (= (point) start))
+        ;; Inline-only: positions before the draft share the composer buffer.
         (dolist (position (list (point-min) (1- start)))
           (goto-char position)
           (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
@@ -102,15 +105,17 @@
         (goto-char start)
         (mevedel-view-refresh-input-prompt)
         (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
-        (should (equal (mevedel-view--input-text) "`word`\nsecond line"))
-        (should (= (point) (mevedel-view--input-start))))))
+        (should (equal (mevedel-view-composer-draft-text view-buf t)
+                       "`word`\nsecond line"))
+        (should (= (point) (mevedel-view-composer-draft-start view-buf))))))
 
   :doc "Root and side composers keep distinct bindings across rebuilds"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (dolist (side '(nil t nil))
         (mevedel-view--setup view-buf data-buf (list :side-conversation-p side))
-        (goto-char (point-max))
+        (set-buffer (mevedel-view-composer-buffer view-buf))
+        (goto-char (mevedel-view-composer-draft-end view-buf))
         (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
         (should (eq (key-binding (kbd "C-c C-k"))
                     (if side #'mevedel-view-abort #'mevedel-view-cancel-composer-state)))
@@ -123,8 +128,10 @@
       (mevedel-view--setup view-buf data-buf '(:agent-transcript-p t))
       (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
       (mevedel-view--setup view-buf data-buf)
-      (goto-char (point-max))
+      (set-buffer (mevedel-view-composer-buffer view-buf))
+        (goto-char (mevedel-view-composer-draft-end view-buf))
       (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
+      ;; Inline-only: losing the inline prompt marker disables the draft maps.
       (set-marker mevedel-view--input-marker nil)
       (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
       (fundamental-mode)
@@ -136,9 +143,9 @@
          (emulation-mode-map-alists (cons (list (cons t other)) emulation-mode-map-alists)))
     (mevedel-view-test--with-buffers
       (save-window-excursion
-        (switch-to-buffer view-buf)
-        (insert "draft")
-        (goto-char (+ (mevedel-view--input-start) 2))
+        (mevedel-view-composer-insert "draft" nil view-buf)
+        (switch-to-buffer (mevedel-view-composer-buffer view-buf))
+        (goto-char (+ (mevedel-view-composer-draft-start view-buf) 2))
         (should (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
         (should (eq (key-binding (kbd "C-y")) #'mevedel-view-yank-dwim))
         (let ((overriding-local-map (define-keymap "C-c RET" #'forward-char)))
@@ -156,16 +163,17 @@
     (keymap-set mevedel-view--side-conversation-keymap "C-v" #'backward-char)
     (mevedel-view-test--with-buffers
       (save-window-excursion
-        (switch-to-buffer view-buf)
         (dolist (side '(nil t))
           (mevedel-view--setup view-buf data-buf (list :side-conversation-p side))
-          (insert "draft")
-          (goto-char (+ (mevedel-view--input-start) 2))
+          (mevedel-view-composer-insert "draft" nil view-buf)
+          (switch-to-buffer (mevedel-view-composer-buffer view-buf))
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 2))
           (should (eq (key-binding (kbd "C-v"))
                       (if side #'backward-char #'forward-char)))
           (let ((before (point)))
             (execute-kbd-macro (kbd "C-v"))
             (should (= (point) (+ before (if side -1 1)))))
+          ;; Inline-only: the view's first row shares the composer buffer.
           (goto-char (point-min))
           (should (eq (key-binding (kbd "C-v")) #'scroll-up-command)))))))
 

@@ -304,11 +304,9 @@
                     (_
                      (should (member "demo:alpha" names)))))
                 (with-current-buffer view-buf
-                  (should (equal draft
-                                 (buffer-substring-no-properties
-                                  (mevedel-view--input-start) (point-max))))
-                  (should (= (+ (mevedel-view--input-start) point-offset)
-                             (point))))))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))
+                  (should (= point-offset
+                             (mevedel-view-test--composer-point-offset))))))
           (when (file-directory-p root)
             (delete-directory root t))
           (when (file-directory-p fresh-root)

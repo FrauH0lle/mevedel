@@ -187,13 +187,13 @@
                   (insert draft))
                 (let ((window (selected-window))
                       (start (window-start))
-                      (offset (with-current-buffer view (- (point) (mevedel-view--input-start)))))
+                      (offset (with-current-buffer view (mevedel-view-test--composer-point-offset))))
                   (mevedel-test--await 8 "Steering boundary did not settle"
                     (not (mevedel-turn-busy-p buffer)))
                   (with-current-buffer view
                     (mevedel-view--render-stream-update buffer)
-                    (should (equal draft (mevedel-view--input-text)))
-                    (should (= offset (- (point) (mevedel-view--input-start)))))
+                    (should (equal draft (mevedel-view-composer-draft-text)))
+                    (should (= offset (mevedel-view-test--composer-point-offset))))
                   (should (eq window (selected-window)))
                   (should (= start (window-start window)))))
               (ert-info ((format "steering boundary=%S" mode))

@@ -82,15 +82,14 @@
                           nil))))
               (with-current-buffer view
                 (mevedel-view--forward-input-now "hello composer")
-                (goto-char (mevedel-view--input-start))
-                (insert "> Keep this draft\nand its second line"))
+                (mevedel-view-composer-insert "> Keep this draft\nand its second line"))
               (mevedel-test--await 5 "Composer subscription request did not settle"
                 (not (mevedel-turn-busy-p buffer))))
             (should (= 1 (mevedel-session-turn-count session)))
             (should (string-search "answer:hello composer" (buffer-string)))
             (with-current-buffer view
               (should (equal "> Keep this draft\nand its second line"
-                             (mevedel-view--input-text)))))
+                             (mevedel-view-composer-draft-text)))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-session-codec/external-history (:quiet t)

@@ -52,9 +52,8 @@
                   (mevedel-view--setup view buffer)
                   (set-window-buffer (selected-window) view)
                   (with-current-buffer view
-                    (goto-char (mevedel-view--input-start))
-                    (insert ordinary-prompt)
-                    (setq draft (mevedel-view--input-text)))
+                    (mevedel-view-composer-insert ordinary-prompt)
+                    (setq draft (mevedel-view-composer-draft-text)))
                   (when (eq stage 'close)
                     (should (derived-mode-p 'org-mode))
                     (goto-char (point-max))
@@ -72,7 +71,8 @@
                          ;; has a distinct ordinary composer prompt.
                          (with-current-buffer view
                            (condition-case err
-                               (mevedel-view-send)
+                               (with-current-buffer (mevedel-view-composer-buffer)
+                                 (mevedel-view-send))
                              (user-error
                               (setq blocked (error-message-string err)))))
                          (setq newer mevedel--current-request
@@ -100,7 +100,7 @@
                             (should (plist-get observations :context-unchanged))
                             (should (plist-get observations :pending-unchanged))
                             (should (= 1 (length sent)))
-                            (with-current-buffer view (should (equal draft (mevedel-view--input-text))))
+                            (with-current-buffer view (should (equal draft (mevedel-view-composer-draft-text))))
                             (let* ((fsm (car sent)) (info (gptel-fsm-info fsm))
                                    (request mevedel--current-request)
                                    (payload (prin1-to-string (plist-get info :data))))
@@ -127,7 +127,8 @@
                             (with-current-buffer view
                               (mevedel-view--clear-input)
                               (insert "Ordinary baseline follow-up")
-                              (mevedel-view-send))
+                              (with-current-buffer (mevedel-view-composer-buffer)
+                                (mevedel-view-send)))
                             (let ((fsm (car sent)) (request mevedel--current-request))
                               (should (= 2 (length sent)))
                               (should (eq 'fast-model (plist-get (gptel-fsm-info fsm) :model)))
@@ -165,9 +166,8 @@
                 (mevedel-view--setup view buffer)
                 (set-window-buffer (selected-window) view)
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert ordinary-prompt)
-                  (setq draft (mevedel-view--input-text)))
+                  (mevedel-view-composer-insert ordinary-prompt)
+                  (setq draft (mevedel-view-composer-draft-text)))
                 (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
                           ((symbol-function 'gptel-curl-get-response) (lambda (fsm) (push fsm sent)))
                           ((symbol-function 'mevedel-claude-code-launch)
@@ -189,7 +189,8 @@
                                        (text (buffer-string)))
                                    (with-current-buffer view
                                      (condition-case err
-                                         (mevedel-view-send)
+                                         (with-current-buffer (mevedel-view-composer-buffer)
+                                           (mevedel-view-send))
                                        (user-error
                                         (setq blocked (error-message-string err)))))
                                    (should (equal text (buffer-string)))
@@ -215,13 +216,14 @@
                     (should-not (plist-get (mevedel-engine-info request) :reasoning-effort)))
                   (should (cl-some (lambda (input) (string-match-p "Implement accepted outcome" input)) prompts))
                   (should-not (cl-some (lambda (input) (string-match-p (regexp-quote ordinary-prompt) input)) prompts))
-                  (with-current-buffer view (should (equal draft (mevedel-view--input-text))))
+                  (with-current-buffer view (should (equal draft (mevedel-view-composer-draft-text))))
                   (should-not mevedel--pending-implementation-policy)
                   (should (eq 'low (mevedel-session-reasoning-effort session)))
                   (with-current-buffer view
                     (mevedel-view--clear-input)
                     (insert "Ordinary native-startup baseline follow-up")
-                    (mevedel-view-send))
+                    (with-current-buffer (mevedel-view-composer-buffer)
+                      (mevedel-view-send)))
                   (let ((fsm (car sent)) (request mevedel--current-request))
                     (should (= 1 (length sent)))
                     (should (eq 'fast-model (plist-get (gptel-fsm-info fsm) :model)))

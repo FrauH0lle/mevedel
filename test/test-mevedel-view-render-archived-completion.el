@@ -47,8 +47,7 @@
                 (mevedel-view-toggle-section)
                 (should (string-search "OLD OUTPUT" (buffer-string)))
                 (mevedel-view--full-rerender archive)
-                (goto-char (point-max))
-                (insert "> draft\nsecond line")
+                (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
                 (when (memq batch '(before clear refresh))
                   (mevedel-view-render-batched-full)
                   (cl-loop repeat 150
@@ -92,7 +91,7 @@
                   (should (= tick (with-current-buffer archive (buffer-modified-tick))))
                   (should (string-search "FINAL OUTPUT" (buffer-string)))
                   (should-not (string-search "OLD OUTPUT" (buffer-string)))
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
           (when (buffer-live-p archive) (kill-buffer archive))))))
   (mode)
   :doc "A synchronous projection sees a live completion."

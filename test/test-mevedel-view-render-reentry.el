@@ -262,8 +262,9 @@
         (should-not mevedel-view--live-data-tail-start)
         (should (= 1 (mevedel-view-test--count-substring
                       "<meta charset=" (buffer-string))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (mevedel-deftest mevedel-view-render/chrome-reentry ()
   (mevedel-view-test--with-buffers
@@ -279,8 +280,10 @@
               (copy-marker mevedel-view--status-marker nil))
         (mevedel-view-test--insert-composer-draft ,draft (min 4 (length ,draft)))
         (let ((original (symbol-function 'mevedel-view--fontify-response))
+              ;; Inline-only: the prompt text lives in the view until the cutover.
               (prompt (buffer-substring-no-properties
-                       mevedel-view--input-marker (mevedel-view--input-start)))
+                       (mevedel-view-prompt-boundary)
+                       (mevedel-view-composer-draft-start)))
               entered)
           (cl-letf (((symbol-function 'mevedel-view--fontify-response)
                      (lambda (&rest args)
@@ -320,26 +323,32 @@
           (should (mevedel-view-zone-region ',zone))
           (should (= 1 (mevedel-view-test--count-substring
                         "Unique response body" (buffer-string))))
-          (let ((start (mevedel-view--input-start))
-                (prompt-start (mevedel-view--input-marker-position)))
-            (should (equal ,draft (buffer-substring-no-properties start (point-max))))
-            (should (= (point) (+ start (min 4 (length ,draft)))))
+          (let ((start (mevedel-view-composer-draft-start))
+                (end (mevedel-view-composer-draft-end))
+                (prompt-start (mevedel-view-prompt-boundary)))
+            (should (equal ,draft (mevedel-view-composer-draft-text nil t)))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (should (= (point) (+ start (min 4 (length ,draft)))))
+              (let ((position start))
+                (while (< position end)
+                  (should-not (get-char-property position 'read-only))
+                  (should-not (invisible-p position))
+                  (setq position (1+ position)))))
+            ;; Inline-only presentation: the prompt and display overlay sit in
+            ;; the view between the zone boundary and the draft.
             (should (equal prompt (buffer-substring-no-properties prompt-start start)))
             (should (= start (overlay-start mevedel-view--composer-display-overlay)))
-            (should (= (point-max) (overlay-end mevedel-view--composer-display-overlay)))
+            (should (= end (overlay-end mevedel-view--composer-display-overlay)))
             (let ((position prompt-start))
               (while (< position start)
                 (should (get-text-property position 'mevedel-view-prompt))
                 (should-not (invisible-p position))
                 (should-not (get-char-property position 'display))
-                (setq position (1+ position))))
-            (let ((position start))
-              (while (< position (point-max))
-                (should-not (get-char-property position 'read-only))
-                (should-not (invisible-p position))
+                (should-not (get-char-property position 'line-prefix))
+                (should-not (get-char-property position 'wrap-prefix))
                 (setq position (1+ position))))
             (let ((position (point-min)))
-              (while (< position start)
+              (while (< position prompt-start)
                 (should-not (get-char-property position 'line-prefix))
                 (should-not (get-char-property position 'wrap-prefix))
                 (setq position (1+ position))))
@@ -392,8 +401,9 @@
       (mevedel-view--render-status-now)
       (should (mevedel-view-zone-fragment-bounds 'status 'recovery))
       (should (string-search "Owned status" (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
 
 (mevedel-deftest mevedel-view--interaction-render-now ()
   ,test
@@ -413,8 +423,9 @@
         (should (mevedel-view-zone-fragment-bounds 'interaction 'owned))
         (should (eq overlay (gethash 'owned mevedel-view--interaction-overlays)))
         (should (eq callback (overlay-get overlay 'mevedel-view-interaction-activate)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (mevedel-deftest mevedel-view-render/chrome-coalescing ()
   ,test
@@ -545,8 +556,9 @@
                     "Unique tool body" (buffer-string))))
       (should (= 1 (mevedel-view-test--count-substring
                     "ReentryTool: details" (buffer-string))))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point))))))
 
   :doc "full rendering during disclosure collapse preserves the requested fold"
   (mevedel-view-test--with-buffers
@@ -576,8 +588,9 @@
                     "System reminder" (buffer-string))))
       (should (= 1 (mevedel-view-test--count-substring
                     "Adjacent response" (buffer-string))))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
 
 (mevedel-deftest mevedel-view-stream/replacement ()
   ,test
@@ -637,8 +650,9 @@
                     "Agent: owned worker" (buffer-string))))
       (should (= 1 (mevedel-view-test--count-substring
                     "Added authoritative prompt" (buffer-string))))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
 
 (mevedel-deftest mevedel-view-render-mutate/terminal-cleanup ()
   ,test
@@ -754,8 +768,9 @@
         (should-not mevedel-view--data-turn-start)
         (should-not mevedel-view--in-flight-turn-start)
         (should-not mevedel-view--spinner-timer)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (mevedel-deftest mevedel-view-agent-live-transcript-finalize/reentry ()
   ,test
@@ -830,8 +845,9 @@
         (should (= (if collapse 0 1)
                    (mevedel-view-test--count-substring
                     "Unique reminder body" (buffer-string))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (mevedel-deftest mevedel-view-agent/adjacent-reentry ()
   ,test
@@ -878,15 +894,17 @@
                   (mevedel-view--refresh-agent-rendering-now "/root/worker")
                 (mevedel-view--full-rerender)))
             (should entered)
-            (should (= (point) (if reader reader-point
-                                (+ 4 (mevedel-view--input-start))))))
+            (should (if reader
+                        (= (point) reader-point)
+                      (= (+ (mevedel-view-composer-draft-start) 4)
+                         (with-current-buffer (mevedel-view-composer-buffer) (point))))))
           (should (= 2 (length (car (mevedel-view--agent-handle-refresh-points
                                     "/root/worker")))))
           (should (= 2 (mevedel-view-test--count-substring
                         "Agent: adjacent worker" (buffer-string))))
           (should (= 1 (mevedel-view-test--count-substring
                         "Adjacent expanded reminder" (buffer-string))))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
           (let ((pos (point-min)))
             (while (< pos mevedel-view--status-marker)
               (when-let* ((source (get-text-property pos 'mevedel-view-source)))
@@ -931,8 +949,9 @@
                                              (1- (point)) 'mevedel-view-source)))))
             (mevedel-view-toggle-section)
             (should (string-search "New source body" (buffer-string))))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= (+ (mevedel-view-composer-draft-start) 4)
+                     (with-current-buffer (mevedel-view-composer-buffer) (point)))))))))
 
 (provide 'test-mevedel-view-render-reentry)
 ;;; test-mevedel-view-render-reentry.el ends here

@@ -54,7 +54,7 @@
                                              :path "/root/test")))
                  (inset (concat (make-string (string-width indent) ?\s) "    ")))
             (let ((inhibit-read-only t))
-              (goto-char mevedel-view--input-marker)
+              (goto-char (mevedel-view-prompt-boundary))
               (if (string-empty-p indent)
                   (mevedel-view--insert-rendered-tool
                    (plist-put (mevedel-view--child-call-rendering child)
@@ -81,7 +81,7 @@
                                (get-text-property (match-beginning 0) 'line-prefix)))
                 (mevedel-view-toggle-section)
                 (mevedel-view-toggle-section)))
-            (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))))))
+            (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))))))))
 
 (mevedel-deftest mevedel-view-render-mailbox-insets ()
   ,test
@@ -101,7 +101,7 @@
                  (prefix (concat (make-string (string-width indent) ?\s) "    │ "))
                  (wrap (make-string (+ (string-width indent) 6) ?\s)))
             (let ((inhibit-read-only t))
-              (goto-char mevedel-view--input-marker)
+              (goto-char (mevedel-view-prompt-boundary))
               (if (string-empty-p indent)
                   (progn
                     (insert text)
@@ -125,7 +125,7 @@
                 (should (equal wrap (get-text-property (match-beginning 0) 'wrap-prefix)))
                 (mevedel-view-toggle-section)
                 (mevedel-view-toggle-section))
-              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))))))
+              (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))))))))
 
   :doc "collapsed headers keep their inset, with hints only for ordinary mail"
   (dolist (tag '("agent-message" "agent-result"))
@@ -141,7 +141,7 @@
                  (wrap (unless (string-empty-p indent)
                          (make-string (string-width indent) ?\s))))
             (let ((inhibit-read-only t))
-              (goto-char mevedel-view--input-marker)
+              (goto-char (mevedel-view-prompt-boundary))
               (if (string-empty-p indent)
                   (let ((mevedel-view-mailbox-collapse-line-threshold 0))
                     (insert text)
@@ -149,18 +149,19 @@
                     (mevedel-view--decorate-agent-result-blocks (point-min) (point)))
                 (mevedel-view--insert-child-call-block child source t indent)))
             (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
-            (let ((draft-point (point)))
+            (let ((draft-point (with-current-buffer (mevedel-view-composer-buffer)
+                                 (point))))
               (cl-flet ((check-hint ()
                           (goto-char (point-min))
                           (if (equal tag "agent-result")
                               (progn
                                 (should-not (search-forward "collapsed]"
-                                                            mevedel-view--input-marker t))
+                                                            (mevedel-view-prompt-boundary) t))
                                 (goto-char (point-min))
                                 (should (search-forward "Agent /root/test finished"
-                                                        mevedel-view--input-marker t)))
+                                                        (mevedel-view-prompt-boundary) t)))
                             (should (search-forward "[1 line collapsed]"
-                                                    mevedel-view--input-marker t)))
+                                                    (mevedel-view-prompt-boundary) t)))
                           (let ((hint (match-beginning 0)))
                             (should (equal (unless (string-empty-p indent) indent)
                                            (get-text-property hint 'line-prefix)))
@@ -173,12 +174,13 @@
                     (mevedel-view-toggle-section)
                     (goto-char (point-min))
                     (should-not (search-forward "collapsed]"
-                                                mevedel-view--input-marker t))
+                                                (mevedel-view-prompt-boundary) t))
                     (search-forward "/root/test")
                     (mevedel-view-toggle-section)
                     (check-hint))))
-              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-              (should (= draft-point (point))))))))))
+              (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))
+              (should (= draft-point (with-current-buffer (mevedel-view-composer-buffer)
+                                       (point)))))))))))
 
 (mevedel-deftest mevedel-view-render-mailbox-boundaries ()
   ,test
@@ -208,7 +210,7 @@
                             '(:kind collaboration-event :event interacted
                               :path "/root/following"))))
                    (inhibit-read-only t))
-              (goto-char mevedel-view--input-marker)
+              (goto-char (mevedel-view-prompt-boundary))
               (mevedel-view--insert-child-call-block child '(1 . 8) t "  ")
               (mevedel-view--insert-child-call-block
                following '(8 . 15) t following-indent)
@@ -248,7 +250,7 @@
                                    (get-text-property start 'line-prefix)))
                     (should-not (invisible-p (1- start)))
                     (should-not (invisible-p (line-end-position)))))
-                (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))))))))
+                (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))))))))))
 
 (provide 'test-mevedel-view-render-insets)
 ;;; test-mevedel-view-render-insets.el ends here

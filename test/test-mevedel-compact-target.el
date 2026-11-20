@@ -616,7 +616,7 @@
       (mevedel-compact-target--main-start nil))
     (with-current-buffer view-buf
       (should (equal "Compacting..." mevedel-view--spinner-status))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
       (dolist (name '("first.el" "second.el"))
         (goto-char (point-min))
         (search-forward name)
@@ -721,9 +721,8 @@
       (with-current-buffer data-buf
         (mevedel-compact-target--main-complete nil t))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point)
-                   (+ (mevedel-view--input-start) point-offset))))))
+        (should (string= draft (mevedel-view-composer-draft-text)))
+        (should (= point-offset (mevedel-view-test--composer-point-offset))))))
 
   :doc "successful rotation retains expansion only for surviving tool rows"
   (mevedel-view-test--with-buffers
@@ -768,12 +767,12 @@
             (should (= 2 (mevedel-session-current-segment session)))
             (with-current-buffer view-buf
               (goto-char (point-min))
-              (should-not (search-forward "old.el" mevedel-view--input-marker t))
+              (should-not (search-forward "old.el" (mevedel-view-prompt-boundary) t))
               (goto-char (point-min))
               (search-forward "recent.el")
               (should-not (get-text-property (point) 'mevedel-view-collapsed))
               (should (search-forward "Recent result" nil t))
-              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))
+              (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))))
         (mevedel-session-persistence-lock-release
          (or (mevedel-session-save-path session) tempdir) session)
         (mevedel-workspace-clear-registry)
@@ -932,8 +931,8 @@
               (should (= 1 (mevedel-view-test--count-substring
                             "--- conversation compacted ---" (buffer-string)))))
             (with-current-buffer parent-view
-              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+              (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))))
         (when (buffer-live-p view) (kill-buffer view))
         (when (buffer-live-p cold) (kill-buffer cold))
         (when (buffer-live-p parent-buffer)

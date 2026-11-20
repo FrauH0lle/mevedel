@@ -26,8 +26,8 @@
              (insert "Continued answer\n"
                      (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt")
                      "More answer\n")
-             (setq-local mevedel-view--input-marker (copy-marker (point)))
-             (insert "> draft\nsecond line")
+             (mevedel-view-composer-initialize-prompt)
+             (mevedel-view-composer-insert "> draft\nsecond line")
              (setq-local mevedel-view--continuation-prompt-cache
                          '(nil nil nil nil (:segment 1 :pos 1 :preview "Archived prompt")))
              (setq-local header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
@@ -57,8 +57,7 @@
                      (setq observations
                            (list :depth maximum :visible visible
                                  :hidden (and hidden (substring-no-properties hidden))
-                                 :draft (buffer-substring-no-properties
-                                         mevedel-view--input-marker (point-max))
+                                 :draft (mevedel-view-composer-draft-text nil t)
                                  :header-restored
                                  (equal header-line-format
                                         '(:eval (mevedel-view--sticky-prompt-line))))))

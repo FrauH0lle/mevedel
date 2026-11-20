@@ -73,21 +73,11 @@
                (let ((inhibit-read-only t))
                  (erase-buffer)
                  (insert "header\n")
-                 (let ((prompt-start (point)))
-                   (insert (mevedel-view--input-prompt-string))
-                   (add-text-properties
-                    prompt-start (point)
-                    '(read-only t
-                      mevedel-view-prompt t
-                      front-sticky (read-only mevedel-view-prompt)
-                      rear-nonsticky
-                      (read-only mevedel-view-prompt font-lock-face)))
+                 (let ((prompt-start (mevedel-view-composer-initialize-prompt)))
                    (setq-local mevedel-view--status-marker
                                (copy-marker prompt-start t))
                    (setq-local mevedel-view--interaction-marker
-                               (copy-marker prompt-start t))
-                   (setq-local mevedel-view--input-marker
-                               (copy-marker prompt-start nil)))))
+                               (copy-marker prompt-start t)))))
              (let ((gptel--fsm-last
                     (gptel-make-fsm
                      :info (list :tracking-marker tracking))))
@@ -261,10 +251,10 @@
            (agent-task (cadr tasks))
            (display (substring-no-properties
                      (mevedel-tool-task--format-groups session))))
-	      (should (equal "/root/explorer"
-	                     (mevedel-task-owner agent-task)))
-	      (should (string-match-p "#1 main task" display))
-	      (should (string-match-p "#2 explorer · agent task" display))))
+              (should (equal "/root/explorer"
+                             (mevedel-task-owner agent-task)))
+              (should (string-match-p "#1 main task" display))
+              (should (string-match-p "#2 explorer · agent task" display))))
 
   :doc "shows agent paths without opaque IDs, shortened for display"
   (test-mevedel-tool-task--with-session session
@@ -1402,52 +1392,32 @@
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer view
       (let ((draft "> quoted\nsecond line"))
-        (goto-char (mevedel-view--input-start))
-        (let ((draft-start (point))
-              (inhibit-read-only t))
-          (insert draft)
-          (remove-text-properties
-           draft-start (point)
-           '(read-only nil
-             mevedel-view-prompt nil
-             font-lock-face nil
-             face nil
-             front-sticky nil
-             rear-nonsticky nil)))
-        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view-test--insert-composer-draft draft)
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start) 4)))
         (with-current-buffer data
           (mevedel-tool-task--handle-write
            (list :tasks (vector (list :subject "one"))))
           (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "two")))))
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (should-not (get-text-property (mevedel-view--input-start)
-                                       'read-only))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
+        (should-not (with-current-buffer (mevedel-view-composer-buffer)
+                      (get-text-property (mevedel-view-composer-draft-start)
+                                         'read-only)))
         (save-excursion
           (let ((display (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
+                          (point-min) (mevedel-view-prompt-boundary))))
             (should-not (string-match-p "#1 one" display))
             (should (string-match-p "two" display))
             (goto-char (point-min))
-            (search-forward "two" mevedel-view--input-marker)
+            (search-forward "two" (mevedel-view-prompt-boundary))
             (should (get-text-property (match-beginning 0) 'read-only)))))))
 
   :doc "drifted status marker does not insert task text into composer"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer view
       (let ((draft "> quoted\nsecond line"))
-        (goto-char (mevedel-view--input-start))
-        (let ((draft-start (point))
-              (inhibit-read-only t))
-          (insert draft)
-          (remove-text-properties
-           draft-start (point)
-           '(read-only nil
-             mevedel-view-prompt nil
-             font-lock-face nil
-             face nil
-             front-sticky nil
-             rear-nonsticky nil)))
+        (mevedel-view-test--insert-composer-draft draft)
         (set-marker mevedel-view--status-marker (point-max))
         (set-marker mevedel-view--interaction-marker (point-max))
         (set-marker mevedel-view--input-marker (point-max))
@@ -1455,12 +1425,11 @@
           (mevedel-tool-task--handle-write
            (list :tasks (vector (list :subject "drift task")))))
         (mevedel-view-refresh-input-prompt)
-        (should (string= draft (mevedel-view--input-text)))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
         (save-excursion
           (let ((display (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker))
-                (input (buffer-substring-no-properties
-                        (mevedel-view--input-start) (point-max))))
+                          (point-min) (mevedel-view-prompt-boundary)))
+                (input (mevedel-view-composer-draft-text nil t)))
             (should (string-match-p "drift task" display))
             (should-not (string-match-p "drift task" input)))))))
 

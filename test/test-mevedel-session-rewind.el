@@ -799,7 +799,7 @@ them are set, so the committing save keeps them."
             ;; The rewind schedules the view's rebuild.
             (mevedel-view--flush-scheduled-render view-buf t)
             (with-current-buffer view-buf
-              (should (equal draft (mevedel-view--input-text)))
+              (should (equal draft (mevedel-view-composer-draft-text)))
               (should-not (string-match-p ":PROPERTIES:" (buffer-string)))
               (should-not (string-match-p "^You$" (buffer-string))))
             (should-not (get-buffer "*mevedel-rewind-impact*")))

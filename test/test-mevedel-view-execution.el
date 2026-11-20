@@ -14,6 +14,7 @@
 (require 'mevedel-view-agent)
 (require 'mevedel-view-execution)
 (require 'mevedel-view-audit)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-execution)
@@ -52,6 +53,18 @@ mouse events in them, which later interactive calls would read."
                    ((symbol-function 'mouse-pixel-position)
                     (lambda () (cons (selected-frame) '(-1 . -1)))))
            ,@body)))))
+
+(defun mevedel-view-execution-test--draft-offset (&optional mark)
+  "Return the composer caret (or MARK) offset from the draft start."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (if mark (mark) (point)) (mevedel-view-composer-draft-start view)))))
+
+(defun mevedel-view-execution-test--set-draft-mark (distance)
+  "Activate the composer mark DISTANCE characters before its caret."
+  (with-current-buffer (mevedel-view-composer-buffer)
+    (set-mark (- (point) distance))
+    (setq mark-active t)))
 
 (defun mevedel-view-execution-test--at (text)
   "Move to the beginning of TEXT in the current rendered view."
@@ -164,10 +177,9 @@ mouse events in them, which later interactive calls would read."
         (unwind-protect
             (progn
               (mevedel-view--render-status)
-              (goto-char (point-max))
-              (insert "> draft\nsecond line")
+              (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
               (mevedel-view-execution-test--activate "  ▸ Running   bash")
-              (goto-char (point-max))
+              (goto-char (mevedel-view-prompt-boundary))
               (let ((action-line (save-excursion
                                    (mevedel-view-execution-test--at "[Full output]")
                                    (line-number-at-pos))))
@@ -188,7 +200,7 @@ mouse events in them, which later interactive calls would read."
                   (should (= action-line (save-excursion
                                            (mevedel-view-execution-test--at "[Full output]")
                                            (line-number-at-pos))))
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
           (mevedel-view-execution--cancel-release)))))
   :doc "a finished row lingers while point is on the panel and the grace period restarts on leaving"
   (mevedel-view-execution-test--with-view
@@ -223,7 +235,7 @@ mouse events in them, which later interactive calls would read."
                 (mevedel-view--render-status)
                 (should (string-search "✓ Completed" (buffer-string)))
                 ;; Leaving restarts the full grace period.
-                (goto-char (point-max))
+                (goto-char (mevedel-view-prompt-boundary))
                 (mevedel-view-execution--check-release view-buf)
                 (setq clock 1109.0)
                 (mevedel-view-execution--check-release view-buf)
@@ -288,7 +300,7 @@ mouse events in them, which later interactive calls would read."
                   (should (= line (funcall line-of "cmd 3")))
                   (should (string-search "[Show all 6]" (buffer-string))))
                 ;; Leaving shows new work and starts the held row's grace.
-                (goto-char (point-max))
+                (goto-char (mevedel-view-prompt-boundary))
                 (mevedel-view-execution--check-release view-buf)
                 (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
                 (should (string-search "✓ Completed" (buffer-string))))
@@ -302,7 +314,7 @@ mouse events in them, which later interactive calls would read."
         (cl-letf (((symbol-function 'float-time)
                    (lambda (&optional time) (if time (funcall float-time-orig time) clock))))
           (mevedel-view--render-status)
-          (goto-char (point-max))
+          (goto-char (mevedel-view-prompt-boundary))
           (setq live nil)
           (unwind-protect
               (progn
@@ -373,8 +385,7 @@ mouse events in them, which later interactive calls would read."
       (delete-other-windows)
       (switch-to-buffer view-buf)
       (mevedel-view--render-status)
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
       (let ((rule-width (lambda ()
                           (save-excursion
                             (mevedel-view-execution-test--at "background work")
@@ -384,7 +395,7 @@ mouse events in them, which later interactive calls would read."
         (split-window-right 40)
         (mevedel-view-zone--on-window-change (selected-window))
         (should (= (- (mevedel-view-zone-width) 4) (funcall rule-width)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
   :doc "a finished inspected execution keeps its place among the rows"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
@@ -398,8 +409,7 @@ mouse events in them, which later interactive calls would read."
       (setq mevedel-view-execution--selected
             (plist-put (copy-sequence (nth 2 live)) :session session))
       (mevedel-view--render-status)
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
       (let ((order (lambda ()
                      (mapcar (lambda (text)
                                (save-excursion (mevedel-view-execution-test--at text) (point)))
@@ -411,7 +421,7 @@ mouse events in them, which later interactive calls would read."
               (mevedel-view--render-status)
               (should (string-search "Completed" (buffer-string)))
               (should (apply #'< (funcall order)))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
           (mevedel-view-execution--cancel-release)))))
   :doc "point stays on its row when a row above it finishes"
   (mevedel-view-execution-test--with-view
@@ -424,8 +434,7 @@ mouse events in them, which later interactive calls would read."
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda () agents)))
           (mevedel-view--render-status)
-          (goto-char (point-max))
-          (insert "> draft\nsecond line")
+          (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
           (mevedel-view-execution-test--at "same command")
           (setq agents nil)
           (unwind-protect
@@ -433,7 +442,7 @@ mouse events in them, which later interactive calls would read."
                 (mevedel-view--render-status)
                 (should (string-search "✓ Finished  agent    /root/worker" (buffer-string)))
                 (should (looking-at-p "same command"))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
             (mevedel-view-execution--cancel-release))))))
   :doc "output arriving above point never moves point onto another execution's Stop"
   (mevedel-view-execution-test--with-view
@@ -505,8 +514,7 @@ mouse events in them, which later interactive calls would read."
               (mevedel-view--render-status)
               (mevedel-view-execution-test--activate "[Show all 7]")
               (should (= 7 (mevedel-view-test--count-substring "▸ Running" (buffer-string))))
-              (goto-char (point-max))
-              (insert "> draft\nsecond line")
+              (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
               (let ((control (save-excursion
                                (mevedel-view-execution-test--at "[Show fewer]")
                                (point))))
@@ -522,7 +530,7 @@ mouse events in them, which later interactive calls would read."
                   (should (string-search "[Show all 7]" (buffer-string)))
                   (should-not mevedel-view-execution--reflow-pending)
                   (should (mevedel-view-execution--pointer-on-panel-p))
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
                   (mevedel-view--render-status)))))))))
   :doc "queued reduction drains once, accounts for shown completion, and keeps true hover and selection"
   (mevedel-view-execution-test--with-view
@@ -535,8 +543,7 @@ mouse events in them, which later interactive calls would read."
       (mevedel-view--render-status)
       (mevedel-view-execution-test--activate "[Show all 7]")
       (mevedel-view-execution-test--activate "cmd 1")
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
       (mevedel-view-execution-test--at "[Show fewer]")
       (let ((before (buffer-string)))
         (unwind-protect
@@ -569,7 +576,7 @@ mouse events in them, which later interactive calls would read."
               (setf (plist-get (nth 2 (car mevedel-view-execution--held)) :release-at) 0.0)
               (mevedel-view--render-status)
               (should (string-search "✓ Completed bash     cmd 2" (buffer-string)))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
           (mevedel-view-execution--cancel-release)))))
   :doc "Show all supersedes a queued Show fewer through the still-rendered control"
   (mevedel-view-execution-test--with-view
@@ -619,7 +626,7 @@ mouse events in them, which later interactive calls would read."
       (let* ((position (point))
              (event (list 'mouse-1 (list (selected-window) position '(0 . 0) 0)))
              (command (lookup-key (get-text-property position 'keymap) [mouse-1])))
-        (goto-char (point-max))
+        (goto-char (mevedel-view-prompt-boundary))
         (funcall command event)
         (should mevedel-view-execution--selected))))
   :doc "TAB toggles only its row, including preview controls, and preserves the draft"
@@ -628,8 +635,7 @@ mouse events in them, which later interactive calls would read."
                                       :yielded t :state 'running :kind 'monitor
                                       :description "Watch errors"))))
     (mevedel-view--render-status)
-    (goto-char (point-max))
-    (insert "> draft\nsecond line")
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
     (cl-letf (((symbol-function 'mevedel-execution-stop-user)
                (lambda (&rest _) (ert-fail "TAB stopped an execution"))))
       (dolist (text '("same command" "Watch errors"))
@@ -650,7 +656,7 @@ mouse events in them, which later interactive calls would read."
       (call-interactively (key-binding (kbd "TAB")))
       (should-not (mevedel-view-zone-collapse-state
                    mevedel-view-execution--collapse-key)))
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
   :doc "blank suffix and header margins are inert, Manage is explicit"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
@@ -790,7 +796,7 @@ mouse events in them, which later interactive calls would read."
           (should-not mevedel-view-execution--selected)
           (should (= start (region-beginning)))
           (should (= end (region-end))))
-        (goto-char (mevedel-view--input-start))
+        (goto-char (mevedel-view-composer-draft-start))
         (should (eq (key-binding [down-mouse-1]) 'mouse-drag-region))))))
 
 (mevedel-deftest mevedel-view-execution--frame-focused-p ()
@@ -824,7 +830,7 @@ mouse events in them, which later interactive calls would read."
     (save-window-excursion
       (switch-to-buffer view-buf)
       (mevedel-view--render-status)
-      (goto-char (mevedel-view--input-start))
+      (goto-char (mevedel-view-composer-draft-start))
       (dolist (coordinates '((0 . -27) (-4 . 3) (-1 . -1)))
         (cl-letf (((symbol-function 'mouse-pixel-position)
                    (lambda () (cons (selected-frame) coordinates))))
@@ -838,7 +844,7 @@ mouse events in them, which later interactive calls would read."
     (save-window-excursion
       (switch-to-buffer view-buf)
       (mevedel-view--render-status)
-      (goto-char (point-max))
+      (goto-char (mevedel-view-prompt-boundary))
       (let ((clock 1000.0) (focus t) (inside t) (window (selected-window)))
         (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
                   ((symbol-function 'frame-focus-state) (lambda (&optional _) focus))
@@ -862,7 +868,7 @@ mouse events in them, which later interactive calls would read."
           (should (mevedel-view-execution--pointer-on-panel-p))
           (setq focus nil)
           (should-not (mevedel-view-execution--pointer-on-panel-p))
-          (goto-char (point-max))
+          (goto-char (mevedel-view-prompt-boundary))
           (setq focus t)
           (should (mevedel-view-execution--pointer-on-panel-p))
           (setq clock 1560.0)
@@ -895,9 +901,8 @@ mouse events in them, which later interactive calls would read."
             (unwind-protect
                 (progn
                   (mevedel-view--render-status)
-                  (goto-char (point-max))
-                  (insert "> draft\nsecond line")
-                  (setq draft-offset (- (point) (mevedel-view--input-start)))
+                  (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
+                  (setq draft-offset (mevedel-view-execution-test--draft-offset))
                   ;; Observe entry before completion, not a fresh lease when
                   ;; completed rows change the panel's geometry.
                   (mevedel-view--render-status)
@@ -923,8 +928,8 @@ mouse events in them, which later interactive calls would read."
                   (should-not (string-search "✓ Finished  agent" (buffer-string)))
                   (should-not mevedel-view-execution--held)
                   (should-not mevedel-view-execution--release-timer)
-                  (should (= draft-offset (- (point) (mevedel-view--input-start))))
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                  (should (= draft-offset (mevedel-view-execution-test--draft-offset)))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
                   ;; Disappearance ends the observed visit, even with no
                   ;; subsequent timer available to observe mouse exit.
                   (should-not mevedel-view-execution--hover-deadline)
@@ -953,8 +958,7 @@ mouse events in them, which later interactive calls would read."
           (unwind-protect
               (progn
                 (mevedel-view--render-status)
-                (goto-char (point-max))
-                (insert "> draft\nsecond line")
+                (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
                 (mevedel-view-execution-test--activate "  ▸ Running")
                 (setq live nil)
                 (mevedel-view-execution--event
@@ -989,7 +993,7 @@ mouse events in them, which later interactive calls would read."
                 (mevedel-view-execution--check-release view-buf)
                 (should-not (string-search "✓ Completed bash" (buffer-string)))
                 (should-not mevedel-view-execution--release-timer)
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
             (mevedel-view-execution--cancel-release))))))
   :doc "a completed inspector beyond five newer rows stays visible until its grace expires"
   (mevedel-view-execution-test--with-view
@@ -1079,14 +1083,13 @@ mouse events in them, which later interactive calls would read."
   :doc "the header toggle hides and restores rows, preserving an active draft"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
-    (goto-char (point-max))
-    (insert "> draft\nsecond line")
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
     (mevedel-view-execution-test--activate "[-]")
     (should-not (string-search "▸ Running" (buffer-string)))
     (should (string-search "background work · 1 command [+]" (buffer-string)))
     (mevedel-view-execution-test--activate "[+]")
     (should (string-search "▸ Running" (buffer-string)))
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
   :doc "TAB on the header, not the work rows, toggles the complete panel"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
@@ -1242,8 +1245,7 @@ mouse events in them, which later interactive calls would read."
       (ert-info ((format "event order: %S facts: %S" order (car case)))
         (mevedel-view-execution-test--with-view
           (mevedel-view--render-status)
-          (goto-char (point-max))
-          (insert "> draft\nsecond line")
+          (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
           (let ((event (list :session session :data-buffer data-buf :owner "/root"
                              :type 'terminal :facts (append '(:execution-id "e1") (car case)))))
             (unwind-protect
@@ -1271,7 +1273,7 @@ mouse events in them, which later interactive calls would read."
                   (dotimes (_ 2)
                     (mevedel-view-execution-test--assert-held-row
                      "✓ Completed" (cdr case) '("bash" "same command"))
-                    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
                     (mevedel-view--render-status)))
               (mevedel-view-execution--cancel-release))))))))
 
@@ -1290,8 +1292,7 @@ mouse events in them, which later interactive calls would read."
           (setf (mevedel-session-agent-registry session) (list (cons "/root/worker" record)))
           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents)))
             (mevedel-view--render-status)
-            (goto-char (point-max))
-            (insert "> draft\nsecond line")
+            (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
             (setf (mevedel-agent-record-activity record) 'idle
                   (mevedel-agent-record-settled-outcome record) (car case))
             (setq agents nil)
@@ -1307,7 +1308,7 @@ mouse events in them, which later interactive calls would read."
                     (mevedel-view-execution-test--assert-held-row
                      "✓ Finished" (cdr case) '("agent" "/root/worker"))
                     (mevedel-view--render-status))
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
               (mevedel-view-execution--cancel-release))))))))
 
 (mevedel-deftest mevedel-view-execution--line-presentation ()
@@ -1346,8 +1347,7 @@ mouse events in them, which later interactive calls would read."
     (mevedel-view-execution-test--with-view
       (mevedel-view--render-status)
       (mevedel-view-execution-test--activate "  ▸ Running")
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
       (setq live nil)
       (mevedel-view-execution--event
        (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
@@ -1359,7 +1359,7 @@ mouse events in them, which later interactive calls would read."
           (should (eq (cdr case) (get-text-property (1- (point)) property))))
         (should (string-search "final output" (buffer-string)))
         (should-not (string-search "[Stop]" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
         (mevedel-view--render-status)))))
 
 (mevedel-deftest mevedel-view-execution--agent-line ()
@@ -1391,8 +1391,7 @@ mouse events in them, which later interactive calls would read."
         (unwind-protect
             (progn
               (mevedel-view--render-status)
-              (goto-char (point-max))
-              (insert "> draft\nsecond line")
+              (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
               (mevedel-view-execution-test--activate "  ▸ Running   bash")
               (let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background))
                      (before (count-screen-lines (plist-get bounds :start)
@@ -1402,7 +1401,7 @@ mouse events in them, which later interactive calls would read."
                 (setq bounds (mevedel-view-zone-fragment-bounds 'status 'background))
                 (should (= before (count-screen-lines (plist-get bounds :start)
                                                       (plist-get bounds :end) nil (selected-window)))))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
           (mevedel-view-execution--cancel-release))))))
 
 (mevedel-deftest mevedel-view-execution--control-lines ()
@@ -1493,8 +1492,7 @@ mouse events in them, which later interactive calls would read."
                      (:path "/root/target" :status running :depth 0
                       :model-metadata (:model "opus"))))))
         (mevedel-view--render-status)
-        (goto-char (point-max))
-        (insert "> draft\nsecond line")
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
         (let ((row '(agent "/root/target")))
           ;; nil starts and stays on the surviving row: the control case.
           (dolist (target '(nil "    Model     opus" "[Interrupt]"))
@@ -1513,7 +1511,7 @@ mouse events in them, which later interactive calls would read."
               (should (= (point) (car (mevedel-view-zone--anchor-run
                                        row (point-min) (point-max)))))
               (should (= (point) (window-point (selected-window))))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))))))))
   :doc "narrow hovered expansions keep displayed rows on agent and execution completion"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
@@ -1535,8 +1533,7 @@ mouse events in them, which later interactive calls would read."
           (unwind-protect
               (progn
                 (mevedel-view--render-status)
-                (goto-char (point-max))
-                (insert "> draft\nsecond line")
+                (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
                 (mevedel-view-execution-test--activate "  ▸ Running   agent")
                 (let ((before (funcall rows)))
                   (setq agents nil)
@@ -1547,7 +1544,7 @@ mouse events in them, which later interactive calls would read."
                   (setq live nil)
                   (mevedel-view--render-status)
                   (should (= before (funcall rows))))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
             (mevedel-view-execution--cancel-release))))))
   :doc "a finished agent keeps an inert expansion of the same height while held, and its stale controls refuse"
   (mevedel-view-execution-test--with-view
@@ -1555,15 +1552,14 @@ mouse events in them, which later interactive calls would read."
                                :model-metadata '(:backend "Claude" :model "opus" :effort "high"))))
            (clock 1000.0)
            (float-time-orig (symbol-function 'float-time))
-           (lines (lambda () (count-lines (point-min) (mevedel-view--input-start)))))
+           (lines (lambda () (count-lines (point-min) (mevedel-view-prompt-boundary)))))
       (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
                 ((symbol-function 'float-time)
                  (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
                 ((symbol-function 'mevedel-agent-control-interrupt-user)
                  (lambda (&rest _) (ert-fail "interrupted a finished agent"))))
         (mevedel-view--render-status)
-        (goto-char (point-max))
-        (insert "> draft\nsecond line")
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
         (mevedel-view-execution-test--activate "  ▸ Running   agent")
         (mevedel-view-execution-test--at "[Interrupt]")
         (let ((callback (get-text-property (point) 'mevedel-view-zone-activate))
@@ -1585,7 +1581,7 @@ mouse events in them, which later interactive calls would read."
                 (mevedel-view--render-status)
                 (should-not mevedel-view-execution--selected-agent)
                 (should-not (string-search "Agent finished." (buffer-string)))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
             (mevedel-view-execution--cancel-release)))))))
 
 (mevedel-deftest mevedel-view-execution--preview ()
@@ -1639,9 +1635,9 @@ mouse events in them, which later interactive calls would read."
                   ((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda () (list '(:path "/root/worker" :status running :started-at 0.0)))))
           (mevedel-view--render-status)
-          (mevedel-view-test--insert-composer-draft "> active draft\nsecond line")
-          (goto-char (1- (point-max)))
-          (let ((offset (- (point) mevedel-view--input-marker))
+          (mevedel-view-test--insert-composer-draft
+           "> active draft\nsecond line" (1- (length "> active draft\nsecond line")))
+          (let ((offset (mevedel-view-execution-test--draft-offset))
                 (timer mevedel-view--spinner-timer))
             (should (timerp timer))
             (should (equal '((metadata . 1.0)) mevedel-view--spinner-timer-plan))
@@ -1657,8 +1653,8 @@ mouse events in them, which later interactive calls would read."
               (funcall (timer--function timer)))
             (should (= 3 (mevedel-view-test--count-substring " · 1m 00s" (buffer-string))))
             (should (eq timer mevedel-view--spinner-timer))
-            (should (equal "> active draft\nsecond line" (mevedel-view--input-text)))
-            (should (= offset (- (point) mevedel-view--input-marker)))
+            (should (equal "> active draft\nsecond line" (mevedel-view-composer-draft-text)))
+            (should (= offset (mevedel-view-execution-test--draft-offset)))
             (dolist (target mevedel-view-execution--elapsed-targets)
               (should (<= (string-width (buffer-substring-no-properties
                                         (car target) (1- (cdr target)))) 64))
@@ -1744,7 +1740,7 @@ mouse events in them, which later interactive calls would read."
             (setq clock 10.0)
             (funcall (timer--function mevedel-view--spinner-timer))
             (should (string-search " · 10s" (buffer-string)))
-            (should (equal "> keep draft\nsecond line" (mevedel-view--input-text))))))))
+            (should (equal "> keep draft\nsecond line" (mevedel-view-composer-draft-text))))))))
   :doc "a finished agent freezes its invocation duration during the grace period"
   (mevedel-view-execution-test--with-view
     (let ((clock 59.0)
@@ -1890,14 +1886,12 @@ mouse events in them, which later interactive calls would read."
                 (ert-info ((format "Initial execution observation: %S" observation))
                   (should id))
                 (mevedel-view-execution-test--activate "  ▸ Running")
-                (goto-char (point-max))
-                (insert (propertize "> active draft\nsecond line" 'draft-test 'kept))
-                (backward-char 3)
-                (set-mark (- (point) 4))
-                (setq mark-active t)
-                (let ((draft (buffer-substring (mevedel-view--input-start) (point-max)))
-                      (offset (- (point) (mevedel-view--input-start)))
-                      (mark-offset (- (mark) (mevedel-view--input-start))))
+                (let ((text (propertize "> active draft\nsecond line" 'draft-test 'kept)))
+                  (mevedel-view-test--insert-composer-draft text (- (length text) 3)))
+                (mevedel-view-execution-test--set-draft-mark 4)
+                (let ((draft (mevedel-view-composer-draft-text))
+                      (offset (mevedel-view-execution-test--draft-offset))
+                      (mark-offset (mevedel-view-execution-test--draft-offset t)))
                   (write-region "go" nil (file-name-concat root "go") nil 'silent)
                   (test-mevedel-execution--wait
                    (lambda () (string-search "    live output" (buffer-string))))
@@ -1911,10 +1905,11 @@ mouse events in them, which later interactive calls would read."
                   (should (string-search "    final output" (buffer-string)))
                   (should-not (string-search "[Stop]" (buffer-string)))
                   (should (equal-including-properties
-                           draft (buffer-substring (mevedel-view--input-start) (point-max))))
-                  (should (= offset (- (point) (mevedel-view--input-start))))
-                  (should (= mark-offset (- (mark) (mevedel-view--input-start))))
-                  (should mark-active)))))
+                           draft (mevedel-view-composer-draft-text)))
+                  (should (= offset (mevedel-view-execution-test--draft-offset)))
+                  (should (= mark-offset (mevedel-view-execution-test--draft-offset t)))
+                  (should (buffer-local-value
+                           'mark-active (mevedel-view-composer-buffer)))))))
         (mevedel-execution-teardown-session session)
         (delete-directory root t))))
   :doc "wrong session and equal ID with different owner cannot update selection"
@@ -1943,26 +1938,26 @@ mouse events in them, which later interactive calls would read."
             (plist-get (car live) :event-count) 2)
       (mevedel-view--render-status)
       (mevedel-view-execution-test--activate "  ▸ Watching")
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
-      (backward-char 3)
-      (set-mark (- (point) 5))
-      (setq mark-active t)
+      (mevedel-view-test--insert-composer-draft
+       "> draft\nsecond line" (- (length "> draft\nsecond line") 3))
+      (mevedel-view-execution-test--set-draft-mark 5)
       (let* ((other (split-window-below))
-            (offset (- (point) (mevedel-view--input-start)))
-            (mark-offset (- (mark) (mevedel-view--input-start)))
+            (offset (mevedel-view-execution-test--draft-offset))
+            (mark-offset (mevedel-view-execution-test--draft-offset t))
             (windows (window-list))
             (start (window-start)))
-        (set-window-point other (+ (mevedel-view--input-start) 2))
+        (set-window-point (mevedel-view-composer-window other)
+                           (+ (mevedel-view-composer-draft-start) 2))
         (setf (plist-get (car live) :event-count) 3
               (plist-get (car live) :output-tail) "changed")
         (mevedel-view-execution--state-changed session data-buf)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= offset (- (point) (mevedel-view--input-start))))
-        (should (= mark-offset (- (mark) (mevedel-view--input-start))))
-        (should mark-active)
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+        (should (= offset (mevedel-view-execution-test--draft-offset)))
+        (should (= mark-offset (mevedel-view-execution-test--draft-offset t)))
+        (should (buffer-local-value 'mark-active (mevedel-view-composer-buffer)))
         (should (equal windows (window-list)))
-        (should (= 2 (- (window-point other) (mevedel-view--input-start))))
+        (should (= 2 (- (window-point (mevedel-view-composer-window other))
+                           (mevedel-view-composer-draft-start))))
         (should (= start (window-start)))
         (should (string-search "until " (buffer-string)))
         (should (string-search "3 events" (buffer-string)))
@@ -2021,9 +2016,8 @@ mouse events in them, which later interactive calls would read."
                          "(:name \"Bash\" :args (:command \"printf result\"))\n\nRESULT\n"
                          'gptel '(tool . "tool1"))))
               (switch-to-buffer view-buf)
-              (goto-char (point-max))
-              (insert "> draft\nsecond line")
-              (backward-char 3)
+              (mevedel-view-test--insert-composer-draft
+               "> draft\nsecond line" (- (length "> draft\nsecond line") 3))
               (progn
                 (setf (plist-get (car live) :owner) path)
                 (mevedel-view--render-status)
@@ -2037,7 +2031,7 @@ mouse events in them, which later interactive calls would read."
                   (should (equal "tool1" (get-text-property (point) 'mevedel-view-tool-use-id)))
                   (should-not (get-text-property (point) 'mevedel-view-collapsed)))
                 (with-current-buffer view-buf
-                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+                  (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
           (unless agent-view
             (when-let* ((window (buffer-local-value
                                 'mevedel-view--agent-transcript-window view-buf))

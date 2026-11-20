@@ -200,8 +200,8 @@
                 (transient--emergency-exit)))
             (should (= collections 0))
             (with-current-buffer view-buf
-              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+              (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))))
         (advice-remove 'mevedel-memory-list--collect probe))))
 
   :doc "opens the permissions cockpit from the owning data buffer"
@@ -1654,8 +1654,8 @@
                                           lines))))))
             (transient--emergency-exit)))))
     (with-current-buffer view-buf
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
 (mevedel-deftest mevedel-menu--share-summary ()
   ,test

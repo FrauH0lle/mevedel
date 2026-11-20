@@ -93,17 +93,16 @@
                           (push id ids)
                           (list :meta `((compactionEvents . ,events)))))))
               (with-current-buffer view
-                (goto-char (mevedel-view--input-start))
-                (insert "Compact this turn")
-                (mevedel-view-send)
-                (goto-char (mevedel-view--input-start))
-                (insert "> Preserve my draft\nand its second line"))
+                (mevedel-view-composer-insert "Compact this turn")
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))
+                (mevedel-view-composer-insert "> Preserve my draft\nand its second line"))
               (mevedel-test--await 5 "View compaction did not settle"
                 (not (or (zerop (mevedel-session-turn-count session))
                          (mevedel-turn-busy-p buffer))))
               (with-current-buffer view
                 (should (equal "> Preserve my draft\nand its second line"
-                               (mevedel-view--input-text)))
+                               (mevedel-view-composer-draft-text)))
                 ;; The native summary is collapsed, then opens on demand with
                 ;; the Claude-labelled preface the model received.
                 (should (string-search "conversation compacted" (buffer-string)))
@@ -122,7 +121,7 @@
                   (mevedel-view-toggle-section))
                 (should-not (string-search "DURABLE NATIVE SUMMARY" (buffer-string)))
                 (should (equal "> Preserve my draft\nand its second line"
-                               (mevedel-view--input-text))))
+                               (mevedel-view-composer-draft-text))))
               (kill-buffer view)
               (let ((path (mevedel-session-save-path session)))
                 (test-mevedel-session-persistence--release-and-kill buffer session)

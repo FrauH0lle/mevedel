@@ -507,15 +507,14 @@
           (setq replacement (mevedel-request-begin session)
                 before (buffer-string)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "> Keep this draft\nand its second line"))
+          (mevedel-view-composer-insert "> Keep this draft\nand its second line"))
         (funcall callback '(:status ok :kind fork :result "Late answer"))
         (funcall callback '(:status error :message "Late error"))
         (should (eq replacement (buffer-local-value 'mevedel--current-request data-buf)))
         (with-current-buffer data-buf (should (equal before (buffer-string))))
         (with-current-buffer view-buf
           (should (equal "> Keep this draft\nand its second line"
-                         (mevedel-view--input-text))))))))
+                         (mevedel-view-composer-draft-text))))))))
 
 (mevedel-deftest mevedel-review--run-task/ownership (:quiet t)
   ,test

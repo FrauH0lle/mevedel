@@ -192,8 +192,8 @@
     (should (= 0 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (with-current-buffer view
       (should-not (string-search "1 recovery" (mevedel-menu--memory-description)))
-      (should (equal draft (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4)))))
+      (should (equal draft (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset)))))
   :doc "shows captured evidence and applies a proposal without disturbing a composer draft"
   (let ((draft "> quoted\nsecond line"))
     (with-current-buffer view (mevedel-view-test--insert-composer-draft draft 4))
@@ -235,8 +235,8 @@
       (should (eq 'reversed (plist-get (mevedel-cockpit-surface-selected) :status)))
       (mevedel-cockpit-surface-refresh))
     (with-current-buffer view
-      (should (equal draft (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4)))))
+      (should (equal draft (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-test--composer-point-offset)))))
   :doc "accept all composes independent reviews, retries stale candidates and preserves the draft"
   (let* ((index (file-name-concat memory "MEMORY.md"))
          (first (car (mevedel-memory-list--collect context)))
@@ -269,8 +269,8 @@
       (should (equal "# Manual notes\n- [Topic](topic.md) - Current\n- [New](new.md) - Context\n"
                      (mevedel-session-control-fs-read-file index)))
       (with-current-buffer view
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (equal draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset))))))
   :doc "candidate rows label stale and pending proposals by what acceptance would do now"
   (let ((index (file-name-concat memory "MEMORY.md"))
         (label (lambda () (aref (cadr (mevedel-memory-list--entry (car (mevedel-memory-list--collect context)) nil)) 3))))
@@ -590,8 +590,8 @@
           (should-not (mevedel-memory-pass-running workspace))
           (should (= 2 (seq-count (lambda (entry) (eq (plist-get entry :kind) 'consolidation)) (mevedel-journal-store-entries root))))
           (with-current-buffer view
-            (should (equal draft (mevedel-view--input-text)))
-            (should (= (point) (+ (mevedel-view--input-start) 4)))))
+            (should (equal draft (mevedel-view-composer-draft-text)))
+            (should (= 4 (mevedel-view-test--composer-point-offset)))))
 		     (mevedel-test--with-captured-diagnostics nil (mevedel-memory-pass-cancel workspace))
 		     (when (get-buffer "*mevedel running consolidation*")
 		       (kill-buffer "*mevedel running consolidation*"))))
@@ -624,8 +624,8 @@
             (while (mevedel-memory-pass-drain-status workspace) (accept-process-output nil .01)))
           (should-not (mevedel-memory-pass-running workspace))
           (with-current-buffer view
-            (should (equal draft (mevedel-view--input-text)))
-            (should (= (point) (+ (mevedel-view--input-start) 4)))))
+            (should (equal draft (mevedel-view-composer-draft-text)))
+            (should (= 4 (mevedel-view-test--composer-point-offset)))))
       (mevedel-test--with-captured-diagnostics nil (mevedel-memory-pass-cancel workspace)))))
 
 (provide 'test-mevedel-memory-list)

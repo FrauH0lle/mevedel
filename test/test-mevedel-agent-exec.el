@@ -710,8 +710,8 @@ fire-count and payload."
       (with-current-buffer view-buf
         (should (string-search "Running   agent    /root/partner · opus" (buffer-string)))
         (should-not (string-search "opus:high" (buffer-string)))
-        (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 3)))))))
+        (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text)))
+        (should (= 3 (mevedel-view-test--composer-point-offset)))))))
 
 (mevedel-deftest mevedel-agent-exec-run ()
 		 ,test

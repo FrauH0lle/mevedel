@@ -52,12 +52,12 @@
     (let ((start (mevedel-view-composer-draft-start view-buf))
           (end (mevedel-view-composer-draft-end view-buf)))
       (should (= start end))
-      (with-current-buffer view-buf
+      (with-current-buffer (mevedel-view-composer-buffer view-buf)
         (should (equal (buffer-substring-no-properties (- start 2) start) "> "))
-        (should (mevedel-view-composer-in-draft-p start))
-        (should (mevedel-view-composer-in-draft-p (copy-marker start)))
-        (should-not (mevedel-view-composer-in-draft-p (1- start)))
-        (should-not (mevedel-view-composer-in-draft-p (1+ end))))
+        (should (mevedel-view-composer-in-draft-p start view-buf))
+        (should (mevedel-view-composer-in-draft-p (copy-marker start) view-buf))
+        (should-not (mevedel-view-composer-in-draft-p (1- start) view-buf))
+        (should-not (mevedel-view-composer-in-draft-p (1+ end) view-buf)))
       (with-temp-buffer
         (insert (make-string (1- start) ?x))
         (should-not (mevedel-view-composer-in-draft-p (point-marker) view-buf))))))
@@ -67,19 +67,19 @@
   (test)
   :doc "Read the full untrimmed draft, with or without its text properties"
   (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (should (equal "" (mevedel-view-composer-draft-text)))
-      (goto-char (point-max))
-      (let ((point-before-insert (point)))
-        (insert (propertize "> hello\nthere " 'face 'bold))
+    (should (equal "" (mevedel-view-composer-draft-text view-buf)))
+    (let ((start (mevedel-view-composer-draft-start view-buf)))
+      (mevedel-view-composer-insert (propertize "> hello\nthere " 'face 'bold)
+                                    start view-buf)
+      (with-current-buffer (mevedel-view-composer-buffer view-buf)
         (save-restriction
-          (narrow-to-region (point-min) point-before-insert)
-          (let ((text (mevedel-view-composer-draft-text))
-                (plain (mevedel-view-composer-draft-text nil t)))
+          (narrow-to-region (point-min) start)
+          (let ((text (mevedel-view-composer-draft-text view-buf))
+                (plain (mevedel-view-composer-draft-text view-buf t)))
             (should (equal "> hello\nthere " text))
             (should (eq 'bold (get-text-property 0 'face text)))
             (should (equal-including-properties "> hello\nthere " plain)))
-          (should (= (point-max) point-before-insert)))))))
+          (should (= (point-max) start)))))))
 
 (mevedel-deftest mevedel-view-composer-insert ()
   ,test
@@ -93,7 +93,7 @@
         (should-error (mevedel-view-composer-insert "outside" (1- start) view-buf))
         (should (eq data-buf (current-buffer)))
         (should (equal "> tail " (mevedel-view-composer-draft-text view-buf t)))
-        (with-current-buffer view-buf
+        (with-current-buffer (mevedel-view-composer-buffer view-buf)
           (should (= (point) (+ start 2)))
           (should (equal "> " (buffer-substring-no-properties (- start 2) start))))))))
 
@@ -104,17 +104,22 @@
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let* ((start (mevedel-view-composer-draft-start))
-             (prefix (buffer-substring (point-min) start)))
+             (transcript (buffer-substring (point-min) (mevedel-view-prompt-boundary)))
+             (prefix (with-current-buffer (mevedel-view-composer-buffer)
+                       (buffer-substring (point-min) start))))
         (mevedel-view-composer-insert "old\nlong draft")
         (should (= (+ start 3) (mevedel-view-composer-replace "new")))
-        (should (= (point) (+ start 3)))
+        (should (= 3 (mevedel-view-test--composer-point-offset)))
         (should (equal "new" (mevedel-view-composer-draft-text)))
         (should-error (mevedel-view-composer-replace '(not text)))
         (should (equal "new" (mevedel-view-composer-draft-text)))
         (should (= start (mevedel-view-composer-replace "")))
         (should (equal "" (mevedel-view-composer-draft-text)))
         (should (equal-including-properties
-                 prefix (buffer-substring (point-min) start))))))
+                 transcript (buffer-substring (point-min) (mevedel-view-prompt-boundary))))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (should (equal-including-properties
+                   prefix (buffer-substring (point-min) start)))))))
   :doc "A hidden, locked composer retains its draft and rejects edits"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf

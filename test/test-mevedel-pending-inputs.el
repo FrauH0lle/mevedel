@@ -119,10 +119,11 @@
       (mevedel-session-set-pending-input-failure-paused session t)
       (with-current-buffer view-buf
         (mevedel-pending-inputs-test--replace-composer view-buf draft)
-        (goto-char (+ (mevedel-view--input-start) 5))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start) 5)))
         (mevedel-view--interaction-rebuild)
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= 5 (- (point) (mevedel-view--input-start))))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 5 (mevedel-view-test--composer-point-offset)))
         (should (string-search "Steering\n  1. [+] @file:" (buffer-string)))
         (mevedel-pending-inputs-test--preview-command "1. [+] @file:")
         (dotimes (_ 2)
@@ -137,10 +138,11 @@
             (should (= 1 (how-many "@file:" (point-min) (point-max))))
             (should (string-search
                      input (replace-regexp-in-string "\n    " "" rendered)))))
-        (goto-char (+ (mevedel-view--input-start) 5))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start) 5)))
         (mevedel-view--interaction-rebuild)
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= 5 (- (point) (mevedel-view--input-start))))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 5 (mevedel-view-test--composer-point-offset)))
         (mevedel-pending-inputs-test--preview-command "1. [-]")
         (should (string-search "Steering\n  1. [+] @file:" (buffer-string)))
         (should (= 1 (how-many "@file:" (point-min) (point-max))))
@@ -273,29 +275,33 @@
         (mevedel-pending-inputs-test--preview-command "1. [+] queued")
         (mevedel-pending-inputs-test--replace-composer
          view-buf (propertize "> draft\nsecond line\n> third" 'draft-test 'kept))
-        (goto-char (+ (mevedel-view--input-start) 12))
-        (set-mark (+ (mevedel-view--input-start) 2))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start) 12)))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (set-mark (+ (mevedel-view-composer-draft-start) 2)))
         (setq mark-active t)
         (set-window-start (selected-window) (point-min))
         ;; Native viewport measurement fontifies like redisplay.  Snapshot
         ;; displayed draft properties, not an unfinished fontification state.
-        (jit-lock-fontify-now (mevedel-view--input-start) (point-max))
-        (let ((draft (buffer-substring (mevedel-view--input-start) (point-max)))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (jit-lock-fontify-now (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))
+        (let ((draft (mevedel-view-composer-draft-text))
               (start (window-start)))
           (mevedel-session-enqueue-pending-input
            session 'steering '(:input "newly queued"))
           (mevedel-view--interaction-rebuild)
           (should (equal-including-properties
-                   draft (buffer-substring (mevedel-view--input-start) (point-max))))
-          (should (= 12 (- (point) (mevedel-view--input-start))))
-          (should (= 2 (- (mark) (mevedel-view--input-start))))
+                   draft (mevedel-view-composer-draft-text)))
+          (should (= 12 (mevedel-view-test--composer-point-offset)))
+          (should (= 2 (with-current-buffer (mevedel-view-composer-buffer)
+                         (- (mark) (mevedel-view-composer-draft-start)))))
           (should mark-active)
           (should (= start (window-start)))
           (should (string-search "    full queued text" (buffer-string)))
           (mevedel-session-set-pending-inputs session 'follow-up nil)
           (mevedel-view--interaction-rebuild)
           (should-not (string-search "full queued text" (buffer-string)))
-          (should (= 12 (- (point) (mevedel-view--input-start))))
+          (should (= 12 (mevedel-view-test--composer-point-offset)))
           ;; A fresh queue must not inherit the old overlay's disclosure.
           (mevedel-session-set-pending-inputs session 'steering nil)
           (mevedel-view--interaction-rebuild)
@@ -325,7 +331,7 @@
       (mevedel-pending-inputs-test--preview-command "1. [+] large")
       (should (string-search "Partial preview: 10 lines maximum" (buffer-string)))
       (should-not (string-search "TAIL" (buffer-string)))
-      (should (< (- (mevedel-view--input-start) (point-min)) 1500))
+      (should (< (- (mevedel-view-prompt-boundary) (point-min)) 1500))
       (should (string-search "Manage queue… (pauses delivery; C-c C-e)" (buffer-string))))))
 
 (mevedel-deftest mevedel-view--pending-input-preview ()
@@ -425,7 +431,7 @@
              (string-match-p
               "Pending-input delivery paused"
               (buffer-substring-no-properties
-               (point-min) (mevedel-view--input-start)))))))))
+               (point-min) (mevedel-view-prompt-boundary)))))))))
 
   :doc "rejects opening an empty Pending Inputs cockpit"
   (mevedel-pending-inputs-test--with-session
@@ -467,13 +473,12 @@
            draft point-offset cockpit)
       (setf (mevedel-session-dropped-file-grants session) (list grant))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert (propertize "> draft\nsecond" 'draft-property 'kept))
-        (goto-char (+ (mevedel-view--input-start) 3))
+        (mevedel-view-test--insert-composer-draft (propertize "> draft\nsecond" 'draft-property 'kept))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start) 3)))
         (setq draft
-              (buffer-substring
-               (mevedel-view--input-start) (point-max))
-              point-offset (- (point) (mevedel-view--input-start))))
+              (mevedel-view-composer-draft-text)
+              point-offset (mevedel-view-test--composer-point-offset)))
       (save-window-excursion
         (setq cockpit
               (with-current-buffer view-buf
@@ -483,28 +488,30 @@
           (mevedel-pending-inputs-edit))
         (with-current-buffer view-buf
           (should (equal "queued\nmessage"
-                         (mevedel-view--input-text)))
+                         (mevedel-view-composer-draft-text nil t)))
           (let ((rail (mevedel-view-zone-region 'progress)))
             (should (overlayp rail))
             (should (string-match-p
                      "Editing follow-up 1"
                      (buffer-substring-no-properties
                       (overlay-start rail) (overlay-end rail)))))
-          (should-error (mevedel-view-send) :type 'user-error)
-          (should-error (mevedel-view-send-follow-up) :type 'user-error)
+          (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                          (mevedel-view-send)) :type 'user-error)
+          (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                          (mevedel-view-send-follow-up)) :type 'user-error)
           (mevedel-test--with-captured-messages nil
             (mevedel-pending-inputs-cancel-edit)))
         (with-current-buffer view-buf
           (should
            (equal-including-properties
             draft
-            (buffer-substring
-             (mevedel-view--input-start) (point-max))))
+            (mevedel-view-composer-draft-text)))
           (should (= point-offset
-                     (- (point) (mevedel-view--input-start))))
+                     (mevedel-view-test--composer-point-offset)))
           (should (eq 'kept
-                      (get-text-property
-                       (mevedel-view--input-start) 'draft-property)))))
+                      (with-current-buffer (mevedel-view-composer-buffer)
+                        (get-text-property
+                         (mevedel-view-composer-draft-start) 'draft-property))))))
       (should (equal (list grant)
                      (mevedel-session-dropped-file-grants session)))
       (should (eq entry
@@ -524,8 +531,7 @@
              session 'follow-up '(:input "second")))
            cockpit)
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "> retained\nmultiline"))
+        (mevedel-view-test--insert-composer-draft "> retained\nmultiline"))
       (save-window-excursion
         (setq cockpit
               (with-current-buffer view-buf
@@ -540,7 +546,7 @@
             (mevedel-pending-inputs-save-edit)))
         (with-current-buffer view-buf
           (should (equal "> retained\nmultiline"
-                         (mevedel-view--input-text))))
+                         (mevedel-view-composer-draft-text nil t))))
         (let ((entries (mevedel-session-pending-follow-ups session)))
           (should
            (equal '("edited first" "second")
@@ -594,7 +600,7 @@
           (mevedel-test--with-captured-messages nil
             (mevedel-pending-inputs-save-edit))
           (should mevedel-view--pending-input-edit)
-          (should (equal "/review" (mevedel-view--input-text))))
+          (should (equal "/review" (mevedel-view-composer-draft-text nil t))))
         (should (eq entry
                     (car
                      (mevedel-session-pending-follow-ups session)))))))
@@ -692,7 +698,7 @@
           (mevedel-test--with-captured-messages nil
             (mevedel-pending-inputs-save-edit))
           (should mevedel-view--pending-input-edit)
-          (should (equal "still editing" (mevedel-view--input-text))))
+          (should (equal "still editing" (mevedel-view-composer-draft-text nil t))))
         (should (eq entry
                     (car
                      (mevedel-session-pending-steering session))))))))
@@ -782,8 +788,7 @@
                   session 'follow-up '(:input "queued")))
           scheduled)
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "> draft"))
+        (mevedel-view-test--insert-composer-draft "> draft"))
       (save-window-excursion
         (let ((cockpit
                (with-current-buffer view-buf
@@ -801,7 +806,7 @@
       (should-not (buffer-local-value 'mevedel-view--pending-input-edit
                                       view-buf))
       (with-current-buffer view-buf
-        (should (equal "> draft" (mevedel-view--input-text))))
+        (should (equal "> draft" (mevedel-view-composer-draft-text nil t))))
       (should-not (mevedel-session-pending-input-paused session))))
 
   :doc "a failure pause survives the kill and delivers nothing"
@@ -997,8 +1002,7 @@
             (mevedel-session-enqueue-pending-input
              session 'follow-up '(:input "later"))))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "> draft"))
+        (mevedel-view-test--insert-composer-draft "> draft"))
       (save-window-excursion
         (let ((cockpit
                (with-current-buffer view-buf
@@ -1013,7 +1017,7 @@
       (should (equal (list follow-up)
                      (mevedel-session-pending-follow-ups session)))
       (with-current-buffer view-buf
-        (should (equal "> draft" (mevedel-view--input-text)))))))
+        (should (equal "> draft" (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-pending-inputs-move-down ()
   ,test
@@ -1956,9 +1960,12 @@
           (mevedel-view--drain-follow-up data-buf)
           (should-not delivered)
           ;; A partial deletion leaves a draft to protect.
-          (delete-region (- (point-max) 6) (point-max))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (delete-region (- (mevedel-view-composer-draft-end) 6)
+                           (mevedel-view-composer-draft-end)))
           (should-not timers)
-          (delete-region (mevedel-view--input-start) (point-max))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))
           (should (equal `((mevedel-pending-inputs--offer-idle-work-now ,data-buf t))
                          timers))
           (apply (caar timers) (cdar timers))
@@ -1971,7 +1978,8 @@
                  (lambda (&rest args) (push args timers))))
         (with-current-buffer view-buf
           (mevedel-view-test--insert-composer-draft "draft")
-          (delete-region (mevedel-view--input-start) (point-max))))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))))
       (should-not timers)))
 
   :doc "a background event held by a detached draft is offered once it is cleared"
@@ -2099,14 +2107,16 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
           (let ((callback (pop callbacks))) (apply (car callback) (cdr callback))))
         (should-not submitted)
         (with-current-buffer view-buf
-          (should (equal draft (mevedel-view--input-text)))
-          (goto-char (point-max))
-          (insert " more")
-          (delete-char -1)
-          (should-not callbacks)
-          (delete-region (mevedel-view--input-start) (point-max))
-          (insert " ")
-          (delete-char -1))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (goto-char (mevedel-view-composer-draft-end))
+            (insert " more")
+            (delete-char -1)
+            (should-not callbacks)
+            (delete-region (mevedel-view-composer-draft-start)
+                           (mevedel-view-composer-draft-end))
+            (insert " ")
+            (delete-char -1)))
         (should (= 1 (length callbacks)))
         (while callbacks
           (let ((callback (pop callbacks))) (apply (car callback) (cdr callback))))
@@ -2137,8 +2147,9 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
               (with-current-buffer view-buf
                 (mevedel-view-test--insert-composer-draft "User question")
                 (should-not (mevedel-pending-inputs--event-wake-view data-buf))
-                (mevedel-view-send)
-                (should (string-empty-p (mevedel-view--input-text))))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))
+                (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
               (dolist (timer timers) (apply (car timer) (cdr timer)))
               (should-not background-turns)
               (should (= 1 (length prompts)))

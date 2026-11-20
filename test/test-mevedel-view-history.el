@@ -128,10 +128,11 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--navigation
   (:doc "M-p / M-n preserve bindings in recalled and incomplete input")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert (mevedel-view-history-test--bound-input
-               "draft with $alpha" "alpha" "/tmp/draft/SKILL.md"))
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
+      (mevedel-view-composer-insert
+       (mevedel-view-history-test--bound-input
+        "draft with $alpha" "alpha" "/tmp/draft/SKILL.md")
+       nil view-buf)
       (mevedel-view-history-add "first")
       (mevedel-view-history-add
        (mevedel-view-history-test--bound-input
@@ -185,9 +186,8 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--restore-incomplete
   (:doc "M-n restores typed-but-unsent input after history browsing")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "draft")
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
+      (mevedel-view-composer-insert "draft" nil view-buf)
       (mevedel-view-history-add "sent")
       (mevedel-view-history-previous)
       (should (equal "sent" (mevedel-view-history--input-text)))
@@ -197,29 +197,26 @@ Binds `data-buf' and `view-buf'."
 (mevedel-deftest mevedel-view-history--bol
   (:doc "C-a moves to input start on the prompt line")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "abc")
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
+      (mevedel-view-composer-insert "abc" nil view-buf)
       (mevedel-view-history-beginning-of-line)
-      (should (= (point) (mevedel-view--input-start))))))
+      (should (= (point) (mevedel-view-composer-draft-start view-buf))))))
 
 (mevedel-deftest mevedel-view-history--clear-input
   (:doc "C-c C-u clears input without touching history")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "abc")
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
+      (mevedel-view-composer-insert "abc" nil view-buf)
       (mevedel-view-history-clear-input)
       (should (equal "" (mevedel-view-history--input-text))))))
 
 (mevedel-deftest mevedel-view-history--isearch
   (:doc "M-r incrementally searches, cycles matches, and restores on C-g")
   (mevedel-view-history-test--with-view
-    (with-current-buffer view-buf
+    (with-current-buffer (mevedel-view-composer-buffer view-buf)
       ;; `read-key' updates this global even for simulated input.
       (let ((last-nonmenu-event last-nonmenu-event))
-        (goto-char (point-max))
-        (insert "draft")
+        (mevedel-view-composer-insert "draft" nil view-buf)
         (mevedel-view-history-add "match older")
         (mevedel-view-history-add "match newer")
         (let ((unread-command-events
@@ -741,7 +738,7 @@ Binds `data-buf' and `view-buf'."
     (with-current-buffer view-buf
       (mevedel-view-history-add "before rewind")
       (let ((inhibit-read-only t))
-        (delete-region (point-min) (mevedel-view--input-start))
+        (delete-region (point-min) (mevedel-view-prompt-boundary))
         (goto-char (point-min))
         (insert "rewound transcript\n"))
       (should (equal '("before rewind")

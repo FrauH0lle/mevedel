@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-stream)
@@ -35,6 +36,13 @@
          (should (get-buffer-window view-buf))
          (should-not (mevedel-view--unattended-p view-buf))
          ,@body))))
+
+(defun mevedel-view-disclosure-events-test--caret-offset ()
+  "Return the composer caret offset from its draft start.
+The current buffer is the owning view."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) (mevedel-view-composer-draft-start view)))))
 
 (mevedel-deftest mevedel-view-disclosure/background-events ()
   (let ((grouped ,grouped))
@@ -68,25 +76,25 @@
                 (with-current-buffer data-buf (copy-marker (point-min))))
           (mevedel-view--full-rerender)
           (mevedel-view-stream-set-in-flight-turn-start
-           (text-property-any (point-min) mevedel-view--input-marker
+           (text-property-any (point-min) (mevedel-view-prompt-boundary)
                               'mevedel-view-turn-role 'assistant))
-          (should (text-property-any (point-min) mevedel-view--input-marker
+          (should (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                      'mevedel-view-type 'thinking-summary))
           (when grouped
-            (goto-char (text-property-any (point-min) mevedel-view--input-marker
+            (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                           'mevedel-view-type 'tool-group))
             (mevedel-view-toggle-section))
           (let ((pos (point-min)))
-            (while (< pos mevedel-view--input-marker)
+            (while (< pos (mevedel-view-prompt-boundary))
               (when (get-text-property pos 'mevedel-view-collapsed)
                 (goto-char pos)
                 (mevedel-view-toggle-section))
               (setq pos (next-single-property-change
-                         pos 'mevedel-view-source nil mevedel-view--input-marker))))
+                         pos 'mevedel-view-source nil (mevedel-view-prompt-boundary)))))
           (should (string-search "KEEP THINKING BODY" (buffer-string)))
           (should (string-search "KEEP TOOL BODY" (buffer-string)))
           ;; Both normalized thinking paths must retain data markers.
-          (goto-char (text-property-any (point-min) mevedel-view--input-marker
+          (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                         'mevedel-view-type 'thinking-summary))
           (dotimes (_ 2)
             (mevedel-view-toggle-section)
@@ -110,12 +118,12 @@
             (save-excursion
               (dolist (body '("KEEP THINKING BODY" "KEEP TOOL BODY"))
                 (goto-char (point-min))
-                (should (search-forward body mevedel-view--input-marker t))
+                (should (search-forward body (mevedel-view-prompt-boundary) t))
                 (should-not (invisible-p (match-beginning 0)))
                 (should-not (get-text-property
                              (match-beginning 0) 'mevedel-view-collapsed))))
-            (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-            (should (= 4 (- (point) (mevedel-view--input-start)))))))))
+            (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text view-buf t)))
+            (should (= 4 (mevedel-view-disclosure-events-test--caret-offset))))))))
   (grouped)
   :doc "background events retain expanded standalone thinking and tools" nil
   :doc "background events retain expanded thinking and grouped tool children" t)
@@ -154,10 +162,10 @@
       (mevedel-view--full-rerender)
       (goto-char (car (mevedel-view--tool-row-region data-buf "outer")))
       (mevedel-view-toggle-section)
-      (goto-char (text-property-any (point-min) mevedel-view--input-marker
+      (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                     'mevedel-view-type 'tool-child))
       (mevedel-view-toggle-section)
-      (should (search-forward "KEEP NESTED BODY" mevedel-view--input-marker t))
+      (should (search-forward "KEEP NESTED BODY" (mevedel-view-prompt-boundary) t))
       (mevedel-view-test--insert-composer-draft "> nested\nsecond line" 4))
     (let ((start-before (with-current-buffer data-buf
                           (car (mevedel-tool-render-data-segment-bounds "outer")))))
@@ -186,17 +194,17 @@
                                  "Bash: sleep 10 · running · 7s")
                                (buffer-string)))
         (let ((child-position
-               (text-property-any (point-min) mevedel-view--input-marker
+               (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                   'mevedel-view-type 'tool-child)))
           (should child-position)
           (should-not (get-text-property child-position 'mevedel-view-collapsed)))
         (save-excursion
           (goto-char (point-min))
-          (should (search-forward "UPDATED NESTED BODY" mevedel-view--input-marker t))
+          (should (search-forward "UPDATED NESTED BODY" (mevedel-view-prompt-boundary) t))
           (should-not (invisible-p (match-beginning 0)))
           (should-not (get-text-property (match-beginning 0) 'mevedel-view-collapsed)))
-        (should (equal "> nested\nsecond line" (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start))))))))
+        (should (equal "> nested\nsecond line" (mevedel-view-composer-draft-text view-buf t)))
+        (should (= 4 (mevedel-view-disclosure-events-test--caret-offset)))))))
 
 (mevedel-deftest mevedel-view--tool-row-region/source-ownership ()
   (let ((mode ,mode))

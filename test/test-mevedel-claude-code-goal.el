@@ -154,9 +154,9 @@
                     (when (memq launches '(2 3))
                       (when (= launches 2)
                         (with-current-buffer view
-                          (goto-char (mevedel-view--input-start))
-                          (insert "Check the queued priority first")
-                          (mevedel-view-send-follow-up)))
+                          (mevedel-view-composer-insert "Check the queued priority first")
+                          (with-current-buffer (mevedel-view-composer-buffer)
+                            (mevedel-view-send-follow-up))))
                       (with-current-buffer buffer (mevedel-goal-pause)))
                     nil))))
       (unwind-protect

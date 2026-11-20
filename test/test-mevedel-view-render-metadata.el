@@ -128,7 +128,7 @@
                       (mevedel-view-render--batch-step
                        view-buf mevedel-view-render--batch))
              (should-not mevedel-view-render--batch)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
           (goto-char (point-min))
           (search-forward "Bash: cat transcript")
           (let ((row (match-beginning 0)))

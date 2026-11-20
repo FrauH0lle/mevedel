@@ -218,7 +218,7 @@
         (mevedel-readiness-runtime-changed '(:status "failed" :message "Update failed"))
         (mevedel-readiness-runtime-changed '(:status "ready")))
       (with-current-buffer view-buf
-        (should (equal "> retained draft\nsecond line" (mevedel-view--input-text)))))))
+        (should (equal "> retained draft\nsecond line" (mevedel-view-composer-draft-text)))))))
 
 (provide 'test-mevedel-readiness)
 ;;; test-mevedel-readiness.el ends here

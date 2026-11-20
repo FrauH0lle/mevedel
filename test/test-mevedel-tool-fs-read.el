@@ -834,8 +834,8 @@ An error result is signalled, as a Read that failed before waiting does."
                          (eq (caar entry) 'workspace-instructions))
                        (plist-get mevedel-reminders--turn-events :items))))
             (with-current-buffer view-buf
-              (should (string= draft (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+              (should (string= draft (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))))
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-fs-read--virtual-text ()

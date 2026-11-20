@@ -15,6 +15,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-workspace)
 
 (mevedel-deftest mevedel-surface--enforce-ephemeral
@@ -51,23 +52,26 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (font-lock-mode 1)
-        (goto-char (mevedel-view--input-start))
-        (insert "Run $review but keep $PATH literal")
-        (font-lock-flush (mevedel-view--input-start) (point-max))
-        (font-lock-ensure (mevedel-view--input-start) (point-max))
-        (goto-char (mevedel-view--input-start))
-        (search-forward "$review")
-        (should (memq 'font-lock-keyword-face
-                      (ensure-list
-                       (get-text-property (match-beginning 0) 'face))))
-        (search-forward "$PATH")
-        (should-not (get-text-property (match-beginning 0) 'face)))))
+        (mevedel-view-test--insert-composer-draft
+         "Run $review but keep $PATH literal")
+        (with-current-buffer (mevedel-view-composer-buffer view-buf)
+          (let ((start (mevedel-view-composer-draft-start view-buf))
+                (end (mevedel-view-composer-draft-end view-buf)))
+            (font-lock-flush start end)
+            (font-lock-ensure start end)
+            (goto-char start))
+          (search-forward "$review")
+          (should (memq 'font-lock-keyword-face
+                        (ensure-list
+                         (get-text-property (match-beginning 0) 'face))))
+          (search-forward "$PATH")
+          (should-not (get-text-property (match-beginning 0) 'face))))))
 
   :doc "wires buffers together correctly"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (should (eq mevedel--data-buffer data-buf))
-      (should mevedel-view--input-marker)
+      (should (mevedel-view-prompt-boundary-marker))
       (should (derived-mode-p 'mevedel-surface-mode))
       (should (derived-mode-p 'mevedel-view-mode))
       (should-not buffer-read-only))
@@ -90,8 +94,7 @@
       (should-not buffer-file-name)
       (should-not buffer-offer-save)
       (should-not buffer-auto-save-file-name)
-      (goto-char (point-max))
-      (insert "draft input")
+      (mevedel-view--insert-user-message "transcript text")
       (should-not buffer-file-name)
       (should-not buffer-offer-save)
       (should-not (buffer-modified-p))
@@ -116,8 +119,7 @@
             (setq buffer-file-name fake-file
                   buffer-file-truename (file-truename fake-file))
             (set-buffer-modified-p t)
-            (goto-char (point-max))
-            (insert "draft input")
+            (mevedel-view--insert-user-message "transcript text")
             (should-not buffer-file-name)
             (should-not buffer-file-truename)
             (should-not (buffer-modified-p))

@@ -141,7 +141,7 @@
                       (should (= (window-point view-window)
                                  (mevedel-view-zone-anchor-position anchor)))
                       (should (equal "Unsent draft\nsecond line"
-                                     (mevedel-view--input-text))))))))
+                                     (mevedel-view-composer-draft-text))))))))
           (when (buffer-live-p source)
             (with-current-buffer source
               (setq-local kill-buffer-hook nil)

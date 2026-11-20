@@ -31,7 +31,7 @@
                           (mevedel-view--realign-markdown)
                           (should mark-active)
                           (should (equal "target" (buffer-substring-no-properties (region-beginning) (region-end))))
-                          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
                           (should (equal-including-properties data-text (with-current-buffer data-buf (buffer-string))))
                           (let ((beg (previous-single-property-change (1+ (point)) 'mevedel-view-table-source nil (point-min)))
                                 (end (next-single-property-change (point) 'mevedel-view-table-source nil (point-max))))
@@ -58,11 +58,15 @@
                         (set-window-buffer window view-buf)
                         (mevedel-view--full-rerender)
                         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
-                        (set-window-point window (point))
+                        (set-window-point
+                         (mevedel-view-composer-window window)
+                         (with-current-buffer (mevedel-view-composer-buffer view-buf)
+                           (point)))
                         (set-window-start
                          window
+                         ;; Inline-only: the transcript window scrolls from the draft.
                          (save-excursion
-                           (goto-char (mevedel-view--input-start))
+                           (goto-char (mevedel-view-composer-draft-start view-buf))
                            (vertical-motion (- (- (window-body-height window) 3)) window)
                            (point))
                          t)
@@ -73,8 +77,8 @@
                           (should (string-search "│" (buffer-string)))
                           (should (= lines (count-lines (point-min) (point-max))))
                           (should (= y (mevedel-view-test--composer-screen-y window)))
-                          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-                          (should (= (point) (+ (mevedel-view--input-start) 4)))))))))
+                          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+                          (should (= 4 (mevedel-view-test--composer-point-offset)))))))))
 
 (mevedel-deftest mevedel-view-table-decorate/layout-cache ()
   ,test
@@ -98,15 +102,15 @@
                 (mevedel-view--full-rerender)
                 (should (string-search "│ target │" (buffer-string)))
                 (should-not (string-search "| First | Second |" (buffer-string)))
-                (should (equal draft (mevedel-view--input-text)))
-                (should (= (point) (+ (mevedel-view--input-start) 4)))
+                (should (equal draft (mevedel-view-composer-draft-text)))
+                (should (= 4 (mevedel-view-test--composer-point-offset)))
                 ;; A table never laid out keeps the deferred first layout.
                 (mevedel-view-test--insert-data
                  data-buf "\n| Other | Table |\n|---|---|\n| a | b |\n" 'response)
                 (mevedel-view--full-rerender)
                 (should (string-search "│ target │" (buffer-string)))
                 (should (string-search "| Other | Table |" (buffer-string)))
-                (should (equal draft (mevedel-view--input-text))))
+                (should (equal draft (mevedel-view-composer-draft-text))))
             (mevedel-view--cancel-realign-timer)))))))
 
 (mevedel-deftest mevedel-view-table-decorate/layout-cache-duplicate-face ()
@@ -310,7 +314,7 @@
                              (match-beginning 0) 'mevedel-view-table-streaming))
                 (mevedel-view--realign-markdown)
                 (should (string-search "│ alpha │ beta │" (buffer-string)))
-                (should (equal draft (mevedel-view--input-text))))
+                (should (equal draft (mevedel-view-composer-draft-text))))
             (mevedel-view--cancel-realign-timer))))))
 
   :doc "a table closed by later streamed text formats once and stays rendered"
@@ -352,12 +356,12 @@
                   (should-not (string-search "| A | B |" (buffer-string))))
                 ;; The trailing one-row run is not a table yet.
                 (should (string-search "| Next |" (buffer-string)))
-                (should (equal draft (mevedel-view--input-text)))
+                (should (equal draft (mevedel-view-composer-draft-text)))
                 (mevedel-view-render-settle
                  data-buf response-start
                  (with-current-buffer data-buf (point-max)))
                 (should (string-search "│ gamma │ delta │" (buffer-string)))
-                (should (equal draft (mevedel-view--input-text))))
+                (should (equal draft (mevedel-view-composer-draft-text))))
             (mevedel-view--cancel-realign-timer))))))
 
   :doc "a table in the live paragraph stays raw until the paragraph closes"

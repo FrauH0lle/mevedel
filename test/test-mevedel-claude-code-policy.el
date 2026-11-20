@@ -53,9 +53,9 @@
 			   (setq launch (list model effort))
 			   nil))))
 	       (with-current-buffer view
-		 (goto-char (mevedel-view--input-start))
-		 (insert (if skill-p "$inspect this change" "Plan this change"))
-		 (mevedel-view-send))
+		 (mevedel-view-composer-insert (if skill-p "$inspect this change" "Plan this change"))
+		 (with-current-buffer (mevedel-view-composer-buffer)
+		   (mevedel-view-send)))
 	       (mevedel-test--await 5 (format "Policy turn did not settle: %s" mevedel-test--captured)
                  (not (or (zerop (mevedel-session-turn-count session))
                           (mevedel-turn-busy-p buffer)))))
@@ -73,9 +73,9 @@
                               (setq sent (apply real-request prompt
                                                 (append options '(:dry-run t)))))))
                    (with-current-buffer view
-                     (goto-char (mevedel-view--input-start))
-                     (insert "Continue through the saved provider")
-                     (mevedel-view-send)))
+                     (mevedel-view-composer-insert "Continue through the saved provider")
+                     (with-current-buffer (mevedel-view-composer-buffer)
+                       (mevedel-view-send))))
                  (should (equal "API fixture"
                                 (gptel-backend-name (plist-get (gptel-fsm-info sent) :backend))))
                  (should-not (plist-get (cdr (assoc "root" (mevedel-session-external-conversations session))) :id)))))
@@ -148,9 +148,9 @@
                                           (responseText . "FORBIDDEN MODEL PROMPT")))
                              config))))
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert "This must never be sampled")
-                  (mevedel-view-send))
+                  (mevedel-view-composer-insert "This must never be sampled")
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send)))
                 (mevedel-test--await 5 "Unavailable-model request did not settle"
                   (not (mevedel-turn-busy-p buffer))))
               (ert-info ((format "Unavailable route: %s" route))

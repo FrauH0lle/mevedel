@@ -13,16 +13,18 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 
+;; Inline-only: every test here measures the inline draft at the view's physical
+;; end (`point-max', window geometry, view-window command guards); ticket 09
+;; removes those guards.
 (mevedel-deftest mevedel-view--draft-deletion-keeps-height-p ()
   (let ((kind ,kind))
     (mevedel-view-test--with-buffers
       (save-window-excursion
         (switch-to-buffer view-buf)
         (delete-other-windows)
-        (goto-char (point-max))
-        (insert (if (eq kind 'wrapped)
+        (mevedel-view-composer-insert (if (eq kind 'wrapped)
                     (make-string (* 2 (window-body-width)) ?x)
-                  "plain draft"))
+                  "plain draft") nil view-buf)
         (let ((end (point-max)))
           (pcase kind
             ('newline (insert "\n") (setq end (point-max)))
@@ -49,8 +51,7 @@
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
-      (goto-char (point-max))
-      (insert "plain")
+      (mevedel-view-composer-insert "plain" nil view-buf)
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
                 ((symbol-function 'font-get) (lambda (&rest _) 0)))
         (should-not (mevedel-view--draft-deletion-keeps-height-p
@@ -62,8 +63,7 @@
     (save-window-excursion
       (switch-to-buffer view-buf)
       (delete-other-windows)
-      (goto-char (point-max))
-      (insert "> first line\nplain draft")
+      (mevedel-view-composer-insert "> first line\nplain draft" nil view-buf)
       (let ((this-command 'backward-delete-char-untabify)
             (start (window-start))
             (calls 0)
@@ -89,15 +89,14 @@
         (let ((inhibit-read-only t))
           (goto-char (point-min))
           (dotimes (n 100) (insert (format "history %d\n" n))))
-        (goto-char (point-max))
-        (insert "> draft\nsecond\nthird\nfourth\nfifth")
+        (mevedel-view-composer-insert "> draft\nsecond\nthird\nfourth\nfifth" nil view-buf)
         (let ((height (window-body-height)))
           (set-window-start nil (save-excursion
                                   (vertical-motion (- 3 (1- height))) (point)) t)
           ;; Outside a real command, this-command still names the last one.
           (let ((this-command stale))
             (delete-region (save-excursion
-                             (goto-char (mevedel-view--input-start))
+                             (goto-char (mevedel-view-composer-draft-start))
                              (forward-line 2) (1- (point)))
                            (point-max)))
           (if later
@@ -130,8 +129,7 @@
       (let ((inhibit-read-only t))
         (goto-char (point-min))
         (dotimes (n 100) (insert (format "history %d\n" n))))
-      (goto-char (point-max))
-      (insert "> draft\nsecond\nthird\nfourth\nfifth")
+      (mevedel-view-composer-insert "> draft\nsecond\nthird\nfourth\nfifth" nil view-buf)
       (let ((window (selected-window))
             (other (split-window-right))
             (this-command 'mevedel-test-edit-and-switch))
@@ -143,7 +141,7 @@
         (let ((start (window-start window)))
           (run-hooks 'pre-command-hook)
           (delete-region (save-excursion
-                           (goto-char (mevedel-view--input-start))
+                           (goto-char (mevedel-view-composer-draft-start))
                            (forward-line 2) (1- (point)))
                          (point-max))
           (should (= start (window-start window)))
@@ -178,7 +176,7 @@
     (mevedel-view-test--with-buffers
       (save-window-excursion
         (switch-to-buffer view-buf)
-        (goto-char (point-max))
+        (goto-char (mevedel-view-composer-draft-end view-buf))
         (let ((this-command 'self-insert-command)
               (captures 0)
               (measure (symbol-function 'mevedel-view--window-blank-pixels)))

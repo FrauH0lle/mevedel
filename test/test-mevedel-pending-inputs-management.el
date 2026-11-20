@@ -62,11 +62,11 @@
       (mevedel-session-set-pending-inputs session 'steering (list third first))
       (with-current-buffer view-buf
         (mevedel-view-retract-pending)
-        (should (equal "third" (mevedel-view--input-text)))
+        (should (equal "third" (mevedel-view-composer-draft-text)))
         (should (equal (list first) (mevedel-session-pending-steering session)))
         (mevedel-view--clear-input)
         (mevedel-view-retract-pending)
-        (should (equal "second" (mevedel-view--input-text)))
+        (should (equal "second" (mevedel-view-composer-draft-text)))
         (should-not (mevedel-session-pending-follow-ups session))
         (should-not (mevedel-session-pending-input-paused session))
         (should (eq 'follow-up (plist-get second :category))))))
@@ -75,10 +75,9 @@
     (let ((entry (mevedel-session-enqueue-pending-input
                   session 'follow-up '(:input "queued"))))
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert " \n ")
+        (mevedel-view-composer-insert " \n ")
         (should-error (mevedel-view-retract-pending) :type 'user-error)
-        (should (equal " \n " (mevedel-view--visible-draft)))
+        (should (equal " \n " (mevedel-view-composer-draft-text)))
         (should (eq entry (car (mevedel-session-pending-follow-ups session)))))))
   :doc "refuses the newest dispatching entry rather than withdrawing an older one"
   (mevedel-pending-management-test--with-session
@@ -89,7 +88,7 @@
                                             (if (eq flag :state) 'dispatching t)))))
         (with-current-buffer view-buf
           (should-error (mevedel-view-retract-pending) :type 'user-error)
-          (should (string-empty-p (mevedel-view--input-text))))
+          (should (string-empty-p (mevedel-view-composer-draft-text))))
         (should (memq entry (mevedel-session-pending-follow-ups session))))))
   :doc "restores bound mention text, attachment grants and reserved hook context"
   (mevedel-pending-management-test--with-session
@@ -105,7 +104,9 @@
                               :dropped-file-grants (list path)))
       (with-current-buffer view-buf
         (mevedel-view-retract-pending)
-        (should (equal-including-properties text (mevedel-view--input-text))))
+        (should (equal-including-properties
+                 text (mevedel-mention-bindings-copy-text
+                       (mevedel-view-composer-draft-text)))))
       (should (equal (list path) (mevedel-session-dropped-file-grants session)))
       (should (equal '((:text "context"))
                      (mevedel-session-hook-context-pending session)))
@@ -116,9 +117,10 @@
       (with-current-buffer view-buf
         (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-new-mutation-authority)
                    (lambda (_)
-                     (goto-char (point-max)) (insert "> new draft\nsecond line"))))
+                     (mevedel-view-composer-insert
+                      "> new draft\nsecond line" nil view-buf))))
           (should-error (mevedel-view-retract-pending) :type 'user-error))
-        (should (equal "> new draft\nsecond line" (mevedel-view--input-text))))
+        (should (equal "> new draft\nsecond line" (mevedel-view-composer-draft-text))))
       (should (eq entry (car (mevedel-session-pending-follow-ups session)))))))
 
 (mevedel-deftest mevedel-pending-inputs--remove ()
@@ -159,7 +161,7 @@
         (let ((command (key-binding (kbd (cdr pair)))))
           (should (eq command #'mevedel-pending-inputs-drop-at-point))
           (call-interactively command))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
         (should-not (mevedel-session-pending-input-paused session)))
       (should-not (mevedel-session-pending-input-p session))))
   :doc "stale rows and dispatching inputs refuse deletion"
@@ -272,7 +274,7 @@
           (should-not (plist-get cold :submission))
           (should (= 2 (length (mevedel-session-pending-steering session))))
           (mevedel-view-retract-pending)
-          (should (equal "COLD" (mevedel-view--input-text)))))
+          (should (equal "COLD" (mevedel-view-composer-draft-text)))))
       (should (eq 'reserved (mevedel-prompt-submission-state live))))))
 
 (mevedel-deftest mevedel-view-resume-pending/paused-goal (:quiet t)
@@ -385,7 +387,7 @@
         (should-not (plist-get entry :delivering)))
       (with-current-buffer view-buf
         (mevedel-view-retract-pending)
-        (should (equal "second" (mevedel-view--input-text)))))))
+        (should (equal "second" (mevedel-view-composer-draft-text)))))))
 
 (mevedel-deftest mevedel-tools--handle-steering-inject/post-injection-error ()
   (mevedel-pending-management-test--with-session
@@ -434,7 +436,7 @@
           (should-not (plist-get entry :delivering)))
         (with-current-buffer view-buf
           (mevedel-view-retract-pending)
-          (should (equal "keep" (mevedel-view--input-text))))))))
+          (should (equal "keep" (mevedel-view-composer-draft-text))))))))
 
 (mevedel-deftest mevedel-pending-inputs-cockpit-holds-p ()
   (mevedel-pending-management-test--with-session

@@ -968,9 +968,7 @@
       (let ((draft "> quoted\nsecond line")
             (mevedel-gptel-stream-bridge-insert-batch-delay nil))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert draft)
-          (goto-char (+ (mevedel-view--input-start) 4)))
+          (mevedel-view-test--insert-composer-draft draft 4))
         (with-current-buffer data-buf
           (insert "Old conversation\n")
           (let* ((info (list :buffer data-buf
@@ -999,8 +997,8 @@
           (should (string-match-p "conversation compacted" (buffer-string)))
           (should-not (string-match-p "Private handoff" (buffer-string)))
           (should (string-match-p "Continued response" (buffer-string)))
-          (should (equal draft (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 4)))
+          (should (equal draft (mevedel-view-composer-draft-text)))
+          (should (= 4 (mevedel-view-test--composer-point-offset)))
           ;; Expanding shows what the model received: preface and summary.
           (save-excursion
             (goto-char (point-min))
@@ -1011,7 +1009,7 @@
                                   (buffer-string)))
           (should-not (string-match-p "begin_summary\\|end_summary"
                                       (buffer-string)))
-          (should (equal draft (mevedel-view--input-text))))))))
+          (should (equal draft (mevedel-view-composer-draft-text))))))))
 
 (mevedel-deftest mevedel--compact-agent-terminal-failure ()
   ,test

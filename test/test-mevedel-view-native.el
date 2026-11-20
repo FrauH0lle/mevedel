@@ -632,8 +632,8 @@
                 (should (= checks 7))
                 (mevedel-view-native--before-redisplay window)
                 (should (= checks 7))
-                (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
-                (should (= (point) (+ (mevedel-view--input-start) 3))))
+                (should (equal (mevedel-view-composer-draft-text) "> quoted\nsecond line"))
+                (should (= 3 (mevedel-view-test--composer-point-offset))))
             (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
               (mevedel-view-native-stop))))))))
 

@@ -106,7 +106,7 @@
                    (should-not (file-exists-p (file-name-concat root "mutation")))
                    (should-not (file-exists-p (file-name-concat root "unsafe.patch")))
                    (with-current-buffer view-buf
-                     (should (equal draft (mevedel-view--input-text))))
+                     (should (equal draft (mevedel-view-composer-draft-text))))
                    result)))
             (git "init" "-q" "--initial-branch=main")
             (git "config" "maintenance.auto" "false")

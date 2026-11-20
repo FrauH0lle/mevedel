@@ -81,13 +81,12 @@
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (point-max))
-        (insert "> first line\nsecond line")
-        (backward-char 4)
-        (let ((offset (- (point) (mevedel-view--input-start))))
+        (mevedel-view-test--insert-composer-draft
+         "> first line\nsecond line" (- (length "> first line\nsecond line") 4))
+        (let ((offset (mevedel-view-test--composer-point-offset)))
           (mevedel-recovery-report session "agent:a" 'request "Agent failed" nil)
-          (should (= offset (- (point) (mevedel-view--input-start))))
-          (should (equal "> first line\nsecond line" (mevedel-view--input-text))))
+          (should (= offset (mevedel-view-test--composer-point-offset)))
+          (should (equal "> first line\nsecond line" (mevedel-view-composer-draft-text))))
         (goto-char (point-min))
         (search-forward "[Dismiss]")
         (backward-char 2)
@@ -97,7 +96,7 @@
           (call-interactively (key-binding (kbd "RET"))))
         (should-not (mevedel-session-recovery-issues session))
         (should-not (string-search "Agent failed" (buffer-string)))
-        (should (equal "> first line\nsecond line" (mevedel-view--input-text))))
+        (should (equal "> first line\nsecond line" (mevedel-view-composer-draft-text))))
       (should (eq 'errored (mevedel-agent-record-settled-outcome record)))
       (should (equal "Provider failed" (mevedel-agent-record-settled-result record))))))
 
@@ -181,7 +180,7 @@
           (full-count 0))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker))
+              (copy-marker (mevedel-view-prompt-boundary-marker)))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
       (unwind-protect
@@ -233,7 +232,7 @@
           delays callback)
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker))
+              (copy-marker (mevedel-view-prompt-boundary-marker)))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
       (cl-letf (((symbol-function 'run-at-time)
@@ -437,8 +436,8 @@
         (with-current-buffer view-buf
           (should-not mevedel-view--pending-tool-rows)
           (should-not mevedel-view--pending-render-kind)
-          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-          (should (= 3 (- (point) (mevedel-view--input-start)))))))))
+          (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+          (should (= 3 (mevedel-view-test--composer-point-offset))))))))
 
 (mevedel-deftest mevedel-view--schedule-render/tool-rows
   (:doc "tool updates never downgrade pending projection; cancelling can keep rows")
@@ -643,11 +642,11 @@
                          (setq found (cons pos preview)))
                        (setq pos next)))
                    found))))
-          (dolist (start (number-sequence (point-min) (1- (mevedel-view--input-start))))
+          (dolist (start (number-sequence (point-min) (1- (mevedel-view-composer-draft-start))))
             (set-window-start nil start t)
             (unless (get-text-property start 'mevedel-view-prompt-preview)
               (should (equal (funcall oracle start
-                                      (min start (mevedel-view--input-marker-position)))
+                                      (min start (mevedel-view-prompt-boundary)))
                              (mevedel-view--pinned-prompt (selected-window))))))))))
 
   :doc "header follows the prompt above the top edge, not point or the newest prompt"
@@ -1149,8 +1148,7 @@
           (should (looking-at-p "Multi line prompt"))
           (should-not (get-text-property (point) 'mevedel-view-collapsed))
           (should (string= "> draft\nsecond line"
-                           (buffer-substring-no-properties
-                            (mevedel-view--input-start) (point-max))))))))
+                           (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "a preview click targets its window when another buffer is selected"
   (save-window-excursion
@@ -1188,7 +1186,7 @@
             (should (= header (window-start right)))
             (should (equal "> draft\nsecond line"
                            (with-current-buffer view-buf
-                             (mevedel-view--input-text))))))))))
+                             (mevedel-view-composer-draft-text))))))))))
 
 (mevedel-deftest mevedel-view-toggle-auto-compaction ()
   ,test
@@ -1435,9 +1433,8 @@
                 (should (string-match-p "lease lost" header))
                 (should (string-match-p "publication pending" header))
                 (should-not (string-match-p "sandbox bubblewrap" header))
-                (should (string= draft (mevedel-view--input-text)))
-                (should (= (point)
-                           (+ (mevedel-view--input-start) point-offset))))))
+                (should (string= draft (mevedel-view-composer-draft-text)))
+                (should (= point-offset (mevedel-view-test--composer-point-offset))))))
         (setf (mevedel-session-pending-publication session) nil)
         (when (buffer-live-p data-buf)
           (with-current-buffer data-buf
@@ -1741,7 +1738,8 @@
           (should (eq (get-text-property header 'mouse-face) 'highlight))
           (should (get-text-property header 'follow-link))
           (should (stringp (get-text-property header 'help-echo)))
-          (goto-char (+ (mevedel-view--input-start) 2))
+          ;; Inline-only: the click moves the shared view point out of the draft.
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 2))
           (funcall command
                    (list 'mouse-1 (list (selected-window) header '(0 . 0) 0))))
         (should (eq (mevedel-view--status-task-show-completed-p) expanded))
@@ -1753,12 +1751,13 @@
                (command (lookup-key (get-text-property row 'keymap) [mouse-1])))
           (should-not (get-text-property row 'mouse-face))
           (should-not (get-text-property row 'follow-link))
-          (goto-char (+ (mevedel-view--input-start) 2))
+          ;; Inline-only: the click moves the shared view point out of the draft.
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 2))
           (funcall command
                    (list 'mouse-1 (list (selected-window) row '(0 . 1) 0)))
           (should (= (point) row))
           (should (eq (mevedel-view--status-task-show-completed-p) expanded)))
-        (should (equal (mevedel-view--input-text) "> draft\nsecond line"))))))
+        (should (equal (mevedel-view-composer-draft-text) "> draft\nsecond line"))))))
 
 (mevedel-deftest mevedel-view-execution-state-changed-integration ()
   ,test
@@ -1770,9 +1769,9 @@
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
+        (goto-char (mevedel-view-composer-draft-start))
         (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 4)))
+        (goto-char (+ (mevedel-view-composer-draft-start) 4)))
       (cl-letf (((symbol-function 'mevedel-execution-count-user)
                  (lambda (seen-session)
                    (should (eq session seen-session))
@@ -1784,12 +1783,12 @@
                  #'ignore))
         (mevedel-view-execution--state-changed session data-buf))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (string= draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
         (should (string-match-p
                  "Running   bash     make test"
                  (buffer-substring-no-properties
-                  (point-min) (mevedel-view--input-start)))))))
+                  (point-min) (mevedel-view-prompt-boundary)))))))
   :doc "routes an agent execution update to its parent session view"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "agent-execution-status"))
@@ -1817,7 +1816,7 @@
               (should (string-match-p
                        "Running   bash     make test"
                        (buffer-substring-no-properties
-                        (point-min) (mevedel-view--input-start))))))
+                        (point-min) (mevedel-view-prompt-boundary))))))
         (kill-buffer agent-data)))))
 
 (mevedel-deftest mevedel-view-execution-fragment-integration ()

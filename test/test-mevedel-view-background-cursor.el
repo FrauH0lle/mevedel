@@ -15,6 +15,7 @@
 (require 'mevedel-tool-introspect)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 
@@ -60,7 +61,7 @@
               (should (= (point) (window-point (selected-window))))
               (should-not mevedel-view--interaction-focus-return)
               (should (equal "> unsent draft\nsecond line"
-                             (mevedel-view--input-text)))))))))
+                             (mevedel-view-composer-draft-text)))))))))
   (action)
   :doc "full redraw preserves the background header and actual agent row"
   (mevedel-view--full-rerender)
@@ -130,15 +131,16 @@
       (mevedel-view-test--insert-composer-draft "draft survives" 3)
       (let ((window (selected-window))
             (windows (window-list))
-            (draft (mevedel-view--input-text)))
+            (draft (mevedel-view-composer-draft-text)))
         (with-current-buffer data-buf
           ,action
           (should (eq (current-buffer) data-buf)))
         (should (eq (selected-window) window))
         (should (equal (window-list) windows))
         (should (eq (window-buffer window) view-buf))
-        (should (= 3 (- (point) (mevedel-view--input-start))))
-        (should (equal draft (mevedel-view--input-text)))
+        (should (= 3 (with-current-buffer (mevedel-view-composer-buffer view-buf)
+                       (- (point) (mevedel-view-composer-draft-start view-buf)))))
+        (should (equal draft (mevedel-view-composer-draft-text)))
         (should (with-current-buffer data-buf
                   (string-search "intentional edit" (buffer-string)))))))
   (action)
@@ -224,11 +226,11 @@
             (should (eq (window-buffer first-window) first-view))
             (should (eq (window-buffer second-window) view-buf))
             (with-current-buffer first-view
-              (should (equal "first view draft" (mevedel-view--input-text)))
-              (should (= 2 (- (window-point first-window) (mevedel-view--input-start)))))
+              (should (equal "first view draft" (mevedel-view-composer-draft-text)))
+              (should (= 2 (- (window-point (mevedel-view-composer-window first-window)) (mevedel-view-composer-draft-start)))))
             (with-current-buffer view-buf
-              (should (equal "second view draft" (mevedel-view--input-text)))
-              (should (= 5 (- (window-point second-window) (mevedel-view--input-start)))))))))))
+              (should (equal "second view draft" (mevedel-view-composer-draft-text)))
+              (should (= 5 (- (window-point (mevedel-view-composer-window second-window)) (mevedel-view-composer-draft-start)))))))))))
 
 (ert-deftest mevedel-view-window-configuration-same-view-two-windows ()
   "One view shown twice retains each window's distinct composer offset."
@@ -239,7 +241,7 @@
       (mevedel-view-test--insert-composer-draft "shared view draft" 2)
       (let ((first-window (selected-window))
             (second-window (split-window-right)))
-        (set-window-point second-window (+ (mevedel-view--input-start) 7))
+        (set-window-point (mevedel-view-composer-window second-window) (+ (mevedel-view-composer-draft-start) 7))
         (with-current-buffer data-buf
           (mevedel-view-call-preserving-window-configuration
            (lambda ()
@@ -250,8 +252,8 @@
         (should (eq (selected-window) first-window))
         (should (eq (window-buffer first-window) view-buf))
         (should (eq (window-buffer second-window) view-buf))
-        (should (= 2 (- (window-point first-window) (mevedel-view--input-start))))
-        (should (= 7 (- (window-point second-window) (mevedel-view--input-start))))))))
+        (should (= 2 (- (window-point (mevedel-view-composer-window first-window)) (mevedel-view-composer-draft-start))))
+        (should (= 7 (- (window-point (mevedel-view-composer-window second-window)) (mevedel-view-composer-draft-start))))))))
 
 (provide 'test-mevedel-view-background-cursor)
 ;;; test-mevedel-view-background-cursor.el ends here

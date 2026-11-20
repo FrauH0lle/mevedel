@@ -62,23 +62,25 @@
       (mevedel-view-test--insert-data data-buf "Handled.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> Keep this draft\nsecond line" 4)
-        (let ((offset (- (point) (mevedel-view--input-start))))
+        (let ((offset (with-current-buffer (mevedel-view-composer-buffer)
+                        (- (point) (mevedel-view-composer-draft-start view-buf)))))
           (mevedel-view--insert-user-message trigger nil nil nil nil nil attribution)
           (let ((history (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
+                          (point-min) (mevedel-view-prompt-boundary))))
             (should-not (string-match-p "Background event" history))
             (should-not (string-match-p (regexp-quote trigger) history))
             (should-not (string-match-p "^You$" history)))
           (mevedel-view--full-rerender)
           (let ((history (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
+                          (point-min) (mevedel-view-prompt-boundary))))
             (should-not (string-match-p "Background event" history))
             (should-not (string-match-p (regexp-quote trigger) history))
             (should (string-match-p "Handled\\." history))
             (should-not (string-match-p "^You$" history))
             (should-not (string-match-p "(guest)" history)))
-          (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text)))
-          (should (= offset (- (point) (mevedel-view--input-start)))))))))
+          (should (equal "> Keep this draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= offset (with-current-buffer (mevedel-view-composer-buffer)
+                              (- (point) (mevedel-view-composer-draft-start view-buf))))))))))
 
 
 (mevedel-deftest mevedel-view--render-user-turn/empty-background
@@ -120,8 +122,9 @@
       (with-current-buffer view-buf
         (mevedel-view-render-live-update data-buf)
         (should (equal "Assistant" (buffer-substring-no-properties start (+ start 9))))
-        (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start))))
+        (should (equal "> Keep this draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))
         (setq live (buffer-substring-no-properties
                     (point-min) (mevedel-view--history-insertion-marker)))
         (mevedel-view--full-rerender)
@@ -173,24 +176,24 @@
         (search-forward question)
         (search-forward "Discussion · ")
         (should (get-text-property (point) 'mevedel-view-collapsed))
-        (should-not (string-match-p "board.png" (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p "board.png" (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
         (mevedel-view-toggle-section)
-        (should (string-match-p "board.png" (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
-        (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text))))
+        (should (string-match-p "board.png" (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
+        (should (equal "> Keep this draft\nsecond line" (mevedel-view-composer-draft-text nil t))))
       (mevedel-view-test--insert-data data-buf "It describes your information.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (goto-char (point-min))
         (search-forward "Discussion · ")
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
-        (should (string-match-p "board.png" (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "board.png" (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
         (mevedel-view-toggle-section)
         (mevedel-view--full-rerender)
         (goto-char (point-min))
         (search-forward "Discussion · ")
         (should (get-text-property (point) 'mevedel-view-collapsed))
-        (should-not (string-match-p "board.png" (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
-        (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text))))
+        (should-not (string-match-p "board.png" (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary))))
+        (should (equal "> Keep this draft\nsecond line" (mevedel-view-composer-draft-text nil t))))
       (with-current-buffer data-buf
         (should (string-prefix-p before (buffer-substring-no-properties (point-min) (point-max))))))))
 

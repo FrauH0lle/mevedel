@@ -19,6 +19,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-zone)
 (require 'mevedel-workspace)
@@ -43,6 +44,18 @@
    :role (or role "default")
    :activity activity
    :invocation invocation))
+
+(defun mevedel-view-agent-test--draft-offset ()
+  "Return the caret offset from the draft start, read in the composer buffer."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) (mevedel-view-composer-draft-start view)))))
+
+(defun mevedel-view-agent-test--goto-draft (offset)
+  "Move the composer caret OFFSET characters into the draft."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (goto-char (+ (mevedel-view-composer-draft-start view) offset)))))
 
 (mevedel-deftest mevedel-view--render-agent-status
   (:doc "renders agent status and nudges the session's collaboration room")
@@ -88,9 +101,7 @@
                 (mevedel-view-stream-begin-turn
                  mevedel-view--status-marker
                  (with-current-buffer data-buf (copy-marker (point-min))))
-                (goto-char (mevedel-view--input-start))
-                (insert "> quoted\nsecond line")
-                (goto-char (+ (mevedel-view--input-start) 3))
+                (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
                 (mevedel-view-render-live-update data-buf)
                 (let ((before (buffer-substring-no-properties (point-min) (point-max))))
                   (mevedel-view-open-agent-transcript path)
@@ -102,8 +113,8 @@
                                    mevedel-view--render-agent-status
                                    mevedel-view--spinner-tick))
                   (funcall refresh)
-                  (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-                  (should (= (point) (+ (mevedel-view--input-start) 3)))
+                  (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text)))
+                  (should (= 3 (mevedel-view-agent-test--draft-offset)))
                   (should (string-match-p "Parent response" (buffer-string)))
                   (should (string-match-p "Running   agent    /root/inspected" (buffer-string))))))
           (when (and (buffer-live-p agent-view) (not (eq agent-view view-buf)))
@@ -142,8 +153,7 @@
                             mevedel--workspace (mevedel-session-workspace session)))
               (with-current-buffer view-buf
                 (switch-to-buffer view-buf)
-                (goto-char (mevedel-view--input-start))
-                (insert "> draft\nsecond line")
+                (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
                 (let ((before (buffer-string)))
                   ;; The cold transcript is a raw file here, not a published generation.
                   (cl-letf (((symbol-function 'mevedel-session-artifacts-artifact-present-p)
@@ -293,7 +303,7 @@
                     (should (= parent-point (point)))
                     (should (= parent-start (window-start parent-window)))
                     (should (equal before (buffer-string)))
-                    (should (equal "> keep\nsecond line" (mevedel-view--input-text))))))
+                    (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text))))))
             (dolist (buffer (list first-view second-view first second))
               (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
@@ -337,7 +347,7 @@
                 (should-not (eq parent-window (selected-window)))
                 ;; Redisplay keeps the parent's point, in the composer, on screen.
                 (with-selected-window parent-window
-                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (mevedel-view-agent-test--goto-draft 3)
                   (recenter -1))
                 (with-current-buffer agent-view
                   (mevedel-view-close-agent-transcript))
@@ -345,9 +355,9 @@
                 (should (= (window-total-width parent-window) (frame-width)))
                 (with-current-buffer view-buf
                   (should (= y (mevedel-view-test--composer-screen-y parent-window)))
-                  (should (= (point) (+ (mevedel-view--input-start) 3)))
+                  (should (= 3 (mevedel-view-agent-test--draft-offset)))
                   (should (equal "> keep\nsecond line"
-                                 (mevedel-view--input-text))))))
+                                 (mevedel-view-composer-draft-text))))))
           (dolist (buffer (list agent-view agent))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
 
@@ -395,7 +405,7 @@
                 (let ((start (window-start parent-window))
                       (point (window-point parent-window)))
                   (should (< point (with-current-buffer view-buf
-                                     (mevedel-view--input-start))))
+                                     (mevedel-view-prompt-boundary))))
                   (with-current-buffer agent-view
                     (mevedel-view-close-agent-transcript))
                   (should (eq parent-window (selected-window)))
@@ -403,7 +413,7 @@
                     (should (= start (window-start parent-window)))
                     (should (= point (window-point parent-window)))
                     (should (equal "> keep\nsecond line"
-                                   (mevedel-view--input-text)))))))
+                                   (mevedel-view-composer-draft-text)))))))
           (dolist (buffer (list agent-view agent))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
 
@@ -443,7 +453,7 @@
                 ;; Point stays in the composer, but the window start is far
                 ;; above it: the composer is off screen before the close.
                 (with-selected-window parent-window
-                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (mevedel-view-agent-test--goto-draft 3)
                   (set-window-start parent-window (point-min)))
                 (should-not (with-current-buffer view-buf
                               (mevedel-view-test--composer-screen-y parent-window)))
@@ -459,7 +469,7 @@
                 (with-current-buffer view-buf
                   (should (= (point-min) (window-start parent-window)))
                   (should (equal "> keep\nsecond line"
-                                 (mevedel-view--input-text))))))
+                                 (mevedel-view-composer-draft-text))))))
           (dolist (buffer (list agent-view agent))
             (when (buffer-live-p buffer) (kill-buffer buffer))))))))
 
@@ -588,8 +598,8 @@
         (mevedel-view--render-agent-status)
         (should (string-search "Running   agent    /root/partner · sonnet" (buffer-string)))
         (should-not (string-search "opus:high" (buffer-string)))
-        (should (equal "> keep this\nand this" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (equal "> keep this\nand this" (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-agent-test--draft-offset)))
         (setq mevedel-view-execution--selected-agent "/root/partner")
         (mevedel-view--render-agent-status)
         (should (string-search "    Provider  Claude Code" (buffer-string)))
@@ -597,7 +607,7 @@
         (mevedel-view--render-agent-status)
         (should (string-search "background work · 1 agent [+]" (buffer-string)))
         (should-not (string-search "sonnet" (buffer-string)))
-        (should (equal "> keep this\nand this" (mevedel-view--input-text)))))))
+        (should (equal "> keep this\nand this" (mevedel-view-composer-draft-text)))))))
 
 (mevedel-deftest mevedel-view-agent--handle-badge
   (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
@@ -720,11 +730,11 @@
                     :status completed))
                  :agent-path agent-path)))
           (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t)
+            (goto-char (mevedel-view-prompt-boundary-marker))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
             (unwind-protect
                 (mevedel-view--insert-rendered-tool rendering source)
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
+              (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
           (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                      (lambda (_buf _start _end) rendering))
                     ((symbol-function 'mevedel-view-open-agent-transcript)
@@ -739,7 +749,7 @@
             (goto-char (match-beginning 0))
             (mevedel-view-agent-handle-activate agent-path)
             (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
+                         (point-min) (mevedel-view-prompt-boundary))))
               (should opened)
               (should (equal (format "mevedel [%s]: Transcript file missing"
                                      temporary-file-directory)
@@ -783,11 +793,11 @@
                     :status running))
                  :agent-path agent-path)))
           (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t)
+            (goto-char (mevedel-view-prompt-boundary-marker))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
             (unwind-protect
                 (mevedel-view--insert-rendered-tool rendering source)
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
+              (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
           (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                      (lambda (_buf _start _end) rendering))
                     ((symbol-function 'mevedel-view--agent-invocation)
@@ -804,7 +814,7 @@
             (goto-char (match-beginning 0))
             (mevedel-view-agent-handle-activate agent-path)
             (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
+                         (point-min) (mevedel-view-prompt-boundary))))
               (should opened)
               (should (equal (format "mevedel [%s]: Live buffer unavailable"
                                      temporary-file-directory)
@@ -917,8 +927,7 @@
             (org-mode))
           (mevedel-view--setup parent-view parent-data)
           (with-current-buffer parent-view
-            (goto-char (point-max))
-            (insert "> draft\ncontinues"))
+            (mevedel-view-test--insert-composer-draft "> draft\ncontinues"))
           (with-current-buffer data-buffer
             (org-mode)
             (setq invocation
@@ -954,10 +963,8 @@
               (mevedel-view-agent-live-transcript-stream)))
           (should scheduled)
           (with-current-buffer parent-view
-            (should (string-suffix-p
-                     "> draft\ncontinues"
-                     (buffer-substring-no-properties
-                      (point-min) (point-max))))))
+            (should (equal "> draft\ncontinues"
+                           (mevedel-view-composer-draft-text nil t)))))
       (dolist (buffer (list parent-data parent-view data-buffer view-buffer))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
@@ -1369,22 +1376,23 @@
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (point-max))
-        (insert "> first line\nsecond line")
+        (mevedel-view-test--insert-composer-draft "> first line\nsecond line")
         (mevedel-view--render-status data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p
                    (regexp-quote "background work · 1 agent [-]") text))
           (should (string-match-p "─\n  ▸ Running   agent    /root/spec_review" text))
-          (should (string-suffix-p "> first line\nsecond line" text)))
+          (should (equal "> first line\nsecond line"
+                         (mevedel-view-composer-draft-text nil t))))
         (mevedel-view-execution-toggle-panel)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p
                    (regexp-quote "background work · 1 agent [+]") text))
           (should-not (string-match-p "/root/spec_review" text))
-          (should (string-suffix-p "> first line\nsecond line" text)))
+          (should (equal "> first line\nsecond line"
+                         (mevedel-view-composer-draft-text nil t))))
         (mevedel-view-execution-toggle-panel)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
@@ -1575,8 +1583,7 @@
   :doc "no handle and no source leaves the draft untouched"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "> draft\ncontinues")
+      (mevedel-view-test--insert-composer-draft "> draft\ncontinues")
       (let ((mevedel-view-agent-refresh-delay 0))
         (cl-letf (((symbol-function 'mevedel-view--agent-handle-refresh-points)
                    (lambda (_path) '(nil . nil)))
@@ -1584,9 +1591,8 @@
                    (lambda () nil)))
           (mevedel-view-refresh-agent-rendering
            view-buf "/root/spec_review")))
-      (should (string-suffix-p "> draft\ncontinues"
-                               (buffer-substring-no-properties
-                                (point-min) (point-max))))))
+      (should (equal "> draft\ncontinues"
+                     (mevedel-view-composer-draft-text nil t)))))
 
   :doc "the stale-source full rerender preserves a multiline draft"
   ;; An unrendered handle whose source exists falls back to a full
@@ -1594,8 +1600,7 @@
   ;; `>', must survive that path too.
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "> draft\ncontinues")
+      (mevedel-view-test--insert-composer-draft "> draft\ncontinues")
       (let ((mevedel-view-agent-refresh-delay 0))
         (cl-letf (((symbol-function 'mevedel-view--agent-handle-refresh-points)
                    (lambda (_path) '(nil . nil)))
@@ -1603,9 +1608,8 @@
                    (lambda (_path) t)))
           (mevedel-view-refresh-agent-rendering
            view-buf "/root/spec_review")))
-      (should (string-suffix-p "> draft\ncontinues"
-                               (buffer-substring-no-properties
-                                (point-min) (point-max)))))))
+      (should (equal "> draft\ncontinues"
+                     (mevedel-view-composer-draft-text nil t))))))
 
 (mevedel-deftest mevedel-view--agent-live-transcript-dispatch ()
   ,test
@@ -1662,8 +1666,8 @@
               (with-current-buffer parent-view
                 (should (string-search "PARENT response must remain visible." (buffer-string)))
                 (should-not (string-search "CHILD response" (buffer-string)))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-                (should (= (point) (+ 4 (mevedel-view--input-start))))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+                (should (= 4 (mevedel-view-agent-test--draft-offset)))
                 (should-not mevedel-view--pending-tool-calls))
               (with-current-buffer child-data
                 (should (eq mevedel--view-buffer parent-view))))

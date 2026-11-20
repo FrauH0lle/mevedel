@@ -906,8 +906,8 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
               (mevedel-test-memory-list-await (get-buffer "*mevedel memory*"))
               (should (eq chat (selected-window)))
               (with-current-buffer view
-                (should (equal draft (mevedel-view--input-text)))
-                (should (= (point) (+ (mevedel-view--input-start) 4))))
+                (should (equal draft (mevedel-view-composer-draft-text)))
+                (should (= 4 (mevedel-view-test--composer-point-offset))))
               (with-selected-window left (should (equal left-id (tabulated-list-get-id))))
               (with-selected-window right (should (equal right-id (tabulated-list-get-id))))))
           (with-selected-window right
@@ -920,8 +920,8 @@ PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
           (should-not (mevedel-memory-decision-status workspace (plist-get first :id)))
           (should (eq chat (selected-window)))
           (with-current-buffer view
-            (should (equal draft (mevedel-view--input-text)))
-            (should (= (point) (+ (mevedel-view--input-start) 4)))))
+            (should (equal draft (mevedel-view-composer-draft-text)))
+            (should (= 4 (mevedel-view-test--composer-point-offset)))))
       (when (get-buffer "*mevedel memory*") (kill-buffer "*mevedel memory*"))
       (when (buffer-live-p view) (kill-buffer view))
       (when (buffer-live-p data) (kill-buffer data)))))

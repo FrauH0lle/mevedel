@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'helpers
@@ -31,6 +32,13 @@
                   (cl-incf restores) (apply restore args))))
        ,@body)
      (list captures restores)))
+
+(defun mevedel-view-zone-noop-test--caret-offset ()
+  "Return the composer caret offset from its draft start.
+The current buffer is the owning view."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) (mevedel-view-composer-draft-start view)))))
 
 (mevedel-deftest mevedel-view-zone-unchanged-viewport ()
   ,test
@@ -68,7 +76,7 @@
         (should (= position (point)))
         (should (= start (window-start)))
         (should (= vscroll (window-vscroll nil t)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
         (should (= captures 0))
         (should (= restores 0)))))
 
@@ -83,8 +91,8 @@
                        (list (list :namespace 'status :id 'tasks
                                    :body (propertize "Tasks" 'face face))))))
           (should (eq face (get-text-property (overlay-start region) 'face)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+          (should (= 4 (mevedel-view-zone-noop-test--caret-offset)))))))
 
   :doc "unchanged live text does not conceal orphaned text before the region"
   (mevedel-view-test--with-buffers
@@ -103,8 +111,8 @@
         (mevedel-view-zone-reconcile
          'status mevedel-view--status-marker mevedel-view--status-marker fragments)
         (should-not (string-match-p "orphan" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-zone-noop-test--caret-offset))))))
 
   :doc "an absent zone skips view capture and restore without changing text"
   (mevedel-view-test--with-buffers
@@ -126,7 +134,7 @@
         (should (= tick (buffer-modified-tick)))
         (should (= position (point)))
         (should (= start (window-start)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
   :doc "stale text of an absent zone is still removed, with the draft kept"
   (mevedel-view-test--with-buffers
@@ -146,8 +154,8 @@
                                     'status mevedel-view--status-marker
                                     mevedel-view--status-marker nil)))))
       (should-not (string-match-p "stale status" (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+      (should (= 4 (mevedel-view-zone-noop-test--caret-offset))))))
 
 (mevedel-deftest mevedel-view-zone-absent-stream-update
   (:doc "a stream update with an empty status zone runs one capture/restore pair")
@@ -171,7 +179,7 @@
                        (mevedel-view-zone-noop-test--counting
                          (mevedel-view--render-stream-update data-buf)))))
       (should (string-search "Then word word word" (buffer-string)))
-      (should (equal "> draft" (mevedel-view--input-text))))))
+      (should (equal "> draft" (mevedel-view-composer-draft-text))))))
 
 (mevedel-deftest mevedel-view-zone-absent-proof
   (:doc "one scan proves a zone absent until a region or lost state discards it")
@@ -232,8 +240,8 @@
         (should-not (reconcile))
         (should-not (stale-p)))
       (should (string-search "Then word" (buffer-string)))
-      (should (equal "> draft" (mevedel-view--input-text)))
-      (should (= (point) (+ 2 (mevedel-view--input-start)))))))
+      (should (equal "> draft" (mevedel-view-composer-draft-text)))
+      (should (= 2 (mevedel-view-zone-noop-test--caret-offset))))))
 
 (provide 'test-mevedel-view-zone-noop)
 ;;; test-mevedel-view-zone-noop.el ends here

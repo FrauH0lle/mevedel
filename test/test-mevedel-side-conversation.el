@@ -75,12 +75,12 @@
                 (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq side-data (buffer-local-value 'mevedel--data-buffer side-view))
       (with-current-buffer side-view
         (should (eq #'mevedel-side-conversation-close
@@ -135,10 +135,10 @@
                     mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
-        (should-error (mevedel-view-send) :type 'user-error)
-        (should (equal "/btw" (mevedel-view--input-text))))))
+        (mevedel-view-test--insert-composer-draft "/btw")
+        (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                        (mevedel-view-send)) :type 'user-error)
+        (should (equal "/btw" (mevedel-view-composer-draft-text nil t))))))
   :doc "waits for asynchronous inherited gptel context formatting"
   (let* ((temporary-file-directory
           (file-name-as-directory (expand-file-name "~")))
@@ -186,8 +186,7 @@
                       (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw Explain the frozen context")
+              (mevedel-view-test--insert-composer-draft "/btw Explain the frozen context")
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _)
                            (setq side-view buffer)))
@@ -195,12 +194,13 @@
                          (lambda (&optional _arg)
                            (setq request
                                  (mevedel-view-test--dry-run-request-data)))))
-                (mevedel-view-send)
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))
                 (should formatter-callback)
                 (should formatter-contexts)
                 (should-not side-view)
                 (should (equal "/btw Explain the frozen context"
-                               (mevedel-view--input-text)))
+                               (mevedel-view-composer-draft-text nil t)))
                 (let* ((entry (cl-find-if
                                (lambda (item) (bufferp (car item)))
                                formatter-contexts))
@@ -248,7 +248,7 @@
                    'btw-label-property 'kept formatted)
                   (funcall formatter-callback formatted)))
               (should (buffer-live-p side-view))
-              (should (string-empty-p (mevedel-view--input-text))))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
             (should (string-match-p "BTWFROZENORIGINAL" request))
             (should-not (string-match-p "BTWLIVECHANGED" request))
             (should (string-match-p "BTWBUFFERFROZEN" request))
@@ -315,25 +315,25 @@
                        (lambda (&optional _arg))))
               (with-current-buffer view-buf
                 (setq-local mevedel--session session)
-                (goto-char (mevedel-view--input-start))
-                (insert "/btw Initial question")
-                (mevedel-view-send))
+                (mevedel-view-test--insert-composer-draft "/btw Initial question")
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send)))
               (with-current-buffer data-buf
                 (should-error
                  (mevedel-side-conversation-open "Duplicate question")
                  :type 'user-error))
               (with-current-buffer view-buf
                 (let ((inhibit-read-only t))
-                  (delete-region (mevedel-view--input-start) (point-max)))
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end))))
                 (mevedel-view-test--insert-composer-draft
                  "> quoted\nsecond line" 4))
               (funcall formatter-callback "FROZEN ASYNC CONTEXT"))
             (should (buffer-live-p side-view))
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"
-                             (buffer-substring-no-properties
-                              (mevedel-view--input-start) (point-max))))
-              (should (= 4 (- (point) (mevedel-view--input-start)))))))
+                             (mevedel-view-composer-draft-text nil t)))
+              (should (= 4 (mevedel-view-test--composer-point-offset))))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "cleans async context after formatter quit or side mode failure"
@@ -372,15 +372,16 @@
                         (propertize "Parent answer\n" 'gptel 'response)))
               (with-current-buffer view-buf
                 (setq-local mevedel--session session)
-                (goto-char (mevedel-view--input-start))
-                (insert "/btw")
+                (mevedel-view-test--insert-composer-draft "/btw")
                 (if (eq failure 'formatter-quit)
                     (let (quit-seen)
                       (condition-case nil
-                          (mevedel-view-send)
+                          (with-current-buffer (mevedel-view-composer-buffer)
+                            (mevedel-view-send))
                         (quit (setq quit-seen t)))
                       (should quit-seen))
-                  (mevedel-view-send)
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send))
                   (should formatter-callback)
                   (should (file-exists-p frozen-path))
                   (let ((mode-function
@@ -429,9 +430,9 @@
                       (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
-              (mevedel-view-send))
+              (mevedel-view-test--insert-composer-draft "/btw")
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (with-current-buffer data-buf
               (setq pending-side mevedel-side-conversation--side-buffer))
             (setq frozen-path
@@ -478,12 +479,12 @@
                       (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
+              (mevedel-view-test--insert-composer-draft "/btw")
               (cl-letf (((symbol-function 'mevedel-session-create)
                          (lambda (&rest _)
                            (error "Injected side session creation failure"))))
-                (should-error (mevedel-view-send))))
+                (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                                (mevedel-view-send)))))
             (should
              (equal before
                     (directory-files temporary-file-directory t
@@ -511,13 +512,13 @@
                 (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send))
-        (should (string-empty-p (mevedel-view--input-text))))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
+        (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
       (should (buffer-live-p side-view))
       (should-not (eq side-view view-buf))
       (let ((side-data
@@ -535,11 +536,11 @@
           (should-not (string-match-p "Parent answer" (buffer-string)))
           (should-not (memq #'mevedel-agent-capf
                             completion-at-point-functions))
-          (goto-char (mevedel-view--input-start))
-          (insert "@")
+          (mevedel-view-test--insert-composer-draft "@")
           (let ((completion (mevedel-mention-capf)))
             (should-not (member "@agent:" (nth 2 completion))))
-          (delete-region (mevedel-view--input-start) (point-max))))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))))
       (with-current-buffer data-buf
         (should (mevedel-session-plan-mode session))
         (should (equal "*** Parent prompt\nParent answer\n"
@@ -563,12 +564,12 @@
                 (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (let ((side-system
              (buffer-local-value
               'gptel-system-prompt
@@ -609,32 +610,32 @@
                               :mevedel-model-context (buffer-string))))))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (goto-char (mevedel-view--input-start))
-          (insert "/btw Unique side question")
+          (mevedel-view-test--insert-composer-draft "/btw Unique side question")
           (cl-letf (((symbol-function 'pop-to-buffer)
                      (lambda (buffer &rest _) (setq side-view buffer)))
                     ((symbol-function 'gptel-send) #'ignore))
-            (mevedel-view-send)))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send))))
         (setq side-data (buffer-local-value 'mevedel--data-buffer side-view)
               response-info
               (with-current-buffer side-data
                 (list :buffer side-data :position (copy-marker (point-max)))))
         (with-current-buffer side-view
-          (goto-char (mevedel-view--input-start))
-          (insert draft)
+          (mevedel-view-test--insert-composer-draft draft)
           (backward-char 3))
         (cl-labels
             ((check-view
               ()
               (with-current-buffer side-view
                 (let ((text (buffer-substring-no-properties
-                             (point-min) mevedel-view--input-marker)))
+                             (point-min) (mevedel-view-prompt-boundary))))
                   (should (= 1 (cl-count "Unique side question"
                                          (split-string text "\n") :test #'equal)))
                   (should-not (string-match-p "System reminder\\|Parent prompt"
                                              text)))
-                (should (equal draft (mevedel-view--input-text)))
-                (should (= (point) (- (point-max) 3))))))
+                (should (equal draft (mevedel-view-composer-draft-text nil t)))
+                (should (= 3 (with-current-buffer (mevedel-view-composer-buffer)
+                               (- (mevedel-view-composer-draft-end) (point))))))))
           (when live-first
             ;; A tool/permission refresh can run before the first response
             ;; establishes a new gptel property run after the inherited reminder.
@@ -682,13 +683,13 @@
                      (put-text-property start (point) 'gptel 'response)))))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (goto-char (mevedel-view--input-start))
-          (insert "/btw First side prompt")
-          (mevedel-view-send))
+          (mevedel-view-test--insert-composer-draft "/btw First side prompt")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (with-current-buffer side-view
-          (goto-char (mevedel-view--input-start))
-          (insert "Second side prompt")
-          (mevedel-side-conversation-send)))
+          (mevedel-view-test--insert-composer-draft "Second side prompt")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-side-conversation-send))))
       (should (= 2 (length requests)))
       (should (string-match-p "Parent prompt" (cadr requests)))
       (should (string-match-p "First side prompt" (cadr requests)))
@@ -723,12 +724,12 @@
                       (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
+              (mevedel-view-test--insert-composer-draft "/btw")
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _)
                            (setq side-view buffer))))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (delete-file context-file)
             (with-current-buffer data-buf
               (setq-local gptel-context (list changed-file)
@@ -744,9 +745,9 @@
                                               'gptel 'response)))))
               (dolist (prompt '("First side turn" "Second side turn"))
                 (with-current-buffer side-view
-                  (goto-char (mevedel-view--input-start))
-                  (insert prompt)
-                  (mevedel-side-conversation-send))))
+                  (mevedel-view-test--insert-composer-draft prompt)
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-side-conversation-send)))))
             (should (= 2 (length requests)))
             (dolist (request requests)
               (should (string-match-p "FROZEN INVOCATION CONTEXT" request))
@@ -797,12 +798,12 @@
                       (propertize "Parent answer\n" 'gptel 'response)))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
+              (mevedel-view-test--insert-composer-draft "/btw")
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _)
                            (setq side-view buffer))))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (let ((side-data
                    (buffer-local-value 'mevedel--data-buffer side-view)))
               (setq frozen-paths
@@ -823,9 +824,9 @@
                            (setq request
                                  (mevedel-view-test--dry-run-request-data)))))
                 (with-current-buffer side-view
-                  (goto-char (mevedel-view--input-start))
-                  (insert "Inspect the inherited image")
-                  (mevedel-side-conversation-send)))
+                  (mevedel-view-test--insert-composer-draft "Inspect the inherited image")
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-side-conversation-send))))
               (should (string-match-p
                        "RlJPWkVOIE1FRElBIEJZVEVT" request))
               (should-not (string-match-p
@@ -855,12 +856,12 @@
             (mevedel-session-control-transfer-register-root-buffer session data-buf)
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
+              (mevedel-view-test--insert-composer-draft "/btw")
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _)
                            (setq side-view buffer))))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (let ((side-data
                    (buffer-local-value 'mevedel--data-buffer side-view)))
               (with-current-buffer side-data
@@ -981,20 +982,20 @@
                   '(("Read" :action deny))))))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
+              (mevedel-view-test--insert-composer-draft "/btw")
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _)
                            (setq side-view buffer))))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (cl-letf (((symbol-function 'gptel-send)
                        (lambda (&optional _arg)
                          (setq request
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer side-view
-                (goto-char (mevedel-view--input-start))
-                (insert "Inspect @file:secret.txt")
-                (mevedel-side-conversation-send)))
+                (mevedel-view-test--insert-composer-draft "Inspect @file:secret.txt")
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-side-conversation-send))))
             (should request)
             (should-not (string-match-p "SIDE FILE SECRET" request))
             (should (string-match-p "permission denied" request))))
@@ -1023,12 +1024,12 @@
                     (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
-            (goto-char (mevedel-view--input-start))
-            (insert "/btw")
+            (mevedel-view-test--insert-composer-draft "/btw")
             (cl-letf (((symbol-function 'pop-to-buffer)
                        (lambda (buffer &rest _)
                          (setq side-view buffer))))
-              (mevedel-view-send)))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))))
           (setq side-data
                 (buffer-local-value 'mevedel--data-buffer side-view)
                 side-session
@@ -1094,12 +1095,12 @@
                     (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
-            (goto-char (mevedel-view--input-start))
-            (insert "/btw")
+            (mevedel-view-test--insert-composer-draft "/btw")
             (cl-letf (((symbol-function 'pop-to-buffer)
                        (lambda (buffer &rest _)
                          (setq side-view buffer))))
-              (mevedel-view-send)))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))))
           (setq side-data
                 (buffer-local-value 'mevedel--data-buffer side-view)
                 side-session
@@ -1186,12 +1187,12 @@
                     (propertize "Parent answer\n" 'gptel 'response)))
           (with-current-buffer view-buf
             (setq-local mevedel--session session)
-            (goto-char (mevedel-view--input-start))
-            (insert "/btw")
+            (mevedel-view-test--insert-composer-draft "/btw")
             (cl-letf (((symbol-function 'pop-to-buffer)
                        (lambda (buffer &rest _)
                          (setq side-view buffer))))
-              (mevedel-view-send)))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))))
           (setq side-data
                 (buffer-local-value 'mevedel--data-buffer side-view)
                 side-session
@@ -1222,7 +1223,7 @@
                               mevedel-view--interaction-overlays))
                     (text
                      (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker)))
+                      (point-min) (mevedel-view-prompt-boundary))))
                 (should (overlayp overlay))
                 (should (overlay-get overlay 'mevedel-permission-prompt))
                 (should (string-search "allow once" text))
@@ -1291,12 +1292,12 @@
                         (propertize "Parent answer\n" 'gptel 'response)))
               (with-current-buffer view-buf
                 (setq-local mevedel--session session)
-                (goto-char (mevedel-view--input-start))
-                (insert "/btw")
+                (mevedel-view-test--insert-composer-draft "/btw")
                 (cl-letf (((symbol-function 'pop-to-buffer)
                            (lambda (buffer &rest _)
                              (setq side-view buffer))))
-                  (mevedel-view-send)))
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send))))
               (setq side-data
                     (buffer-local-value 'mevedel--data-buffer side-view)
                     side-session
@@ -1318,7 +1319,7 @@
                      (string-search
                       "Permission Request"
                       (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker))))
+                       (point-min) (mevedel-view-prompt-boundary)))))
                 (should-not result)
                 (should
                  (equal "before\n"
@@ -1328,7 +1329,7 @@
                 (with-current-buffer side-view
                   (let ((text
                          (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
+                          (point-min) (mevedel-view-prompt-boundary))))
                     (should-not (string-search "Permission Request" text))
                     (should (string-search "ApplyPatch ·" text))
                     (should (string-search "M target.txt" text))
@@ -1375,12 +1376,12 @@
                (ABRT))))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (goto-char (mevedel-view--input-start))
-          (insert "/btw")
+          (mevedel-view-test--insert-composer-draft "/btw")
           (cl-letf (((symbol-function 'pop-to-buffer)
                      (lambda (buffer &rest _)
                        (setq side-view buffer))))
-            (mevedel-view-send))))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send)))))
       (let ((side-data
              (buffer-local-value 'mevedel--data-buffer side-view)))
         (with-current-buffer side-data
@@ -1472,12 +1473,12 @@
                          ("WebFetch" :action allow))))))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (let ((side-data
              (buffer-local-value 'mevedel--data-buffer side-view)))
         (with-current-buffer side-data
@@ -1665,12 +1666,12 @@
                   (setq-local mevedel--current-request parent-request)))
               (with-current-buffer view-buf
                 (setq-local mevedel--session session)
-                (goto-char (mevedel-view--input-start))
-                (insert "/btw")
+                (mevedel-view-test--insert-composer-draft "/btw")
                 (cl-letf (((symbol-function 'pop-to-buffer)
                            (lambda (buffer &rest _)
                              (setq side-view buffer))))
-                  (mevedel-view-send)))
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send))))
               (setq mevedel-hook-rules nil)
               (setf (mevedel-session-hook-rules session) nil
                     (mevedel-request-hook-rules parent-request) nil)
@@ -1745,12 +1746,12 @@
                                   :tracking-marker tracking))))))))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (with-current-buffer
           (buffer-local-value 'mevedel--data-buffer side-view)
         (should (= 1
@@ -1778,9 +1779,9 @@
                    (setq side-view buffer))))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (goto-char (mevedel-view--input-start))
-          (insert "/btw")
-          (mevedel-view-send))
+          (mevedel-view-test--insert-composer-draft "/btw")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (let ((first-side side-view)
               (side-draft "> quoted\nsecond line"))
           (with-current-buffer side-view
@@ -1788,27 +1789,29 @@
           (with-current-buffer view-buf
             (mevedel-view-test--insert-composer-draft
              "/btw another question" 5)
-            (let ((point-before (point)))
-              (should-error (mevedel-view-send) :type 'user-error)
-              (should (= point-before (point)))
+            (let ((point-before (mevedel-view-test--composer-point-offset)))
+              (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                              (mevedel-view-send)) :type 'user-error)
+              (should (= point-before (mevedel-view-test--composer-point-offset)))
               (should (equal "/btw another question"
-                             (mevedel-view--input-text)))))
+                             (mevedel-view-composer-draft-text nil t)))))
           (should (eq first-side side-view))
           (with-current-buffer side-view
-            (should (equal side-draft (mevedel-view--input-text)))
-            (should (= 3 (- (point) (mevedel-view--input-start))))
+            (should (equal side-draft (mevedel-view-composer-draft-text nil t)))
+            (should (= 3 (mevedel-view-test--composer-point-offset)))
             (let ((error
                    (should-error
-                    (mevedel-view-send-follow-up) :type 'user-error)))
+                    (with-current-buffer (mevedel-view-composer-buffer)
+                      (mevedel-view-send-follow-up)) :type 'user-error)))
               (should (string-match-p
                        "/btw" (error-message-string error))))
-            (should (equal side-draft (mevedel-view--input-text))))
+            (should (equal side-draft (mevedel-view-composer-draft-text nil t))))
           (with-current-buffer view-buf
             (mevedel-view--full-rerender)
             (should (equal "/btw another question"
-                           (mevedel-view--input-text))))
+                           (mevedel-view-composer-draft-text nil t))))
           (with-current-buffer side-view
-            (should (equal side-draft (mevedel-view--input-text))))))))
+            (should (equal side-draft (mevedel-view-composer-draft-text nil t))))))))
   :doc "aborts a response in place and preserves the side draft"
   (let* ((workspace
           (mevedel-workspace--create
@@ -1826,9 +1829,9 @@
                    (setq side-view buffer))))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (goto-char (mevedel-view--input-start))
-          (insert "/btw")
-          (mevedel-view-send)))
+          (mevedel-view-test--insert-composer-draft "/btw")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (let* ((side-data
               (buffer-local-value 'mevedel--data-buffer side-view))
              (side-session
@@ -1855,9 +1858,10 @@
             (put-text-property start (point) 'gptel 'response)))
         (with-current-buffer side-view
           (mevedel-view-test--insert-composer-draft draft 3)
-          (should-error (mevedel-side-conversation-send)
+          (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                          (mevedel-side-conversation-send))
                         :type 'user-error)
-          (should (equal draft (mevedel-view--input-text)))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
           (cl-letf (((symbol-function 'gptel-abort)
                      (lambda (_buffer)
                        (should cancelled)
@@ -1865,8 +1869,8 @@
                        (setq gptel--request-alist nil))))
             (mevedel-view-abort))
           (should (buffer-live-p side-view))
-          (should (equal draft (mevedel-view--input-text)))
-          (should (= 3 (- (point) (mevedel-view--input-start)))))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
+          (should (= 3 (mevedel-view-test--composer-point-offset))))
         (should (buffer-live-p side-data))
         (with-current-buffer side-data
           (should cancelled)
@@ -1894,16 +1898,16 @@
                 "#+end_summary\n"))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (with-current-buffer side-view
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+                     (point-min) (mevedel-view-prompt-boundary))))
           (should-not (string-match-p "conversation compacted" text))
           (should-not (string-match-p "Only effective" text))))))
   :doc "discards the side with its parent without listing or persisting it"
@@ -1920,12 +1924,12 @@
                 (propertize "Parent answer\n" 'gptel 'response)))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "/btw")
+        (mevedel-view-test--insert-composer-draft "/btw")
         (cl-letf (((symbol-function 'pop-to-buffer)
                    (lambda (buffer &rest _)
                      (setq side-view buffer))))
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq side-data (buffer-local-value 'mevedel--data-buffer side-view)
             side-session (buffer-local-value 'mevedel--session side-data))
       (should (= 1 (length (mevedel--workspace-sessions workspace))))

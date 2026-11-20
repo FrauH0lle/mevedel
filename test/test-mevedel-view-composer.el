@@ -71,6 +71,14 @@ Control-transfer quiescing stays real."
               (lambda (&rest _) t)))
      ,@body))
 
+(defmacro mevedel-view-composer-test--in-composer (view &rest body)
+  "Run BODY in VIEW's composer buffer, where raw editing commands act.
+Pass VIEW explicitly to composer bounds used inside BODY."
+  (declare (indent 1) (debug t))
+  `(with-current-buffer (or (mevedel-view-composer-buffer ,view)
+                            (error "No composer for view"))
+     ,@body))
+
 (defun mevedel-view-composer-test--status-rows (count)
   "Reconcile COUNT status rows through the real zone preserver."
   (mevedel-view-zone-reconcile
@@ -103,11 +111,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (goto-char (point-min))
         (forward-line 1)
         (dotimes (n 100) (insert (format "transcript %d\n" n))))
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-composer-insert "> draft\nsecond line")
       (let* ((reader (selected-window))
              (editor (split-window-right))
-             (input (mevedel-view--input-start))
+             (input (mevedel-view-composer-draft-start))
              (start (save-excursion
                       (goto-char input) (forward-line -10) (point))))
         (dolist (window (list reader editor))
@@ -134,10 +141,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (goto-char (point-min))
         (forward-line 1)
         (dotimes (n 100) (insert (format "transcript %d\n" n))))
-      (goto-char (point-max))
-      (insert "> draft\nsecond line")
+      (mevedel-view-composer-insert "> draft\nsecond line")
       (let ((start (save-excursion
-                     (goto-char (mevedel-view--input-start))
+                     (goto-char (mevedel-view-composer-draft-start))
                      (forward-line -10) (point))))
         (set-window-start nil start t)
         (goto-char start)
@@ -151,7 +157,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (should (= start (window-start)))
             (should (= y (mevedel-view-test--position-screen-y
                           (point) (selected-window)))))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))))
 
 (mevedel-deftest mevedel-view--history-reader-windows ()
   (mevedel-view-test--with-buffers
@@ -165,7 +171,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (should (equal ,expected (mevedel-view--history-reader-windows)))))
   (position expected)
   :doc "Transcript point is captured before mutation" (point-min) (list (selected-window))
-  :doc "The composer is not a history reader" (mevedel-view--input-start) nil
+  :doc "The composer is not a history reader" (mevedel-view-composer-draft-start) nil
   :doc "Status and interaction chrome are not history readers" mevedel-view--status-marker nil)
 
 (mevedel-deftest mevedel-view--restore-composer-anchors ()
@@ -180,12 +186,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (goto-char (point-min))
         (forward-line 1)
         (dotimes (n 200) (insert (format "transcript %d\n" n))))
-      (goto-char (point-max))
-      (insert "a draft")
+      (mevedel-view-composer-insert "a draft")
       ;; A full window: the composer's line is the last one shown.
       (let ((row (1- (window-body-height))))
         (set-window-start nil (save-excursion
-                                (goto-char (mevedel-view--input-start))
+                                (goto-char (mevedel-view-composer-draft-start))
                                 (vertical-motion (- row))
                                 (point)))
         (should (= row (mevedel-view-test--composer-screen-y (selected-window))))
@@ -200,7 +205,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
              (goto-char (mevedel-view--status-anchor))
              (insert "streamed line\nanother\n"))))
         (should (= row (mevedel-view-test--composer-screen-y (selected-window))))
-        (should (equal "a draft" (mevedel-view--input-text))))))
+        (should (equal "a draft" (mevedel-view-composer-draft-text nil t))))))
   :doc "a window scrolled away from the composer keeps its start"
   (mevedel-view-test--with-buffers
     (save-window-excursion
@@ -225,9 +230,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (goto-char (point-max))
       (insert (mapconcat (lambda (n) (format "draft line %d" n))
                          (number-sequence 1 (* 3 (window-body-height))) "\n"))
-      (let* ((start (save-excursion (goto-char (mevedel-view--input-start))
+      (let* ((start (save-excursion (goto-char (mevedel-view-composer-draft-start))
                                     (forward-line 10) (point)))
-             (offset (- start (mevedel-view--input-start))))
+             (offset (- start (mevedel-view-composer-draft-start))))
         (set-window-start nil start)
         (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (mevedel-view--call-preserving-window-state
@@ -235,7 +240,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
            (let ((inhibit-read-only t))
              (goto-char (mevedel-view--status-anchor))
              (insert "streamed line above the composer\n"))))
-        (should (= offset (- (window-start) (mevedel-view--input-start)))))))
+        (should (= offset (- (window-start) (mevedel-view-composer-draft-start)))))))
   :doc "while everything fits, the window start stays and the composer moves down"
   (mevedel-view-test--with-buffers
     (save-window-excursion
@@ -260,8 +265,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (goto-char (point-min))
           (forward-line 1)
           (dotimes (n 200) (insert (format "transcript %d\n" n))))
-        (goto-char (point-max))
-        (insert "> draft\nsecond line")
+        (mevedel-view-composer-insert "> draft\nsecond line")
         (let* ((height (window-body-height))
                (card (mevedel-view--interaction-register
                       (list :kind 'ask :id 'viewport-test
@@ -276,7 +280,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  (save-excursion (forward-line -5) (point)))
                 (t
                  (save-excursion
-                   (goto-char (mevedel-view--input-start))
+                   (goto-char (mevedel-view-composer-draft-start))
                    (vertical-motion (if (eq scenario 'full) (- 2 height) -5))
                    (point)))) t)
           (if (memq scenario '(hidden transcript transcript-render))
@@ -308,7 +312,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                              (goto-char (point-max))
                              (vertical-motion (- (1- height)))
                              (point))))))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))))))
   (scenario)
   :doc "settlement fills the last page when the composer was hidden"
   'hidden
@@ -370,7 +374,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                                   (point)) t)
           (pcase operation
             ((or 'clear 'tall) (mevedel-view--clear-input))
-            ('delete (delete-region (mevedel-view--input-start) (point-max)))
+            ('delete (delete-region (mevedel-view-composer-draft-start)
+                                    (mevedel-view-composer-draft-end)))
             ('history (mevedel-view-history--replace-input "one\ntwo"))
             ('snapshot
              (mevedel-view--restore-composer-snapshot
@@ -399,8 +404,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (let ((inhibit-read-only t))
         (goto-char (point-min))
         (dotimes (n 200) (insert (format "history %d\n" n))))
-      (goto-char (point-max))
-      (insert "one\ntwo\nthree\nfour\nfive\nsix")
+      (mevedel-view-composer-insert "one\ntwo\nthree\nfour\nfive\nsix")
       (let* ((reader (selected-window))
              (writer (split-window-right))
              (other-writer (split-window writer nil 'below))
@@ -416,11 +420,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                       (goto-char (point-max))
                       (vertical-motion (- blank (1- (window-body-height window))) window)
                       (point)) t)))
-        (delete-region (mevedel-view--input-start) (point-max))
+        (delete-region (mevedel-view-composer-draft-start)
+                       (mevedel-view-composer-draft-end))
         (should (= reader-start (window-start reader)))
         (should (= 0 (mevedel-view-composer-test--blank-rows writer)))
         (should (= 3 (mevedel-view-composer-test--blank-rows other-writer)))
-        (should (equal "" (mevedel-view--input-text)))
+        (should (equal "" (mevedel-view-composer-draft-text nil t)))
         (should-not mevedel-view--draft-window-state)))))
 
 (mevedel-deftest mevedel-view--draft-command-transaction ()
@@ -433,8 +438,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (let ((inhibit-read-only t))
           (goto-char (point-min))
           (dotimes (n 200) (insert (format "history %d\n" n))))
-        (goto-char (point-max))
-        (insert "one\ntwo\nthree\nfour\nfive")
+        (mevedel-view-composer-insert "one\ntwo\nthree\nfour\nfive")
         (let* ((window (selected-window))
                (start (save-excursion
                         (goto-char (point-max))
@@ -443,12 +447,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (set-window-start window start t)
           (let ((this-command 'yank))
             (run-hooks 'pre-command-hook)
-            (delete-region (mevedel-view--input-start) (point-max))
+            (delete-region (mevedel-view-composer-draft-start)
+                           (mevedel-view-composer-draft-end))
             ;; The deletion half of a replacement is not a viewport state.
             (should (= start (window-start window)))
             (insert replacement)
             (run-hooks 'post-command-hook))
-          (should (equal replacement (mevedel-view--input-text)))
+          (should (equal replacement (mevedel-view-composer-draft-text nil t)))
           (should (= blank (mevedel-view-composer-test--blank-rows window)))
           (should-not mevedel-view--draft-window-state)))))
   (replacement blank)
@@ -489,7 +494,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                          (goto-char (point-max))
                          (vertical-motion (- blank (1- (window-body-height))))
                          (point))))
-               (rows (count-screen-lines (mevedel-view--input-start) (point-max))))
+               (rows (count-screen-lines (mevedel-view-composer-draft-start)
+                                                 (mevedel-view-composer-draft-end))))
           (unwind-protect
               (progn
                 (should (= 180 rows))
@@ -497,7 +503,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 (should (= blank (mevedel-view-composer-test--blank-rows window)))
                 (let ((this-command 'indent-region))
                   (run-hooks 'pre-command-hook)
-                  (goto-char (mevedel-view--input-start))
+                  (goto-char (mevedel-view-composer-draft-start))
                   ;; Reindent each real line independently, not as a single
                   ;; replacement.  Removing 1620 characters has no net row loss.
                   (dotimes (_ 90)
@@ -514,11 +520,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 ;; Use raw draft text: input-text deliberately trims the first
                 ;; line's indentation.  START tracks edits before the viewport.
                 (should (equal expected
-                               (buffer-substring-no-properties
-                                (mevedel-view--input-start) (point-max))))
+                               (mevedel-view-composer-draft-text nil t)))
                 (should (= 1620 (- (length original) (length expected))))
                 (should (= rows (count-screen-lines
-                                 (mevedel-view--input-start) (point-max))))
+                                 (mevedel-view-composer-draft-start)
+                                 (mevedel-view-composer-draft-end))))
                 (should (= start (window-start window)))
                 (should (= blank (mevedel-view-composer-test--blank-rows window)))
                 (should-not mevedel-view--draft-window-state))
@@ -538,8 +544,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (let ((inhibit-read-only t))
           (goto-char (point-min))
           (dotimes (n 200) (insert (format "history %d\n" n))))
-        (goto-char (point-max))
-        (insert original)
+        (mevedel-view-composer-insert original)
         (let* ((window (selected-window))
                (start (save-excursion
                         (goto-char (point-max))
@@ -554,7 +559,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             ;; This arbitrary command must work without a command whitelist.
             (let ((this-command 'mevedel-test-draft-edit))
               (run-hooks 'pre-command-hook)
-              (goto-char (mevedel-view--input-start))
+              (goto-char (mevedel-view-composer-draft-start))
               (if (eq operation 'transpose)
                   (progn
                     ;; Move a newline: the intermediate extra row is not the
@@ -568,12 +573,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 (delete-region (point) (point-max)))
               (should (= start (window-start window)))
               (run-hooks 'post-command-hook))
-            (should (equal expected (mevedel-view--input-text)))
+            (should (equal expected (mevedel-view-composer-draft-text nil t)))
             (should-not mevedel-view--draft-window-state)
             (when (eq operation 'transpose)
-              (should (= (length original) (length (mevedel-view--input-text))))
+              (should (= (length original) (length (mevedel-view-composer-draft-text nil t))))
               (should (= (cl-count ?\n original)
-                         (cl-count ?\n (mevedel-view--input-text)))))
+                         (cl-count ?\n (mevedel-view-composer-draft-text nil t)))))
             (should (= initial-blanks (mevedel-view-composer-test--blank-rows window)))
             (when (eq operation 'transpose)
               (should (= start (window-start window)))))))))
@@ -597,10 +602,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (goto-char (point-min))
         (forward-line 1)
         (dotimes (n 200) (insert (format "history %d\n" n))))
-      (goto-char (point-max))
-      (insert "draft")
+      (mevedel-view-composer-insert "draft")
       (set-window-start nil (save-excursion
-                              (goto-char (mevedel-view--input-start))
+                              (goto-char (mevedel-view-composer-draft-start))
                               (vertical-motion -5)
                               (point)) t)
       (mevedel-view--call-preserving-window-state
@@ -633,8 +637,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (mevedel-view-test--with-buffers
       (save-window-excursion
         (switch-to-buffer view-buf)
-        (goto-char (point-max))
-        (insert "old draft\nsecond line")
+        (mevedel-view-composer-insert "old draft\nsecond line")
         (let ((this-command command)
               (overwrite-mode overwrite)
               (auto-fill-function auto-fill))
@@ -644,7 +647,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             ;; survive the cheap insertion path until post-command repair.
             ;; A newline makes this a genuine row-shrink candidate rather
             ;; than the plain short-line deletion fast path.
-            (delete-region (mevedel-view--input-start) (point-max)))
+            (delete-region (mevedel-view-composer-draft-start)
+                           (mevedel-view-composer-draft-end)))
           (insert "x")
           (should (eq capture (consp mevedel-view--draft-window-state)))
           (run-hooks 'post-command-hook)
@@ -670,15 +674,14 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (save-window-excursion
       (switch-to-buffer view-buf)
-      (goto-char (point-max))
-      (insert "plain draft")
+      (mevedel-view-composer-insert "plain draft")
       (cl-letf (((symbol-function 'mevedel-view--viewport-at-y)
                  (lambda (&rest _) (ert-fail "Short deletion traversed viewport"))))
         (let ((this-command 'backward-delete-char-untabify))
           (run-hooks 'pre-command-hook)
           (delete-char -1)
           (run-hooks 'post-command-hook))
-        (should (equal "plain draf" (mevedel-view--input-text)))
+        (should (equal "plain draf" (mevedel-view-composer-draft-text nil t)))
         (should-not mevedel-view--draft-window-state)))))
 
 (mevedel-deftest mevedel-view--call-preserving-draft-window-state
@@ -902,37 +905,46 @@ Policy tests use terminal rows, not production's pixel measurement helper."
              (lambda () 'emacs-lisp-mode)))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (buffer-enable-undo)
-        (insert "> \"first\nsecond\" @file:/tmp/note.md")
-        (mevedel-mention-bindings-set
-         (- (point-max) (length "@file:/tmp/note.md")) (point-max)
-         '(:kind file :token "@file:/tmp/note.md" :path "/tmp/note.md"))
+        (mevedel-view-composer-test--in-composer view-buf
+          (buffer-enable-undo)
+          (mevedel-view-composer-insert "> \"first\nsecond\" @file:/tmp/note.md")
+          (mevedel-mention-bindings-set
+           (- (point-max) (length "@file:/tmp/note.md")) (point-max)
+           '(:kind file :token "@file:/tmp/note.md" :path "/tmp/note.md")))
         (jit-lock-fontify-now)
-        (let* ((start (mevedel-view--input-start))
-               (prefix (buffer-substring (point-min) start))
-               (draft (mevedel-view--input-text))
-               (position (point))
-               (undo buffer-undo-list))
-          (jit-lock-refontify start)
-          (setq undo buffer-undo-list)
-          (jit-lock-fontify-now)
-          (should (eq (get-text-property (+ start 4) 'font-lock-face)
-                      'font-lock-string-face))
-          (should (equal (mevedel-view--input-text) draft))
-          (should (= (point) position))
-          (should (equal buffer-undo-list undo))
+        (let* ((start (mevedel-view-composer-draft-start view-buf))
+               ;; Transcript side: everything before the prompt boundary.
+               (boundary (mevedel-view-prompt-boundary))
+               (prefix (buffer-substring (point-min) boundary))
+               (draft (mevedel-view-composer-draft-text view-buf t))
+               (position (mevedel-view-composer-test--in-composer view-buf
+                           (point)))
+               (undo (mevedel-view-composer-test--in-composer view-buf
+                       buffer-undo-list)))
+          (mevedel-view-composer-test--in-composer view-buf
+            (jit-lock-refontify start)
+            (setq undo buffer-undo-list)
+            (jit-lock-fontify-now)
+            (should (eq (get-text-property (+ start 4) 'font-lock-face)
+                        'font-lock-string-face))
+            (should (equal (mevedel-view-composer-draft-text view-buf t) draft))
+            (should (= (point) position))
+            (should (equal buffer-undo-list undo))
+            (should (equal (get-text-property
+                            (1- (mevedel-view-composer-draft-end view-buf))
+                            'mevedel-mention-binding)
+                           '(:kind file :token "@file:/tmp/note.md"
+                             :path "/tmp/note.md")))
+            (should-not (text-property-not-all
+                         start (mevedel-view-composer-draft-end view-buf)
+                         'invisible nil)))
           (should (equal-including-properties
-                   prefix (buffer-substring (point-min) start)))
-          (should (equal (get-text-property (1- (point-max))
-                                            'mevedel-mention-binding)
-                         '(:kind file :token "@file:/tmp/note.md"
-                           :path "/tmp/note.md")))
-          (should-not (text-property-not-all start (point-max) 'invisible nil))
-          (goto-char (+ start 2))
-          (delete-char 1)
-          (jit-lock-fontify-now (line-beginning-position) (line-end-position))
-          (should-not (get-text-property (+ start 9) 'font-lock-face))))))
+                   prefix (buffer-substring (point-min) boundary)))
+          (mevedel-view-composer-test--in-composer view-buf
+            (goto-char (+ start 2))
+            (delete-char 1)
+            (jit-lock-fontify-now (line-beginning-position) (line-end-position))
+            (should-not (get-text-property (+ start 9) 'font-lock-face)))))))
 
   :doc "native Markdown highlights the final heading while typing without newline"
   (progn
@@ -940,35 +952,36 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (skip-unless (mevedel-view--markdown-fontify-mode))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert "> quote\n# H\n")
+        (mevedel-view-composer-insert "> quote\n# H\n")
         (jit-lock-fontify-now)
-        (delete-char -1)
+        (mevedel-view-composer-test--in-composer view-buf
+          (delete-char -1))
         (jit-lock-fontify-now)
-        (should (equal "> quote\n# H" (mevedel-view--input-text)))
+        (should (equal "> quote\n# H" (mevedel-view-composer-draft-text nil t)))
         (should (memq 'markdown-ts-heading-1
-                      (ensure-list (get-text-property (1- (point-max))
-                                                      'font-lock-face))))
-        (should-not (text-property-not-all (mevedel-view--input-start)
-                                           (point-max) 'invisible nil)))))
+                      (ensure-list (get-text-property
+                                    (1- (mevedel-view-composer-draft-end))
+                                    'font-lock-face))))
+        (should-not (text-property-not-all (mevedel-view-composer-draft-start)
+                                           (mevedel-view-composer-draft-end)
+                                           'invisible nil)))))
 
   :doc "missing grammars leave the draft editable and clear stale highlighting"
   (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
              (lambda () nil)))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert (propertize "**draft**" 'font-lock-face 'bold))
+        (mevedel-view-composer-insert (propertize "**draft**" 'font-lock-face 'bold))
         (jit-lock-fontify-now)
-        (should (equal (mevedel-view--input-text) "**draft**"))
-        (should-not (get-text-property (mevedel-view--input-start)
+        (should (equal (mevedel-view-composer-draft-text nil t) "**draft**"))
+        (should-not (get-text-property (mevedel-view-composer-draft-start)
                                        'font-lock-face))))))
 
 (mevedel-deftest mevedel-view-composer-ownership ()
   ,test
   (test)
   :doc "owns composer editing and submission"
-  (dolist (symbol '(mevedel-view--input-start
+  (dolist (symbol '(mevedel-view-composer-draft-start
                     mevedel-view--input-text
                     mevedel-view--clear-input
                     mevedel-view-refresh-input-prompt
@@ -1065,8 +1078,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                           mevedel--workspace ws)
               (mevedel-skills-install session data-buf))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "> diagnosis\nPlease use $al")
+              (mevedel-view-composer-insert "> diagnosis\nPlease use $al"
+                                             (mevedel-view-composer-draft-start))
               (mevedel-view-test--complete-skill "alpha"))
             (pcase mode
               ('missing
@@ -1108,7 +1121,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 (with-current-buffer view-buf
                   (setq raised
                         (condition-case err
-                            (progn (mevedel-view-send) nil)
+                            (progn (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) nil)
                           (user-error (error-message-string err))))
                   (should sent)
                   (should-not raised)
@@ -1118,7 +1131,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                   (should-not (string-match-p "COMPETING ALPHA BODY" sent))
                   (should (string-prefix-p (format "mevedel [%s]: " root)
                                            message-text))
-                  (should (string-empty-p (mevedel-view--input-text)))
+                  (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
                   (should (equal "> diagnosis\nPlease use $alpha"
                                  (car (mevedel-view-history--entries))))
                   (with-current-buffer data-buf
@@ -1338,8 +1351,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (setq-local mevedel-permission-mode 'ask)
-              (goto-char (mevedel-view--input-start))
-              (insert "> first\nsecond")
+              (mevedel-view-composer-insert "> first\nsecond"
+                                             (mevedel-view-composer-draft-start))
               (should (eq 'edits
                           (mevedel-view-cycle-permission-mode)))
               (should (eq 'edits
@@ -1353,9 +1366,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
               (should (string= "\n[edits]\n> "
                                (buffer-substring-no-properties
                                 (mevedel-view-zone-start 'progress)
-                                (mevedel-view--input-start))))
+                                (mevedel-view-composer-draft-start))))
               (should (equal "> first\nsecond"
-                             (mevedel-view--input-text))))
+                             (mevedel-view-composer-draft-text nil t))))
             (with-current-buffer view-buf
               (should (eq 'full-auto
                           (mevedel-view-cycle-permission-mode)))
@@ -1370,7 +1383,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
               (should (eq 'ask
                           (mevedel-session-permission-mode session)))
               (should (equal "> first\nsecond"
-                             (mevedel-view--input-text))))))
+                             (mevedel-view-composer-draft-text nil t))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
   :doc "cycles only baseline during implementation and preserves multiline draft"
@@ -1384,13 +1397,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                     mevedel--current-request request))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "> first editable\nsecond line")
+        (mevedel-view-composer-insert "> first editable\nsecond line"
+                                       (mevedel-view-composer-draft-start))
         (should (eq 'edits (mevedel-view-cycle-permission-mode)))
         (should (eq 'edits (mevedel-session-permission-mode session)))
         (should (eq 'full-auto (mevedel-view--effective-permission-mode)))
         (mevedel-view-refresh-associated-input-prompt)
-        (should (equal "> first editable\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> first editable\nsecond line" (mevedel-view-composer-draft-text nil t))))))
 
   :doc "keeps the committed mode when an incomplete view cannot repaint"
   (let ((data-buffer (generate-new-buffer " *mev-cycle-data*"))
@@ -1429,8 +1442,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel--view-buffer view-buf))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "> first\nsecond")
+        (mevedel-view-composer-insert "> first\nsecond"
+                                       (mevedel-view-composer-draft-start))
         (should (mevedel-view-toggle-plan-mode))
         (should (mevedel-session-plan-mode session))
         (should (eq 'full-auto
@@ -1438,15 +1451,15 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should (string= "\n[Plan · full-auto]\n> "
                          (buffer-substring-no-properties
                           (mevedel-view-zone-start 'progress)
-                          (mevedel-view--input-start))))
+                          (mevedel-view-composer-draft-start))))
         (should (equal "> first\nsecond"
-                       (mevedel-view--input-text)))
+                       (mevedel-view-composer-draft-text nil t)))
         (should-not (mevedel-view-toggle-plan-mode))
         (should-not (mevedel-session-plan-mode session))
         (should (eq 'full-auto
                     (mevedel-session-permission-mode session)))
         (should (equal "> first\nsecond"
-                       (mevedel-view--input-text)))))))
+                       (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view-composer-keymap
   (:doc "Composer commands are bound only inside editable input")
@@ -1475,13 +1488,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (with-current-buffer view-buf
               (use-local-map (copy-keymap (current-local-map)))
               (local-set-key (kbd "C-z") #'move-beginning-of-line)
-              (goto-char (mevedel-view--input-start))
+              (goto-char (mevedel-view-composer-draft-start))
               (dolist (binding bindings)
                 (should
                  (eq (key-binding (kbd (car binding)))
                      (cdr binding))))
               (insert "draft")
-              (goto-char (+ (mevedel-view--input-start) 2))
+              (goto-char (+ (mevedel-view-composer-draft-start) 2))
               (should
                (eq (key-binding (kbd "C-<tab>"))
                    #'mevedel-view-toggle-plan-mode))
@@ -1495,7 +1508,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  (eq (key-binding (kbd (car binding)))
                      (cdr binding))))
               (mevedel-view--setup view-buf data-buf)
-              (goto-char (mevedel-view--input-start))
+              (goto-char (mevedel-view-composer-draft-start))
               (should
                (eq (key-binding (kbd "C-<tab>"))
                    #'mevedel-view-toggle-plan-mode))
@@ -1527,9 +1540,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
       (let ((history (buffer-substring-no-properties
-                      (point-min) (mevedel-view--input-start))))
-        (goto-char (mevedel-view--input-start))
-        (insert "hello")
+                      (point-min) (mevedel-view-composer-draft-start))))
+        (mevedel-view-composer-insert "hello"
+                                       (mevedel-view-composer-draft-start))
         (undo-boundary)
         ;; Renders above the composer: an insertion, a property change and
         ;; a deletion, each recorded by Emacs with shifting positions.
@@ -1539,12 +1552,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (insert "rendered row\n")
             (put-text-property (point-min) (+ (point-min) 3) 'face 'bold)
             (delete-region (point-min) (+ (point-min) 4))))
-        (goto-char (point-max))
-        (insert " world")
+        (mevedel-view-composer-insert " world")
         (undo-boundary)
         (mevedel-view--sanitize-undo)
         ;; Only composer positions remain.
-        (let ((start (mevedel-view--input-start)))
+        (let ((start (mevedel-view-composer-draft-start)))
           (should (cl-every (lambda (entry)
                               (pcase entry
                                 ('nil t)
@@ -1554,13 +1566,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                             buffer-undo-list)))
         (undo-start)
         (undo-more 1)
-        (should (equal "hello" (mevedel-view--input-text)))
+        (should (equal "hello" (mevedel-view-composer-draft-text nil t)))
         (undo-more 1)
-        (should (equal "" (mevedel-view--input-text)))
+        (should (equal "" (mevedel-view-composer-draft-text nil t)))
         ;; The render stays; undo never touched read-only transcript.
         (should (equal (concat "ered row\n" history)
                        (buffer-substring-no-properties
-                        (point-min) (mevedel-view--input-start)))))))
+                        (point-min) (mevedel-view-composer-draft-start)))))))
 
   :doc "prompt refreshes remain outside composer undo history"
   (dolist (modes '((full-auto) (ask) (full-auto ask edits ask)))
@@ -1568,41 +1580,42 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (with-current-buffer view-buf
         (buffer-enable-undo)
         (setq buffer-undo-list nil)
-        (goto-char (mevedel-view--input-start))
-        (insert "> quoted\nsecond")
+        (mevedel-view-composer-insert "> quoted\nsecond"
+                                       (mevedel-view-composer-draft-start))
         (undo-boundary)
         (dolist (mode modes)
           (setq-local mevedel-permission-mode mode)
           (mevedel-view-refresh-input-prompt))
         (let ((prompt (buffer-substring
-                       mevedel-view--input-marker (mevedel-view--input-start))))
+                       (mevedel-view-prompt-boundary) (mevedel-view-composer-draft-start))))
           (mevedel-view--sanitize-undo)
           (undo-start)
           (undo-more 1)
           (should (equal-including-properties
                    prompt (buffer-substring
-                           mevedel-view--input-marker (mevedel-view--input-start))))
-          (should (equal "" (mevedel-view--input-text)))
+                           (mevedel-view-prompt-boundary) (mevedel-view-composer-draft-start))))
+          (should (equal "" (mevedel-view-composer-draft-text nil t)))
           (should (= (overlay-start mevedel-view--composer-display-overlay)
-                     (mevedel-view--input-start)))))))
+                     (mevedel-view-composer-draft-start)))))))
 
   :doc "a real deletion at the draft boundary remains undoable after prompt refresh"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "> quoted\nsecond")
+      (mevedel-view-composer-insert "> quoted\nsecond"
+                                     (mevedel-view-composer-draft-start))
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
-      (delete-region (mevedel-view--input-start) (point-max))
+      (delete-region (mevedel-view-composer-draft-start)
+                     (mevedel-view-composer-draft-end))
       (undo-boundary)
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
       (mevedel-view--sanitize-undo)
       (undo-start)
       (undo-more 1)
-      (should (equal "> quoted\nsecond" (mevedel-view--input-text)))
+      (should (equal "> quoted\nsecond" (mevedel-view-composer-draft-text nil t)))
       (should (= (overlay-start mevedel-view--composer-display-overlay)
-                 (mevedel-view--input-start)))))
+                 (mevedel-view-composer-draft-start)))))
 
   :doc "drops render-only history and multiline drafts starting with >"
   (mevedel-view-test--with-buffers
@@ -1618,20 +1631,19 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (put-text-property (point-min) (1+ (point-min)) 'face 'bold)))
       (mevedel-view--sanitize-undo)
       (should-not buffer-undo-list)
-      (should (equal "> quoted\nsecond" (mevedel-view--input-text)))))
+      (should (equal "> quoted\nsecond" (mevedel-view-composer-draft-text nil t)))))
 
   :doc "ends the history at an entry it cannot place"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
-      (goto-char (mevedel-view--input-start))
-      (insert "old")
+      (mevedel-view-composer-insert "old"
+                                     (mevedel-view-composer-draft-start))
       (undo-boundary)
       (push (list 'apply #'ignore) buffer-undo-list)
       (undo-boundary)
-      (goto-char (point-max))
-      (insert "new")
+      (mevedel-view-composer-insert "new")
       (let ((start (- (point-max) 3)))
         (mevedel-view--sanitize-undo)
         (should (equal (list (cons start (point-max))) buffer-undo-list)))))
@@ -1641,10 +1653,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (with-current-buffer view-buf
       (buffer-enable-undo)
       (setq buffer-undo-list nil)
-      (goto-char (mevedel-view--input-start))
-      (insert "kept")
+      (mevedel-view-composer-insert "kept"
+                                     (mevedel-view-composer-draft-start))
       (undo-boundary)
-      (let ((start (mevedel-view--input-start)))
+      (let ((start (mevedel-view-composer-draft-start)))
         ;; Commands that only moved point while renders ran above.
         (dotimes (_ 5)
           (push (1+ start) buffer-undo-list)
@@ -1656,7 +1668,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should-not (seq-some #'integerp buffer-undo-list))
         (undo-start)
         (undo-more 1)
-        (should (equal "" (mevedel-view--input-text))))))
+        (should (equal "" (mevedel-view-composer-draft-text nil t))))))
 
   :doc "keeps nothing for a transcript view without a composer"
   (mevedel-view-test--with-buffers
@@ -1681,20 +1693,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                             'invisible 'mevedel-view-mailbox-collapsed)))
       (should (eq buffer-invisibility-spec t))
       (should (invisible-p (point-min)))
-      (goto-char (mevedel-view--input-start))
-      (insert "> exact draft\nsecond line")
+      (mevedel-view-composer-insert "> exact draft\nsecond line"
+                                     (mevedel-view-composer-draft-start))
       (mevedel-view-composer-set-historical-visible nil)
       (should buffer-read-only)
-      (should (invisible-p (mevedel-view--input-start)))
+      (should (invisible-p (mevedel-view-composer-draft-start)))
       (should (eq buffer-invisibility-spec t))
       (should (invisible-p (point-min)))
       (mevedel-view-composer-set-historical-visible t)
       (should-not buffer-read-only)
-      (should-not (invisible-p (mevedel-view--input-start)))
+      (should-not (invisible-p (mevedel-view-composer-draft-start)))
       (should (eq buffer-invisibility-spec t))
       (should (invisible-p (point-min)))
       (should (equal "> exact draft\nsecond line"
-                     (mevedel-view--input-text))))))
+                     (mevedel-view-composer-draft-text nil t))))))
 
 (mevedel-deftest mevedel-view-arm-conversation-fork ()
   ,test
@@ -1714,8 +1726,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "> existing\nmultiline draft")
+        (mevedel-view-composer-insert "> existing\nmultiline draft"
+                                       (mevedel-view-composer-draft-start))
         (goto-char (point-min))
         (setq-local mevedel-view-segments--number 1
                     mevedel-view-segments--buffer data-buf)
@@ -1735,9 +1747,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                                   :fork-point-id)))
         (should (= (point) (point-max)))
         (should-not buffer-read-only)
-        (should-not (invisible-p (mevedel-view--input-start)))
+        (should-not (invisible-p (mevedel-view-composer-draft-start)))
         (should (equal "> existing\nmultiline draft"
-                       (mevedel-view--input-text)))
+                       (mevedel-view-composer-draft-text nil t)))
         (let ((descriptor
                (gethash 'armed-session-fork
                         mevedel-view--interaction-descriptors)))
@@ -1752,12 +1764,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should-not mevedel-view--armed-session-fork)
         (should (mevedel-view-historical-segment-p))
         (should buffer-read-only)
-        (should (invisible-p (mevedel-view--input-start)))
+        (should (invisible-p (mevedel-view-composer-draft-start)))
         (should (= (point) (point-min)))
         (should-not (gethash 'armed-session-fork
                              mevedel-view--interaction-descriptors))
         (should (equal "> existing\nmultiline draft"
-                       (mevedel-view--input-text))))))
+                       (mevedel-view-composer-draft-text nil t))))))
   :doc "reports an exact selection error without arming"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -1785,8 +1797,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "> child draft\nsecond line")
+        (mevedel-view-composer-insert "> child draft\nsecond line"
+                                       (mevedel-view-composer-draft-start))
         (cl-letf
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
@@ -1808,7 +1820,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                          (plist-get mevedel-view--armed-session-fork
                                     :fork-point-id)))
           (should (equal "> child draft\nsecond line"
-                         (mevedel-view--input-text))))))))
+                         (mevedel-view-composer-draft-text nil t))))))))
 
 (mevedel-deftest mevedel-view--dim-unforked-turns ()
   ,test
@@ -1877,8 +1889,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "draft")
+        (mevedel-view-composer-insert "draft"
+                                       (mevedel-view-composer-draft-start))
         (cl-letf
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
@@ -1904,7 +1916,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should (eq reserved
                     (plist-get mevedel-view--armed-session-fork
                                :worktree-reservation)))
-        (should (equal "draft" (mevedel-view--input-text)))
+        (should (equal "draft" (mevedel-view-composer-draft-text nil t)))
         (should
          (string-match-p
           "Fork worktree from Assistant turn 2"
@@ -1975,19 +1987,19 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (with-current-buffer view-buf
       (setq-local mevedel-view-segments--number 1
                   mevedel-view-segments--buffer data-buf)
-      (goto-char (mevedel-view--input-start))
-      (insert "live-tip draft")
-      (let ((error (should-error (mevedel-view-send) :type 'user-error)))
+      (mevedel-view-composer-insert "live-tip draft"
+                                     (mevedel-view-composer-draft-start))
+      (let ((error (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)))
         (should (string-match-p
                  "return to latest or fork"
                  (error-message-string error))))
       (mevedel-view--clear-input)
-      (goto-char (mevedel-view--input-start))
-      (insert "/clear")
+      (mevedel-view-composer-insert "/clear"
+                                     (mevedel-view-composer-draft-start))
       (setq-local
        mevedel-view--armed-session-fork
        '(:fork-point-id "historical" :fork-type conversation))
-      (let ((error (should-error (mevedel-view-send) :type 'user-error)))
+      (let ((error (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)))
         (should (string-match-p
                  "Slash commands are unavailable"
                  (error-message-string error)))))))
@@ -2018,9 +2030,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
               (setq-local mevedel-view--armed-session-fork target)
               (setf (mevedel-session-dropped-file-grants session)
                     (list attachment "/tmp/unrelated.txt"))
-              (goto-char (mevedel-view--input-start))
-              (insert draft)
-              (goto-char (+ (mevedel-view--input-start) 3))
+              (mevedel-view-composer-insert draft
+                                             (mevedel-view-composer-draft-start))
+              (mevedel-view-composer-test--in-composer view-buf
+                (goto-char (+ (mevedel-view-composer-draft-start view-buf) 3)))
               (cl-letf
                   (((symbol-function
                      'mevedel-session-fork-create)
@@ -2034,17 +2047,18 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                    ((symbol-function 'mevedel-view-rerender)
                     (lambda (&optional view)
                       (push (list 'scheduled view) events))))
-                (mevedel-view-send))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send)))
               ;; Source's display rebuild is scheduled, not blocking.
               (should (member (list 'scheduled view-buf) events))
               (should-not mevedel-view--armed-session-fork)
-              (should (string-empty-p (mevedel-view--input-text))))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
             (should (eq 'materialized (caar (last events))))
             (should (eq child-view (cadr (car events))))
             (with-current-buffer child-view
-              (should (equal draft (mevedel-view--input-text)))
-              (should (= 3 (- (point)
-                              (mevedel-view--input-start)))))
+              (should (equal draft (mevedel-view-composer-draft-text nil t)))
+              (should (= 3 (mevedel-view-test--composer-point-offset
+                            child-view))))
             (should (equal (list attachment)
                            (mevedel-session-dropped-file-grants
                             child-session)))
@@ -2068,14 +2082,14 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel-view--armed-session-fork target)
         (setf (mevedel-session-dropped-file-grants session)
               (list attachment))
-        (goto-char (mevedel-view--input-start))
-        (insert (format "> exact\n@file:%s" attachment))
+        (mevedel-view-composer-insert (format "> exact\n@file:%s" attachment)
+                                       (mevedel-view-composer-draft-start))
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
                  'mevedel-session-fork-create)
                 (lambda (&rest _) (error "materialization failed"))))
-            (should-error (mevedel-view-send)
+            (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send))
                           :type 'error))
           (should (equal target mevedel-view--armed-session-fork))
           (should (equal (plist-get before :text)
@@ -2100,14 +2114,14 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel-view--armed-session-fork target)
         (setf (mevedel-session-dropped-file-grants session)
               (list attachment))
-        (goto-char (mevedel-view--input-start))
-        (insert (format "> exact\n@file:%s" attachment))
+        (mevedel-view-composer-insert (format "> exact\n@file:%s" attachment)
+                                       (mevedel-view-composer-draft-start))
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
                  'mevedel-session-fork-create)
                 (lambda (&rest _) (error "staging failed"))))
-            (should-error (mevedel-view-send)))
+            (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send))))
           (should (eq reservation
                       (plist-get mevedel-view--armed-session-fork
                                  :worktree-reservation)))
@@ -2122,8 +2136,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           materialized)
       (with-current-buffer view-buf
         (setq-local mevedel-view--armed-session-fork target)
-        (goto-char (mevedel-view--input-start))
-        (insert "invalid skill input")
+        (mevedel-view-composer-insert "invalid skill input"
+                                       (mevedel-view-composer-draft-start))
         (cl-letf
             (((symbol-function 'mevedel-skills-plan-user-input)
               (lambda (&rest _) (user-error "Invalid skill syntax")))
@@ -2131,12 +2145,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                'mevedel-session-fork-create)
               (lambda (&rest _)
                 (setq materialized t))))
-          (should-error (mevedel-view-send)
+          (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send))
                         :type 'user-error))
         (should-not materialized)
         (should (equal target mevedel-view--armed-session-fork))
         (should (equal "invalid skill input"
-                       (mevedel-view--input-text))))))
+                       (mevedel-view-composer-draft-text nil t))))))
 
   :doc "dispatches an armed Worktree Fork through its materializer"
   (mevedel-view-test--with-source-skills nil
@@ -2156,8 +2170,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (mevedel-view--setup child-view child-data)
             (with-current-buffer view-buf
               (setq-local mevedel-view--armed-session-fork target)
-              (goto-char (mevedel-view--input-start))
-              (insert "continue here")
+              (mevedel-view-composer-insert "continue here"
+                                             (mevedel-view-composer-draft-start))
               (cl-letf
                   (((symbol-function
                      'mevedel-session-fork-create)
@@ -2166,7 +2180,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                       child-data))
                    ((symbol-function 'mevedel-view--submit-planned-input)
                     #'ignore))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (should (equal (list data-buf target 'worktree) called)))
         (dolist (buffer (list child-view child-data))
           (when (buffer-live-p buffer)
@@ -2200,8 +2215,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((expected (marker-position mevedel-view--input-marker)))
-        (goto-char (mevedel-view--input-start))
-        (insert "draft")
+        (mevedel-view-composer-insert "draft"
+                                       (mevedel-view-composer-draft-start))
         (set-marker mevedel-view--input-marker (point-max))
         (should (= expected (mevedel-view--prompt-start-position))))))
 
@@ -2219,34 +2234,34 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "every beginning-of-line style command stops after the prompt"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "abc")
+      (mevedel-view-composer-insert "abc")
       (dolist (command '(beginning-of-line back-to-indentation
                          move-beginning-of-line))
-        (goto-char (point-max))
-        (call-interactively command)
-        (should (= (point) (mevedel-view--input-start))))
-      (should (equal "abc" (mevedel-view--input-text)))))
+        (mevedel-view-composer-test--in-composer view-buf
+          (goto-char (mevedel-view-composer-draft-end view-buf))
+          (call-interactively command)
+          (should (= (point) (mevedel-view-composer-draft-start view-buf)))))
+      (should (equal "abc" (mevedel-view-composer-draft-text nil t)))))
 
   :doc "continuation lines keep their own line start"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "abc\ndef")
-      (beginning-of-line)
-      (should (= (point) (- (point-max) 3)))))
+      (mevedel-view-composer-test--in-composer view-buf
+        (mevedel-view-composer-insert "abc\ndef")
+        (beginning-of-line)
+        (should (= (point) (- (mevedel-view-composer-draft-end view-buf) 3))))))
 
   :doc "a refreshed prompt keeps the field boundary"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "abc")
+      (mevedel-view-composer-insert "abc")
       (mevedel-view-refresh-input-prompt)
-      (goto-char (point-max))
-      (beginning-of-line)
-      (should (= (point) (mevedel-view--input-start)))
+      (mevedel-view-composer-test--in-composer view-buf
+        (goto-char (mevedel-view-composer-draft-end view-buf))
+        (beginning-of-line)
+        (should (= (point) (mevedel-view-composer-draft-start view-buf))))
       (should (eq 'mevedel-view-prompt
-                  (get-text-property (1- (mevedel-view--input-start))
+                  (get-text-property (1- (mevedel-view-composer-draft-start))
                                      'field))))))
 
 (mevedel-deftest mevedel-view--update-composer-indent
@@ -2306,19 +2321,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       ;; Type into the empty composer: inserted text joins the overlay.
-      (goto-char (mevedel-view--input-start))
-      (insert "> first\nsecond")
-      (let* ((first-line (save-excursion
-                           (goto-char (mevedel-view--input-start))
-                           (pos-bol)))
-             (second-line (save-excursion
-                            (goto-char (mevedel-view--input-start))
-                            (forward-line 1)
-                            (point))))
-        (should-not (get-char-property first-line 'line-prefix))
-        (should (equal "  " (get-char-property second-line 'line-prefix)))
-        (should (equal "  " (get-char-property second-line 'wrap-prefix)))
-        (should (equal "> first\nsecond" (mevedel-view--input-text))))))
+      (mevedel-view-composer-insert "> first\nsecond"
+                                     (mevedel-view-composer-draft-start))
+      (mevedel-view-composer-test--in-composer view-buf
+        (let* ((first-line (save-excursion
+                             (goto-char (mevedel-view-composer-draft-start view-buf))
+                             (pos-bol)))
+               (second-line (save-excursion
+                              (goto-char (mevedel-view-composer-draft-start view-buf))
+                              (forward-line 1)
+                              (point))))
+          (should-not (get-char-property first-line 'line-prefix))
+          (should (equal "  " (get-char-property second-line 'line-prefix)))
+          (should (equal "  " (get-char-property second-line 'wrap-prefix)))
+          (should (equal "> first\nsecond"
+                         (mevedel-view-composer-draft-text view-buf t)))))))
 
   :doc "history redraw and optimistic turns never acquire the composer indent"
   (mevedel-view-test--with-buffers
@@ -2327,19 +2344,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (with-current-buffer view-buf
       (dolist (draft '("" "> first\nsecond\n"))
         (mevedel-view--clear-input)
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start))
         (dotimes (_ 3)
           (mevedel-view--full-rerender)
           (mevedel-view--insert-user-message "Next prompt")
           (mevedel-view--render-status)
           (mevedel-view--interaction-rebuild)
-          (let ((start (mevedel-view--input-start)))
+          (let ((start (mevedel-view-composer-draft-start view-buf))
+                (end (mevedel-view-composer-draft-end view-buf)))
             (should (= start (overlay-start mevedel-view--composer-display-overlay)))
-            (should (= (point-max) (overlay-end mevedel-view--composer-display-overlay)))
-            (should (equal draft (buffer-substring-no-properties start (point-max))))
+            (should (= end (overlay-end mevedel-view--composer-display-overlay)))
+            (should (equal draft (mevedel-view-composer-draft-text view-buf t)))
+            ;; Transcript side: the boundary precedes only prompt chrome.
             (should-not (text-property-not-all
-                         (point-min) mevedel-view--input-marker
+                         (point-min) (mevedel-view-prompt-boundary)
                          'mevedel-view-prompt nil))
             (let ((position (point-min)))
               (while (< position start)
@@ -2349,28 +2368,31 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "the indent stays two columns when the prompt is rebuilt for a mode"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "draft\nmore")
+      (mevedel-view-composer-insert "draft\nmore"
+                                     (mevedel-view-composer-draft-start))
       (dolist (case '((full-auto . "> ") (ask . "> ")))
         (setq-local mevedel-permission-mode (car case))
         (mevedel-view-refresh-input-prompt)
-        (let ((second-line (save-excursion
-                             (goto-char (mevedel-view--input-start))
-                             (forward-line 1)
-                             (point))))
-          (should (equal (make-string (length (cdr case)) ?\s)
-                         (get-char-property second-line 'line-prefix)))
-          (should (equal "draft\nmore" (mevedel-view--input-text)))))))
+        (mevedel-view-composer-test--in-composer view-buf
+          (let ((second-line (save-excursion
+                               (goto-char (mevedel-view-composer-draft-start view-buf))
+                               (forward-line 1)
+                               (point))))
+            (should (equal (make-string (length (cdr case)) ?\s)
+                           (get-char-property second-line 'line-prefix)))
+            (should (equal "draft\nmore"
+                           (mevedel-view-composer-draft-text view-buf t))))))))
 
   :doc "mode redraws keep indentation, draft, point and selection"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (setq-local mevedel--session (mevedel-session--create :name "main"))
-      (goto-char (mevedel-view--input-start))
-      (insert "> first\nsecond\n")
-      (goto-char (+ (mevedel-view--input-start) 3))
-      (set-mark (+ (mevedel-view--input-start) 10))
-      (setq mark-active t)
+      (mevedel-view-composer-insert "> first\nsecond\n"
+                                     (mevedel-view-composer-draft-start))
+      (mevedel-view-composer-test--in-composer view-buf
+        (goto-char (+ (mevedel-view-composer-draft-start view-buf) 3))
+        (set-mark (+ (mevedel-view-composer-draft-start view-buf) 10))
+        (setq mark-active t))
       (dolist (state '(ask edits full-auto plan editing ask))
         (setq-local mevedel-permission-mode
                     (if (memq state '(ask edits full-auto)) state 'ask))
@@ -2380,18 +2402,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (mevedel-view-refresh-input-prompt)
         (mevedel-view--render-status)
         (mevedel-view--interaction-rebuild)
-        (let ((start (mevedel-view--input-start))
-              (indent "  "))
-          (should (equal "> first\nsecond\n"
-                         (buffer-substring-no-properties start (point-max))))
-          (should (= (point) (+ start 3)))
-          (should (= (mark) (+ start 10)))
-          (should mark-active)
-          (should (= (overlay-start mevedel-view--composer-display-overlay) start))
-          (should (= (overlay-end mevedel-view--composer-display-overlay) (point-max)))
-          (should (equal indent (get-char-property (+ start 8) 'line-prefix)))
-          (should (equal indent (get-char-property (+ start 8) 'wrap-prefix)))
-          (should-not (get-char-property (1- start) 'line-prefix)))))))
+        (mevedel-view-composer-test--in-composer view-buf
+          (let ((start (mevedel-view-composer-draft-start view-buf))
+                (indent "  "))
+            (should (equal "> first\nsecond\n"
+                           (mevedel-view-composer-draft-text view-buf t)))
+            (should (= (point) (+ start 3)))
+            (should (= (mark) (+ start 10)))
+            (should mark-active)
+            (should (= (overlay-start mevedel-view--composer-display-overlay) start))
+            (should (= (overlay-end mevedel-view--composer-display-overlay)
+                       (mevedel-view-composer-draft-end view-buf)))
+            (should (equal indent (get-char-property (+ start 8) 'line-prefix)))
+            (should (equal indent (get-char-property (+ start 8) 'wrap-prefix)))
+            (should-not (get-char-property (1- start) 'line-prefix))))))))
 
 (mevedel-deftest mevedel-view--update-composer-end ()
   ,test
@@ -2399,21 +2423,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "only an empty final line gets display text, typing and deletion update it"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
-      (insert "> draft\n")
-      (let ((display (overlay-get mevedel-view--composer-display-overlay 'after-string)))
-        (should (equal "   " display))
-        (should (get-text-property 2 'cursor display)))
-      (should (equal "> draft\n"
-                     (buffer-substring-no-properties
-                      (mevedel-view--input-start) (point-max))))
-      (insert "x")
-      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
-      (delete-char -1)
-      (should (overlay-get mevedel-view--composer-display-overlay 'after-string))
-      (delete-char -1)
-      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))))
+      (mevedel-view-composer-test--in-composer view-buf
+        (goto-char (mevedel-view-composer-draft-start view-buf))
+        (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
+        (insert "> draft\n")
+        (let ((display (overlay-get mevedel-view--composer-display-overlay 'after-string)))
+          (should (equal "   " display))
+          (should (get-text-property 2 'cursor display)))
+        (should (equal "> draft\n"
+                       (mevedel-view-composer-draft-text view-buf t)))
+        (insert "x")
+        (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
+        (delete-char -1)
+        (should (overlay-get mevedel-view--composer-display-overlay 'after-string))
+        (delete-char -1)
+        (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string)))))
 
   :doc "silently restored drafts refresh the empty-line display too"
   (mevedel-view-test--with-buffers
@@ -2444,64 +2468,63 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should (string= "\n[ask]\n> "
                          (buffer-substring-no-properties
                           (mevedel-view-zone-start 'progress)
-                          (mevedel-view--input-start)))))))
+                          (mevedel-view-composer-draft-start)))))))
 
   :doc "refresh preserves input text and updates the mode"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "draft")
+      (mevedel-view-composer-insert "draft"
+                                     (mevedel-view-composer-draft-start))
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
       (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
                         (mevedel-view-zone-start 'progress)
-                        (mevedel-view--input-start))))
-      (should (string= "draft" (mevedel-view--input-text)))))
+                        (mevedel-view-composer-draft-start))))
+      (should (string= "draft" (mevedel-view-composer-draft-text nil t)))))
 
   :doc "refresh preserves a multiline draft starting with a literal >"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "> quoted\nsecond line")
+      (mevedel-view-composer-insert "> quoted\nsecond line"
+                                     (mevedel-view-composer-draft-start))
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
       (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
                         (mevedel-view-zone-start 'progress)
-                        (mevedel-view--input-start))))
-      (should (string= "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should-not (get-text-property (mevedel-view--input-start)
+                        (mevedel-view-composer-draft-start))))
+      (should (string= "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should-not (get-text-property (mevedel-view-composer-draft-start)
                                      'mevedel-view-prompt))))
 
   :doc "refresh recovers drifted markers before updating the prompt"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((draft "> quoted\nsecond line"))
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start))
         (set-marker mevedel-view--status-marker (point-max))
         (set-marker mevedel-view--interaction-marker (point-max))
         (set-marker mevedel-view--input-marker (point-max))
         (setq-local mevedel-permission-mode 'full-auto)
         (mevedel-view-refresh-input-prompt)
-        (should (string= draft (mevedel-view--input-text)))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
         (should (string= "\n[full-auto]\n> "
                          (buffer-substring-no-properties
                           (mevedel-view-zone-start 'progress)
-                          (mevedel-view--input-start))))))))
+                          (mevedel-view-composer-draft-start))))))))
 
 (mevedel-deftest mevedel-view--call-preserving-input-text
   (:doc "restores composer text after accidental render insertion")
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "draft")
+      (mevedel-view-composer-insert "draft"
+                                     (mevedel-view-composer-draft-start))
       (mevedel-view--call-preserving-input-text
        (lambda ()
-         (goto-char (point-max))
-         (insert "\nagent result leaked into composer")))
-      (should (string= "draft" (mevedel-view--input-text)))
+         (mevedel-view-composer-insert "\nagent result leaked into composer")))
+      (should (string= "draft" (mevedel-view-composer-draft-text nil t)))
       (let ((changes 0))
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
@@ -2531,7 +2554,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                (render (lambda (fragments)
                          (mevedel-view-zone-reconcile
                           'interaction mevedel-view--interaction-marker
-                          mevedel-view--input-marker fragments))))
+                          (mevedel-view-prompt-boundary-marker) fragments))))
           (funcall render (list card))
           (goto-char (plist-get (mevedel-view-zone-fragment-bounds
                                 'interaction 'visited) :start))
@@ -2552,7 +2575,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             ;; The outer renderer must not undo a nested zone's visited anchor.
             (should (= before inside))
             (should (looking-at-p "option two"))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
             (should (= before (mevedel-view-test--position-screen-y
                                (point) (selected-window)))))))))
   (outer)
@@ -2622,6 +2645,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (redisplay t)
       (mevedel-view--call-preserving-window-state
        (lambda ()
+         ;; Transcript output in a bare buffer, not a composer draft.
          (goto-char (point-max))
          (insert "new output\n")))
       (should (= (window-point) (point-max)))
@@ -2675,8 +2699,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (setq-local transient-mark-mode t)
-      (goto-char (mevedel-view--input-start))
-      (insert "draft selection")
+      (mevedel-view-composer-insert "draft selection"
+                                     (mevedel-view-composer-draft-start))
       (search-backward "selection")
       (set-mark (match-end 0))
       (activate-mark)
@@ -2718,11 +2742,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
               (mevedel-view--with-render-boundaries-advancing
                 (insert (propertize "rendered history\n"
                                     'mevedel-view-source '(40 . 90)))))
-            (goto-char (mevedel-view--input-start))
-            (insert draft)
-            (set-window-point other (+ (mevedel-view--input-start) 4))
+            (mevedel-view-composer-insert draft
+                                           (mevedel-view-composer-draft-start))
+            (set-window-point other (+ (mevedel-view-composer-draft-start) 4))
             (goto-char (+ (point-min) 3))
-            (set-mark (+ (mevedel-view--input-start) 8))
+            (set-mark (+ (mevedel-view-composer-draft-start) 8))
             (setq-local transient-mark-mode t)
             (activate-mark)
             (let ((redraw
@@ -2737,10 +2761,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                   (should-error (funcall redraw) :type 'error)
                 (should (eq 'result (funcall redraw)))))
             (should (= (point) (+ (point-min) (length "new history\n") 3)))
-            (should (= (window-point other) (+ (mevedel-view--input-start) 4)))
-            (should (= (mark) (+ (mevedel-view--input-start) 8)))
+            (should (= (window-point other) (+ (mevedel-view-composer-draft-start) 4)))
+            (should (= (mark) (+ (mevedel-view-composer-draft-start) 8)))
             (should mark-active)
-            (should (equal draft (mevedel-view--input-text))))))))
+            (should (equal draft (mevedel-view-composer-draft-text nil t))))))))
 
   :doc "a vanished transcript position never lands in the composer"
   (mevedel-view-test--with-buffers
@@ -2768,7 +2792,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should-not (mevedel-view--position-in-input-region-p (point)))
         (should-not (mevedel-view--position-in-input-region-p
                      (window-point (selected-window))))
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view--render-anchor-identity ()
   ,test
@@ -2928,7 +2952,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (with-temp-buffer
     (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
     (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
-    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+    (let ((mevedel-view--agent-transcript-p t))
+      (mevedel-view-composer-initialize-prompt))
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      '((:namespace status :id tasks :body "abcdef")))
@@ -3051,7 +3076,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (with-temp-buffer
     (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
     (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
-    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+    (let ((mevedel-view--agent-transcript-p t))
+      (mevedel-view-composer-initialize-prompt))
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      '((:namespace status :id tasks :body "abcdef")))
@@ -3106,7 +3132,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (with-temp-buffer
     (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
     (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
-    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+    (let ((mevedel-view--agent-transcript-p t))
+      (mevedel-view-composer-initialize-prompt))
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      (list (list :namespace 'status :id 'tasks
@@ -3211,15 +3238,15 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (should (string-empty-p (mevedel-view--input-text)))
-      (goto-char (mevedel-view--input-start))
-      (insert "hello world")
+      (mevedel-view-composer-insert "hello world"
+                                     (mevedel-view-composer-draft-start))
       (should (equal "hello world" (mevedel-view--input-text)))))
 
   :doc "clear empties input region"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "hello world")
+      (mevedel-view-composer-insert "hello world"
+                                     (mevedel-view-composer-draft-start))
       (mevedel-view--clear-input)
       (should (string-empty-p (mevedel-view--input-text))))))
 
@@ -3254,8 +3281,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
             (mevedel-skills-install session data-buf))
-          (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
+          (mevedel-view-composer-test--in-composer view-buf
+            (goto-char (mevedel-view-composer-draft-start view-buf))
             (insert "$")
             (let ((capf (mevedel-view-slash-capf)))
               (should (member "alpha"
@@ -3290,22 +3317,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (setq-local mevedel--session session)
             (mevedel-skills-install session data-buf))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$al")
+            (mevedel-view-composer-insert "$al"
+                                           (mevedel-view-composer-draft-start))
             (let* ((capf (mevedel-view-slash-capf))
                    (exit (plist-get (nthcdr 3 capf) :exit-function)))
               (delete-region (nth 0 capf) (nth 1 capf))
               (insert "alpha")
               (funcall exit "alpha" 'finished))
-            (let* ((start (mevedel-view--input-start))
+            (let* ((start (mevedel-view-composer-draft-start))
                    (binding (get-text-property
                              start 'mevedel-mention-binding)))
               (should (equal 'skill (plist-get binding :kind)))
               (should (equal "$alpha" (plist-get binding :token)))
               (should (equal source-file
                              (plist-get binding :source-file)))
-              (goto-char (point-max))
-              (insert "analyze")
+              (mevedel-view-composer-insert "analyze")
               (should (equal binding
                              (get-text-property
                               start 'mevedel-mention-binding))))))
@@ -3324,16 +3350,16 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "/go")
+            (mevedel-view-composer-insert "/go"
+                                           (mevedel-view-composer-draft-start))
             (let ((capf (mevedel-view-slash-capf)))
               (should capf)
               (should (equal '("goal")
                              (mevedel-view-test--capf-candidates
                               capf "go"))))
             (mevedel-view--clear-input)
-            (goto-char (mevedel-view--input-start))
-            (insert "/mode fu")
+            (mevedel-view-composer-insert "/mode fu"
+                                           (mevedel-view-composer-draft-start))
             (let ((capf (mevedel-view-slash-capf)))
               (should capf)
               (should (equal '("full-auto")
@@ -3354,8 +3380,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "/review cur")
+            (mevedel-view-composer-insert "/review cur"
+                                           (mevedel-view-composer-draft-start))
             (let ((capf (mevedel-view-slash-capf)))
               (should capf)
               (should (equal '("current")
@@ -3380,8 +3406,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$rem")
+            (mevedel-view-composer-insert "$rem"
+                                           (mevedel-view-composer-draft-start))
             (let* ((capf (mevedel-view-slash-capf))
                    (exit (and capf (plist-get (nthcdr 3 capf)
                                               :exit-function))))
@@ -3394,7 +3420,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                        (mevedel-view-test--skill-hint-string)))
               (insert "d")
               (should (equal "$remember d"
-                             (mevedel-view--input-text))))))
+                             (mevedel-view-composer-draft-text nil t))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-resource-capf
@@ -3411,10 +3437,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
-            (with-current-buffer view-buf
+            (mevedel-view-composer-test--in-composer view-buf
               (should (memq #'mevedel-resource-capf
                             completion-at-point-functions))
-              (goto-char (mevedel-view--input-start))
+              (goto-char (mevedel-view-composer-draft-start view-buf))
               (insert "work://")
               (let* ((result (mevedel-resource-capf))
                      (candidates (mevedel-view-test--capf-candidates result)))
@@ -3449,7 +3475,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (mevedel-view-composer-initialize)
       (should (memq #'mevedel-view--refresh-skill-argument-hint-after-change
                     after-change-functions))
-      (goto-char (mevedel-view--input-start))
+      (goto-char (mevedel-view-composer-draft-start))
       (let* ((workflow-token
               "@file:/tmp/.github/workflows/test.yml")
              (ranged-token (concat workflow-token "#L25"))
@@ -3473,7 +3499,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  'mevedel-mention-binding))
         (let* ((prepared
                 (mevedel-mentions-prepare-user-input
-                 (mevedel-view--input-text)))
+                 (mevedel-view-composer-draft-text)))
                (tokens
                 (mapcar (lambda (range)
                           (plist-get (plist-get range :binding) :token))
@@ -3500,13 +3526,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$green-loop")
+            (mevedel-view-composer-insert "$green-loop"
+                                           (mevedel-view-composer-draft-start))
             (mevedel-view--refresh-skill-argument-hint)
             (should (string-match-p
                      "What change should be validated"
                      (mevedel-view-test--skill-hint-string)))
-            (should (equal "$green-loop" (mevedel-view--input-text)))
+            (should (equal "$green-loop" (mevedel-view-composer-draft-text nil t)))
             (insert " current changes")
             (mevedel-view--refresh-skill-argument-hint)
             (should-not (mevedel-view-test--skill-hint-string))))
@@ -3529,8 +3555,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$deploy-api")
+            (mevedel-view-composer-insert "$deploy-api"
+                                           (mevedel-view-composer-draft-start))
             (mevedel-view--refresh-skill-argument-hint)
             (should (string-match-p
                      "\\[service\\] \\[environment\\]"
@@ -3562,8 +3588,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$green-loop")
+            (mevedel-view-composer-insert "$green-loop"
+                                           (mevedel-view-composer-draft-start))
             (mevedel-view--refresh-skill-argument-hint)
             (should (mevedel-view-test--skill-hint-string))
             (mevedel-view--clear-input)
@@ -3591,15 +3617,19 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (with-current-buffer data-buf
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "$deploy-api billing")
+            (mevedel-view-composer-insert "$deploy-api billing"
+                                           (mevedel-view-composer-draft-start))
             (run-hooks 'post-command-hook)
             (let ((hint (mevedel-view-test--skill-hint-string)))
               (should (string-match-p "\\[environment\\]" hint))
               (should (= (point-max) (overlay-start
                                       mevedel-view--skill-argument-hint-overlay)))
-              (cl-letf (((symbol-function 'mevedel-view--input-start)
-                         (lambda () (error "Motion must not scan the prompt"))))
+              (cl-letf (((symbol-function 'mevedel-view-composer-draft-start)
+                         (lambda (&rest _)
+                           (error "Motion must not scan the prompt")))
+                        ((symbol-function 'mevedel-view-prompt-boundary)
+                         (lambda ()
+                           (error "Motion must not scan the prompt"))))
                 (dolist (position (list (- (point-max) 9) (point-min)))
                   (goto-char position)
                   (run-hooks 'post-command-hook)
@@ -3607,19 +3637,18 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                   (should (= (point-max)
                              (overlay-start
                               mevedel-view--skill-argument-hint-overlay))))))
-            (should (equal "$deploy-api billing" (mevedel-view--input-text)))))
+            (should (equal "$deploy-api billing" (mevedel-view-composer-draft-text nil t)))))
       (delete-directory root t)))
 
   :doc "a draft edit repairs a drifted input marker"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((prompt-start (mevedel-view--prompt-start-position))
-            (input-start (mevedel-view--input-start)))
+            (input-start (mevedel-view-composer-draft-start)))
         (goto-char input-start)
         (insert "draft")
         (set-marker mevedel-view--input-marker (point-max))
-        (goto-char (point-max))
-        (insert "s")
+        (mevedel-view-composer-insert "s")
         (should (= prompt-start
                    (marker-position mevedel-view--input-marker)))))))
 
@@ -3639,11 +3668,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  (lambda (fmt &rest args)
                    (setq seen (apply #'format fmt args)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "/fake")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "/fake"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should (equal "fake result" seen))
-          (should (string-empty-p (mevedel-view--input-text)))))))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))))))
   :doc "local shared-command refusals are attributed while shared calls stay raw"
   (dolist (case '(("worktree" "unknown" mevedel-cmd--worktree
                    "Unknown /worktree command: unknown" nil)
@@ -3661,11 +3691,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (with-current-buffer view-buf
           (setq-local mevedel-slash-commands (list (cons name handler)))
           (let ((input (concat "/" name (unless (string-empty-p args) (concat " " args)))))
-            (goto-char (mevedel-view--input-start))
-            (insert input)
+            (mevedel-view-composer-insert input
+                                           (mevedel-view-composer-draft-start))
             (should (equal (concat "mevedel [/tmp/command origin/]: " reason)
-                           (cadr (should-error (mevedel-view-send) :type 'user-error))))
-            (should (equal input (mevedel-view--input-text))))))))
+                           (cadr (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error))))
+            (should (equal input (mevedel-view-composer-draft-text nil t))))))))
   :doc "/goal pause reaches the lifecycle handler during an active request"
   (mevedel-view-test--with-buffers
     (let* (seen
@@ -3675,11 +3705,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (setq-local mevedel--current-request (mevedel-request--create)
                     mevedel-slash-commands commands))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "/goal pause")
-        (mevedel-view-send)
+        (mevedel-view-composer-insert "/goal pause"
+                                       (mevedel-view-composer-draft-start))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send))
         (should (equal "pause" seen))
-        (should (string-empty-p (mevedel-view--input-text))))))
+        (should (string-empty-p (mevedel-view-composer-draft-text nil t))))))
   :doc "/ps and /stop remain available during an active request"
   (dolist (command '("ps" "stop"))
     (mevedel-view-test--with-buffers
@@ -3690,14 +3721,15 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (setq-local mevedel--current-request (mevedel-request--create)
                       mevedel-slash-commands commands))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert (if (string= command "stop")
-                      "/stop exec-000001"
-                    "/ps"))
-          (mevedel-view-send)
+          (mevedel-view-composer-insert (if (string= command "stop")
+                                            "/stop exec-000001"
+                                          "/ps")
+                                        (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should (equal (if (string= command "stop") "exec-000001" "")
                          seen))
-          (should (string-empty-p (mevedel-view--input-text))))))))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t))))))))
 (mevedel-deftest mevedel-view-send/dollar-text ()
   (mevedel-view-composer-test--without-admission ,test)
   (test)
@@ -3716,10 +3748,11 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$PATH is relevant")
-          (mevedel-view-send)
-          (should (string-empty-p (mevedel-view--input-text)))))
+          (mevedel-view-composer-insert "$PATH is relevant"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))))
       (should send-called)
       (with-current-buffer data-buf
         (should (string-match-p "\\$PATH is relevant"
@@ -3748,13 +3781,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 ((symbol-function 'gptel--update-status)
                  (lambda (msg &rest _) (push msg statuses))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "please do the thing")
+          (mevedel-view-composer-insert "please do the thing"
+                                         (mevedel-view-composer-draft-start))
           ;; `should-error' handles only `error' conditions; the
           ;; re-signalled quit needs its own handler.
           (should (eq 'caught
                       (condition-case nil
-                          (progn (mevedel-view-send) nil)
+                          (progn (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) nil)
                         (quit 'caught))))))
       (should (eq 'aborted (plist-get summary :outcome)))
       (should (string-match-p "Interrupted" (plist-get summary :message)))
@@ -3787,11 +3820,12 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                          (lambda (_type message &rest _)
                            (setq warning message))))
                 (mevedel-view-history-save))
-              (goto-char (mevedel-view--input-start))
-              (insert "valid prompt")
+              (mevedel-view-composer-insert "valid prompt"
+                                             (mevedel-view-composer-draft-start))
               (cl-letf (((symbol-function 'gptel-send)
                          (lambda (&rest _) (setq send-called t))))
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (should (string-match-p "Input history save failed" warning))
             (should send-called)))
       (delete-directory root t))))
@@ -4096,9 +4130,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq request-data
                          (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Run $thermo-review on the repository")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Run $thermo-review on the repository"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should (string-search "THERMO BODY" request-data))
       (should (string-search "[skill:thermo-review -- attached]"
                              request-data))))
@@ -4121,21 +4156,22 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (run-at-time 0 nil
                                 (lambda () (apply prepare args))))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Run $myskill now")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "Run $myskill now"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should (= 0 send-count))
           ;; The user keeps typing while preparation is pending.
-          (delete-region (mevedel-view--input-start) (point-max))
-          (goto-char (point-max))
-          (insert "> quoted\nsecond line")
+          (delete-region (mevedel-view-composer-draft-start)
+                         (mevedel-view-composer-draft-end))
+          (mevedel-view-composer-insert "> quoted\nsecond line")
           (let ((deadline (+ (float-time) 10)))
             (while (and (= 0 send-count) (< (float-time) deadline))
               (accept-process-output nil 0.01)
               (sit-for 0.01)))
           (should (= 1 send-count))
           (should (equal "> quoted\nsecond line"
-                         (mevedel-view--input-text)))))))
+                         (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "inline skill forwards expanded body with render-data side channel"
   (mevedel-view-test--with-fork-skill
@@ -4148,11 +4184,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myskill hello")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "$myskill hello"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+                       (point-min) (mevedel-view-prompt-boundary))))
             (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should-not (string-match-p "Expanded hello" text))))
@@ -4161,7 +4198,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (search-forward "Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
             (should (string-match-p (regexp-quote "$myskill hello")
                                     expanded))
             (should (string-match-p "Expanded hello" expanded))
@@ -4189,7 +4226,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	        (with-current-buffer view-buf
 	          (mevedel-view--full-rerender)
 	          (let ((text (buffer-substring-no-properties
-	                       (point-min) mevedel-view--input-marker)))
+	                       (point-min) (mevedel-view-prompt-boundary))))
 	            (should (string-match-p "\\$myskill hello" text))
 	            (should (string-match-p "Prompt" text))
 	            (should-not (string-match-p "Expanded hello" text)))
@@ -4197,7 +4234,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	          (search-forward "◆ Prompt")
 	          (mevedel-view-toggle-section)
 	          (let ((expanded (buffer-substring-no-properties
-	                           (point-min) mevedel-view--input-marker)))
+	                           (point-min) (mevedel-view-prompt-boundary))))
 	            (should (string-match-p (regexp-quote "$myskill hello")
                                       expanded))
 	            (should (string-match-p "Expanded hello" expanded)))))))
@@ -4220,12 +4257,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myskill hello")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "$myskill hello"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should send-called)
           (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+                       (point-min) (mevedel-view-prompt-boundary))))
             (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should (string-match-p "hook changed prompt" text))
@@ -4236,7 +4274,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (search-forward "hook changed prompt")
           (mevedel-view-toggle-section)
 	          (let ((expanded (buffer-substring-no-properties
-	                           (point-min) mevedel-view--input-marker)))
+	                           (point-min) (mevedel-view-prompt-boundary))))
 	            (should (string-match-p "UserPromptExpansion" expanded))
 	            (should (string-match-p "Expanded hello" expanded))
 	            (should (string-match-p "rewritten prompt" expanded)))
@@ -4247,7 +4285,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	          (search-forward "◆ Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
             (should (string-match-p "rewritten prompt" expanded))
             (should-not (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "hook policy context" expanded)))))
@@ -4262,7 +4300,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+                     (point-min) (mevedel-view-prompt-boundary))))
           (should (string-match-p "hook changed prompt" text))
           (should (string-match-p "hook context added" text))
           (should-not (string-match-p "hook policy context" text)))
@@ -4272,7 +4310,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (string-match-p
                  "hook policy context"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))))
+                  (point-min) (mevedel-view-prompt-boundary)))))))
 
   :doc "manually typed queued mention keeps its exact source and latest body"
   (let* ((mevedel-skills-include-bundled nil)
@@ -4311,9 +4349,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer view-buf
-                (goto-char (mevedel-view--input-start))
-                (insert "Please use $alpha for the queued analysis")
-                (mevedel-view-send-follow-up))
+                (mevedel-view-composer-insert "Please use $alpha for the queued analysis"
+                                               (mevedel-view-composer-draft-start))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send-follow-up)))
               (let* ((queue (mevedel-session-pending-follow-ups session))
                      (input (plist-get (car queue) :input))
                      (start (string-match "\\$alpha" input))
@@ -4367,8 +4406,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           mevedel--workspace ws)
               (mevedel-skills-install session data-buf))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Please use $al")
+              (mevedel-view-composer-insert "Please use $al"
+                                             (mevedel-view-composer-draft-start))
               (mevedel-view-test--complete-skill "alpha")
               (insert "for details"))
             (mevedel-view-test--write-skill
@@ -4384,7 +4423,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer view-buf
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (should (string-search "PROJECT ALPHA BODY" request-data))
             (should-not (string-search "COMPETING ALPHA BODY"
                                        request-data))))
@@ -4419,18 +4459,20 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           mevedel--workspace ws)
               (mevedel-skills-install session data-buf))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Please use $al")
-              (mevedel-view-test--complete-skill "alpha")
-              (goto-char (mevedel-view--input-start))
-              (search-forward "$alpha")
-              (replace-match "$beta" t t))
+              (mevedel-view-composer-insert "Please use $al"
+                                             (mevedel-view-composer-draft-start))
+              (mevedel-view-composer-test--in-composer view-buf
+                (mevedel-view-test--complete-skill "alpha")
+                (goto-char (mevedel-view-composer-draft-start view-buf))
+                (search-forward "$alpha")
+                (replace-match "$beta" t t)))
             (cl-letf (((symbol-function 'gptel-send)
                        (lambda (&rest _)
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer view-buf
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (should (string-search "BETA BODY" request-data))
             (should-not (string-search "ALPHA BODY" request-data))))
       (delete-directory root t)))
@@ -4441,20 +4483,22 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (let (first second)
       (with-current-buffer view-buf
         (let ((kill-ring nil))
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $al")
-          (mevedel-view-test--complete-skill "alpha")
-          (setq first
-                (get-text-property
-                 (+ (mevedel-view--input-start) 4)
-                 'mevedel-mention-binding))
-          (kill-ring-save (+ (mevedel-view--input-start) 4) (point-max))
-          (goto-char (point-max))
-          (insert " and ")
-          (yank)
-          (setq second
-                (get-text-property
-                 (- (point-max) 6) 'mevedel-mention-binding))))
+          (mevedel-view-composer-insert "Use $al"
+                                         (mevedel-view-composer-draft-start))
+          (mevedel-view-composer-test--in-composer view-buf
+            (mevedel-view-test--complete-skill "alpha")
+            (setq first
+                  (get-text-property
+                   (+ (mevedel-view-composer-draft-start view-buf) 4)
+                   'mevedel-mention-binding))
+            (kill-ring-save (+ (mevedel-view-composer-draft-start view-buf) 4)
+                            (mevedel-view-composer-draft-end view-buf))
+            (mevedel-view-composer-insert " and ")
+            (yank)
+            (setq second
+                  (get-text-property
+                   (- (mevedel-view-composer-draft-end view-buf) 6)
+                   'mevedel-mention-binding)))))
       (should (equal first second))))
 
   :doc "persisted history recall submits the latest exact source after a collision"
@@ -4484,16 +4528,17 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           mevedel--workspace ws)
               (mevedel-skills-install session data-buf))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Recall $al")
+              (mevedel-view-composer-insert "Recall $al"
+                                             (mevedel-view-composer-draft-start))
               (mevedel-view-test--complete-skill "alpha")
-              (mevedel-view-history-add (mevedel-view--input-text))
+              (mevedel-view-history-add (mevedel-view-composer-draft-text nil t))
               (mevedel-view-history-save)
               (setq mevedel-view-history--ring nil
                     mevedel-view-history--loaded-entries nil)
               (mevedel-view-history-load session)
               (mevedel-view--clear-input)
-              (mevedel-view-history-previous))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-history-previous)))
             (mevedel-view-test--write-skill
              project-skills "alpha"
              "name: alpha\ndescription: Project alpha\ncontext: inline\n"
@@ -4509,7 +4554,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer view-buf
-                (mevedel-view-send)))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))))
             (should (string-search "PROJECT HISTORY BODY V2" request-data))
             (should-not (string-search "PROJECT HISTORY BODY V1"
                                        request-data))
@@ -4546,9 +4592,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
               (with-current-buffer view-buf
-                (goto-char (mevedel-view--input-start))
-                (insert "Use $alpha live")
-                (mevedel-view-send)
+                (mevedel-view-composer-insert "Use $alpha live"
+                                               (mevedel-view-composer-draft-start))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))
                 (let* ((entry (car (mevedel-view-history--entries)))
                        (start (string-match "\\$alpha" entry)))
                   (should (equal source-file
@@ -4584,10 +4631,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           gptel-prompt-transform-functions)))
            request-data messages (send-count 0))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert prompt)
+        (mevedel-view-composer-insert prompt
+                                       (mevedel-view-composer-draft-start))
         (dolist (spec specs)
-          (goto-char (mevedel-view--input-start))
+          (goto-char (mevedel-view-composer-draft-start))
           (search-forward (car spec))
           (mevedel-mention-bindings-set
            (match-beginning 0) (match-end 0) (cadr spec))))
@@ -4606,7 +4653,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq request-data
                          (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (mevedel-view-send)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should (= 1 send-count))
       (dolist (annotation '("[skill:alpha -- unavailable]"
                             "[note:2 -- unavailable]"
@@ -4637,7 +4685,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
+          (goto-char (mevedel-view-composer-draft-start))
           (let ((start (point))
                 (prompt "Use $alpha @file:/tmp/a @mcp:docs:file:///api"))
             (insert prompt)
@@ -4658,13 +4706,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (match-beginning 0) (match-end 0) (cadr spec)))))
           (setq raised
                 (condition-case err
-                    (progn (mevedel-view-send) nil)
+                    (progn (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) nil)
                   (user-error (error-message-string err))))
           (should (equal (format "mevedel [%s]: Malformed mention binding" root)
                          raised))
           (should-not send-called)
           (should (equal "Use $alpha @file:/tmp/a @mcp:docs:file:///api"
-                         (mevedel-view--input-text)))))))
+                         (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "missing exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'missing)
@@ -4695,9 +4743,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (lambda (&rest _)
                      (setq sent (mevedel-view-test--dry-run-request-data)))))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert (car case))
-            (mevedel-view-send)))
+            (mevedel-view-composer-insert (car case)
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send))))
         (setq sent (mevedel-tool-render-data-strip sent))
         (should (string-match-p (regexp-quote (cdr case)) sent))
         (if (string-prefix-p "$" (car case))
@@ -4717,9 +4766,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq context
                          (copy-tree mevedel-skills--pending-request-context)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$alpha inspect")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "$alpha inspect"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should (equal '(:tier fast) (plist-get context :model)))
       (should (plist-member context :effort))
       (should-not (plist-get context :effort))))
@@ -4783,9 +4833,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                       (lambda (&rest _)
                         (mevedel-view-test--dry-run-request-data))))
                   (with-current-buffer view-buf
-                    (goto-char (mevedel-view--input-start))
-                    (insert "$local:alpha inspect")
-                    (mevedel-view-send))))
+                    (mevedel-view-composer-insert "$local:alpha inspect"
+                                                   (mevedel-view-composer-draft-start))
+                    (with-current-buffer (mevedel-view-composer-buffer)
+                      (mevedel-view-send)))))
               (should (equal '("Fast" fast-model high) effective))))
         (put 'gptel-reasoning-effort 'custom-type old-custom)
         (put 'fast-model :reasoning-effort old-effort)
@@ -4805,9 +4856,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (copy-tree mevedel-skills--pending-request-context)
                          sent t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$alpha $beta inspect")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "$alpha $beta inspect"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should sent)
       (should-not (plist-member context :model))
       (should-not (plist-member context :effort))))
@@ -4823,9 +4875,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (copy-tree mevedel-skills--pending-request-context)
                          sent t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha to inspect")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Use $alpha to inspect"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should sent)
       (should-not (plist-member context :model))
       (should-not (plist-member context :effort))))
@@ -4838,9 +4891,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha, then $alpha again")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Use $alpha, then $alpha again"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq sent (mevedel-tool-render-data-strip sent))
       (should (= 1 (mevedel-view-test--count-matches
                     "UNIQUE ALPHA BODY" sent)))
@@ -4857,9 +4911,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$alpha $alpha $beta -- $delta details")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "$alpha $alpha $beta -- $delta details"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq sent (mevedel-tool-render-data-strip sent))
       (should (= 1 (mevedel-view-test--count-matches "ALPHA<" sent)))
       (should (= 1 (mevedel-view-test--count-matches "BETA<" sent)))
@@ -4882,9 +4937,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$a $b $c $d $e $f $g rest")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "$a $b $c $d $e $f $g rest"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq sent (mevedel-tool-render-data-strip sent))
       (dolist (body '("A<" "B<" "C<" "D<" "E<" "F<"))
         (should (string-match-p body sent)))
@@ -4905,20 +4961,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest args)
                    (run-at-time 0 nil (lambda () (apply prepare args))))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$forker inspect this")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "$forker inspect this"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should (= 0 dispatched))
-          (delete-region (mevedel-view--input-start) (point-max))
-          (goto-char (point-max))
-          (insert "> quoted\nsecond line")
+          (delete-region (mevedel-view-composer-draft-start)
+                         (mevedel-view-composer-draft-end))
+          (mevedel-view-composer-insert "> quoted\nsecond line")
           (let ((deadline (+ (float-time) 10)))
             (while (and (= 0 dispatched) (< (float-time) deadline))
               (accept-process-output nil 0.01)
               (sit-for 0.01)))
           (should (= 1 dispatched))
           (should (equal "> quoted\nsecond line"
-                         (mevedel-view--input-text)))))))
+                         (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "leading forks dispatch once while later forks remain instructions"
   (mevedel-view-test--with-source-skills
@@ -4932,9 +4989,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$forker inspect with $alpha")
-          (mevedel-view-send))
+          (mevedel-view-composer-insert "$forker inspect with $alpha"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (should (string-match-p "FORK<inspect with" fork-prompt))
         (should (string-match-p
                  (regexp-quote "[skill:alpha -- attached]") fork-prompt))
@@ -4962,9 +5020,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (mevedel-view--clear-input)
-          (goto-char (mevedel-view--input-start))
-          (insert "$alpha $forker inspect")
-          (mevedel-view-send))
+          (mevedel-view-composer-insert "$alpha $forker inspect"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (should-not fork-called)
         (should (string-match-p "FORK<>" sent)))))
 
@@ -4976,9 +5035,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
                (lambda (&rest _) (error "Fork dispatch failed"))))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "$forker inspect")
-        (mevedel-view-send)))
+        (mevedel-view-composer-insert "$forker inspect"
+                                       (mevedel-view-composer-draft-start))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send))))
     (should-not (mevedel-session-hook-context-pending session))
     (with-current-buffer data-buf
       (should (= 1 (mevedel-view-test--count-matches
@@ -5022,19 +5082,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha and $beta")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "Use $alpha and $beta"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (setq first-binding
                 (get-text-property
-                 (+ (mevedel-view--input-start) 4)
+                 (+ (mevedel-view-composer-draft-start) 4)
                  'mevedel-mention-binding))
           (should (equal "Use $alpha and $beta"
-                         (mevedel-view--input-text)))
+                         (mevedel-view-composer-draft-text nil t)))
           (should-not (mevedel-view-history--entries))
           (setq fail-beta nil
                 calls nil)
-          (mevedel-view-send)
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (setq second-binding
                 (get-text-property
                  4 'mevedel-mention-binding
@@ -5084,25 +5146,28 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (error "Gptel-send should not run"))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert prompt)
+          (mevedel-view-composer-insert prompt
+                                         (mevedel-view-composer-draft-start))
           (dolist (spec specs)
-            (goto-char (mevedel-view--input-start))
-            (search-forward (car spec))
-            (mevedel-mention-bindings-set
-             (match-beginning 0) (match-end 0) (cadr spec)))
-          (mevedel-view-send)
-          (should (equal prompt (mevedel-view--input-text)))
+            (mevedel-view-composer-test--in-composer view-buf
+              (goto-char (mevedel-view-composer-draft-start view-buf))
+              (search-forward (car spec))
+              (mevedel-mention-bindings-set
+               (match-beginning 0) (match-end 0) (cadr spec))))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
+          (should (equal prompt (mevedel-view-composer-draft-text nil t)))
           (should
            (equal expected
                   (mapcar (lambda (range) (plist-get range :binding))
                           (mevedel-mention-bindings-ranges
-                           (mevedel-view--input-text)))))
+                           (mevedel-view-composer-draft-text)))))
           (setq fail nil)
           (with-current-buffer data-buf
             (setq-local mevedel--current-request
                         (mevedel-request--create :session session)))
-          (mevedel-view-send-follow-up)
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up))
           (let ((queued
                  (plist-get
                   (car (mevedel-session-pending-follow-ups session))
@@ -5115,12 +5180,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                       (mapcar (lambda (range)
                                 (plist-get range :binding))
                               (mevedel-mention-bindings-ranges text))))))
-          (mevedel-view-history-previous)
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-history-previous))
           (should
            (equal expected
                   (mapcar (lambda (range) (plist-get range :binding))
                           (mevedel-mention-bindings-ranges
-                           (mevedel-view--input-text)))))))))
+                           (mevedel-view-composer-draft-text)))))))))
 
   :doc "submit hooks see the complete inert prompt and added skill text stays literal"
   (mevedel-view-test--with-source-skills
@@ -5142,9 +5208,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Use $alpha"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should (string-match-p "ALPHA BODY" seen))
       (should (string-match-p
                (regexp-quote "[skill:alpha -- attached]") seen))
@@ -5166,9 +5233,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Use $alpha"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (setq sent (mevedel-tool-render-data-strip sent))
       (should (string-match-p "ALPHA BODY" sent))
       (should (string-match-p
@@ -5185,16 +5253,17 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "Use $alpha"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should mevedel-view--pending-skill-submission)
           (mevedel-view-abort)
           (funcall late-callback
                    '(:status ok :model-input "late"
                      :request-context nil :prepared-entries nil))
           (should-not mevedel-view--pending-skill-submission)
-          (should (equal "Use $alpha" (mevedel-view--input-text)))))
+          (should (equal "Use $alpha" (mevedel-view-composer-draft-text nil t)))))
       (should-not sent)))
 
   :doc "buffer death settles asynchronous preparation once without dispatch"
@@ -5222,9 +5291,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                   ((symbol-function 'gptel-send)
                    (lambda (&rest _) (cl-incf dispatches))))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "Use $alpha")
-            (mevedel-view-send)
+            (mevedel-view-composer-insert "Use $alpha"
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send))
             (setq token mevedel-view--pending-skill-submission))
           (should token)
           (kill-buffer (if (eq killed-buffer 'view) view-buf data-buf))
@@ -5273,20 +5343,23 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (lambda (&rest _)
                      (mevedel-view-test--dry-run-request-data))))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "Plan this change")
-            (mevedel-view-send))
+            (mevedel-view-composer-insert "Plan this change"
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send)))
           (setq mevedel-model-workloads '((planning :tier balanced)))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "Revise the plan")
-            (mevedel-view-send))
+            (mevedel-view-composer-insert "Revise the plan"
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send)))
           (setf (mevedel-session-plan-mode session) nil)
           (setq mevedel-model-workloads '((planning :tier fast)))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "Implement normally")
-            (mevedel-view-send)))
+            (mevedel-view-composer-insert "Implement normally"
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send))))
         (should (equal '(("Fast" fast-model)
                          ("Balanced" balanced-model)
                          ("Balanced" balanced-model))
@@ -5309,8 +5382,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (let ((draft (mapconcat #'number-to-string (number-sequence 1 8) "\n"))
             (mevedel-view-user-input-collapse-line-threshold 3)
             sent)
-        (goto-char (point-max))
-        (insert draft)
+        (mevedel-view-composer-insert draft)
         (should (mevedel-view--user-input-fold-p draft))
         (set-window-start nil (save-excursion
                                 (goto-char (point-max))
@@ -5323,7 +5395,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (lambda (&rest _) (setq sent t))))
           (mevedel-view--forward-input-now draft :submitted-draft draft))
         (should sent)
-        (should (equal "" (mevedel-view--input-text)))
+        (should (equal "" (mevedel-view-composer-draft-text nil t)))
         (should (text-property-any (point-min) (point-max)
                                    'mevedel-view-type 'user-input-summary))
         (should (= 5 (mevedel-view-composer-test--blank-rows (selected-window)))))))
@@ -5368,8 +5440,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "Install rg"))
+        (mevedel-view-composer-insert "Install rg"
+                                       (mevedel-view-composer-draft-start)))
       (cl-letf (((symbol-function 'mevedel-execution-target-probe) #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&optional _arg)
@@ -5379,7 +5451,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should-error
            (mevedel-view--forward-input-now "Install rg")
            :type 'user-error)
-          (should (equal "Install rg" (mevedel-view--input-text)))
+          (should (equal "Install rg" (mevedel-view-composer-draft-text nil t)))
           (should-not mevedel-view--spinner-status)
           (should-not mevedel-view--in-flight-turn-start)))
       (should-not sent)
@@ -5403,8 +5475,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "prompt that fails to start"))
+        (mevedel-view-composer-insert "prompt that fails to start"
+                                       (mevedel-view-composer-draft-start)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _)
                    ;; gptel-send already runs in the data buffer, which is
@@ -5453,8 +5525,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--workspace ws)
-        (goto-char (mevedel-view--input-start))
-        (insert "Hello"))
+        (mevedel-view-composer-insert "Hello"
+                                       (mevedel-view-composer-draft-start)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&optional _arg) (setq sent t)))
                 ((symbol-function 'mevedel-hooks-run-event)
@@ -5463,7 +5535,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-hooks-event-plist)
                  (lambda (_event _session _workspace &rest extra) extra)))
         (with-current-buffer view-buf
-          (mevedel-view-send)
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should sent)
           (should-not (mevedel-session-hook-context-pending session))
           (let ((text (buffer-string)))
@@ -5515,8 +5588,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     mevedel--turn-settlements-pending '(settlement))
         (setq data-before (buffer-string)))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start))
         (setq view-before (buffer-string))
         (should-error
          (mevedel-view--start-fork-skill-turn
@@ -5541,11 +5614,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (setq-local mevedel--current-request request))
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert "> unfinished\ncomposer draft")
+        (mevedel-view-composer-insert "> unfinished\ncomposer draft")
         (mevedel-view--send-root "Use $alpha")
         (should (equal "> unfinished\ncomposer draft"
-                       (mevedel-view--input-text))))
+                       (mevedel-view-composer-draft-text nil t))))
       (let ((entry (car (mevedel-session-pending-steering session))))
         (should (string-match-p "ALPHA EXTERNAL STEERING"
                                 (plist-get entry :model-input)))
@@ -5567,13 +5639,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert "> untouched\ndraft")
+        (mevedel-view-composer-insert "> untouched\ndraft")
         (should-error (mevedel-view--send-root "idle") :type 'user-error)
         (with-current-buffer data-buf
           (setq-local mevedel--current-request request))
         (should-error (mevedel-view--send-root "/goal done") :type 'user-error)
-        (should (equal "> untouched\ndraft" (mevedel-view--input-text)))))))
+        (should (equal "> untouched\ndraft" (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view-send/pending-input (:quiet t)
   (mevedel-view-composer-test--without-admission ,test)
@@ -5603,10 +5674,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     ((symbol-function 'gptel-send)
                      (lambda (&rest _) (ert-fail "Sent before settlement finished"))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert draft)
+              (mevedel-view-composer-insert draft
+                                             (mevedel-view-composer-draft-start))
               (funcall send)
-              (should (string-empty-p (mevedel-view--input-text)))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
               (should (equal (list draft) (mevedel-view-history--entries)))))
           (should-not (mevedel-session-pending-steering session))
           (let ((entries (mevedel-session-pending-follow-ups session)))
@@ -5625,10 +5696,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  #'ignore))
         (with-current-buffer view-buf
           (dolist (text '("first" "second"))
-            (goto-char (mevedel-view--input-start))
-            (insert text)
-            (mevedel-view-send-follow-up))
-          (should (string-empty-p (mevedel-view--input-text)))
+            (mevedel-view-composer-insert text
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send-follow-up)))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
           (should (equal '("second" "first")
                          (mevedel-view-history--entries)))))
       (let ((entries (mevedel-session-pending-follow-ups session)))
@@ -5657,15 +5729,17 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (ert-fail "Newer follow-up bypassed the queue"))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "first")
-          (mevedel-view-send-follow-up))
+          (mevedel-view-composer-insert "first"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up)))
         (with-current-buffer data-buf
           (setq-local mevedel--current-request nil))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "second")
-          (mevedel-view-send-follow-up)))
+          (mevedel-view-composer-insert "second"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up))))
       (should
        (equal '("first" "second")
               (mapcar
@@ -5684,10 +5758,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-agent-control-root-waiting-p)
                  (lambda (_session) nil)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "steer this turn")
-          (mevedel-view-send)
-          (should (string-empty-p (mevedel-view--input-text)))
+          (mevedel-view-composer-insert "steer this turn"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
           (should (equal '("steer this turn")
                          (mevedel-view-history--entries)))))
       (let ((entry (car (mevedel-session-pending-steering session))))
@@ -5732,9 +5807,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           mevedel--workspace workspace
                           mevedel--current-request request))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Inspect @file:target.txt")
-              (mevedel-view-send))
+              (mevedel-view-composer-insert "Inspect @file:target.txt"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (let* ((entry
                     (car (mevedel-session-pending-steering session)))
                    (input (plist-get entry :input))
@@ -5805,10 +5881,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           mevedel--current-request request
                           gptel-model model))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Compare @file:board.png")
-              (mevedel-view-send)
-              (should (equal "" (mevedel-view--input-text))))
+              (mevedel-view-composer-insert "Compare @file:board.png"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
+              (should (equal "" (mevedel-view-composer-draft-text nil t))))
             (should (= 1 (length (mevedel-session-pending-steering session))))
             (mevedel-tools--handle-steering-inject fsm)
             (mevedel-reminders--handle-inject fsm)
@@ -5850,9 +5927,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (setq-local mevedel--current-request request))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "Use $alpha")
-        (mevedel-view-send))
+        (mevedel-view-composer-insert "Use $alpha"
+                                       (mevedel-view-composer-draft-start))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send)))
       (let ((entry (car (mevedel-session-pending-steering session))))
         (should (string-match-p
                  "ALPHA ORDINARY STEERING"
@@ -5889,21 +5967,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (lambda (format-string &rest args)
               (setq notice (apply #'format format-string args)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert (propertize "race prompt" 'test-property 'preserved))
-          (goto-char (+ (mevedel-view--input-start) 4))
+          (mevedel-view-composer-insert (propertize "race prompt" 'test-property 'preserved)
+                                         (mevedel-view-composer-draft-start))
+          (mevedel-view-composer-test--in-composer view-buf
+            (goto-char (+ (mevedel-view-composer-draft-start view-buf) 4)))
           (setq snapshot
-                (buffer-substring
-                 (mevedel-view--input-start) (point-max))
-                point-offset (- (point) (mevedel-view--input-start)))
-          (mevedel-view-send)
+                (mevedel-view-composer-draft-text)
+                point-offset (mevedel-view-test--composer-point-offset))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should
            (equal-including-properties
             snapshot
-            (buffer-substring
-             (mevedel-view--input-start) (point-max))))
+            (mevedel-view-composer-draft-text)))
           (should (= point-offset
-                     (- (point) (mevedel-view--input-start))))))
+                     (mevedel-view-test--composer-point-offset)))))
       (should (equal (list grant)
                      (mevedel-session-dropped-file-grants session)))
       (should-not (mevedel-session-pending-steering session))
@@ -5927,9 +6005,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'run-at-time)
                  (lambda (&rest _) 'fake-timer)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "steer after kickoff")
-          (mevedel-view-send-follow-up))
+          (mevedel-view-composer-insert "steer after kickoff"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up)))
         (let ((entry (car (mevedel-session-pending-follow-ups session))))
           (should (equal "steer after kickoff" (plist-get entry :input)))
           (should (equal "reserved" (plist-get entry :queued-at-goal-id)))))))
@@ -5948,9 +6027,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (&rest _) 'fake-timer)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "after approval")
-          (mevedel-view-send-follow-up)))
+          (mevedel-view-composer-insert "after approval"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up))))
       (should (mevedel-session-pending-plan-approval session))
       (should (eq 'proposed
                   (plist-get (mevedel-session-plan-metadata session)
@@ -5970,12 +6050,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session
                     mevedel--current-request request))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "later work")
-        (should-error (mevedel-view-send) :type 'user-error)
-        (should (equal "later work" (mevedel-view--input-text)))
-        (mevedel-view-send-follow-up)
-        (should (string-empty-p (mevedel-view--input-text)))
+        (mevedel-view-composer-insert "later work"
+                                       (mevedel-view-composer-draft-start))
+        (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)
+        (should (equal "later work" (mevedel-view-composer-draft-text nil t)))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send-follow-up))
+        (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
         (should (equal "later work"
                        (plist-get
                         (car (mevedel-session-pending-follow-ups session))
@@ -6008,11 +6089,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-agent-control-wait
          session (lambda (reason) (setq wake-reason reason)) 10000)
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "follow up")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "follow up"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should-not send-called)
-          (should (string-empty-p (mevedel-view--input-text)))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
           (should (equal '("follow up")
                          (mevedel-view-history--entries)))
           (should (string-match-p
@@ -6056,10 +6138,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (mevedel-agent-control-wait
              session (lambda (reason) (setq wake-reason reason)) 10000)
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "original steering")
-              (mevedel-view-send)
-              (should (string-empty-p (mevedel-view--input-text)))))
+              (mevedel-view-composer-insert "original steering"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t)))))
           (should (eq 'user wake-reason))
           (should (equal "original steering"
                          mevedel-view-test--seen-prompt))
@@ -6090,9 +6173,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-agent-control-wait
          session (lambda (reason) (setq wake-reason reason)) 10000)
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Use $alpha")
-          (mevedel-view-send)))
+          (mevedel-view-composer-insert "Use $alpha"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))))
       (should (eq 'user wake-reason))
       (let ((message (car (mevedel-session-pending-steering session))))
         (should (string-match-p "ALPHA STEERING BODY"
@@ -6135,13 +6219,14 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'run-at-time)
                  (lambda (&rest _) 'fake-timer)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "race prompt")
-          (mevedel-view-send))
+          (mevedel-view-composer-insert "race prompt"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (should (= 1 (length
                       (mevedel-session-pending-follow-ups session))))
         (with-current-buffer view-buf
-          (should (string-empty-p (mevedel-view--input-text)))
+          (should (string-empty-p (mevedel-view-composer-draft-text nil t)))
           (should (equal '("race prompt")
                          (mevedel-view-history--entries))))
         (should (equal "race prompt"
@@ -6303,9 +6388,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           'mevedel-pending-inputs-schedule-held-input-delivery)
                          #'ignore))
                 (with-current-buffer view-buf
-                  (goto-char (mevedel-view--input-start))
-                  (insert "Inspect " token " after the current turn")
-                  (mevedel-view-send-follow-up)))
+                  (mevedel-view-composer-insert
+                   (concat "Inspect " token " after the current turn")
+                   (mevedel-view-composer-draft-start))
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send-follow-up))))
               (let* ((queued
                       (plist-get
                        (car (mevedel-session-pending-follow-ups session))
@@ -6400,9 +6487,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                       'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Inspect @file:queued.txt")
-              (mevedel-view-send-follow-up)))
+              (mevedel-view-composer-insert "Inspect @file:queued.txt"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send-follow-up))))
           (let* ((queued
                   (plist-get
                    (car (mevedel-session-pending-follow-ups session))
@@ -6483,9 +6571,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                       'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "Consult " token)
-              (mevedel-view-send-follow-up))
+              (mevedel-view-composer-insert
+               (concat "Consult " token)
+               (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send-follow-up)))
             (let* ((queued
                     (plist-get
                      (car (mevedel-session-pending-follow-ups session))
@@ -6567,9 +6657,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq mevedel-view--in-flight-turn-start
               (mevedel-view--insert-user-message "Prompt"))
         (mevedel-view-render-live-update data-buf)
-        (goto-char (mevedel-view--input-start))
-        (insert "follow up")
-        (mevedel-view-send-follow-up)
+        (mevedel-view-composer-insert "follow up"
+                                       (mevedel-view-composer-draft-start))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send-follow-up))
         (should (string-match-p "follow up"
                                 (buffer-substring-no-properties
                                  (point-min) (point-max))))
@@ -6618,7 +6709,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (with-current-buffer data-buf
                 (copy-marker (point-min) nil)))
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
+              (copy-marker (mevedel-view-prompt-boundary-marker) nil))
         (mevedel-view--full-rerender)
         (let* ((text (buffer-substring-no-properties
                       (point-min) (point-max)))
@@ -6669,9 +6760,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sends))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Queue $alpha exactly")
-          (mevedel-view-send-follow-up))
+          (mevedel-view-composer-insert "Queue $alpha exactly"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up)))
         (should (= 0 hooks))
         (should (= 0 sends))
         (let* ((input (plist-get
@@ -6699,9 +6791,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                   'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Queue $alpha exactly")
-          (mevedel-view-send-follow-up)))
+          (mevedel-view-composer-insert "Queue $alpha exactly"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send-follow-up))))
       (setq original (car (mevedel-session-pending-follow-ups session)))
       (delete-file
        (plist-get
@@ -6785,27 +6878,29 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                         :display-text "already queued")))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (goto-char (mevedel-view--input-start))
-        (insert "draft")
-        (goto-char (+ (mevedel-view--input-start) 2))
+        (mevedel-view-composer-insert "draft"
+                                       (mevedel-view-composer-draft-start))
+        (mevedel-view-composer-test--in-composer view-buf
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 2)))
         (mevedel-view--interaction-rebuild)
-        (should (string= "draft" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 2))))))
+        (should (string= "draft" (mevedel-view-composer-draft-text nil t)))
+        (should (= 2 (mevedel-view-test--composer-point-offset))))))
 
   :doc "spinner status redraw preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((draft "> quoted\nsecond line"))
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start))
+        (mevedel-view-composer-test--in-composer view-buf
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 4)))
         (mevedel-view--start-spinner "Thinking...")
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
         (mevedel-view--update-spinner "Calling Read...")
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
         (mevedel-view--stop-spinner)
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (should (string= draft (mevedel-view--input-text))))))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
+        (should (string= draft (mevedel-view-composer-draft-text nil t))))))
 
   :doc "full rerender preserves composer when all zone markers drift"
   (mevedel-view-test--with-buffers
@@ -6813,16 +6908,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start))
+        (goto-char (+ (mevedel-view-composer-draft-start) 4))
         (set-marker mevedel-view--status-marker (point-max))
         (set-marker mevedel-view--interaction-marker (point-max))
         (set-marker mevedel-view--input-marker (point-max))
         (mevedel-view--full-rerender)
         (mevedel-view-refresh-input-prompt)
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= (point) (+ (mevedel-view-composer-draft-start) 4))))))
 
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers
@@ -6838,11 +6933,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert "/review")
-        (should-error (mevedel-view-send) :type 'user-error)
+        (mevedel-view-composer-insert "/review"
+                                       (mevedel-view-composer-draft-start))
+        (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)
         (should-not (mevedel-session-pending-follow-ups session))
-        (should (string= "/review" (mevedel-view--input-text))))))
+        (should (string= "/review" (mevedel-view-composer-draft-text nil t))))))
 
   :doc "fallback drain submits one exact FIFO entry per turn"
   (mevedel-view-test--with-buffers
@@ -6997,15 +7092,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (setq-local mevedel--workspace workspace)
             (mevedel-session-set-root-buffer session data-buf))
           (with-current-buffer view-buf
-            (goto-char (mevedel-view--input-start))
-            (insert "blocked prompt")
-            (mevedel-view-send)
+            (mevedel-view-composer-insert "blocked prompt"
+                                           (mevedel-view-composer-draft-start))
+            (with-current-buffer (mevedel-view-composer-buffer)
+              (mevedel-view-send))
             (should-not (mevedel-view-history--entries))
             (should-not
              (string-match-p
               "blocked prompt"
               (buffer-substring-no-properties
-               (point-min) mevedel-view--input-marker))))
+               (point-min) (mevedel-view-prompt-boundary)))))
 	      (with-current-buffer data-buf
 		(should (string-empty-p (buffer-string)))))
       (delete-directory root t)))
@@ -7025,8 +7121,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer view-buf
         (setq-local mevedel--session session
                     mevedel--workspace workspace)
-        (goto-char (mevedel-view--input-start))
-        (insert draft))
+        (mevedel-view-composer-insert draft
+                                       (mevedel-view-composer-draft-start)))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (_event _payload callback &rest _)
                    (with-current-buffer data-buf
@@ -7037,8 +7133,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (ert-fail "Settlement fence allowed provider dispatch"))))
         (with-current-buffer view-buf
-          (should-error (mevedel-view-send) :type 'user-error)
-          (should (equal draft (mevedel-view--input-text)))
+          (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
           (should-not (mevedel-view-history--entries))))
       (with-current-buffer data-buf
         (should (equal data-before (buffer-string))))))
@@ -7198,9 +7294,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (error "Request startup failed"))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "send prompt")
-          (should-error (mevedel-view-send))))
+          (mevedel-view-composer-insert "send prompt"
+                                         (mevedel-view-composer-draft-start))
+          (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)))))
       (should-not (mevedel-session-hook-context-pending session))
       (with-current-buffer data-buf
         (should (= 1 (mevedel-view-test--count-matches
@@ -7233,18 +7329,19 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                                    (mevedel-prompt-submission-context submission))
                              events))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "/goal draft")
-              (mevedel-view-send)
+              (mevedel-view-composer-insert "/goal draft"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
               (should (equal "draft" mevedel-view-test--seen-prompt))
               (setq events (nreverse events))
               (should (equal "rewritten prompt" (caar events)))
               (should (string-match-p "hook policy context"
                                       (cadar events)))
-              (should (string-empty-p (mevedel-view--input-text)))))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t)))))
           (with-current-buffer view-buf
             (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
+                         (point-min) (mevedel-view-prompt-boundary))))
               (should-not (string-match-p "/goal draft" text)))))
       (delete-directory root t)))
 
@@ -7272,14 +7369,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (cl-letf (((symbol-function 'mevedel-goal-start)
                      (lambda (&rest _) (cl-incf started))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "/goal ship the campaign")
-              (mevedel-view-send)
+              (mevedel-view-composer-insert "/goal ship the campaign"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
               (should mevedel-view--prompt-hook-pending)
               ;; The user keeps typing while the hook runs.
-              (delete-region (mevedel-view--input-start) (point-max))
-              (goto-char (point-max))
-              (insert "> quoted\nsecond line")
+              (delete-region (mevedel-view-composer-draft-start)
+                             (mevedel-view-composer-draft-end))
+              (mevedel-view-composer-insert "> quoted\nsecond line")
               (let ((deadline (+ (float-time) 10)))
                 (while (and mevedel-view--prompt-hook-pending
                             (< (float-time) deadline))
@@ -7287,7 +7385,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 (should-not mevedel-view--prompt-hook-pending)
                 (should (= 1 started))
                 (should (equal "> quoted\nsecond line"
-                               (mevedel-view--input-text)))))))
+                               (mevedel-view-composer-draft-text nil t)))))))
       (delete-directory root t)))
 
   :doc "/plan PROMPT enters Plan and submits PROMPT through UserPromptSubmit"
@@ -7313,14 +7411,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (cl-letf (((symbol-function 'gptel-send)
                      (lambda (&rest _) (setq sent t))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "/plan refactor X")
-              (mevedel-view-send)
+              (mevedel-view-composer-insert "/plan refactor X"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
               (should sent)
               (should (equal "refactor X" mevedel-view-test--seen-prompt))
               (should (equal "/plan refactor X"
                              (car (mevedel-view-history--entries))))
-              (should (string-empty-p (mevedel-view--input-text))))
+              (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
             (should (mevedel-session-plan-mode session))
             (with-current-buffer data-buf
               (should (string-match-p "rewritten prompt" (buffer-string))))))
@@ -7344,9 +7443,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq send-called t))))
 	(with-current-buffer view-buf
-	  (goto-char (mevedel-view--input-start))
-	  (insert "$myskill blocked")
-	  (mevedel-view-send)
+	  (mevedel-view-composer-insert "$myskill blocked"
+	                                 (mevedel-view-composer-draft-start))
+	  (with-current-buffer (mevedel-view-composer-buffer)
+	    (mevedel-view-send))
 	          (should-not send-called)
 	          (should-not (mevedel-view-history--entries)))
 	        (with-current-buffer data-buf
@@ -7373,9 +7473,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myskill hello")
-          (mevedel-view-send))
+          (mevedel-view-composer-insert "$myskill hello"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
 	        (should send-called)
 	        (should (string-match-p "Expanded hello"
 	                                mevedel-view-test--seen-prompt))
@@ -7412,12 +7513,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (setq send-called t))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "original prompt")
-              (mevedel-view-send)
+              (mevedel-view-composer-insert "original prompt"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
               (should send-called)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-match-p "rewritten prompt" text))
                 (should (string-match-p "hook changed prompt" text))
                 (should-not (string-match-p "original prompt" text))
@@ -7426,7 +7528,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (search-forward "hook changed prompt")
               (mevedel-view-toggle-section)
               (let ((expanded (buffer-substring-no-properties
-                               (point-min) mevedel-view--input-marker)))
+                               (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-match-p "UserPromptSubmit" expanded))
                 (should (string-match-p "changed by test hook" expanded))
                 (should (string-match-p "Original prompt:" expanded))
@@ -7448,7 +7550,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer view-buf
             (mevedel-view--full-rerender)
             (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
+                         (point-min) (mevedel-view-prompt-boundary))))
               (should (string-match-p "hook changed prompt" text))
               (should-not (string-match-p "original prompt" text)))))
       (delete-directory root t)))
@@ -7471,12 +7573,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _)
                    (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myskill hello")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "$myskill hello"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should send-called)
           (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+                       (point-min) (mevedel-view-prompt-boundary))))
             (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should (string-match-p "hook context added" text))
@@ -7486,7 +7589,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (search-forward "Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
             (should-not (string-match-p "rewritten prompt" expanded))
             (should (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "hook policy context" expanded)))))
@@ -7518,9 +7621,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (setq send-called t))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "prompt with malformed hook result")
-              (mevedel-view-send))
+              (mevedel-view-composer-insert "prompt with malformed hook result"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (should send-called)))
       (delete-directory root t)))
 
@@ -7544,9 +7648,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (setq send-called t))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "prompt with symbol hook result")
-              (mevedel-view-send))
+              (mevedel-view-composer-insert "prompt with symbol hook result"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (should send-called)))
       (delete-directory root t)))
 
@@ -7572,11 +7677,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (cl-incf send-count))))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "slow prompt")
-              (mevedel-view-send)
+              (mevedel-view-composer-insert "slow prompt"
+                                             (mevedel-view-composer-draft-start))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send))
               (should mevedel-view--prompt-hook-pending)
-              (should-error (mevedel-view-send) :type 'user-error)
+              (should-error (with-current-buffer (mevedel-view-composer-buffer) (mevedel-view-send)) :type 'user-error)
               (let ((deadline (+ (float-time) 10)))
                 (while (and mevedel-view--prompt-hook-pending
                             (< (float-time) deadline))
@@ -7614,6 +7720,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           ((symbol-function 'gptel-send)
                            (lambda (&rest _) (cl-incf send-count))))
                   (mevedel-view-composer-replace "submitted prompt")
+                  ;; The detached draft stub emulates storage, not command routing.
                   (mevedel-view-send)
                   (should mevedel-view--prompt-hook-pending)
                   (let ((draft-point
@@ -7654,14 +7761,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "abort this prompt")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "abort this prompt"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (should mevedel-view--prompt-hook-pending)
           (mevedel-view-abort)
           (funcall late-callback nil)
           (should-not mevedel-view--prompt-hook-pending)
-          (should (equal "abort this prompt" (mevedel-view--input-text))))
+          (should (equal "abort this prompt" (mevedel-view-composer-draft-text nil t))))
       (should-not send-called)
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
@@ -7687,9 +7795,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "kill this prompt")
-          (mevedel-view-send)
+          (mevedel-view-composer-insert "kill this prompt"
+                                         (mevedel-view-composer-draft-start))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send))
           (setq submission mevedel-view--prompt-hook-pending))
         (kill-buffer view-buf)
         (funcall late-callback nil))

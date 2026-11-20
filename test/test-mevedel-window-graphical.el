@@ -61,8 +61,7 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                (with-current-buffer view-buf
                  (setq-local mevedel--session session)
                  (mevedel-view-test--insert-composer-draft
-                  "> child composer draft\nsecond line")
-                 (goto-char (+ (mevedel-view--input-start) 7)))
+                  "> child composer draft\nsecond line" 7))
                (delete-other-windows)
                (switch-to-buffer data-buf)
                (when (eq ,layout 'split)
@@ -90,8 +89,8 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                         (mevedel-window-graphical-test--layout parent))
                        (child-before
                         (mevedel-window-graphical-test--layout child))
-                       (draft (mevedel-view--input-text))
-                       (draft-point (- (point) (mevedel-view--input-start))))
+                       (draft (mevedel-view-composer-draft-text))
+                       (draft-point (mevedel-view-test--composer-point-offset)))
                    ,@body
                    (should (frame-live-p child))
                    (should (window-live-p origin))
@@ -103,9 +102,9 @@ Bind parent, child, origin, parent-before and child-before for assertions."
                                   (mevedel-window-graphical-test--layout parent)))
                    (should (equal child-before
                                   (mevedel-window-graphical-test--layout child)))
-                   (should (equal draft (mevedel-view--input-text)))
+                   (should (equal draft (mevedel-view-composer-draft-text)))
                    (should (= draft-point
-                              (- (point) (mevedel-view--input-start)))))))
+                              (mevedel-view-test--composer-point-offset))))))
            (transient--emergency-exit)
            (when (buffer-live-p view-buf)
              (with-current-buffer view-buf (mevedel-note-frame-mode -1)))
@@ -240,7 +239,7 @@ body height and composer draft."
             :header-px (window-header-line-height window)
             :start (window-start window)
             :body (window-body-height window t)
-            :draft (with-current-buffer buffer (mevedel-view--input-text))))))
+            :draft (with-current-buffer buffer (mevedel-view-composer-draft-text))))))
 
 (defun mevedel-window-graphical-test--start-at (window text &optional offset)
   "Scroll WINDOW so the line holding TEXT, moved OFFSET lines, is on top."

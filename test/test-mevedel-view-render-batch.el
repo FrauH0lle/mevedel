@@ -53,7 +53,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
     (should-not mevedel-view-render--batch)
     (should-not (gethash 'obsolete mevedel-view--tool-rendering-cache))
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))
   :doc "projects current history first and converges to synchronous output"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
@@ -67,15 +67,18 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
   :doc "new draft edits and selection survive every callback"
   (mevedel-batch-test--with-history
     (mevedel-batch-test--start-projection view-buf)
-    (goto-char (point-max)) (insert "\nnew typing")
-    (let ((offset (- (point) (mevedel-view--input-start))))
-      (set-mark (- (point) 6)) (setq mark-active t)
+    (mevedel-view-composer-insert "\nnew typing")
+    (let* ((composer (mevedel-view-composer-buffer))
+           (offset (with-current-buffer composer
+                     (set-mark (- (point) 6)) (setq mark-active t)
+                     (- (point) (mevedel-view-composer-draft-start view-buf)))))
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
-        (should (equal "> draft\nsecond line\nnew typing" (mevedel-view--input-text)))
-        (should (= (- (point) (mevedel-view--input-start)) offset))
-        (should mark-active)
-        (should (= (- (point) (mark)) 6)))))
+        (should (equal "> draft\nsecond line\nnew typing" (mevedel-view-composer-draft-text nil t)))
+        (with-current-buffer composer
+          (should (= (- (point) (mevedel-view-composer-draft-start view-buf)) offset))
+          (should mark-active)
+          (should (= (- (point) (mark)) 6))))))
   :doc "selected history and its window start are rendered before restoration"
   (mevedel-batch-test--with-history
     (save-window-excursion
@@ -104,7 +107,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
       (should (string-search "Prompt 2" (mevedel-view--sticky-prompt-line)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
         (should (equal "Prompt 2" (cdr (mevedel-view--pinned-prompt
@@ -125,12 +128,12 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
                                       (selected-window)))))
       (should (string-search "Prompt 4" (mevedel-view--sticky-prompt-line)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
         (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
                                         (selected-window)))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
   :doc "scrolling onto a pending response still pins and reveals its own prompt"
   (mevedel-batch-test--with-history
     (save-window-excursion
@@ -153,13 +156,13 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (set-window-start nil (nth 1 entry) t)
         (should (equal "Prompt 4" (cdr (mevedel-view--pinned-prompt
                                         (selected-window)))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
         (mevedel-view--jump-to-pinned-prompt
          (car (mevedel-view--pinned-prompt (selected-window))))
         (should (looking-at "You"))
         (should (save-excursion (forward-line 1) (looking-at "Prompt 4")))
         (should mevedel-view-render--batch)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
   :doc "both windows keep their own pinned prompt during deferred rendering"
   (mevedel-batch-test--with-history
     (save-window-excursion
@@ -189,7 +192,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
     (mevedel-view-render-batched-full)
     (should-not mevedel-view-render--batch)
     (should-not (string-search "Loading conversation turn" (buffer-string)))
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))
 
 (mevedel-deftest mevedel-view-render--plan-fontify-step/disclosure ()
   ,test
@@ -216,10 +219,10 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
     (let* ((job mevedel-view-render--batch)
            (cache (plist-get job :tool-cache)))
       (puthash 'sentinel t cache)
-      (goto-char (point-max)) (insert " newer")
+      (mevedel-view-composer-insert " newer")
       (mevedel-view-render--batch-step view-buf job)
       (should-not (gethash 'sentinel cache))
-      (should (equal "> draft\nsecond line newer" (mevedel-view--input-text)))
+      (should (equal "> draft\nsecond line newer" (mevedel-view-composer-draft-text nil t)))
       (cl-loop repeat 30 while mevedel-view-render--batch do
                (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)))))
 
@@ -245,8 +248,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (should (string-search "Loading conversation turn" (buffer-string)))
         (should (string-search "Visible batched status" (buffer-string)))
         (should (string-search "Visible batched interaction" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
 
   :doc "a synchronous full projection retires the old batch"
   (mevedel-batch-test--with-history
@@ -260,14 +264,14 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
   :doc "other writers see a complete projection and retain newer draft edits"
   (mevedel-batch-test--with-history
     (mevedel-batch-test--start-projection view-buf)
-    (goto-char (point-max)) (insert " new edit")
+    (mevedel-view-composer-insert " new edit")
     (mevedel-view-render-mutate
      'test-reader
      (lambda ()
        (should-not mevedel-view-render--batch)
        (should-not (string-search "Loading conversation turn" (buffer-string)))
        (should (string-search "Response 0" (buffer-string)))))
-    (should (equal "> draft\nsecond line new edit" (mevedel-view--input-text)))))
+    (should (equal "> draft\nsecond line new edit" (mevedel-view-composer-draft-text nil t)))))
 
 (mevedel-deftest mevedel-view--flush-scheduled-render/batched ()
   ,test
@@ -282,7 +286,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (mevedel-view--schedule-render 'full data-buf 0)
       (should-not mevedel-view-render--batch)
       (should-not (string-search "Loading conversation turn" (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
 
 (mevedel-deftest mevedel-view-render--priority-turns ()
   (mevedel-batch-test--with-history
@@ -437,8 +441,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
             (when (and batched (zerop round)) (should (zerop starts)))
             (setq available t))
           (when batched (should (= starts 6)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= (+ (mevedel-view-composer-draft-start) 4)
+                     (with-current-buffer (mevedel-view-composer-buffer) (point)))))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/fork-index ()
   ,test
@@ -471,8 +476,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
             (mevedel-view--full-rerender))
           (should (= calls 1))
           (should (string-search "[⇆ Source · 2 variants]" (buffer-string)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= (+ (mevedel-view-composer-draft-start) 4)
+                     (with-current-buffer (mevedel-view-composer-buffer) (point)))))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/response-promotion ()
   ,test
@@ -505,8 +511,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
             (save-excursion
               (goto-char (point-min)) (search-forward "Response 5")
               (should (eq 'bold (get-text-property (1- (point)) 'font-lock-face))))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-            (should (= (point) (+ 4 (mevedel-view--input-start))))))))))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+            (should (= (+ (mevedel-view-composer-draft-start) 4)
+                       (with-current-buffer (mevedel-view-composer-buffer) (point))))))))))
 
 (mevedel-deftest mevedel-view-render--plan-tool-step ()
   ,test
@@ -541,7 +548,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
           (should (= (length prepared) 1))
           (should published)
           (should (cl-every (lambda (segment) (equal (car prepared) segment)) published))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))))
   :doc "an interrupted entry resumes without repeating previously committed entries"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf (insert (make-string 30 ?x)))
@@ -589,8 +596,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
                (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should-not mevedel-view-render--batch)
       (should (string-search "Untruncated last body line." (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/tool-preparation ()
   ,test
@@ -658,7 +666,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should (string-search "Changed source." (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))
   :doc "failed batch rolls back its partial insertion and recovers canonically"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
@@ -708,7 +716,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (mevedel-view-render-resume-batch)
         (should-not (plist-get job :timer))
         (should (= pending (length (plist-get job :pending)))))
-      (goto-char (point-max)) (insert " while paused")
+      (mevedel-view-composer-insert " while paused")
       (mevedel-view--resume-render-if-attended view-buf)
       (let ((timer (plist-get job :timer)))
         (should (memq timer timer-list))
@@ -717,7 +725,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should-not mevedel-view-render--batch)
-      (should (equal "> draft\nsecond line while paused" (mevedel-view--input-text))))
+      (should (equal "> draft\nsecond line while paused" (mevedel-view-composer-draft-text nil t))))
   :doc "a paused job releases its collection hold until it resumes"
   (mevedel-batch-test--with-history
     (let ((holds (make-hash-table :test #'eq)))
@@ -757,12 +765,12 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
      (lambda ()
        (mevedel-view-render-batched-full)
        (should-not mevedel-view-render--batch)
-       (goto-char (point-max)) (insert " latest edit")))
+       (mevedel-view-composer-insert " latest edit")))
     (should mevedel-view-render--batch)
     (cl-loop repeat 30 while mevedel-view-render--batch do
       (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
     (should-not mevedel-view-render--batch)
-    (should (equal "> draft\nsecond line latest edit" (mevedel-view--input-text))))
+    (should (equal "> draft\nsecond line latest edit" (mevedel-view-composer-draft-text nil t))))
   :doc "defers collection during the job and a short grace after it"
   (mevedel-batch-test--with-history
     (let (live-p)
@@ -880,7 +888,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (should mevedel-view-render--batch)
       (dolist (visible '("Response 1" "Response 2" "Response 3" "Response 4"))
         (should (string-search visible (buffer-string))))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
       (dolist (entry (plist-get mevedel-view-render--batch :pending))
         (should-not (with-current-buffer data-buf
                       (string-match-p
@@ -890,8 +898,8 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
                         (plist-get (car entry) :end)))))))))
 
 (defun mevedel-batch-test--turn-ids ()
-  "Return rendered turn ids before the composer, in buffer order."
-  (let ((pos (point-min)) (limit (mevedel-view--input-marker-position)) ids)
+  "Return rendered turn ids before the prompt boundary, in buffer order."
+  (let ((pos (point-min)) (limit (mevedel-view-prompt-boundary)) ids)
     (while (< pos limit)
       (when-let* ((id (get-text-property pos 'mevedel-view-turn-id)))
         (unless (eq id (car ids)) (push id ids)))
@@ -925,8 +933,9 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
       (should (equal text (buffer-substring-no-properties (point-min) (point-max))))
       ;; Earlier turns keep their rendered text; the newest keeps its identity.
       (should (equal ids (mevedel-batch-test--turn-ids)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4)))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= (+ (mevedel-view-composer-draft-start) 4)
+                 (with-current-buffer (mevedel-view-composer-buffer) (point))))
       (goto-char (point-min))
       (search-forward "Response 5")
       (let* ((turn-start (car (mevedel-view-disclosure-section-bounds
@@ -942,7 +951,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
                  (lambda (&rest _) (setq full t))))
         (mevedel-view-render-refresh-latest-turn data-buf))
       (should full)
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))
   :doc "leaves an in-progress history job to revalidate the changed source"
   (mevedel-batch-test--with-history
     (let (full)
@@ -968,20 +977,21 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (goto-char (point-min))
         (search-forward "Response 0 with target text")
         (set-window-start nil (line-beginning-position) t)
-        (goto-char (mevedel-view--input-start))
-        (forward-char 4)
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (goto-char (+ (mevedel-view-composer-draft-start view-buf) 4)))
         ;; The newest reply is offscreen, so publication ends in a placeholder.
         (mevedel-batch-test--start-projection-showing view-buf "Response 0")
         (should (string-search "Loading conversation turn"
                                (buffer-substring-no-properties
-                                (- (mevedel-view--input-start) 80)
-                                (mevedel-view--input-start))))
+                                (- (mevedel-view-prompt-boundary) 80)
+                                (mevedel-view-prompt-boundary))))
         (cl-loop repeat 30 while mevedel-view-render--batch do
           (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
         (should (equal expected
                        (buffer-substring-no-properties (point-min) (point-max))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point)))))))
   :doc "a rail whose separator is current is not redrawn"
   (mevedel-batch-test--with-history
     (let (redrawn)

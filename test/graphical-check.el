@@ -23,7 +23,7 @@
                   (&optional owned visits))
 (declare-function mevedel-view--spinner-tick "mevedel-view-stream" ())
 (declare-function mevedel-view-table-rerender "mevedel-view-table" (&optional window))
-(declare-function mevedel-view--input-text "mevedel-view-composer" ())
+(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec-registration" ())
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
@@ -315,7 +315,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (setq bold-position (match-beginning 0))
       (unless (text-property-not-all (point-min) (point-max) 'mevedel-view-table-cell nil)
         (error "Fixture table was not laid out"))
-      (unless (equal "> active draft\nsecond line" (mevedel-view--input-text))
+      (unless (equal "> active draft\nsecond line" (mevedel-view-composer-draft-text))
         (error "Fixture redraw changed the composer"))
       (goto-char (point-min))
       (search-forward "── Worked for 2m 37s · Thu 29 Oct 14:32 ")

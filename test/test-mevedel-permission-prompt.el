@@ -712,8 +712,7 @@
               (setq-local mevedel--session session))
             (mevedel-view--setup view data)
             (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert draft))
+              (mevedel-view-test--insert-composer-draft draft))
             (with-current-buffer data
               (mevedel-permission-request entry session))
             ;; A scope change redraws the same pending one-shot card.
@@ -740,22 +739,22 @@
                   (should-not (string-match-p "Permission mode at admission" (buffer-string)))
                   (should (string-match-p (regexp-quote operation) remote))
                   (should-not (string-match-p (regexp-quote operation) (buffer-string)))
-                  (should (equal draft (mevedel-view--input-text)))))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))))
               ;; TAB reveals the cause locally without touching the draft.
               (with-current-buffer view
                 (let* ((queued (car (mevedel-session-permission-queue session)))
                        (ov (gethash (mevedel-queue--entry-metadata-get
                                      queued :interaction-id)
                                     mevedel-view--interaction-overlays))
-                       (point-before (- (point) (mevedel-view--input-start))))
+                       (point-before (mevedel-view-test--composer-point-offset)))
                   (save-excursion
                     (goto-char (overlay-start ov))
                     (call-interactively (lookup-key (overlay-get ov 'keymap) (kbd "TAB"))))
                   (should (string-match-p "Permission mode at admission: full-auto"
                                           (buffer-string)))
                   (should (string-match-p (regexp-quote operation) (buffer-string)))
-                  (should (equal draft (mevedel-view--input-text)))
-                  (should (= point-before (- (point) (mevedel-view--input-start))))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))
+                  (should (= point-before (mevedel-view-test--composer-point-offset)))
                   (mevedel-queue--entry-metadata-put queued :expanded nil)))))
         (mevedel-permission-queue-abort-all session)
         (when (buffer-live-p view) (kill-buffer view))
@@ -848,8 +847,7 @@
             (setq-local mevedel--session session))
           (mevedel-view--setup view data)
           (with-current-buffer view
-            (goto-char (mevedel-view--input-start))
-            (insert draft))
+            (mevedel-view-test--insert-composer-draft draft))
           (with-current-buffer data
             (mevedel-permission-request entry session))
           (with-current-buffer view
@@ -870,7 +868,7 @@
                                   "Model's reason: Inspect the live buffer list" expression))
                 (should (string-match-p (regexp-quote text) (plist-get remote :body))))
               (should (equal '(allow-once deny-once) (mapcar #'car (plist-get remote :options))))
-              (should (equal draft (mevedel-view--input-text)))
+              (should (equal draft (mevedel-view-composer-draft-text nil t)))
               ;; Changing remembering appears on the folded card.
               (save-excursion
                 (goto-char (overlay-start ov))
@@ -881,7 +879,7 @@
               (should (string-match-p "remembers: nothing"
                                       (buffer-substring-no-properties
                                        (overlay-start ov) (overlay-end ov))))
-              (should (equal draft (mevedel-view--input-text))))))
+              (should (equal draft (mevedel-view-composer-draft-text nil t))))))
       (mevedel-permission-queue-abort-all session)
       (when (buffer-live-p view) (kill-buffer view))
       (when (buffer-live-p data) (kill-buffer data)))))
@@ -1298,7 +1296,7 @@
             (mevedel-queue--entry-metadata-put entry :expanded expanded)
             (render)
             (on-keys))
-          (should (equal "> draft\nnext" (mevedel-view--input-text))))))))
+          (should (equal "> draft\nnext" (mevedel-view-composer-draft-text nil t))))))))
 
 (mevedel-deftest mevedel--prompt-block-face ()
   ,test

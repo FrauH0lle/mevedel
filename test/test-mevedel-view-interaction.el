@@ -37,6 +37,11 @@
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
 
+(defun test-mevedel-view-interaction--caret-offset (view)
+  "Return the composer caret offset from VIEW's draft start."
+  (with-current-buffer (mevedel-view-composer-buffer view)
+    (- (point) (mevedel-view-composer-draft-start view))))
+
 (mevedel-deftest mevedel-view--interaction-sync-focus ()
   ,test
   (test)
@@ -52,7 +57,7 @@
          "Confirm" "Do the thing" "Proceed?" nil
          (lambda (value) (setq outcome value))))
       (with-current-buffer view-buf
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= 4 (test-mevedel-view-interaction--caret-offset view-buf)))
         (should-not (eq (key-binding (kbd "RET")) #'mevedel--approve-request))
         (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
@@ -61,9 +66,9 @@
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
         (should (eq outcome 'approve))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (= (point) (+ (mevedel-view-composer-draft-start) 4)))
         (should (= (window-point (selected-window)) (point)))
-        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "> quoted\nsecond line"))
         (should-not mevedel-view--interaction-focus-return))))
 
   :doc "permission approval returns to the saved composer position"
@@ -75,13 +80,13 @@
         (mevedel-permission--prompt-async-with-content
          "Allow operation?\n" nil (lambda (value) (setq outcome value))))
       (with-current-buffer view-buf
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (should (= 3 (test-mevedel-view-interaction--caret-offset view-buf)))
         (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
         (should (eq outcome 'allow-once))
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
-        (should (equal (mevedel-view--input-text) "> draft\nnext")))))
+        (should (= (point) (+ (mevedel-view-composer-draft-start) 3)))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "> draft\nnext")))))
 
   :doc "Ask keeps focus through answer redraw and returns after submission"
   (mevedel-view-test--with-buffers
@@ -93,7 +98,7 @@
          (lambda (value) (setq answer value))
          [(:question "Run tests?" :options ["Yes" "No"])]))
       (with-current-buffer view-buf
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (should (= 3 (test-mevedel-view-interaction--caret-offset view-buf)))
         (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
@@ -102,8 +107,8 @@
         (should (eq 'submit (get-text-property (point) 'mevedel-ask-entry)))
         (call-interactively (key-binding (kbd "C-c C-c")))
         (should (string-match-p "A1: Yes" answer))
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
-        (should (equal (mevedel-view--input-text) "> draft\nnext")))))
+        (should (= (point) (+ (mevedel-view-composer-draft-start) 3)))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "> draft\nnext")))))
 
   :doc "a prompt leaves a reader in history and never refocuses on redraw"
   (mevedel-view-test--with-buffers
@@ -114,21 +119,21 @@
        "Confirm" "Do the thing" "Proceed?" nil #'ignore))
     (with-current-buffer view-buf
       (should (= (point) (point-min)))
-      (goto-char (mevedel-view--input-start))
+      (goto-char (mevedel-view-composer-draft-start))
       (mevedel-view--interaction-rebuild)
-      (should (= (point) (mevedel-view--input-start)))
+      (should (= (point) (mevedel-view-composer-draft-start)))
       (should-not mevedel-view--interaction-focus-return)
       (mevedel--prompt-dismiss-all)))
 
   :doc "cancel restores composer and a second prompt does not take existing focus"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
-    (goto-char (mevedel-view--input-start))
+    (goto-char (mevedel-view-composer-draft-start))
     (with-current-buffer data-buf
       (mevedel--prompt-user-with-overlay
        "First" "One" "Proceed?" nil #'ignore))
     (with-current-buffer view-buf
-      (should (= (point) (mevedel-view--input-start)))
+      (should (= (point) (mevedel-view-composer-draft-start)))
       (mevedel-view-jump-to-interaction))
     (let ((first (with-current-buffer view-buf
                    (car mevedel--prompt-overlays))))
@@ -139,7 +144,7 @@
         (should (eq first (mevedel--prompt--overlay-at-point
                            'mevedel-user-request)))
         (mevedel--prompt--settle first 'aborted)
-        (should (= (point) (mevedel-view--input-start)))
+        (should (= (point) (mevedel-view-composer-draft-start)))
         (should-not mevedel-view--interaction-focus-return)
         (mevedel--prompt-dismiss-all)))))
 
@@ -153,12 +158,12 @@
     (mevedel-view-test--insert-composer-draft "draft\nnext" 3)
     (let ((other (split-window)))
       (set-window-buffer other view-buf)
-      (set-window-point other (+ (mevedel-view--input-start) 1))
+      (set-window-point other (+ (mevedel-view-composer-draft-start) 1))
       (with-current-buffer data-buf
         (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore)
         (mevedel--prompt-user-with-overlay "Second" "Two" "Proceed?" nil #'ignore))
-      (should (= (point) (+ (mevedel-view--input-start) 3)))
-      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (should (= (point) (+ (mevedel-view-composer-draft-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view-composer-draft-start) 1)))
       (mevedel-view-jump-to-interaction)
       (let ((first (get-text-property (point) 'mevedel-view-interaction-id)))
         (mevedel-view-jump-to-interaction)
@@ -168,8 +173,8 @@
         (should (equal first (get-text-property
                              (point) 'mevedel-view-interaction-id))))
       (call-interactively (key-binding (kbd "RET")))
-      (should (= (point) (+ (mevedel-view--input-start) 3)))
-      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (should (= (point) (+ (mevedel-view-composer-draft-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view-composer-draft-start) 1)))
       (mevedel--prompt-dismiss-all)))
 
   :doc "two explicit visitors return independently to their own draft offsets"
@@ -179,15 +184,15 @@
     (let ((first (selected-window))
           (other (split-window)))
       (set-window-buffer other view-buf)
-      (set-window-point other (+ (mevedel-view--input-start) 1))
+      (set-window-point other (+ (mevedel-view-composer-draft-start) 1))
       (with-current-buffer data-buf
         (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore))
       (mevedel-view-jump-to-interaction)
       (with-selected-window other
         (mevedel-view-jump-to-interaction))
       (call-interactively (key-binding (kbd "RET")))
-      (should (= (window-point first) (+ (mevedel-view--input-start) 3)))
-      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (should (= (window-point first) (+ (mevedel-view-composer-draft-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view-composer-draft-start) 1)))
       (should-not mevedel-view--interaction-focus-return)))
 
   :doc "the first visit takes the card nearest the composer, then cycles outward"
@@ -212,9 +217,9 @@
       (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore))
     (mevedel-view-jump-to-interaction)
     (let ((prompt (car mevedel--prompt-overlays)))
-      (goto-char (+ (mevedel-view--input-start) 1))
+      (goto-char (+ (mevedel-view-composer-draft-start) 1))
       (mevedel--prompt--settle prompt 'aborted)
-      (should (= (point) (+ (mevedel-view--input-start) 1)))
+      (should (= (point) (+ (mevedel-view-composer-draft-start) 1)))
       (should-not mevedel-view--interaction-focus-return)))
 
   :doc "a hidden Plan approval is revealed and visited explicitly"
@@ -239,9 +244,9 @@
   :doc "no pending card reports a user error without moving point"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
-    (goto-char (mevedel-view--input-start))
+    (goto-char (mevedel-view-composer-draft-start))
     (should-error (mevedel-view-jump-to-interaction) :type 'user-error)
-    (should (= (point) (mevedel-view--input-start)))))
+    (should (= (point) (mevedel-view-composer-draft-start)))))
 
 (mevedel-deftest mevedel-view--permission-absence-render
   (:doc "the expired-queue notice informs without disturbing the composer")
@@ -268,8 +273,8 @@
                                 (buffer-string)))
         (should (mevedel-view-interaction-pending-p))
         (should-not (mevedel-view--interaction-active-work-paused-p))
-        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "> quoted\nsecond line"))
+        (should (= 4 (test-mevedel-view-interaction--caret-offset view-buf)))
         (mevedel-view--interaction-rebuild)
         (should (= 2 (length (split-string
                               (buffer-string)
@@ -278,8 +283,8 @@
         (should-not (string-match-p "permission requests expired"
                                     (buffer-string)))
         (should-not (mevedel-view-interaction-pending-p))
-        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+        (should (equal (mevedel-view-composer-draft-text view-buf t) "> quoted\nsecond line"))
+        (should (= 4 (test-mevedel-view-interaction--caret-offset view-buf)))))))
 
 (mevedel-deftest mevedel-view-interaction-ownership ()
   ,test
@@ -485,8 +490,8 @@
             (should-not (overlay-get overlay property)))
           (should (overlay-get overlay 'read-only))
           (should (eq 'retained (overlay-get overlay 'test-private-state)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text view-buf t)))
+          (should (= 4 (test-mevedel-view-interaction--caret-offset view-buf)))))))
 
   :doc "acquires one blocker per non-permission interaction identity"
   (mevedel-view-test--with-buffers
@@ -534,7 +539,7 @@
           (mevedel-view--interaction-register
            (list :kind kind :id kind :origin "/root" :body "prompt"))
           (should (mevedel-request-active-work-pause-started-at request))
-          (should (equal draft (mevedel-view--input-text)))
+          (should (equal draft (mevedel-view-composer-draft-text view-buf t)))
           (when (memq kind '(ask preview request))
             (let ((started
                    (mevedel-request-active-work-pause-started-at request)))
@@ -580,7 +585,7 @@
         (with-current-buffer data-buf
           (mevedel-request-end))
         (should-not (mevedel-request-active-work-pause-started-at request))
-        (should (equal draft (mevedel-view--input-text)))))))
+        (should (equal draft (mevedel-view-composer-draft-text view-buf t)))))))
 
 (mevedel-deftest mevedel-view--interaction-unregister ()
   ,test
@@ -700,8 +705,8 @@
         (split-window-right 30)
         (mevedel-view-zone--on-window-change nil)
         (should (= 1 (separator-rows))))
-      (should (equal "> draft\nnext" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 3))))))
+      (should (equal "> draft\nnext" (mevedel-view-composer-draft-text view-buf t)))
+      (should (= 3 (test-mevedel-view-interaction--caret-offset view-buf))))))
 
 (mevedel-deftest mevedel-view--interaction-rank ()
   ,test
@@ -726,8 +731,8 @@
         (mevedel-view--interaction-unregister 'old)
         (test-mevedel-view-interaction--card 'old 'plan 1)
         (should (equal '(old new mid queued) (order))))
-      (should (equal "> draft\nnext" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 3)))))
+      (should (equal "> draft\nnext" (mevedel-view-composer-draft-text view-buf t)))
+      (should (= 3 (test-mevedel-view-interaction--caret-offset view-buf)))))
 
   :doc "an arriving card leaves a visited card on its screen row"
   (mevedel-view-test--with-buffers
@@ -756,7 +761,7 @@
                         (test-mevedel-view-interaction--card-start 'visited))))
         (should (= offset (- (point) (test-mevedel-view-interaction--card-start
                                       'visited))))
-        (should (equal "> draft\nnext" (mevedel-view--input-text)))))))
+        (should (equal "> draft\nnext" (mevedel-view-composer-draft-text view-buf t)))))))
 
 (mevedel-deftest mevedel-view--interaction-target-buffer
   (:doc "resolves the live parent view for queued interactions")
@@ -835,7 +840,7 @@
                      (mevedel-view--interaction-count-label)))
       (goto-char (point-min))
       (search-forward "1 plan · 2 permissions pending"
-                      mevedel-view--input-marker)
+                      (mevedel-view-prompt-boundary))
       (should (eq 'interaction (get-text-property
                                 (match-beginning 0)
                                 'mevedel-view-zone-namespace)))
@@ -902,7 +907,7 @@
                :entry 'permission-entry
                :activate (lambda () (setq called t))))
         (goto-char (point-min))
-        (search-forward "permission needs" mevedel-view--input-marker)
+        (search-forward "permission needs" (mevedel-view-prompt-boundary))
         (should-error (mevedel-view-activate-at-point) :type 'user-error)
         (should-not called))))
 
@@ -934,7 +939,7 @@
           (should (get-text-property (overlay-start overlay)
                                      'mevedel-view-zone-key))
           (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+                       (point-min) (mevedel-view-prompt-boundary))))
             (should (= 1 (mevedel-view-test--count-substring
                           "new body text" text)))
             (should (= 0 (mevedel-view-test--count-substring
@@ -976,7 +981,7 @@
              :entry 'permission-entry
              :activate #'ignore))
       (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+                    (point-min) (mevedel-view-prompt-boundary)))
              (header (string-trim-right
                       (mevedel-view--header-string data-buf)))
              (header-pos (string-search header text))
@@ -1010,7 +1015,7 @@
                :entry 'permission-entry
                :activate #'ignore))
         (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+                      (point-min) (mevedel-view-prompt-boundary)))
                (header "mevedel")
                (header-pos (string-search header text))
                (permission-pos (string-search "permission below header"
@@ -1051,7 +1056,7 @@
              :entry 'permission-entry :activate #'ignore))
       (mevedel-view--interaction-clear-for-rebuild)
       (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+                   (point-min) (mevedel-view-prompt-boundary))))
         (should-not (string-match-p "permission prompt" text))
         (should (= 0 (hash-table-count
                       mevedel-view--interaction-descriptors)))
@@ -1135,7 +1140,7 @@
         (should (string-match-p
                  "Blocked   agent    /root/verifier"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))
+                  (point-min) (mevedel-view-prompt-boundary)))))
       (with-current-buffer data-buf
         (mevedel-permission-request
          (list :kind 'generic
@@ -1149,7 +1154,7 @@
       (with-current-buffer view-buf
         (should-not outcomes)
         (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+                      (point-min) (mevedel-view-prompt-boundary)))
                (agent-pos (string-search
                            "Blocked   agent    /root/verifier" text))
                (permission-pos (string-search "Permission Request" text)))
@@ -1158,7 +1163,7 @@
           (should (< agent-pos permission-pos))
           (should (string-search "1 permission pending" text))
           (goto-char (point-min))
-          (search-forward "1 permission pending" mevedel-view--input-marker)
+          (search-forward "1 permission pending" (mevedel-view-prompt-boundary))
           (should (eq :separator (get-text-property
                                   (match-beginning 0)
                                   'mevedel-view-zone-id)))))))
@@ -1200,7 +1205,7 @@
           (cl-labels
               ((display-text ()
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))
+                  (point-min) (mevedel-view-prompt-boundary)))
                (head-overlay ()
                  (let* ((entry (car (mevedel-session-permission-queue
                                      session)))
@@ -1254,7 +1259,7 @@
              :body "new permission prompt\n" :keymap (make-sparse-keymap)
              :entry 'new-entry :activate #'ignore))
       (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+                   (point-min) (mevedel-view-prompt-boundary))))
         (should (= 0 (mevedel-view-test--count-substring
                       "old permission prompt" text)))
         (should (= 1 (mevedel-view-test--count-substring
@@ -1327,9 +1332,9 @@
     (switch-to-buffer view-buf)
     (delete-other-windows)
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
+      (goto-char (mevedel-view-composer-draft-start))
       (insert "> quoted\nsecond line")
-      (goto-char (+ (mevedel-view--input-start) 4))
+      (goto-char (+ (mevedel-view-composer-draft-start) 4))
       ;; Simulate buffer point drifting away from the selected window point.
       ;; Prompt focus must respect the live cursor, not this stale value.
       (save-excursion
@@ -1342,11 +1347,11 @@
                     :help-echo "Permission" :entry 'permission-entry
                     :activate #'ignore))))
         (should (= (window-point (selected-window))
-                   (+ (mevedel-view--input-start) 4)))
-        (should (string= "> quoted\nsecond line" (mevedel-view--input-text)))
+                   (+ (mevedel-view-composer-draft-start) 4)))
+        (should (string= "> quoted\nsecond line" (mevedel-view-composer-draft-text view-buf t)))
         (should (overlay-get overlay 'read-only))
         (should (get-text-property (overlay-start overlay) 'read-only))
-        (should-not (get-text-property (mevedel-view--input-start)
+        (should-not (get-text-property (mevedel-view-composer-draft-start)
                                        'read-only))))
     (delete-other-windows))
 
@@ -1364,19 +1369,20 @@
         (cl-labels
             ((display-text ()
                (buffer-substring-no-properties
-                (point-min) mevedel-view--input-marker))
+                (point-min) (mevedel-view-prompt-boundary)))
              (should-preserve-composer ()
-               (should (string= draft (mevedel-view--input-text)))
-               (should (= (point)
-                          (+ (mevedel-view--input-start) point-offset)))
-               (should (< (point) (point-max)))
-               (should (equal " line"
-                              (buffer-substring-no-properties
-                               (point)
-                               (min (point-max)
-                                    (+ (point) (length " line"))))))
-               (should-not (get-text-property (mevedel-view--input-start)
-                                              'read-only)))
+               (should (string= draft (mevedel-view-composer-draft-text view-buf t)))
+               (should (= point-offset (test-mevedel-view-interaction--caret-offset view-buf)))
+               (with-current-buffer (mevedel-view-composer-buffer view-buf)
+                 (should (< (point) (point-max)))
+                 (should (equal " line"
+                                (buffer-substring-no-properties
+                                 (point)
+                                 (min (point-max)
+                                      (+ (point) (length " line"))))))
+                 (should-not (get-text-property
+                              (mevedel-view-composer-draft-start view-buf)
+                              'read-only))))
              (should-show-current-body ()
                (let ((display (display-text)))
                  (should (= 1 (mevedel-view-test--count-substring
@@ -1440,7 +1446,7 @@
                    #'ignore))
           (mevedel-view-render-live-update data-buf))
         (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+                      (point-min) (mevedel-view-prompt-boundary)))
                (assistant-pos (string-match-p "Assistant" text))
                (permission-pos (string-match-p "permission" text)))
           (should assistant-pos)
@@ -1448,7 +1454,7 @@
           (should (< assistant-pos permission-pos)))
         (mevedel-view--interaction-clear)
         (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+                     (point-min) (mevedel-view-prompt-boundary))))
           (should (string-match-p "Assistant" text))
           (should (string-match-p "Working through it" text))
           (should-not (string-match-p "permission" text))))))
@@ -1610,9 +1616,8 @@
                            (regexp-quote (format "from %s" origin))
                            (buffer-substring-no-properties
                             (point-min) (point-max))))
-                  (should (string= draft (mevedel-view--input-text)))
-                  (should (= (point)
-                             (+ (mevedel-view--input-start) point-offset)))
+                  (should (string= draft (mevedel-view-composer-draft-text view-buf t)))
+                  (should (= point-offset (test-mevedel-view-interaction--caret-offset view-buf)))
                   (should-not mevedel--prompt-overlays))
                 (with-current-buffer agent-buf
                   (should-not
@@ -1640,9 +1645,8 @@
                            "Invocation Authority Request"
                            (buffer-substring-no-properties
                             (point-min) (point-max))))
-                  (should (string= draft (mevedel-view--input-text)))
-                  (should (= (point)
-                             (+ (mevedel-view--input-start) point-offset))))
+                  (should (string= draft (mevedel-view-composer-draft-text view-buf t)))
+                  (should (= point-offset (test-mevedel-view-interaction--caret-offset view-buf))))
                 (with-current-buffer agent-buf
                   (mevedel-request-end))
                 (should (equal '(aborted) outcomes))))
@@ -1722,10 +1726,10 @@
              overlays)))
         (dotimes (_ 2)
           (mevedel-view--interaction-render)
-          (should (string= draft (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) point-offset))))
+          (should (string= draft (mevedel-view-composer-draft-text view-buf t)))
+          (should (= point-offset (test-mevedel-view-interaction--caret-offset view-buf))))
         (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+                      (point-min) (mevedel-view-prompt-boundary)))
                (preview (string-search "preview body" text))
                (plan (string-search "plan body" text))
                (request (string-search "access body" text))
@@ -1803,7 +1807,7 @@
             (should (= tick (buffer-chars-modified-tick)))
             (should (eq overlay (gethash 'transfer-prompt
                                          mevedel-view--interaction-overlays)))
-            (should (equal draft (mevedel-view--input-text))))))))
+            (should (equal draft (mevedel-view-composer-draft-text view-buf t))))))))
 
   :doc "a queue rebuild does not toggle active progress through transfer UI"
   (let ((mevedel-view-spinner-animate nil))
@@ -1869,7 +1873,7 @@
         (should-not (string-search
                      "stale permission"
                      (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker)))))))
+                      (point-min) (mevedel-view-prompt-boundary))))))))
 
 (defun test-mevedel-view-interaction--run-deferred (timers)
   "Run idle-work callbacks captured in TIMERS, oldest first, until none remain.

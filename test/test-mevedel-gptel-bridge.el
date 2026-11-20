@@ -418,8 +418,7 @@
                     mevedel--workspace workspace
                     gptel--fsm-last fsm))
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert draft))
+        (mevedel-view-composer-insert draft))
       (mevedel-session-set-pending-input-paused session t)
       ;; Equal text must still preserve an independently authored draft.
       (dolist (text (list "first steering" draft))
@@ -437,7 +436,7 @@
       (should-not (plist-get info :steering-message))
       (should-not (plist-get info :post-tool))
       (with-current-buffer view-buf
-        (should (equal draft (mevedel-view--input-text))))))
+        (should (equal draft (mevedel-view-composer-draft-text))))))
 
   :doc "hook rejection preserves the draft and leaves both steering stores empty"
   (mevedel-gptel-bridge-test--with-buffers
@@ -450,15 +449,14 @@
         (setq-local mevedel--current-request request
                     gptel--fsm-last fsm))
       (with-current-buffer view-buf
-        (goto-char (point-max))
-        (insert "> retained\ndraft"))
+        (mevedel-view-composer-insert "> retained\ndraft"))
       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "blocked text")))
         (with-current-buffer data-buf
           (mevedel-gptel-bridge--steer-advice #'ert-fail)))
       (should-not (mevedel-session-pending-steering session))
       (should-not (plist-get (gptel-fsm-info fsm) :steering-message))
       (with-current-buffer view-buf
-        (should (equal "> retained\ndraft" (mevedel-view--input-text))))))
+        (should (equal "> retained\ndraft" (mevedel-view-composer-draft-text))))))
 
   :doc "retained-agent native steering is refused before creating a TSTR message"
   (mevedel-gptel-bridge-test--with-buffers
@@ -527,14 +525,13 @@
             (setq mevedel--current-request
                   (mevedel-request--create :id "replacement" :session session))))
         (with-current-buffer view-buf
-          (goto-char (point-max))
-          (insert "> newly authored\ndraft"))
+          (mevedel-view-composer-insert "> newly authored\ndraft"))
         (funcall continuation nil)
         (should (eq (not replace-request)
                     (not (null (mevedel-session-pending-steering session)))))
         (with-current-buffer view-buf
           (should-not mevedel-view--prompt-hook-pending)
-          (should (equal "> newly authored\ndraft" (mevedel-view--input-text))))))))
+          (should (equal "> newly authored\ndraft" (mevedel-view-composer-draft-text))))))))
 
 (mevedel-deftest mevedel-gptel-bridge--tool-steer-advice ()
   ,test

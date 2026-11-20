@@ -74,8 +74,7 @@
                                   failure-preparation (nth 2 args))
                             (apply pause args))))
                  (with-current-buffer view
-                   (goto-char (mevedel-view--input-start))
-                   (insert input)
+                   (mevedel-view-composer-insert input)
                    (mevedel-view--submit-planned-input input))
                  (should resume)
                  (should (eq 'ok (plist-get prepared :status)))
@@ -145,7 +144,7 @@
           (should-not (mevedel-request-cancelled-p newer-request))
           (mevedel-request-end))
         (with-current-buffer view
-          (should (equal input (mevedel-view--input-text)))))))
+          (should (equal input (mevedel-view-composer-draft-text)))))))
 
   :doc "a generic readiness error after Goal replacement has no authority over the new owner"
   (mevedel-composer-owner-test--with-skill

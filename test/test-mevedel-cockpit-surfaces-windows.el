@@ -77,9 +77,7 @@
               (with-current-buffer view-buf
                 (setq-local default-directory root
                             mevedel--session session)
-                (goto-char (mevedel-view--input-start))
-                (insert draft)
-                (goto-char (+ (mevedel-view--input-start) 7)))
+                (mevedel-view-test--insert-composer-draft draft 7))
               (delete-other-windows)
               (switch-to-buffer (if foreign other view-buf))
               (when (memq layout '(split foreign-split))
@@ -93,7 +91,7 @@
                      (context (mevedel-cockpit-context-for-buffer view-buf))
                      (before (mevedel-cockpit-surfaces-windows-test--layout))
                      (draft-point (with-current-buffer view-buf
-                                    (- (point) (mevedel-view--input-start)))))
+                                    (mevedel-view-test--composer-point-offset))))
                 (when foreign
                   (setq context (plist-put context :origin-buffer origin)))
                 ;; Observe menu entry, not display/quit or domain collection.
@@ -124,9 +122,9 @@
                   (ert-info ((format "Before: %S\nAfter: %S" before after))
                     (should (equal before after))))
                 (with-current-buffer view-buf
-                  (should (equal draft (mevedel-view--input-text)))
+                  (should (equal draft (mevedel-view-composer-draft-text)))
                   (should (= draft-point
-                             (- (point) (mevedel-view--input-start)))))
+                             (mevedel-view-test--composer-point-offset))))
                 (when pending
                   (should-not (mevedel-session-pending-input-paused session))
                   (should (mevedel-session-pending-input-failure-paused session))

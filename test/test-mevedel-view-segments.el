@@ -19,8 +19,15 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-segments)
+
+(defun mevedel-view-segments-test--draft-offset ()
+  "Return the caret offset from the draft start, read in the composer buffer."
+  (let ((view (current-buffer)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) (mevedel-view-composer-draft-start view)))))
 
 (defun mevedel-view-segments-test--write
     (path prompt response fork-point-id segment &optional response-bound-length)
@@ -234,7 +241,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should-not (string-search "Archived answer one" (buffer-string)))
     (should-not (string-search "Live answer" (buffer-string)))
     (should buffer-read-only)
-    (should (invisible-p (mevedel-view--input-start))))
+    (should (invisible-p (mevedel-view-composer-draft-start))))
 
   :doc "a missing adjacent segment leaves the current projection unchanged"
   (let* ((directory (make-temp-file "mevedel-view-segment-gap-" t))
@@ -303,7 +310,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               (should (string-search "Complete archived answer."
                                      (buffer-string)))
               (should (= 1 (how-many "^You$" (point-min)
-                                     (mevedel-view--input-marker-position)))))))
+                                     (mevedel-view-prompt-boundary)))))))
       (mevedel-session-durability-lease-release directory session)
       (mevedel-workspace-clear-registry)
       (delete-directory directory t)))
@@ -348,8 +355,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (mevedel-view-toggle-section)
     (should-not (string-search "Archived thought" (buffer-string)))
     (mevedel-view-next-segment)
-    (should (equal "> live draft\nsecond line" (mevedel-view--input-text)))
-    (should (= 4 (- (point) (mevedel-view--input-start))))
+    (should (equal "> live draft\nsecond line" (mevedel-view-composer-draft-text)))
+    (should (= 4 (mevedel-view-segments-test--draft-offset)))
     (mevedel-view-previous-segment)
     (should-not (string-search "Archived thought" (buffer-string)))
     (goto-char (point-min))
@@ -433,7 +440,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (should (string-search "Answer 1" (buffer-string)))
         (should buffer-read-only)
         (mevedel-view-return-to-latest-segment)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
   :doc "rejects non-prompt positions before changing the projection"
   (mevedel-view-segments-test--with-view
@@ -483,7 +490,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
             (should buffer-read-only)
             (mevedel-view-return-to-latest-segment)
             (should (eq mevedel-view--data-turn-start request-start))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
         (set-marker request-start nil))))
 
   :doc "materializes a pending target and ignores obsolete batch callbacks"
@@ -510,21 +517,17 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (mevedel-view-segments-test--with-view
     (mevedel-view-test--insert-composer-draft
      "> live draft\nsecond line" 7)
-    (let ((draft (buffer-substring
-                  (mevedel-view--input-start) (point-max)))
-          (point-offset (- (point) (mevedel-view--input-start))))
+    (let ((draft (mevedel-view-composer-draft-text))
+          (point-offset (mevedel-view-segments-test--draft-offset)))
       (mevedel-view-previous-segment)
       (mevedel-view-return-to-latest-segment)
       (should (string-search "Live answer" (buffer-string)))
       (should-not (string-search "Viewing archived segment"
                                  (buffer-string)))
       (should-not buffer-read-only)
-      (should-not (invisible-p (mevedel-view--input-start)))
-      (should (equal draft
-                     (buffer-substring
-                      (mevedel-view--input-start) (point-max))))
-      (should (= point-offset
-                 (- (point) (mevedel-view--input-start)))))))
+      (should-not (invisible-p (mevedel-view-composer-draft-start)))
+      (should (equal draft (mevedel-view-composer-draft-text)))
+      (should (= point-offset (mevedel-view-segments-test--draft-offset))))))
 
 (mevedel-deftest mevedel-view-segments/reentry ()
   ,test
@@ -549,8 +552,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should-not (string-search "Live answer" (buffer-string)))
     (should-not mevedel-view-render--owner)
     (mevedel-view-return-to-latest-segment)
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-    (should (= (point) (+ 4 (mevedel-view--input-start)))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+    (should (= 4 (mevedel-view-segments-test--draft-offset))))
 
   :doc "return to live during archive rendering discards queued archive work"
   (mevedel-view-segments-test--with-view
@@ -575,8 +578,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should (string-search "Live answer" (buffer-string)))
     (should-not (string-search "Archived answer" (buffer-string)))
     (should-not mevedel-view-render--owner)
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-    (should (= (point) (+ 4 (mevedel-view--input-start))))))
+    (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+    (should (= 4 (mevedel-view-segments-test--draft-offset)))))
 
 (mevedel-deftest mevedel-view-segments/fileless-agent-has-no-parent-history ()
   ,test
@@ -656,8 +659,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (setf (mevedel-session-chapters session)
           '((:segment 1 :title "First chat" :closed-at "t1")))
     (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 7)
-    (let ((draft (mevedel-view--input-text))
-          (draft-offset (- (point) (mevedel-view--input-start))))
+    (let ((draft (mevedel-view-composer-draft-text))
+          (draft-offset (mevedel-view-segments-test--draft-offset)))
       (mevedel-view--full-rerender)
       (save-excursion
         (goto-char (point-min))
@@ -677,10 +680,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                    (should-not (get-text-property pos 'keymap)))
           (should-not (eq mevedel-view-segments--chats-map
                           (get-pos-property after 'keymap)))))
-      (should (= draft-offset (- (point) (mevedel-view--input-start))))
-      (should (equal draft (mevedel-view--input-text)))
-      (insert "x")
-      (should (string-search "x" (mevedel-view--input-text)))))
+      (should (= draft-offset (mevedel-view-segments-test--draft-offset)))
+      (should (equal draft (mevedel-view-composer-draft-text)))
+      (with-current-buffer (mevedel-view-composer-buffer) (insert "x"))
+      (should (string-search "x" (mevedel-view-composer-draft-text)))))
   :doc "an archived projection shows its banner instead"
   (mevedel-view-segments-test--with-view
     (setf (mevedel-session-chapters session)
@@ -765,7 +768,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (goto-char (point-min))
       (let ((state (mevedel-view-render-capture-segment-state)))
         (should-not (plist-get state :point-anchor))
-        (goto-char (mevedel-view--input-start))
+        (goto-char (mevedel-view-prompt-boundary))
         (mevedel-view-render--restore-segment-state state 'backward)
         (should (= (point) (point-min)))))))
 

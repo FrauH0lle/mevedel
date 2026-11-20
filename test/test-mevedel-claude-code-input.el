@@ -26,8 +26,9 @@
               (dolist (input '("> Keep this next\nwith its second line" "Then continue"))
                 (goto-char (point-max))
                 (insert input)
-                (mevedel-view-send)
-                (should (equal "" (mevedel-view--input-text)))))
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-view-send))
+                (should (equal "" (mevedel-view-composer-draft-text)))))
             ;; A busy Claude turn takes the composer as steering, like HTTP.
             (let ((entries (mevedel-session-pending-steering session)))
               (should (equal '("> Keep this next\nwith its second line" "Then continue")
@@ -300,8 +301,7 @@
 				(mevedel-view--forward-input-now
 				 (if (eq attachment 'context) "Describe the attached image"
 				   (format "Describe @file:{%s}" file)))
-				(goto-char (mevedel-view--input-start))
-				(insert "> Keep the next draft\nwith two lines"))
+				(mevedel-view-composer-insert "> Keep the next draft\nwith two lines"))
 			      (mevedel-test--await 5 "Image request did not settle"
                                 (not (mevedel-turn-busy-p buffer))))
 			    (should (string-search "Image accepted" (buffer-string)))
@@ -315,7 +315,7 @@
 			    (should (= 1 (mevedel-session-turn-count session)))
 			    (should-not (string-search data (buffer-string)))
 			    (with-current-buffer view
-			      (should (equal "> Keep the next draft\nwith two lines" (mevedel-view--input-text)))))
+			      (should (equal "> Keep the next draft\nwith two lines" (mevedel-view-composer-draft-text)))))
 			(when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-image (:quiet t)

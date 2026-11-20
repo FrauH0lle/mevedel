@@ -1032,8 +1032,8 @@
         (mevedel-review--insert-progress-handle
          invocation "review draft" 'review))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-test--composer-point-offset))))
       (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
       (setf (mevedel-agent-invocation-call-count invocation) 2)
       (let ((mevedel-view-agent-refresh-delay 0))
@@ -1047,8 +1047,8 @@
             (should (eq 'completed (plist-get render-data :status)))
             (should (= 2 (plist-get render-data :calls))))))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))))))
 
 (mevedel-deftest mevedel-review--handle-view-outcome ()
   ,test
@@ -1068,8 +1068,8 @@
          '(:status ok :kind fork :result "VERDICT: PASS")
          view-buf data-buf 'verify))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
   :doc "schema-invalid reviewer JSON still settles the view request"
   (mevedel-view-test--with-buffers
@@ -1156,21 +1156,22 @@
           (cl-letf (((symbol-function 'mevedel-review--run-task)
                      (lambda (&rest _) (cl-incf started) #'ignore)))
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "/review target")
+              (mevedel-view-test--insert-composer-draft "/review target")
               (mevedel-review--send-from-view
                "/review target" "prompt" "target" view-buf data-buf)
               (should (= 0 started))
               ;; The user keeps typing while the hook runs.
-              (delete-region (mevedel-view--input-start) (point-max))
-              (goto-char (point-max))
-              (insert "> quoted\nsecond line")
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (delete-region (mevedel-view-composer-draft-start) (mevedel-view-composer-draft-end)))
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (goto-char (mevedel-view-composer-draft-end))
+                (insert "> quoted\nsecond line"))
               (let ((deadline (+ (float-time) 10)))
                 (while (and (= 0 started) (< (float-time) deadline))
                   (accept-process-output nil 0.05))
                 (should (= 1 started))
                 (should (equal "> quoted\nsecond line"
-                               (mevedel-view--input-text)))))))
+                               (mevedel-view-composer-draft-text nil t)))))))
       (delete-directory root t)))
 
   :doc "persists consumed start context across a full transcript rerender"
@@ -1201,7 +1202,7 @@
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+                     (point-min) (mevedel-view-prompt-boundary))))
           (should (string-match-p "hook context added" text))
           (should-not (string-match-p "review startup context" text)))
         (goto-char (point-min))
@@ -1210,7 +1211,7 @@
         (should (string-match-p
                  "review startup context"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))))
+                  (point-min) (mevedel-view-prompt-boundary)))))))
 
   :doc "does not prepare package evidence when the submit hook rejects"
   (mevedel-view-test--with-buffers

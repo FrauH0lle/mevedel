@@ -45,9 +45,7 @@
         (with-current-buffer data-buf (setq summary-start (point-max)))
         (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
         (with-current-buffer view-buf
-          (goto-char (point-max))
-          (insert draft)
-          (goto-char (+ (mevedel-view--input-start) 5)))
+          (mevedel-view-test--insert-composer-draft draft 5))
         (cl-letf (((symbol-function 'current-time) (lambda () now)))
           (with-current-buffer data-buf
             (mevedel-view-stream-render-response summary-start (point-max)))
@@ -61,9 +59,9 @@
               (should (equal
                        "Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s"
                        (get-text-property (1- (point)) 'help-echo))))
-            (should (equal draft (buffer-substring-no-properties
-                                  (mevedel-view--input-start) (point-max))))
-            (should (= (point) (+ (mevedel-view--input-start) 5))))
+            (should (equal draft (mevedel-view-composer-draft-text nil t)))
+            (should (= (+ (mevedel-view-composer-draft-start) 5)
+                       (with-current-buffer (mevedel-view-composer-buffer) (point)))))
           ;; A later repeat must keep the first settlement time and duration.
           (setq now (time-add finished 3600))
           (with-current-buffer data-buf

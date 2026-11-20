@@ -891,9 +891,8 @@
                          mevedel-view--interaction-descriptors))
                (keymap (plist-get descriptor :keymap)))
           (call-interactively (lookup-key keymap (kbd "c")))
-          (should (string= draft (mevedel-view--input-text)))
-          (should (= (point)
-                     (+ (mevedel-view--input-start) point-offset)))))))
+          (should (string= draft (mevedel-view-composer-draft-text)))
+          (should (= point-offset (mevedel-view-test--composer-point-offset)))))))
 
   :doc "hides, rebuilds, reopens, and cancels a pending approval"
   (mevedel-view-test--with-buffers
@@ -931,9 +930,8 @@
           (mevedel-view-test--insert-composer-draft draft draft-offset)
           (mevedel-view--interaction-rebuild)
           (should-not (gethash id mevedel-view--interaction-descriptors))
-          (should (string= draft (mevedel-view--input-text)))
-          (should (= (point)
-                     (+ (mevedel-view--input-start) draft-offset)))
+          (should (string= draft (mevedel-view-composer-draft-text)))
+          (should (= draft-offset (mevedel-view-test--composer-point-offset)))
           (goto-char (point-min))
           (search-forward "1 plan")
           (let* ((position (match-beginning 0))
@@ -954,7 +952,7 @@
                      (plist-get
                       (mevedel-view-zone-fragment-bounds 'interaction id)
                       :start)))
-          (should (string= draft (mevedel-view--input-text)))
+          (should (string= draft (mevedel-view-composer-draft-text)))
           (goto-char (point-max))
           (condition-case nil
               (call-interactively (key-binding (kbd "C-g")))
@@ -1017,7 +1015,7 @@
       (mevedel-test--with-captured-messages nil
         (mevedel-plan-mode--feedback-draft data-buf))
       (with-current-buffer view-buf
-        (let ((draft (mevedel-view--input-text)))
+        (let ((draft (mevedel-view-composer-draft-text)))
           (should (string-match-p "Plan feedback:" draft))
           (should (string-match-p "complete replacement" draft))
           (should (string-match-p "work://plans/current.md" draft))
@@ -1246,7 +1244,7 @@
                             :selection)))
             (with-current-buffer view-buf
               (should (equal "> first\nsecond"
-                             (mevedel-view--input-text))))))
+                             (mevedel-view-composer-draft-text))))))
       (mevedel-session-persistence-lock-release save-dir session)
       (mevedel-workspace-clear-registry)
       (delete-directory save-dir t)))

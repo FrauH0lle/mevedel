@@ -80,8 +80,8 @@ registered-overlay and result for questionnaire assertions."
                           registered-overlay (funcall register descriptor)))))
          (save-window-excursion
            (set-window-buffer (selected-window) view-buffer)
-           (with-current-buffer view-buffer
-             (goto-char (point-max)))
+           (with-current-buffer (mevedel-view-composer-buffer view-buffer)
+             (goto-char (mevedel-view-composer-draft-end)))
            (with-current-buffer data-buffer
              ,@body))))))
 
@@ -364,7 +364,7 @@ A panel row is a line whose text sits on the source block face."
       (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
                      '("Sample · B" "b")))
       (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--sample-scroll ()
@@ -494,6 +494,9 @@ A panel row is a line whose text sits on the source block face."
             (run-hooks 'post-command-hook)
             (should (equal focused '((0 . 1) (0 . 0))))
             (should (equal '(0 . 1) mevedel-tool-ask-ui--active-entry))
+            ;; Inline note: the view's end is the draft's end today; after
+            ;; the composer is separate this must move point to the view's
+            ;; tail (card focus leaves the card), owned by ticket 07.
             (goto-char (point-max))
             (run-hooks 'post-command-hook)
             (should (equal focused '((0 . 1) (0 . 0))))
@@ -699,7 +702,8 @@ A panel row is a line whose text sits on the source block face."
                  (:label "docs/development.md" :description "Already owns the test commands and the compile checks.")])
       (:question "Ship?" :options ["Yes" "No"])])
     (with-current-buffer view-buffer
-      (goto-char (+ (mevedel-view--input-start) 3)))
+      (with-current-buffer (mevedel-view-composer-buffer)
+        (goto-char (+ (mevedel-view-composer-draft-start) 3))))
     (let* ((state (car (buffer-local-value 'mevedel-tool-ask-ui--states view-buffer)))
            (wide (car (mevedel-tool-ask-ui--state-height state))))
       (split-window-right 30)
@@ -715,8 +719,8 @@ A panel row is a line whose text sits on the source block face."
         (should (< narrow wide))
         (should (eql narrow (car (mevedel-tool-ask-ui--state-height state))))
         (with-current-buffer view-buffer
-          (should (equal "> draft\nnext" (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 3))))
+          (should (equal "> draft\nnext" (mevedel-view-composer-draft-text nil t)))
+          (should (= 3 (mevedel-view-test--composer-point-offset))))
         (push (funcall rows) heights)
         (with-current-buffer view-buffer
           (mevedel-view-jump-to-interaction)
@@ -974,7 +978,7 @@ A panel row is a line whose text sits on the source block face."
         (call-interactively (lookup-key rendered-keymap (kbd "RET")))
         (should (equal '("B") (aref (mevedel-tool-ask-ui--state-answers state) 0)))
         (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
         (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))))
     (should (string-match-p "A1:\n- A\n- B\n" result))
     (should (string-match-p "alpha" result))
@@ -1209,11 +1213,11 @@ A panel row is a line whose text sits on the source block face."
      #'ignore [(:question "Layout?" :options ["Compact" "Spacious"])])
     (call-interactively (lookup-key rendered-keymap (kbd "RET")))
     (with-current-buffer view-buffer
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t))))
     (call-interactively (lookup-key rendered-keymap (kbd "RET")))
     (with-current-buffer view-buffer
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui-show ()
@@ -1225,7 +1229,7 @@ A panel row is a line whose text sits on the source block face."
       (mevedel-view-test--insert-composer-draft "> draft" 3))
     (mevedel-tool-ask-ui-show #'ignore [(:question "Use cache?" :options ["Yes" "No"])])
     (with-current-buffer view-buffer
-      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (should (= 3 (mevedel-view-test--composer-point-offset)))
       (mevedel-view-jump-to-interaction)
       (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))))
 

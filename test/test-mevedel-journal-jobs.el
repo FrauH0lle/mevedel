@@ -122,8 +122,7 @@
            (save-window-excursion
              (mevedel-view--setup view buffer)
              (with-current-buffer view
-               (goto-char (mevedel-view--input-start))
-               (insert draft))
+               (mevedel-view-composer-insert draft))
              (let ((jobs (mevedel-journal-jobs workspace)))
                (should (buffer-local-value 'buffer-read-only jobs))
                (with-current-buffer jobs (should (string-match-p "pending" (buffer-string)))))
@@ -138,7 +137,7 @@
 			      (mevedel-report-refresh)
 			      (should (string-match-p "Capture diagnostics" (buffer-string))))
              (mevedel-journal-discard workspace id)
-             (with-current-buffer view (should (equal draft (mevedel-view--input-text))))
+             (with-current-buffer view (should (equal draft (mevedel-view-composer-draft-text))))
              (with-current-buffer "*mevedel journal jobs*"
                (should (string-match-p "No pending jobs" (buffer-string)))))
          (dolist (candidate (list view (get-buffer "*mevedel journal jobs*")

@@ -269,8 +269,8 @@ Return the row's tabulated id."
         (mevedel-test--with-captured-messages nil
           (mevedel-permissions-list-revoke)))
       (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (string= draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset))))))
 
   :doc "drops the revoked row from the refreshed table"
   (mevedel-permissions-list-test--with-buffers

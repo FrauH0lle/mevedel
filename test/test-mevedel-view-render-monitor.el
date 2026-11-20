@@ -51,8 +51,14 @@
       (with-current-buffer view-buf
         (setq-local mevedel-view--execution-events (make-hash-table :test #'equal))
         ;; A renderer must not disturb a draft, even when its first character is >.
-        (let ((inhibit-read-only t)) (goto-char (point-max)) (insert "> draft\nsecond line"))
-        (let ((text (buffer-string)) (position (point)) (undo buffer-undo-list))
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
+        (let* ((buffers (list view-buf (mevedel-view-composer-buffer)))
+               (snapshot (lambda ()
+                           (mapcar (lambda (buffer)
+                                     (with-current-buffer buffer
+                                       (list (buffer-string) (point) buffer-undo-list)))
+                                   buffers)))
+               (before (funcall snapshot)))
           (dolist (phase '(initial progress terminal))
             (let ((expected-output (symbol-name phase))
                   (count (pcase phase ('initial 1) ('progress 2) ('terminal 3))))
@@ -82,9 +88,8 @@
                                (plist-get row :header)))
                 (should (equal expected-output (plist-get row :body)))
                 (should (equal "watch-1" (plist-get row :execution-id))))))
-          (should (equal text (buffer-string)))
-          (should (= position (point)))
-          (should (equal undo buffer-undo-list)))))))
+          ;; Text, caret and undo history of both the view and the composer.
+          (should (equal before (funcall snapshot))))))))
 
 (provide 'test-mevedel-view-render-monitor)
 ;;; test-mevedel-view-render-monitor.el ends here

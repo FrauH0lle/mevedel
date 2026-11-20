@@ -35,12 +35,11 @@
             (setq view (mevedel-view--ensure buffer))
             (with-current-buffer view
               (mevedel-view--full-rerender)
-              (goto-char (mevedel-view--input-start))
-              (insert "> preserve this draft\nsecond line")
+              (mevedel-view-composer-insert "> preserve this draft\nsecond line")
               (call-interactively
                (lookup-key mevedel-view--control-transfer-request-map (kbd "r")))
               (should (equal "> preserve this draft\nsecond line"
-                             (mevedel-view--input-text))))
+                             (mevedel-view-composer-draft-text))))
             (should-not mevedel-session--read-only-mode)
             (should-not buffer-read-only)
             (should (eq 'owned (mevedel-session-durability-lease-state
@@ -99,8 +98,7 @@
                   (id (mevedel-session-session-id session))
                   (history (copy-tree (mevedel-session-external-conversations session))))
               (with-current-buffer view
-                (goto-char (mevedel-view--input-start))
-                (insert "> preserve this draft\nsecond line"))
+                (mevedel-view-composer-insert "> preserve this draft\nsecond line"))
               (let (calls)
                 (cl-letf (((symbol-function 'completing-read)
                            (lambda (&rest args) (nth 6 args)))
@@ -155,7 +153,7 @@
                                "unavailable for external conversations"
                                (error-message-string (should-error (funcall command) :type 'user-error))))))
                   (should-not mevedel-view--armed-session-fork)
-                  (should (equal "> preserve this draft\nsecond line" (mevedel-view--input-text)))))
+                  (should (equal "> preserve this draft\nsecond line" (mevedel-view-composer-draft-text)))))
               (let ((lease (copy-tree (mevedel-session-lease session))))
                 (setq-local mevedel-session--read-only-mode t)
                 (unwind-protect

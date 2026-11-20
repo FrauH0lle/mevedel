@@ -77,7 +77,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
       (mevedel-prepare-test--paused
         (should mevedel-view-prepare--jobs)
         (should (string-search "Custom: preparing result" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
         (setq released t)
         (mevedel-prepare-test--wait
          (lambda () (and (not mevedel-view-prepare--jobs) (not mevedel-view-render--batch))))
@@ -85,13 +85,16 @@ BODY can release it by setting RELEASED and inspect WORKER."
   :doc "new typing and selection survive publication"
   (mevedel-prepare-test--with-tool
     (mevedel-view-render-batched-full)
-    (goto-char (point-max)) (insert "\nnew typing")
-    (set-mark (- (point) 6)) (setq mark-active t)
+    (mevedel-view-composer-insert "\nnew typing")
+    (with-current-buffer (mevedel-view-composer-buffer)
+      (set-mark (- (point) 6))
+      (setq mark-active t))
     (mevedel-prepare-test--wait
      (lambda () (and (not mevedel-view-prepare--jobs) (not mevedel-view-render--batch))))
-    (should (equal "> draft\nsecond line\nnew typing" (mevedel-view--input-text)))
-    (should mark-active)
-    (should (equal "typing" (buffer-substring-no-properties (mark) (point))))
+    (should (equal "> draft\nsecond line\nnew typing" (mevedel-view-composer-draft-text)))
+    (with-current-buffer (mevedel-view-composer-buffer)
+      (should mark-active)
+      (should (equal "typing" (buffer-substring-no-properties (mark) (point)))))
     (should-not (string-search "preparing result" (buffer-string)))))
 
 (mevedel-deftest mevedel-view-prepare/groups
@@ -119,7 +122,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
                 ;; The pending row is a member: the run keeps its one row.
                 (should (equal expected (buffer-substring-no-properties
                                          (point-min) (point-max))))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
                 (setq released t)
                 (mevedel-prepare-test--wait
                  (lambda () (and (not mevedel-view-prepare--jobs)
@@ -174,7 +177,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
           (calls 0))
       (mevedel-prepare-test--paused
         (mevedel-prepare-test--wait (lambda () (not mevedel-view-render--batch)))
-        (let ((expected-draft (mevedel-view--input-text)))
+        (let ((expected-draft (mevedel-view-composer-draft-text)))
           (cl-letf (((symbol-function 'mevedel-view--render-turn)
                      (lambda (&rest args) (cl-incf calls) (apply render args))))
             (setq released t)
@@ -182,7 +185,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
              (lambda () (and (not mevedel-view-prepare--jobs)
                              (not mevedel-view-render--batch)))))
           (should (= calls 1))
-          (should (equal expected-draft (mevedel-view--input-text)))
+          (should (equal expected-draft (mevedel-view-composer-draft-text)))
           (should (string-search "Later answer" (buffer-string)))
           (should-not (string-search "preparing result" (buffer-string))))))))
 
@@ -218,7 +221,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
       (should (mevedel-view-render--refresh-source
                data-buf (plist-get turn :start) (plist-get turn :end)))
       (should (eq 'turn-summary (get-text-property pos 'mevedel-view-type)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))))
   :doc "rolls back a failed local projection before requesting the full fallback"
   (mevedel-prepare-test--with-tool
     (let* ((pos (car (last (mevedel-view--rendered-turn-starts))))
@@ -230,7 +233,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
         (should-not (mevedel-view-render--refresh-source
                      data-buf (plist-get turn :start) (plist-get turn :end))))
       (should (equal-including-properties before (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))))
 
 (mevedel-deftest mevedel-view-prepare/changed-session ()
   (mevedel-prepare-test--with-tool
@@ -250,7 +253,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
                                  (not mevedel-view-render--batch)))))
               (should (> calls 0))
               (should-not (string-search "preparing result" (buffer-string)))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
           (with-current-buffer data-buf (setq-local mevedel--session nil)))))))
 
 (mevedel-deftest mevedel-view-prepare/lifetime ()
@@ -416,7 +419,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
                              (not mevedel-view-render--batch))))
             (should-not errors)
             (should (cl-every (lambda (thread) (eq thread main-thread)) calls))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text))))
         (when process
           (set-process-sentinel process #'ignore)
           (delete-process process))))))
@@ -518,7 +521,7 @@ BODY can release it by setting RELEASED and inspect WORKER."
       (should mevedel-view-prepare--jobs)
       (mevedel-prepare-test--wait
        (lambda () (and (not mevedel-view-prepare--jobs) (not mevedel-view-render--batch))))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
       (should (equal expected (buffer-substring-no-properties (point-min) (mevedel-view--history-insertion-marker)))))))
 
 (mevedel-deftest mevedel-view-prepare/malformed ()

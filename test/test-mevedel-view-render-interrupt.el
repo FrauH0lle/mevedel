@@ -112,7 +112,9 @@
          (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
          (save-window-excursion
            (set-window-buffer (selected-window) view-buf)
-           (set-window-start nil (mevedel-view--input-start) t)
+           ;; Inline-only: the window is anchored inside the inline composer, and
+           ;; window offsets below are measured from its draft start.
+           (set-window-start nil (mevedel-view-composer-draft-start) t)
            ,@body)))))
 
 (defun mevedel-interrupt-test--source-edit-window-control ()
@@ -126,10 +128,10 @@
       (mevedel-view-render-batched-full)
       (mevedel-interrupt-test--advance
        view-buf (lambda (job) (plist-get job :fontify)))
-      (setq before (- (window-start) (mevedel-view--input-start)))
+      (setq before (- (window-start) (mevedel-view-composer-draft-start)))
       (mevedel-view-test--insert-data data-buf "Changed source after input.\n" 'response)
       (mevedel-interrupt-test--drain view-buf)
-      (list before (- (window-start) (mevedel-view--input-start))))))
+      (list before (- (window-start) (mevedel-view-composer-draft-start))))))
 
 (defun mevedel-interrupt-test--exercise (stage &optional scan-phase extraction mutation)
   "Interrupt STAGE and SCAN-PHASE, or EXTRACTION, then resume with MUTATION."
@@ -206,7 +208,7 @@
               before (buffer-string)
               source (with-current-buffer data-buf (buffer-string))
               source-tick (with-current-buffer data-buf (buffer-modified-tick))
-              window-offset (- (window-start) (mevedel-view--input-start))
+              window-offset (- (window-start) (mevedel-view-composer-draft-start))
               group-state (copy-tree (plist-get job :group-state))
               group-remaining (plist-get job :remaining)
               armed t)
@@ -281,9 +283,10 @@
             (should (eq job mevedel-view-render--batch))
             (should (eq stage (plist-get job :prepare-stage)))
             (should (equal-including-properties before (buffer-string)))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-            (should (= (point) (+ 4 (mevedel-view--input-start))))
-            (should (= (- (window-start) (mevedel-view--input-start)) window-offset))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+            (should (= (+ (mevedel-view-composer-draft-start) 4)
+                       (with-current-buffer (mevedel-view-composer-buffer) (point))))
+            (should (= (- (window-start) (mevedel-view-composer-draft-start)) window-offset))
             (should-not mevedel-view-render--owner))
           (setq unread-command-events nil)
           (when mutation
@@ -299,7 +302,7 @@
           (should (= 1 (cl-count (car (last calls)) calls)))
           (should (> (hash-table-count mevedel-view--tool-rendering-cache) 0)))
         (when mutation (should (= window-offset (car mutation-window))))
-        (should (= (- (window-start) (mevedel-view--input-start))
+        (should (= (- (window-start) (mevedel-view-composer-draft-start))
                    (if mutation (cadr mutation-window) window-offset)))
         (if mutation
             (progn
@@ -310,8 +313,9 @@
               (mevedel-interrupt-test--drain view-buf)))
         (jit-lock-fontify-now (point-min) (point-max))
         (should (equal-including-properties expected (mevedel-interrupt-test--snapshot)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ 4 (mevedel-view--input-start))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= (+ (mevedel-view-composer-draft-start) 4)
+                   (with-current-buffer (mevedel-view-composer-buffer) (point))))
         (dolist (buffer private-buffers) (should-not (buffer-live-p buffer)))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/fontified-control ()
@@ -407,7 +411,7 @@
               (should (equal-including-properties
                        source (with-current-buffer data-buf (buffer-string))))
               (should (= source-tick (with-current-buffer data-buf (buffer-modified-tick))))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
               (should (= point-before (point)))
               (should (= window-before (window-start)))
               ;; An already dispatched callback from the cancelled plan cannot

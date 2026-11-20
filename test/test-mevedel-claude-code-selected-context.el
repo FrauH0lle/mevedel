@@ -39,9 +39,9 @@
                             (setq launch-system system)
                             (list :meta '((echoAllText . t)))))))
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert "Describe the selected evidence")
-                  (mevedel-view-send))
+                  (mevedel-view-composer-insert "Describe the selected evidence")
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send)))
                 (mevedel-test--await 5 "Selected context turn did not settle"
                   (not (or (zerop (mevedel-session-turn-count session))
                            (mevedel-turn-busy-p buffer)))))
@@ -80,11 +80,10 @@
                             (setq launch-system system)
                             (list :meta '((echoAllText . t)))))))
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert "Use the selected context")
-                  (mevedel-view-send)
-                  (goto-char (mevedel-view--input-start))
-                  (insert "> Keep this draft\nand its second line"))
+                  (mevedel-view-composer-insert "Use the selected context")
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send))
+                  (mevedel-view-composer-insert "> Keep this draft\nand its second line"))
                 (should (functionp resume))
                 (should (zerop launches))
                 (should (mevedel-turn-busy-p buffer))
@@ -104,7 +103,7 @@
                 (should (string-search "ASYNC SELECTED EVIDENCE"
                                        (if (eq placement 'system) launch-system (buffer-string)))))
               (with-current-buffer view
-                (should (equal "> Keep this draft\nand its second line" (mevedel-view--input-text)))))
+                (should (equal "> Keep this draft\nand its second line" (mevedel-view-composer-draft-text)))))
           (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel--send-request/claude-selected-context-restoration (:quiet t)

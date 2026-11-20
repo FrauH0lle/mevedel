@@ -79,7 +79,7 @@
           (with-current-buffer view
             (mevedel-view--full-rerender)
             (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
+                         (point-min) (mevedel-view-prompt-boundary))))
               (dolist (ordinary '("ORDINARY-EARLIER-QUESTION" "ORDINARY-EARLIER-ANSWER"
                                   "ORDINARY-LATER-QUESTION" "ORDINARY-LATER-ANSWER"
                                   "Historical directive" "OLD-DIRECTIVE-REPLY"))

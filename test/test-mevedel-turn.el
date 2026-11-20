@@ -710,8 +710,8 @@
                               :type 'user-error)))
             (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint))
             (with-current-buffer view-buf
-              (should (equal draft (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (should (equal draft (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))
               (goto-char (point-min))
               (should (search-forward "Settled response." nil t))
               (let ((target (mevedel-view-fork-point-at-point)))
@@ -755,8 +755,8 @@
                fsm '(mevedel--turn-save mevedel--turn-checkpoint)))
             (with-current-buffer view-buf
               (should-not full)
-              (should (equal draft (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (should (equal draft (mevedel-view-composer-draft-text)))
+              (should (= 4 (mevedel-view-test--composer-point-offset)))
               (goto-char (point-min))
               (search-forward "Earlier response.")
               (should (eq earlier

@@ -231,8 +231,7 @@
   (mevedel-view-test--with-buffers
     (mevedel-tools-register)
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "> draft\nsecond line"))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line"))
     (dotimes (i 4)
       (mevedel-view-test--insert-data
        data-buf
@@ -252,7 +251,7 @@
       (dotimes (_ 2)
         (should (string-search "! 4 calls: searched 4 patterns" (buffer-string)))
         (should-not (string-search "needle1" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
         (mevedel-view--full-rerender))
       (goto-char (point-min))
       (search-forward "searched 4 patterns")
@@ -263,7 +262,7 @@
       (should (string-search "file:1:matched" (buffer-string)))
       (mevedel-view--full-rerender)
       (should (string-search "file:1:matched" (buffer-string)))
-      (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+      (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
 
 (mevedel-deftest mevedel-view-tool-outcomes/browser ()
   ,test

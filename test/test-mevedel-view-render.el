@@ -41,6 +41,22 @@
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 
+(defun mevedel-view-render-test--view-text ()
+  "Return the current view's transcript and zones, excluding the draft."
+  (buffer-substring-no-properties (point-min) (mevedel-view-prompt-boundary)))
+
+(defun mevedel-view-render-test--draft-offset ()
+  "Return the current view's composer caret offset from its draft start."
+  (let ((start (mevedel-view-composer-draft-start)))
+    (with-current-buffer (mevedel-view-composer-buffer)
+      (- (point) start))))
+
+(defun mevedel-view-render-test--goto-draft-offset (offset)
+  "Move the current view's composer caret to draft-relative OFFSET."
+  (let ((start (mevedel-view-composer-draft-start)))
+    (with-current-buffer (mevedel-view-composer-buffer)
+      (goto-char (+ start offset)))))
+
 ;;; Turn grouping
 
 (defun mevedel-view-test--group-synthetic-segments (segments)
@@ -501,7 +517,7 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--full-rerender)
-        (should-not (string-search "hook audit" (buffer-string)))
+        (should-not (string-search "hook audit" (mevedel-view-render-test--view-text)))
         (goto-char (point-min))
         (search-forward "Assistant")
         (search-forward "Assistant")
@@ -693,7 +709,7 @@
                                    'mevedel-view-collapsed))
         (should-not (search-forward "Advisory context" nil t))
         (should (equal "> quote\nsecond line"
-                       (mevedel-view--input-text)))))))
+                       (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view-switch-conversation-variant ()
   ,test
@@ -786,16 +802,14 @@
               (with-current-buffer view-buf
                 (should (string-match-p
                          "> source draft\nsecond line"
-                         (buffer-substring-no-properties
-                          (mevedel-view--input-start) (point-max)))))
+                         (mevedel-view-composer-draft-text nil t))))
               (with-current-buffer target-view
                 (should (eq 'turn-header
                             (get-text-property
                              (point) 'mevedel-view-type)))
                 (should (string-match-p
                          "> target draft\nsecond line"
-                         (buffer-substring-no-properties
-                          (mevedel-view--input-start) (point-max)))))
+                         (mevedel-view-composer-draft-text nil t))))
               (should (equal "/source/"
                              (mevedel-session-working-directory
                               source-session)))
@@ -891,23 +905,22 @@
   :doc "does not repair drifted zone markers while observing state"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (let ((prompt-start (marker-position mevedel-view--input-marker)))
-        (goto-char (mevedel-view--input-start))
-        (insert "> existing\nmultiline draft")
-        (set-marker mevedel-view--input-marker (point-max))
-        (let ((drifted (marker-position mevedel-view--input-marker))
+      (let ((prompt-start (marker-position (mevedel-view-prompt-boundary-marker))))
+        (mevedel-view-test--insert-composer-draft "> existing\nmultiline draft")
+        (set-marker (mevedel-view-prompt-boundary-marker)
+                    (mevedel-view-composer-draft-end))
+        (let ((drifted (marker-position (mevedel-view-prompt-boundary-marker)))
               (mevedel-view-render-debug nil))
           (should-not (mevedel-view--debug-state data-buf))
           (should (= drifted
-                     (marker-position mevedel-view--input-marker)))
+                     (marker-position (mevedel-view-prompt-boundary-marker))))
           (let ((mevedel-view-render-debug t))
             (let ((state (mevedel-view--debug-state data-buf)))
               (should (plist-member state :point-in-composer))
               (should (= drifted (plist-get state :input)))
               (should (< prompt-start drifted))
               (should (= drifted
-                         (marker-position
-                          mevedel-view--input-marker))))))))))
+                         (marker-position (mevedel-view-prompt-boundary-marker)))))))))))
 
 (mevedel-deftest mevedel-view--full-rerender-reset ()
   ,test
@@ -920,11 +933,11 @@
         (insert "stale display\n")
         (mevedel-view--full-rerender-reset
          data-buf data-buf nil nil))
-      (should-not (string-match-p "stale display" (buffer-string)))
+      (should-not (string-match-p "stale display" (mevedel-view-render-test--view-text)))
       (should (= (marker-position mevedel-view--status-marker)
-                 (marker-position mevedel-view--input-marker)))
+                 (mevedel-view-prompt-boundary)))
       (should (= (marker-position mevedel-view--interaction-marker)
-                 (marker-position mevedel-view--input-marker))))))
+                 (mevedel-view-prompt-boundary))))))
 
 (mevedel-deftest mevedel-view--full-rerender-plan ()
   ,test
@@ -936,10 +949,13 @@
     (with-current-buffer view-buf
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
       (let* ((before (buffer-string))
+             (draft (mevedel-view-composer-draft-text nil t))
              (position (point))
              (plan (mevedel-view--full-rerender-plan data-buf data-buf view-buf nil)))
         (should (equal before (buffer-string)))
         (should (= position (point)))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset)))
         (should (equal '(user assistant)
                        (mapcar (lambda (turn) (plist-get turn :role))
                                (plist-get plan :turns))))
@@ -986,7 +1002,7 @@
                     (<= (point-min)
                         (plist-get rendering :last-assistant-turn-data-start)
                         (point-max))))))
-      (should (string-match-p "Response" (buffer-string)))))
+      (should (string-match-p "Response" (mevedel-view-render-test--view-text)))))
 
   :doc "restored truncated bounds do not leak render data or audit text"
   (mevedel-view-test--with-buffers
@@ -1013,10 +1029,10 @@
         (mevedel-view--full-rerender-reset data-buf data-buf nil nil)
         (mevedel-view--full-rerender-project
          data-buf data-buf view-buf nil nil nil))
-      (should (string-match-p "Visible answer" (buffer-string)))
+      (should (string-match-p "Visible answer" (mevedel-view-render-test--view-text)))
       (should-not (string-match-p
                    "mevedel-render-data\\|mevedel-hook-audit\\|elapsed-seconds"
-                   (buffer-string)))))
+                   (mevedel-view-render-test--view-text)))))
 
   :doc "reports the current assistant turn's data start for reanchoring"
   (mevedel-view-test--with-buffers
@@ -1191,10 +1207,10 @@
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let ((text1 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+      (let ((text1 (mevedel-view-render-test--view-text)))
         (should (string-match-p "What is 2\\+2" text1))
         (mevedel-view--full-rerender)
-        (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+        (let ((text2 (mevedel-view-render-test--view-text)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
 
@@ -1311,8 +1327,7 @@
           :outcome success :activity-kind discussion :sequence 1))))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should-not (string-search "RET: actions" text))
         (should-not (string-search "excluded from model context" text))
         (should-not (string-search "directive-turn-boundary" text))
@@ -1321,7 +1336,7 @@
         (should (string-search "Complete answer." text))
         (should (= 2 (cl-count-if (lambda (line) (equal line "You"))
                                   (split-string text "\n"))))
-        (should-not (text-property-any (point-min) mevedel-view--input-marker
+        (should-not (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                        'mevedel-view-turn-role 'directive)))))
 
   :doc "suppresses modification hooks while rebuilding rendered transcript"
@@ -1338,8 +1353,7 @@
         (should (= 0 changes))
         (should (string-match-p
                  "Response"
-                 (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))))
+                 (mevedel-view-render-test--view-text))))))
   :doc "suppresses intermediate redisplay while rebuilding the transcript"
   (mevedel-view-test--with-buffers
     (let ((original (symbol-function 'mevedel-view--header-string))
@@ -1365,7 +1379,7 @@
               (mevedel-view--insert-pending-tool-row
                (list 'read "Read" "a.el")))))
         (should (text-property-any
-                 (point-min) mevedel-view--input-marker
+                 (point-min) (mevedel-view-prompt-boundary)
                  'mevedel-view-pending-tool-live t))
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
@@ -1374,7 +1388,7 @@
         (mevedel-view--full-rerender)
         (should (= 0 changes))
         (should-not (text-property-any
-                     (point-min) mevedel-view--input-marker
+                     (point-min) (mevedel-view-prompt-boundary)
                      'mevedel-view-pending-tool-live t)))))
   :doc "restores task status fragment after full rerender"
   (mevedel-view-test--with-buffers
@@ -1395,13 +1409,12 @@
         (mevedel-tool-task-refresh-display))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (should (string-match-p "visible task" (buffer-string)))
+        (should (string-match-p "visible task" (mevedel-view-render-test--view-text)))
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "visible task" text))
           (goto-char (point-min))
-          (search-forward "visible task" mevedel-view--input-marker)
+          (search-forward "visible task" (mevedel-view-prompt-boundary))
           (should (eq 'status (get-text-property
                                (1- (point))
                                'mevedel-view-zone-namespace)))
@@ -1447,8 +1460,7 @@
                                    :status 'running)))))
             (mevedel-view--full-rerender))
           (should-not permission-outcomes)
-          (let* ((text (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker))
+          (let* ((text (mevedel-view-render-test--view-text))
                  (header (string-trim-right
                           (mevedel-view--header-string data-buf)))
                  (header-pos (string-search header text))
@@ -1467,7 +1479,7 @@
             (should (< agent-pos permission-pos))
             (should (= 1 (how-many "Permission Request"
                                    (point-min)
-                                   mevedel-view--input-marker)))))))
+                                   (mevedel-view-prompt-boundary))))))))
   :doc "does not restore task block after full rerender when all tasks are completed"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -1487,11 +1499,10 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should-not (string-match-p "tasks" text))
           (should-not (string-match-p "completed task" text))))))
-  :doc "header stays at top when rerendering (input-marker advances past it)"
+  :doc "header stays at top when rerendering (the zone boundary advances past it)"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Greetings\n" nil)
     (mevedel-view-test--insert-data data-buf "Hello back\n" 'response)
@@ -1499,8 +1510,7 @@
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+      (let* ((text (mevedel-view-render-test--view-text))
              (header (mevedel-view--header-string data-buf))
              (header-trim (string-trim-right header))
              (header-pos (string-search header-trim text))
@@ -1526,8 +1536,7 @@
         (put-text-property response-start response-end 'gptel 'response)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "While the agents run, I'll test" text))
         (should-not (string-match-p "^le the agents run" text)))))
   :doc "normalizes restored props in read-only data buffers"
@@ -1560,8 +1569,7 @@
     (with-current-buffer view-buf
       (let (collapsed-header)
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "System reminder (2 lines)" text))
           (should-not (string-match-p "Thinking" text))
           (should-not (string-match-p "<system-reminder>" text)))
@@ -1576,8 +1584,7 @@
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'system-reminder-summary))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p
                    (concat "^" (regexp-quote collapsed-header) "$")
                    text))
@@ -1595,8 +1602,7 @@
           (goto-char body-start)
           (should (looking-at-p "CRITICAL: verify only"))
           (mevedel-view-toggle-section))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 1 (mevedel-view-test--count-substring
                         "System reminder" text)))
           (should-not (string-match-p "CRITICAL: verify only" text))
@@ -1633,8 +1639,7 @@
       (should-not
        (string-match-p
         "/repo/missing.el"
-        (buffer-substring-no-properties
-         (point-min) mevedel-view--input-marker)))))
+        (mevedel-view-render-test--view-text)))))
   :doc "keeps generated system reminders separate from real thinking"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Answer first.\n" 'response)
@@ -1649,8 +1654,7 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Answer first" text))
         (should (string-match-p "System reminder (1 line)" text))
         (should (string-match-p "Thinking... (1 lines)" text))
@@ -1668,15 +1672,13 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "You\nUse \\$implement" text))
         (should-not (string-match-p "Prepared implementation" text)))
       (goto-char (point-min))
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Prepared implementation instructions" text))
         (should (string-match-p "Hook-generated context" text)))))
   :doc "rows the attached-skill reminders leading an expanded skill prompt"
@@ -1696,8 +1698,7 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p
                  "2 attached skills (artifact, artifact-design)" text))
         (should-not (string-match-p "<system-reminder>" text))
@@ -1705,8 +1706,7 @@
       (goto-char (point-min))
       (search-forward "Prompt")
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         ;; The reminders stay in their own row, not in the prompt drawer.
         (should (string-match-p "Prepared document instructions" text))
         (should-not (string-match-p "Attached artifact\\." text))
@@ -1714,8 +1714,7 @@
       (goto-char (point-min))
       (search-forward "attached skills")
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Attached artifact\\." text))
         (should (string-match-p "Attached artifact-design\\." text))
         (should (string-match-p "literal reminder" text))
@@ -1726,8 +1725,7 @@
       (mevedel-view-toggle-section)
       (should (string-match-p
                "2 attached skills (artifact, artifact-design)"
-               (buffer-substring-no-properties
-                (point-min) mevedel-view--input-marker)))))
+               (mevedel-view-render-test--view-text)))))
   :doc "keeps fork reminder and elapsed footers with their assistant turns"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
@@ -1750,8 +1748,7 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+      (let* ((text (mevedel-view-render-test--view-text))
              (first-answer (string-search "First answer" text))
              (reminder (string-search "System reminder" text))
              (first-footer (string-search "Worked for 7s" text))
@@ -1768,7 +1765,7 @@
                    second-prompt second-answer second-footer))
         (should (= 2 (how-many "Worked for"
                                (point-min)
-                               mevedel-view--input-marker))))))
+                               (mevedel-view-prompt-boundary)))))))
   :doc "closes a turn with its request summary as the labelled rule"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
@@ -1801,7 +1798,7 @@
         (should (equal "\n\n" (buffer-substring-no-properties
                                label-end second-prompt)))
         (let ((pos (point-min)))
-          (while (< pos mevedel-view--input-marker)
+          (while (< pos (mevedel-view-prompt-boundary))
             (when (eq (get-text-property pos 'font-lock-face)
                       'mevedel-view-turn-rule)
               (push pos turn-rules))
@@ -1824,11 +1821,10 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (= 2 (how-many "Thinking\\.\\.\\. (1 lines)"
                                 (point-min)
-                                mevedel-view--input-marker)))
+                                (mevedel-view-prompt-boundary))))
         (should (string-match-p "Read: a.el" text))
         (should (string-match-p "I will inspect the file" text))
         (should (string-match-p "Then I will summarize" text))
@@ -1837,18 +1833,17 @@
       (goto-char (point-min))
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
-      (should-not (string-search "I will inspect the file" (buffer-string)))
-      (should (string-search "Then I will summarize" (buffer-string)))
+      (should-not (string-search "I will inspect the file" (mevedel-view-render-test--view-text)))
+      (should (string-search "Then I will summarize" (mevedel-view-render-test--view-text)))
       (goto-char (point-min))
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
       (search-forward "Read: a.el")
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
-      (should-not (string-search "Then I will summarize" (buffer-string)))
+      (should-not (string-search "Then I will summarize" (mevedel-view-render-test--view-text)))
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "I will inspect the file" text))
         (should (string-match-p "Then I will summarize" text))
         (should-not (string-match-p "tool result line" text))
@@ -1865,8 +1860,7 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Handoff" text))
         (should (string-match-p "Assistant answer" text))
         (should-not (string-match-p "mevedel-render-data" text))
@@ -1924,8 +1918,7 @@
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should-not (string-match-p ":GPTEL_MODEL:" text))
         (should-not (string-match-p ":PROPERTIES:" text))
         (should     (string-match-p "Actual prompt" text))
@@ -1973,8 +1966,7 @@
                         (,close-start ,close-end))))))))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Prompt" text))
         (should (string-match-p "Assistant intro" text))
         (should (string-match-p "Read: \\(?:/tmp/\\)?a\\.png" text))
@@ -2060,16 +2052,16 @@
       (goto-char (point-min))
       (search-forward "hook changed tool result")
       (mevedel-view-toggle-section)
-      (should (string-match-p "second audit detail" (buffer-string)))
-      (should-not (string-match-p "first audit detail" (buffer-string)))
+      (should (string-match-p "second audit detail" (mevedel-view-render-test--view-text)))
+      (should-not (string-match-p "first audit detail" (mevedel-view-render-test--view-text)))
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "hook changed tool input")
       (should (get-text-property (point) 'mevedel-view-collapsed))
       (search-forward "hook changed tool result")
       (should-not (get-text-property (point) 'mevedel-view-collapsed))
-      (should (string-match-p "second audit detail" (buffer-string)))
-      (should-not (string-match-p "first audit detail" (buffer-string)))
+      (should (string-match-p "second audit detail" (mevedel-view-render-test--view-text)))
+      (should-not (string-match-p "first audit detail" (mevedel-view-render-test--view-text)))
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "hook changed tool input")
@@ -2118,16 +2110,16 @@
       (goto-char (point-min))
       (search-forward "hook changed tool result")
       (mevedel-view-toggle-section)
-      (should (string-match-p "fallback second detail" (buffer-string)))
-      (should-not (string-match-p "fallback first detail" (buffer-string)))
+      (should (string-match-p "fallback second detail" (mevedel-view-render-test--view-text)))
+      (should-not (string-match-p "fallback first detail" (mevedel-view-render-test--view-text)))
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "hook changed tool input")
       (should (get-text-property (point) 'mevedel-view-collapsed))
       (search-forward "hook changed tool result")
       (should-not (get-text-property (point) 'mevedel-view-collapsed))
-      (should (string-match-p "fallback second detail" (buffer-string)))
-      (should-not (string-match-p "fallback first detail" (buffer-string)))
+      (should (string-match-p "fallback second detail" (mevedel-view-render-test--view-text)))
+      (should-not (string-match-p "fallback first detail" (mevedel-view-render-test--view-text)))
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "hook changed tool input")
@@ -2158,7 +2150,7 @@
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (should (search-forward "full rerender agent body"
-                              mevedel-view--input-marker t))
+                              (mevedel-view-prompt-boundary) t))
       (let ((body-start (match-beginning 0)))
         (should (equal "    " (get-text-property body-start 'line-prefix)))
         (should (equal "    " (get-text-property body-start 'wrap-prefix))))
@@ -2168,7 +2160,7 @@
       (goto-char (match-beginning 0))
       (should-not (get-text-property (point) 'mevedel-view-collapsed))
       (should (search-forward "full rerender agent body"
-                              mevedel-view--input-marker t))))
+                              (mevedel-view-prompt-boundary) t))))
 
   :doc "does not carry fold state to rewritten data at the same source start"
   (mevedel-view-test--with-buffers
@@ -2192,7 +2184,7 @@
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
       (should (search-forward "old expanded body"
-                              mevedel-view--input-marker t)))
+                              (mevedel-view-prompt-boundary) t)))
     (with-current-buffer data-buf
       (erase-buffer)
       (mevedel-view-test--insert-data
@@ -2206,7 +2198,7 @@
       (goto-char (match-beginning 0))
       (should (get-text-property (point) 'mevedel-view-collapsed))
       (should-not (search-forward "new body must start collapsed"
-                                  mevedel-view--input-marker t))
+                                  (mevedel-view-prompt-boundary) t))
       ;; Unmatched identities may remain for children hidden by group folds.
       ;; An explicit transcript-source change discards the whole table.
       (mevedel-view--full-rerender nil t)
@@ -2223,9 +2215,9 @@
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
         (should (search-forward "old thinking tail"
-                                mevedel-view--input-marker t))
+                                (mevedel-view-prompt-boundary) t))
         (mevedel-view-toggle-section)
-        (should-not (string-search "old thinking tail" (buffer-string))))
+        (should-not (string-search "old thinking tail" (mevedel-view-render-test--view-text))))
       (with-current-buffer data-buf
         (erase-buffer)
         (mevedel-view-test--insert-data
@@ -2238,7 +2230,7 @@
         (goto-char (match-beginning 0))
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
         (should (search-forward "new thinking starts expanded"
-                                mevedel-view--input-marker t)))))
+                                (mevedel-view-prompt-boundary) t)))))
 
   :doc "reanchors in-flight assistant after restoring earlier expanded fold"
   (mevedel-view-test--with-buffers
@@ -2261,18 +2253,17 @@
           (should-not (get-text-property (point) 'mevedel-view-collapsed)))
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
+              (copy-marker (mevedel-view-prompt-boundary)))
         (mevedel-view--full-rerender)
         (should (markerp mevedel-view--in-flight-turn-start))
         (save-excursion
           (goto-char mevedel-view--in-flight-turn-start)
           (should (looking-at-p "Assistant"))
           (should (search-forward "Second response"
-                                  mevedel-view--input-marker t)))
+                                  (mevedel-view-prompt-boundary) t)))
         (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 2 (cl-count-if (lambda (line) (string= line "Assistant"))
                                     (split-string text "\n"))))
           (should (= 1 (cl-loop with start = 0
@@ -2308,8 +2299,7 @@
         (should (markerp mevedel-view--in-flight-turn-start))
         (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 1 (cl-count-if (lambda (line) (string= line "Assistant"))
                                     (split-string text "\n"))))
           (should (= 1 (cl-loop with start = 0
@@ -2330,8 +2320,7 @@
     (mevedel-view-test--insert-data data-buf "Actual prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
-      (cl-flet ((text () (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker))
+      (cl-flet ((text () (mevedel-view-render-test--view-text))
                 (toggle () (save-excursion
                              (goto-char (point-min))
                              (search-forward "conversation compacted")
@@ -2339,8 +2328,7 @@
                 (count-marker ()
                   (mevedel-view-test--count-substring
                    "conversation compacted"
-                   (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))))
+                   (mevedel-view-render-test--view-text))))
         (mevedel-view--full-rerender)
         ;; Collapsed by default: the marker alone, no body or wrapper lines.
         (should-not (string-match-p "Summary should stay out of view" (text)))
@@ -2369,8 +2357,8 @@
     (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (should-not (string-match-p "conversation compacted" (buffer-string)))
-      (should (string-match-p "Actual reply" (buffer-string)))))
+      (should-not (string-match-p "conversation compacted" (mevedel-view-render-test--view-text)))
+      (should (string-match-p "Actual reply" (mevedel-view-render-test--view-text)))))
 
   :doc "hook audits attached to the summary render once beside the row"
   (mevedel-view-test--with-buffers
@@ -2387,8 +2375,7 @@
          view-buf data-buf
          (with-current-buffer data-buf (cons (point-min) (point-max)))
          (list audit)))
-      (cl-flet ((text () (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
+      (cl-flet ((text () (mevedel-view-render-test--view-text)))
         (should (= 1 (mevedel-view-test--count-substring
                       "conversation compacted" (text))))
         (should (= 1 (mevedel-view-test--count-substring
@@ -2409,18 +2396,17 @@
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             (start nil))
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (goto-char (mevedel-view-prompt-boundary))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (setq start (point))
         (insert "Assistant\nCalling Read...\nAgent: reviewer done\n")
         (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker mevedel-view--input-marker (point))
-        (set-marker-insertion-type mevedel-view--input-marker nil))
+        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Calling Read" text))
@@ -2440,8 +2426,8 @@
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               start)
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (goto-char (mevedel-view-prompt-boundary))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (setq start (point))
           (insert (concat "Assistant\n"
                           "Shared first.\n"
@@ -2450,17 +2436,16 @@
           (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
           (set-marker mevedel-view--status-marker (point))
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker mevedel-view--input-marker (point))
-          (set-marker-insertion-type mevedel-view--input-marker nil))
+          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 3 (mevedel-view-test--count-substring
                         "Shared first." text)))
           (should (string-match-p "reviewer done" text)))
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset))))))
 
   :doc "loads persisted session summaries once for a full transcript render"
   (mevedel-view-test--with-buffers
@@ -2597,8 +2582,10 @@
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((history-end (marker-position mevedel-view--status-marker))
+              ;; Inline presentation: the prefix and its overlay must stay put.
               (prompt (buffer-substring-no-properties
-                       mevedel-view--input-marker (mevedel-view--input-start)))
+                       (mevedel-view-prompt-boundary)
+                       (mevedel-view-composer-draft-start)))
               (kill-ring nil)
               (kill-ring-yank-pointer nil)
               (interprogram-cut-function nil)
@@ -2612,34 +2599,35 @@
           (search-forward "Do you recall using Undo?")
           (kill-new (filter-buffer-substring
                      (match-beginning 0) (match-end 0)))
-          (goto-char (mevedel-view--input-start))
-          (insert "> ")
-          (yank)
-          (insert "\nsecond line\n")
+          (mevedel-view-test--insert-composer-draft "> ")
+          (with-current-buffer (mevedel-view-composer-buffer view-buf)
+            (yank)
+            (mevedel-view-composer-insert "\nsecond line\n" (point) view-buf))
           ;; Exercise actual copy/yank, not a hand-authored property stub.
           (should (eq 'response
-                      (get-text-property (+ 2 (mevedel-view--input-start))
-                                         'mevedel-view-type)))
-          (goto-char (+ 5 (mevedel-view--input-start)))
-          (let ((draft (buffer-substring-no-properties
-                        (mevedel-view--input-start) (point-max)))
+                      (get-text-property 2 'mevedel-view-type
+                                         (mevedel-view-composer-draft-text))))
+          (mevedel-view-render-test--goto-draft-offset 5)
+          (let ((draft (mevedel-view-composer-draft-text nil t))
                 (tail (mevedel-view--history-tail-position)))
             (mevedel-view--render-status)
             (mevedel-view-render-live-update data-buf)
-            (let ((start (mevedel-view--input-start)))
+            (should (equal draft (mevedel-view-composer-draft-text nil t)))
+            (should (= 5 (mevedel-view-render-test--draft-offset)))
+            (let ((start (mevedel-view-composer-draft-start)))
               (should (equal prompt (buffer-substring-no-properties
-                                     mevedel-view--input-marker start)))
-              (should (equal draft (buffer-substring-no-properties start (point-max))))
-              (should (= (point) (+ start 5)))
-              (should (= start (overlay-start mevedel-view--composer-display-overlay)))
-              (should-not (get-char-property (point-min) 'line-prefix)))
+                                     (mevedel-view-prompt-boundary) start)))
+              (should (= start (overlay-start mevedel-view--composer-display-overlay))))
+            (should-not (get-char-property (point-min) 'line-prefix))
             (should (= history-end tail)))))))
 
   :doc "agent inspection has no composer and scans the complete transcript"
   (with-temp-buffer
     (setq-local mevedel-view--agent-transcript-p t)
     (insert (propertize "Assistant\nAnswer\n" 'mevedel-view-type 'response))
-    (setq-local mevedel-view--input-marker (copy-marker (point-min)))
+    (save-excursion
+      (goto-char (point-min))
+      (mevedel-view-composer-initialize-prompt))
     (should (= (point-max) (mevedel-view--history-tail-position))))
 
   :doc "recovers the last history boundary by property runs"
@@ -2673,19 +2661,18 @@
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             start)
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (goto-char (mevedel-view-prompt-boundary))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (setq start (point))
         (insert "Assistant\nAssistant answer.\n")
         (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker mevedel-view--input-marker (point))
-        (set-marker-insertion-type mevedel-view--input-marker nil))
+        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
       (mevedel-view--full-rerender)
       (mevedel-view--full-rerender)
-      (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+      (let* ((text (mevedel-view-render-test--view-text))
              (assistant-count
               (cl-count-if (lambda (line) (string= line "Assistant"))
                            (split-string text "\n")))
@@ -2712,18 +2699,17 @@
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             start)
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (goto-char (mevedel-view-prompt-boundary))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (setq start (point))
         (insert "Assistant\nAssistant answer.\n✓ Agent: reviewer done · 9.9s · 3 calls\n")
         (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
-        (set-marker mevedel-view--input-marker (point))
-        (set-marker-insertion-type mevedel-view--input-marker nil))
+        (set-marker (mevedel-view-prompt-boundary-marker) (point))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
       (mevedel-view--full-rerender)
-      (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+      (let* ((text (mevedel-view-render-test--view-text))
              (assistant-count
               (cl-count-if (lambda (line) (string= line "Assistant"))
                            (split-string text "\n")))
@@ -2758,19 +2744,18 @@
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               start)
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (goto-char (mevedel-view-prompt-boundary))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (setq start (point))
           (insert "Assistant\nAssistant answer.\n")
           (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
           (set-marker mevedel-view--status-marker (point))
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker mevedel-view--input-marker (point))
-          (set-marker-insertion-type mevedel-view--input-marker nil))
+          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
         (mevedel-view--full-rerender)
         (mevedel-view--full-rerender)
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+        (let* ((text (mevedel-view-render-test--view-text))
                (assistant-count
                 (cl-count-if (lambda (line) (string= line "Assistant"))
                              (split-string text "\n")))
@@ -2787,15 +2772,14 @@
     (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
-            (copy-marker mevedel-view--input-marker nil))
+            (copy-marker (mevedel-view-prompt-boundary)))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max) nil)))
       (mevedel-view--start-spinner "Thinking...")
       (mevedel-view--full-rerender)
       (should (mevedel-view--request-progress-visible-p))
       (mevedel-view--stop-spinner)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "Thinking" text)))))
 
@@ -2815,19 +2799,18 @@
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               start)
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (goto-char (mevedel-view-prompt-boundary))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (setq start (point))
           (insert "Assistant\nstale live tail\n")
           (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
           (set-marker mevedel-view--status-marker (point))
           (set-marker mevedel-view--interaction-marker (point))
-          (set-marker mevedel-view--input-marker (point))
-          (set-marker-insertion-type mevedel-view--input-marker nil))
+          (set-marker (mevedel-view-prompt-boundary-marker) (point))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))
         (setq mevedel-view--data-turn-start data-turn-start)
         (mevedel-view--full-rerender)
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+        (let* ((text (mevedel-view-render-test--view-text))
                (assistant-count
                 (cl-count-if (lambda (line) (string= line "Assistant"))
                              (split-string text "\n"))))
@@ -2851,18 +2834,16 @@
         (with-current-buffer view-buf
           (setq mevedel-view--data-turn-start data-turn-start)
           (setq mevedel-view--in-flight-turn-start
-                (copy-marker mevedel-view--input-marker nil)))))
+                (copy-marker (mevedel-view-prompt-boundary))))))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (should (string-match-p
                "Second"
-               (buffer-substring-no-properties
-                (point-min) mevedel-view--input-marker))))
+               (mevedel-view-render-test--view-text))))
     (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view-render-live-update data-buf)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "First response" text))
         (should (string-match-p "Second" text))
         (should (string-match-p "Second response" text))))))
@@ -2901,14 +2882,13 @@
               (segment
                (list 'request-summary
                      1 (with-current-buffer data-buf (point-max)))))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (goto-char (mevedel-view-prompt-boundary))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (mevedel-view--render-request-summary-segment
                segment data-buf)
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p
                    "Codex request failed · server_error" text))
           (should (string-match-p "HTTP/2 200" text))
@@ -2921,13 +2901,13 @@
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
         (mevedel-view-toggle-section)
         (should-not (search-forward "provider-request-123"
-                                    mevedel-view--input-marker t))
+                                    (mevedel-view-prompt-boundary) t))
         (goto-char (point-min))
         (search-forward "Codex request failed")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "provider-request-123"
-                                mevedel-view--input-marker t)))))
+                                (mevedel-view-prompt-boundary) t)))))
 
   :doc "plain-string provider failures remain visible"
   (mevedel-view-test--with-buffers
@@ -2947,14 +2927,14 @@
             (segment
              (list 'request-summary
                    1 (with-current-buffer data-buf (point-max)))))
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
+        (goto-char (mevedel-view-prompt-boundary))
+        (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
         (unwind-protect
             (mevedel-view--render-request-summary-segment segment data-buf)
-          (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
       (goto-char (point-min))
       (should (search-forward "Raw provider failure"
-                              mevedel-view--input-marker t))))
+                              (mevedel-view-prompt-boundary) t))))
 
   :doc "an agent process exit renders one block that states its message once"
   (mevedel-view-test--with-buffers
@@ -2974,8 +2954,7 @@
        'ignore)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker))
+        (let ((text (mevedel-view-render-test--view-text))
               (count (lambda (needle text)
                        (let ((start 0) (n 0))
                          (while (setq start (string-search needle text start))
@@ -3004,8 +2983,8 @@
         (goto-char (point-min))
         (should (re-search-forward
                  "Partial prose\\.\n\n  [^\n]*Provider request failed"
-                 mevedel-view--input-marker t))
-        (should (search-forward "── Worked for 7s" mevedel-view--input-marker t))
+                 (mevedel-view-prompt-boundary) t))
+        (should (search-forward "── Worked for 7s" (mevedel-view-prompt-boundary) t))
         (goto-char (point-min))
         (search-forward "Provider request failed")
         (mevedel-view-toggle-section)))))
@@ -3055,7 +3034,7 @@
       (with-current-buffer view-buf
         (setq mevedel-view--data-turn-start assistant-start)
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
+              (copy-marker (mevedel-view-prompt-boundary)))
         (cl-letf (((symbol-function 'mevedel-view--fontify-response)
                    (lambda (text)
                      (when (string-search "First paragraph." text)
@@ -3078,7 +3057,7 @@
         (should (= stable-position (marker-position stable-marker)))
         (goto-char stable-marker)
         (should (looking-at-p "Thinking\\.\\.\\."))
-        (should (search-forward "Tail grows." mevedel-view--input-marker t)))
+        (should (search-forward "Tail grows." (mevedel-view-prompt-boundary) t)))
       (with-current-buffer data-buf
         (save-excursion
           (goto-char (point-min))
@@ -3089,7 +3068,7 @@
         (mevedel-view-render-live-update data-buf)
         (goto-char (point-min))
         (should (search-forward "Xirst paragraph"
-                                mevedel-view--input-marker t)))))
+                                (mevedel-view-prompt-boundary) t)))))
 
   :doc "streamed reasoning stays visible between tool runs and preserves the draft"
   (mevedel-view-test--with-buffers
@@ -3098,9 +3077,7 @@
         (mevedel-view-stream-begin-turn
          mevedel-view--status-marker
          (with-current-buffer data-buf (copy-marker (point-min))))
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 3)))
+        (mevedel-view-test--insert-composer-draft draft 3))
       (dotimes (i 6)
         (mevedel-view-test--insert-data
          data-buf
@@ -3111,25 +3088,25 @@
          data-buf "#+begin_reasoning\nNext file\n#+end_reasoning\n" 'ignore)
         (with-current-buffer view-buf
           (mevedel-view-render-live-update data-buf)
-          (should (equal draft (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 3)))))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
+          (should (= 3 (mevedel-view-render-test--draft-offset)))))
       (with-current-buffer view-buf
-        (should-not (text-property-any (point-min) mevedel-view--input-marker
+        (should-not (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                        'mevedel-view-type 'tool-group))
         (should (= 6 (mevedel-view-test--count-substring
-                      "Next file" (buffer-string))))
+                      "Next file" (mevedel-view-render-test--view-text))))
         (goto-char (point-min))
         (dotimes (i 6)
           (should (search-forward (format "f%d.el" i)
-                                  mevedel-view--input-marker t))
-          (should (search-forward "Next file" mevedel-view--input-marker t))
+                                  (mevedel-view-prompt-boundary) t))
+          (should (search-forward "Next file" (mevedel-view-prompt-boundary) t))
           (should-not (invisible-p (match-beginning 0))))
-        (goto-char (+ (mevedel-view--input-start) 3))
+        (mevedel-view-render-test--goto-draft-offset 3)
         (mevedel-view--full-rerender)
         (should (= 6 (mevedel-view-test--count-substring
-                      "Next file" (buffer-string))))
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 3))))))
+                      "Next file" (mevedel-view-render-test--view-text))))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 3 (mevedel-view-render-test--draft-offset))))))
 
   :doc "streamed prose after a tool keeps one activity rule, as a full render does"
   (mevedel-view-test--with-buffers
@@ -3138,7 +3115,7 @@
       (cl-flet ((rules ()
                   (with-current-buffer view-buf
                     (let ((pos (point-min)) (count 0))
-                      (while (< pos (mevedel-view--input-start))
+                      (while (< pos (mevedel-view-prompt-boundary))
                         (when (eq (get-text-property pos 'font-lock-face)
                                   'mevedel-view-activity-rule)
                           (cl-incf count))
@@ -3151,15 +3128,13 @@
                 (update ()
                   (with-current-buffer view-buf
                     (mevedel-view-render-live-update data-buf)
-                    (should (equal draft (mevedel-view--input-text)))
-                    (should (= (point) (+ (mevedel-view--input-start) 3))))))
+                    (should (equal draft (mevedel-view-composer-draft-text nil t)))
+                    (should (= 3 (mevedel-view-render-test--draft-offset))))))
         (with-current-buffer view-buf
           (mevedel-view-stream-begin-turn
            mevedel-view--status-marker
            (with-current-buffer data-buf (copy-marker (point-min))))
-          (goto-char (mevedel-view--input-start))
-          (insert draft)
-          (goto-char (+ (mevedel-view--input-start) 3)))
+          (mevedel-view-test--insert-composer-draft draft 3))
         (mevedel-view-test--insert-data data-buf "Checking the file.\n\n" 'response)
         (update)
         (mevedel-view-test--insert-data
@@ -3176,7 +3151,7 @@
         (should (string-match-p "  \nThe answer grows in chunks\\." live))
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
-          (should (equal draft (mevedel-view--input-text))))
+          (should (equal draft (mevedel-view-composer-draft-text nil t))))
         (should (= 1 (rules)))
         (should (equal live (history))))))
 
@@ -3226,8 +3201,8 @@
             (if (eq refresh 'mevedel-view--full-rerender)
                 (funcall refresh)
               (funcall refresh data-buf))
-            (should (string-match-p "read 4 files" (buffer-string)))
-            (should (string-match-p "tool input repaired" (buffer-string)))
+            (should (string-match-p "read 4 files" (mevedel-view-render-test--view-text)))
+            (should (string-match-p "tool input repaired" (mevedel-view-render-test--view-text)))
             (should (equal "content 0"
                            (buffer-substring-no-properties
                             (line-beginning-position) (line-end-position))))
@@ -3287,8 +3262,8 @@
             (if (eq refresh 'mevedel-view--full-rerender)
                 (funcall refresh)
               (funcall refresh data-buf))
-            (should (string-match-p "read 4 files" (buffer-string)))
-            (should (string-match-p "tool input repaired" (buffer-string)))
+            (should (string-match-p "read 4 files" (mevedel-view-render-test--view-text)))
+            (should (string-match-p "tool input repaired" (mevedel-view-render-test--view-text)))
             (should (= column (current-column)))
             (should (equal line (buffer-substring-no-properties
                                  (line-beginning-position) (line-end-position))))))))))
@@ -3380,7 +3355,7 @@
             (with-current-buffer view-buf
               (setq mevedel-view--data-turn-start assistant-start
                     mevedel-view--in-flight-turn-start
-                    (copy-marker mevedel-view--input-marker nil))
+                    (copy-marker (mevedel-view-prompt-boundary)))
               (mevedel-view-render-live-update data-buf)
               (should mevedel-view--live-data-tail-start))
             (with-current-buffer data-buf
@@ -3421,8 +3396,7 @@
         (should-not mevedel-view--live-view-tail-start)
         (goto-char stable-marker)
         (should-not (looking-at-p "Stable paragraph\\."))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 1 (cl-count-if
                         (lambda (line) (string= line "Assistant"))
                         (split-string text "\n"))))
@@ -3463,12 +3437,11 @@
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "expanded tool body"
-                                mevedel-view--input-marker t)))
+                                (mevedel-view-prompt-boundary) t)))
       (mevedel-view-test--insert-data data-buf "Stream tail.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "expanded tool body" text))
           (should (string-match-p "Stream tail" text))))))
 
@@ -3489,17 +3462,16 @@
               (copy-marker view-assistant-start nil))
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
-        (should (search-forward "short thought" mevedel-view--input-marker t))
+        (should (search-forward "short thought" (mevedel-view-prompt-boundary) t))
         (mevedel-view-toggle-section)
-        (should-not (string-search "short thought" (buffer-string)))
+        (should-not (string-search "short thought" (mevedel-view-render-test--view-text)))
         (mevedel-view-toggle-section)
         (should (search-forward "short thought"
-                                mevedel-view--input-marker t)))
+                                (mevedel-view-prompt-boundary) t)))
       (mevedel-view-test--insert-data data-buf "more streamed thinking\n" 'ignore)
       (with-current-buffer view-buf
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "short thought" text))
           (should (string-match-p "more streamed thinking" text))
           (should (string-match-p "Thinking\\.\\.\\." text)))
@@ -3510,8 +3482,7 @@
           (set-marker mevedel-view--in-flight-turn-start nil))
         (setq mevedel-view--in-flight-turn-start nil)
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "short thought" text))
           (should (string-match-p "more streamed thinking" text))
           (should (string-match-p "Thinking\\.\\.\\." text))))))
@@ -3548,12 +3519,11 @@
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "agent body stays open"
-                                mevedel-view--input-marker t)))
+                                (mevedel-view-prompt-boundary) t)))
       (mevedel-view-test--insert-data data-buf "Agent stream tail.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "agent body stays open" text))
           (should (string-match-p "Agent stream tail" text))))))
 
@@ -3590,7 +3560,7 @@
           (search-forward "line two")
           (should-not (get-text-property (match-beginning 0) 'invisible))
           (should (search-forward "Result stream tail"
-                                  mevedel-view--input-marker t))))))
+                                  (mevedel-view-prompt-boundary) t))))))
 
   :doc "expanded task status survives streaming redraw and full rerender"
   (mevedel-view-test--with-buffers
@@ -3621,7 +3591,7 @@
         (search-forward "active detail")
         (mevedel-toggle-tasks)
         (should (search-forward "finished detail"
-                                mevedel-view--input-marker t))
+                                (mevedel-view-prompt-boundary) t))
         (setq mevedel-view--data-turn-start assistant-start)
         (goto-char (point-min))
         (search-forward "Assistant")
@@ -3631,14 +3601,13 @@
       (mevedel-view-test--insert-data data-buf "Task stream tail.\n" 'response)
       (with-current-buffer view-buf
         (mevedel-view-render-live-update data-buf)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "finished detail" text))
           (should (string-match-p "Task stream tail" text)))
         (mevedel-view--full-rerender)
         (goto-char (point-min))
         (should (search-forward "finished detail"
-                                mevedel-view--input-marker t))))))
+                                (mevedel-view-prompt-boundary) t))))))
 
 
 
@@ -3679,16 +3648,15 @@
       (with-current-buffer view-buf
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 4))
+              (copy-marker (mevedel-view-prompt-boundary)))
+        (mevedel-view-composer-insert draft)
+        (mevedel-view-render-test--goto-draft-offset 4)
         (mevedel-view-render-live-update data-buf)
-        (should (string= draft (mevedel-view--input-text)))
-        (should-not (string-search "hidden provider representation" (buffer-string)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (should-not (get-text-property (mevedel-view--input-start)
-                                       'read-only)))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should-not (string-search "hidden provider representation" (mevedel-view-render-test--view-text)))
+        (should (= 4 (mevedel-view-render-test--draft-offset)))
+        (should-not (get-text-property 0 'read-only
+                                      (mevedel-view-composer-draft-text))))))
   :doc "incremental redraw preserves composer point in every live window"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
@@ -3706,20 +3674,21 @@
               (with-current-buffer view-buf
                 (setq mevedel-view--data-turn-start data-turn-start)
                 (setq mevedel-view--in-flight-turn-start
-                      (copy-marker mevedel-view--input-marker nil)))
-              (with-selected-window first-window
-                (goto-char (mevedel-view--input-start))
-                (insert "draft")
-                (goto-char (+ (mevedel-view--input-start) 2)))
-              (with-selected-window second-window
-                (goto-char (+ (mevedel-view--input-start) 3)))
-              (with-selected-window first-window
-                (mevedel-view-render-live-update data-buf)
-                (should (= (window-point first-window)
-                           (+ (mevedel-view--input-start) 2)))
-                (should (= (window-point second-window)
-                           (+ (mevedel-view--input-start) 3)))
-                (should (string= "draft" (mevedel-view--input-text)))))
+                      (copy-marker (mevedel-view-prompt-boundary))))
+              (let ((first-composer (mevedel-view-composer-window first-window))
+                    (second-composer (mevedel-view-composer-window second-window)))
+                (with-selected-window first-composer
+                  (with-current-buffer view-buf
+                    (mevedel-view-test--insert-composer-draft "draft" 2)))
+                (with-selected-window second-composer
+                  (with-current-buffer view-buf
+                    (mevedel-view-render-test--goto-draft-offset 3)))
+                (with-current-buffer view-buf
+                  (mevedel-view-render-live-update data-buf)
+                  (let ((start (mevedel-view-composer-draft-start)))
+                    (should (= (window-point first-composer) (+ start 2)))
+                    (should (= (window-point second-composer) (+ start 3))))
+                  (should (string= "draft" (mevedel-view-composer-draft-text nil t))))))
           (delete-other-windows)))))
   :doc "full redraw preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
@@ -3727,14 +3696,13 @@
       (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
       (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view-composer-insert draft)
+        (mevedel-view-render-test--goto-draft-offset 4)
         (mevedel-view--full-rerender)
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (should-not (get-text-property (mevedel-view--input-start)
-                                       'read-only)))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset)))
+        (should-not (get-text-property 0 'read-only
+                                      (mevedel-view-composer-draft-text))))))
   :doc "path-verification rerender preserves a multiline leading-> draft"
   (let ((file (make-temp-file "mevedel-view-path-" nil ".el")))
     (unwind-protect
@@ -3744,19 +3712,18 @@
             (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
             (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
             (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert draft)
-              (goto-char (+ (mevedel-view--input-start) 4))
+              (mevedel-view-composer-insert draft)
+              (mevedel-view-render-test--goto-draft-offset 4)
               (setq mevedel-view--path-pending (list file))
               (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
                          (lambda (_key _path thunk &optional _on-cancel)
                            (funcall thunk)
                            t)))
                 (mevedel-view--verify-paths view-buf))
-              (should (string= draft (mevedel-view--input-text)))
-              (should (= (point) (+ (mevedel-view--input-start) 4)))
-              (should-not (get-text-property (mevedel-view--input-start)
-                                             'read-only)))))
+              (should (string= draft (mevedel-view-composer-draft-text nil t)))
+              (should (= 4 (mevedel-view-render-test--draft-offset)))
+              (should-not (get-text-property 0 'read-only
+                                            (mevedel-view-composer-draft-text))))))
       (delete-file file))))
 
 (mevedel-deftest mevedel-view-render-navigation ()
@@ -3792,7 +3759,7 @@
               (end (mevedel-view-composer-draft-end)))
           (with-silent-modifications
             (put-text-property start end 'mevedel-view-source '(1 . 2)))
-          (set-marker mevedel-view--input-marker end)
+          (set-marker (mevedel-view-prompt-boundary-marker) end)
           (goto-char (point-min))
           (mevedel-view-next-turn)
           (should (= prompt (point)))
@@ -4004,8 +3971,8 @@
             (setq calls 0)
             (mevedel-view--full-rerender)
             (should (= calls 2))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-            (should (= (point) (+ 3 (mevedel-view--input-start)))))))))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+            (should (= 3 (mevedel-view-render-test--draft-offset))))))))
   :doc "a coalescing row needs individual presentation and splits its tool run"
   (dolist (mixed '(nil t))
     (mevedel-view-test--with-buffers
@@ -4036,15 +4003,15 @@
             (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
             (mevedel-view--full-rerender)
             (should-not (text-property-any
-                         (point-min) mevedel-view--input-marker
+                         (point-min) (mevedel-view-prompt-boundary)
                          'mevedel-view-type 'tool-group))
-            (should (string-search "PollBoundary: latest" (buffer-string)))
-            (should (string-search "f0.el" (buffer-string)))
-            (should (string-search "f2.el" (buffer-string)))
+            (should (string-search "PollBoundary: latest" (mevedel-view-render-test--view-text)))
+            (should (string-search "f0.el" (mevedel-view-render-test--view-text)))
+            (should (string-search "f2.el" (mevedel-view-render-test--view-text)))
             (when mixed
-              (should (string-search "Consider it." (buffer-string))))
-            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-            (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+              (should (string-search "Consider it." (mevedel-view-render-test--view-text))))
+            (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+            (should (= 4 (mevedel-view-render-test--draft-offset))))))))
 
   :doc "substantive reasoning separates coalescing runs even beside hidden rows"
   (dolist (mixed '(nil t))
@@ -4079,10 +4046,10 @@
             (mevedel-view--full-rerender)
             (should (= (if mixed 2 1)
                        (mevedel-view-test--count-substring
-                        "PollBoundary: latest" (buffer-string))))
+                        "PollBoundary: latest" (mevedel-view-render-test--view-text))))
             (should (eq (not mixed)
-                        (and (string-search "×2" (buffer-string)) t)))
-            (should-not (string-search "HiddenBoundary" (buffer-string)))))))))
+                        (and (string-search "×2" (mevedel-view-render-test--view-text)) t)))
+            (should-not (string-search "HiddenBoundary" (mevedel-view-render-test--view-text)))))))))
 
 (mevedel-deftest mevedel-view--render-tool-call ()
   ,test
@@ -4239,21 +4206,21 @@
       (setq source (cons 1 (with-current-buffer data-buf (point-max))))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
+          (goto-char (mevedel-view-prompt-boundary))
           (mevedel-view--render-tool-activity
            (list (list 'tool (car source) (cdr source))) data-buf))
         (goto-char (point-min))
         (search-forward "CacheStateTool: cached")
         (let ((header-pos (match-beginning 0)))
           (should-not (search-forward "body must survive cache"
-                                      mevedel-view--input-marker t))
+                                      (mevedel-view-prompt-boundary) t))
           (goto-char header-pos))
         (mevedel-view-toggle-section)
         (should (search-forward "body must survive cache"
-                                mevedel-view--input-marker t))
+                                (mevedel-view-prompt-boundary) t))
         (let ((inhibit-read-only t))
-          (delete-region (point-min) mevedel-view--input-marker)
-          (goto-char mevedel-view--input-marker)
+          (delete-region (point-min) (mevedel-view-prompt-boundary))
+          (goto-char (mevedel-view-prompt-boundary))
           (mevedel-view--render-tool-activity
            (list (list 'tool (car source) (cdr source))) data-buf))
         (goto-char (point-min))
@@ -4261,7 +4228,7 @@
         (should-not (get-text-property (match-beginning 0)
                                        'mevedel-view-collapsed))
         (should (search-forward "body must survive cache"
-                                mevedel-view--input-marker t)))))
+                                (mevedel-view-prompt-boundary) t)))))
 
   :doc "direct Eval mixed with Read and Grep survives cached redraw and disclosure"
   (mevedel-view-test--with-buffers
@@ -4320,8 +4287,8 @@
                 (should (equal "Eval" (plist-get
                                        (mevedel-view--tool-group-child
                                         entry data-buf 2 t) :tool))))))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= 4 (mevedel-view-render-test--draft-offset)))
           (goto-char (point-min))
           (search-forward heading)
           (goto-char (match-beginning 0))
@@ -4334,12 +4301,12 @@
                           data-buf eval-start eval-end)
                          (get-text-property (point) 'mevedel-view-source)))
           (should-not (search-forward "audit preview"
-                                      mevedel-view--input-marker t))
+                                      (mevedel-view-prompt-boundary) t))
           (goto-char (point-min))
           (search-forward "Eval: live (+ 1 2)")
           (goto-char (match-beginning 0))
           (mevedel-view-toggle-section)
-          (should (search-forward "3" mevedel-view--input-marker t))
+          (should (search-forward "3" (mevedel-view-prompt-boundary) t))
           (mevedel-view--full-rerender)
           (goto-char (point-min))
           (search-forward "Eval: live (+ 1 2)")
@@ -4348,16 +4315,16 @@
           (mevedel-view-toggle-section)
           (goto-char (point-min))
           (let ((group (text-property-any
-                        (point-min) mevedel-view--input-marker
+                        (point-min) (mevedel-view-prompt-boundary)
                         'mevedel-view-type 'tool-group)))
             (should group)
             (goto-char group)
             (mevedel-view-toggle-section))
-          (goto-char (+ 4 (mevedel-view--input-start))))
+          (mevedel-view-render-test--goto-draft-offset 4))
         (mevedel-view--full-rerender)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
         (goto-char (point-min))
-        (should (search-forward heading mevedel-view--input-marker t)))
+        (should (search-forward heading (mevedel-view-prompt-boundary) t)))
       (with-current-buffer data-buf
         (should (equal-including-properties original (buffer-string)))
         (should (equal data (mevedel-tool-render-data-for-tool data-buf "outer"))))))
@@ -4397,8 +4364,7 @@
     (let ((data-before (with-current-buffer data-buf (buffer-string))))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let* ((visible (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker))
+        (let* ((visible (mevedel-view-render-test--view-text))
                (input-audit (string-match "hook changed tool input" visible))
                (result-audit (string-match "hook changed tool result" visible)))
           (should-not (string-match-p "Polled first" visible))
@@ -4442,11 +4408,11 @@
             (segment)
             (with-current-buffer view-buf
               (let ((inhibit-read-only t))
-                (goto-char mevedel-view--input-marker)
-                (set-marker-insertion-type mevedel-view--input-marker t)
+                (goto-char (mevedel-view-prompt-boundary))
+                (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
                 (unwind-protect
                     (mevedel-view--render-tool-activity (list segment) data-buf)
-                  (set-marker-insertion-type mevedel-view--input-marker nil))))))
+                  (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))))))
         (render-tool
          (insert-tool
           "call-agent"
@@ -4468,7 +4434,7 @@
           '(:kind collaboration-event :event interacted
             :path "/root/timer_patch_review"))))
       (with-current-buffer view-buf
-        (goto-char (+ (mevedel-view--input-start) 4)))
+        (mevedel-view-render-test--goto-draft-offset 4))
       (cl-letf (((symbol-function 'mevedel-transcript-restore-properties)
                 #'ignore)
                 ((symbol-function 'mevedel-view-rerender)
@@ -4488,8 +4454,8 @@
           (should (eq 'blocked (plist-get render-data :status)))
           (should-not (plist-member render-data :activity))))
       (with-current-buffer view-buf
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset)))
         (let ((pos (car (car (mevedel-view--agent-handle-refresh-points
                              "/root/timer_patch_review")))))
           (should pos)
@@ -4500,16 +4466,15 @@
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "/root/timer_patch_review  explorer  running"
-                                mevedel-view--input-marker t))
+                                (mevedel-view-prompt-boundary) t))
         (goto-char (point-min))
         (search-forward
          "SendMessage: /root/timer_patch_review (message queued)")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "Detailed finding"
-                                mevedel-view--input-marker t))
-        (let ((visible (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                                (mevedel-view-prompt-boundary) t))
+        (let ((visible (mevedel-view-render-test--view-text)))
           (should (= 1 (mevedel-view-test--count-substring
                         "Started /root/timer_patch_review" visible)))
           (should (= 1 (mevedel-view-test--count-substring
@@ -4551,11 +4516,10 @@
             (push (list 'tool start (point)) segments))))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
+          (goto-char (mevedel-view-prompt-boundary))
           (mevedel-view--render-tool-activity
            (nreverse segments) data-buf))
-        (let ((visible (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+        (let ((visible (mevedel-view-render-test--view-text)))
           (should (string-match-p "Polled first" visible))
           (should (string-match-p "Visible separator" visible))
           (should (string-match-p "Polled second" visible))
@@ -5092,12 +5056,11 @@
          (eq collapsed
              (get-text-property (car region) 'mevedel-view-collapsed)))
         (should (equal "> quoted\nsecond line"
-                       (mevedel-view--input-text)))
+                       (mevedel-view-composer-draft-text nil t)))
         (should
          (string-match-p
           "Custom: y"
-          (buffer-substring-no-properties
-           (point-min) (mevedel-view--input-start))))))))
+          (mevedel-view-render-test--view-text)))))))
 
 (mevedel-deftest mevedel-view-render--refresh-tool-row-now ()
   ,test
@@ -5118,37 +5081,41 @@
                (interprogram-paste-function nil))
           (should row)
           (kill-new (filter-buffer-substring (car row) (cadr row)))
-          (goto-char (mevedel-view--input-start))
-          (insert "> ")
-          (yank)
-          (insert "\nsecond line")
+          (mevedel-view-composer-insert "> ")
+          (with-current-buffer (mevedel-view-composer-buffer view-buf)
+            (yank)
+            (mevedel-view-composer-insert "\nsecond line" (point) view-buf))
           (mevedel-view-test--insert-data
            data-buf
            "#+begin_tool\n(:name \"Read\" :args (:file_path \"b.el\"))\n\nsecond result\n#+end_tool\n"
            '(tool . "second"))
           (mevedel-view--full-rerender)
-          (let ((draft (mevedel-view--input-text)))
+          (let ((draft (mevedel-view-composer-draft-text nil t)))
             ;; The original row now lives inside a collapsed activity group.
-            (should (text-property-any (point-min) mevedel-view--input-marker
+            (should (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                        'mevedel-view-type 'tool-group))
-            (should-not (text-property-any (point-min) mevedel-view--input-marker
+            (should-not (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                            'mevedel-view-type 'tool-summary))
-            (should (text-property-any (mevedel-view--input-start) (point-max)
-                                       'mevedel-view-type 'tool-summary))
-            (buffer-enable-undo)
-            (setq buffer-undo-list nil)
-            (goto-char (point-max))
-            (insert "typed")
-            (undo-boundary)
-            (let ((undo buffer-undo-list))
-              (should-not (mevedel-view--refresh-tool-row data-buf "first"))
-              (should (eq undo buffer-undo-list)))
-            (should-not (mevedel-view--tool-row-region data-buf "first"))
-            (should (equal (concat draft "typed") (mevedel-view--input-text)))
-            (mevedel-view--sanitize-undo)
-            (undo-start)
-            (undo-more 1)
-            (should (equal draft (mevedel-view--input-text))))))))
+            (let ((composer (mevedel-view-composer-buffer view-buf))
+                  (start (mevedel-view-composer-draft-start view-buf))
+                  (end (mevedel-view-composer-draft-end view-buf)))
+              (with-current-buffer composer
+                (should (text-property-any start end 'mevedel-view-type 'tool-summary))
+                (buffer-enable-undo)
+                (setq buffer-undo-list nil)
+                (mevedel-view-composer-insert "typed" end view-buf)
+                (undo-boundary))
+              (let ((undo (buffer-local-value 'buffer-undo-list composer)))
+                (should-not (mevedel-view--refresh-tool-row data-buf "first"))
+                (should (eq undo (buffer-local-value 'buffer-undo-list composer))))
+              (should-not (mevedel-view--tool-row-region data-buf "first"))
+              (should (equal (concat draft "typed") (mevedel-view-composer-draft-text nil t)))
+              ;; The shared-buffer sanitizer goes away at the cutover.
+              (mevedel-view--sanitize-undo)
+              (with-current-buffer composer
+                (undo-start)
+                (undo-more 1)))
+            (should (equal draft (mevedel-view-composer-draft-text nil t))))))))
   :doc "progress refresh retains unrelated completed tool renderings"
   (mevedel-view-test--with-buffers
     (let ((stable-position nil)
@@ -5173,8 +5140,8 @@
           (should (mevedel-view--refresh-tool-row data-buf "changing"))
           (mevedel-view--full-rerender)
           (should (= 0 stable-computations)))
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start)))))))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset))))))
   :doc "a growing row keeps readers above, inside and below it on their text"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-tool-group-collapse-threshold 100))
@@ -5205,8 +5172,7 @@
               (replace-match ":value \"changing into a much longer value\"" nil t))
             (should (mevedel-view--refresh-tool-row data-buf "changing"))
             (should (string-search "much longer"
-                                   (buffer-substring-no-properties
-                                    (point-min) (mevedel-view--input-start))))
+                                   (mevedel-view-render-test--view-text)))
             (should (= (window-start window)
                        (car (mevedel-view--tool-row-region data-buf "below"))))
             (should (equal below-text (funcall row-text (window-start window))))
@@ -5238,12 +5204,12 @@
       (let ((region (mevedel-view--tool-row-region data-buf "following")))
         (goto-char (car region))
         (mevedel-view-toggle-section)
-        (should (string-search "following-result" (buffer-string)))
-        (should-not (string-search "eHh4eHh4eHh4" (buffer-string)))
+        (should (string-search "following-result" (mevedel-view-render-test--view-text)))
+        (should-not (string-search "eHh4eHh4eHh4" (mevedel-view-render-test--view-text)))
         (let ((source (get-text-property (point) 'mevedel-view-source)))
           (should (markerp (car source)))
           (should (markerp (cdr source)))))
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t))))))
 
 (mevedel-deftest mevedel-view--refresh-tool-row/audit-neighbors
   (:doc "progress leaves an expanded neighboring hook audit unchanged")
@@ -5262,7 +5228,7 @@
       (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
       (let (audit-text audit-key)
         (save-excursion
-          (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+          (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                         'mevedel-view-type 'hook-audit))
           (mevedel-view-toggle-section)
           (let ((bounds (mevedel-view-disclosure-section-bounds)))
@@ -5272,9 +5238,9 @@
         (dotimes (_ 5)
           (should (mevedel-view--refresh-tool-row data-buf "audited"))
           (should (= 1 (mevedel-view-test--count-substring
-                        "PreToolUse hook added context" (buffer-string))))
+                        "PreToolUse hook added context" (mevedel-view-render-test--view-text))))
           (save-excursion
-            (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+            (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                           'mevedel-view-type 'hook-audit))
             (let ((bounds (mevedel-view-disclosure-section-bounds)))
               (should (equal audit-text (buffer-substring-no-properties
@@ -5282,14 +5248,14 @@
               (should-not (get-text-property (point) 'mevedel-view-collapsed))
               (should (eq audit-key (get-text-property
                                     (point) 'mevedel-view-source-key)))))
-          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-          (should (= 4 (- (point) (mevedel-view--input-start)))))
+          (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= 4 (mevedel-view-render-test--draft-offset))))
         ;; The insertion copy must not strip audits from cached renderings.
         (mevedel-view--full-rerender)
         (should (= 1 (mevedel-view-test--count-substring
-                      "PreToolUse hook added context" (buffer-string))))
+                      "PreToolUse hook added context" (mevedel-view-render-test--view-text))))
         (save-excursion
-          (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+          (goto-char (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                         'mevedel-view-type 'hook-audit))
           (let ((bounds (mevedel-view-disclosure-section-bounds)))
             (should (equal audit-text (buffer-substring-no-properties
@@ -5314,7 +5280,7 @@
                      (cl-incf computations)
                      (apply compute args))))
           (mevedel-view--full-rerender)
-          (should (string-search "Custom" (buffer-string)))
+          (should (string-search "Custom" (mevedel-view-render-test--view-text)))
           (let ((first computations))
             (should (> first 0))
             (mevedel-view--full-rerender)
@@ -5337,14 +5303,14 @@
                             'gptel '(tool . "deferred"))
                 "#+end_tool\n"))
       (with-current-buffer view-buf
-        (goto-char (point-max)) (insert "> draft\nsecond line")
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
         (mevedel-view--full-rerender)
         (should (= 0 body-builds))
         (goto-char (point-min)) (search-forward "Bash: printf output")
         (mevedel-view-toggle-section)
         (should (> body-builds 0))
-        (should (string-search "$ printf output\n\noutput" (buffer-string)))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+        (should (string-search "$ printf output\n\noutput" (mevedel-view-render-test--view-text)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view--tool-segment-text
   (:doc "pre-read complete spans are reused while partial spans still recover their enclosing tool")
@@ -6393,15 +6359,13 @@
                           data-buf (car source) (cdr source) t)))))))
     (mevedel-view-test--insert-data data-buf "Continuing.\n" 'response)
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "> quoted\nsecond line")
-      (goto-char (+ (mevedel-view--input-start) 4))
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
       (mevedel-view--full-rerender)
-      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 4)))
-      (should (string-search "1 system reminder" (buffer-string)))
-      (should-not (string-search "hook audit" (buffer-string)))
-      (should-not (string-search "hidden-call" (buffer-string))))))
+      (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+      (should (= 4 (mevedel-view-render-test--draft-offset)))
+      (should (string-search "1 system reminder" (mevedel-view-render-test--view-text)))
+      (should-not (string-search "hook audit" (mevedel-view-render-test--view-text)))
+      (should-not (string-search "hidden-call" (mevedel-view-render-test--view-text))))))
 
 (mevedel-deftest mevedel-view-mailbox-receipt-hidden ()
   (dolist (restored '(nil t))
@@ -6436,18 +6400,17 @@
                          (mevedel-transcript-audit-records
                           (buffer-string) 'mailbox-receipt))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "Keep this draft")
+          (mevedel-view-test--insert-composer-draft "Keep this draft")
           (mevedel-view--full-rerender)
-          (should (equal "Keep this draft" (mevedel-view--input-text)))
-          (should-not (string-search "hook audit" (buffer-string)))
-          (should-not (string-search "hidden-receipt" (buffer-string)))
+          (should (equal "Keep this draft" (mevedel-view-composer-draft-text nil t)))
+          (should-not (string-search "hook audit" (mevedel-view-render-test--view-text)))
+          (should-not (string-search "hidden-receipt" (mevedel-view-render-test--view-text)))
           (should (string-search
                    (pcase placement
                      ('response "Plan ready.")
                      ('tool "WaitAgent")
                      ('mailbox "Agent /root/reviewer finished"))
-                   (buffer-string))))))))
+                   (mevedel-view-render-test--view-text))))))))
 
 (mevedel-deftest mevedel-view--format-injected-reminders-audit ()
   ,test
@@ -6629,8 +6592,7 @@
      '(tool . "repair-error"))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Collect" text))
         (should (string-match-p "tool input repaired" text))
         (should-not (string-match-p "alice\|handler exploded" text)))
@@ -6638,8 +6600,7 @@
       (search-forward "tool input repaired")
       (mevedel-view-toggle-section)
       (should (string-match-p "Rule: wrap-array-singleton"
-                              (buffer-substring-no-properties
-                               (point-min) mevedel-view--input-marker))))))
+                              (mevedel-view-render-test--view-text))))))
 
 
 ;;
@@ -7125,8 +7086,7 @@
     (mevedel-view-test--insert-data data-buf "No issues.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-search "/review current changes" text))
         (should (string-search "Started /root/review" text))
         (should (string-search "No issues." text))))))
@@ -7323,16 +7283,14 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Real user prompt" text))
         (should (string-match-p "◇ hook context added" text))
         (should-not (string-match-p "Model-only context" text)))
       (goto-char (point-min))
       (search-forward "hook context added")
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "◇ hook context added" text))
         (should (string-match-p "UserPromptSubmit" text))
         (should (string-match-p "Model-only context" text)))))
@@ -7354,8 +7312,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (= 1 (mevedel-view-test--count-substring
                       "hook context added" text)))
         (should (string-match-p "Real user prompt" text))
@@ -7364,8 +7321,7 @@
       (goto-char (point-min))
       (search-forward "hook context added")
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "SessionStart" text))
         (should (string-match-p "Startup context" text))
         (should (string-match-p "UserPromptSubmit" text))
@@ -7374,24 +7330,22 @@
       (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
       (mevedel-view--full-rerender)
       (should (= 1 (mevedel-view-test--count-substring
-                    "hook context added" (buffer-string))))
-      (let ((draft-point (copy-marker (point))))
-        (unwind-protect
-            (dotimes (_ 3)
-              (save-excursion
-                (goto-char (point-min))
-                (search-forward "Prompt context")
-                (let ((body-start (match-beginning 0)))
-                  (should (equal "    " (get-text-property body-start 'line-prefix)))
-                  (should (equal "    " (get-text-property body-start 'wrap-prefix)))
-                  (beginning-of-line)
-                  (should (looking-at-p "Prompt context"))))
-              (mevedel-view--full-rerender)
-              (should (= 1 (mevedel-view-test--count-substring
-                            "hook context added" (buffer-string))))
-              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-              (should (= draft-point (point))))
-          (set-marker draft-point nil)))))
+                    "hook context added" (mevedel-view-render-test--view-text))))
+      (dotimes (_ 3)
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "Prompt context")
+          (let ((body-start (match-beginning 0)))
+            (should (equal "    " (get-text-property body-start 'line-prefix)))
+            (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+            (beginning-of-line)
+            (should (looking-at-p "Prompt context"))))
+        (mevedel-view--full-rerender)
+        (should (= 1 (mevedel-view-test--count-substring
+                      "hook context added" (mevedel-view-render-test--view-text))))
+        (should (equal "> keep\nsecond line"
+                       (mevedel-view-composer-draft-text nil t)))
+        (should (= 3 (mevedel-view-render-test--draft-offset))))))
 
   :doc "attributed hook context preserves escaped text and the composer draft"
   (mevedel-view-test--with-buffers
@@ -7416,17 +7370,15 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
         (mevedel-view--full-rerender)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "Real user prompt" text))
           (should (string-match-p "hook context added" text))
           (should-not (string-match-p "literal </hook-event>" text)))
         (goto-char (point-min))
         (search-forward "hook context added")
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "UserPromptSubmit" text))
           (should (string-match-p "source: plugin" text))
           (should (string-match-p (regexp-quote source-file) text))
@@ -7434,7 +7386,7 @@
           (should (string-match-p (regexp-quote body) text))
           (should-not (string-match-p "&lt;/hook-event&gt;" text)))
         (should (equal "> draft\nsecond line"
-                       (mevedel-view--input-text)))))))
+                       (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view--visible-response-text ()
   ,test
@@ -7558,8 +7510,8 @@
             (mevedel-transcript-restore-properties))))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset)))
         (save-excursion
           (goto-char (point-min))
           (search-forward "× ApprovalProbe")
@@ -7598,8 +7550,8 @@
                 (mevedel-transcript-restore-properties))))
           (with-current-buffer view-buf
             (mevedel-view--full-rerender)
-            (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-            (should (= (point) (+ (mevedel-view--input-start) 4)))
+            (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+            (should (= 4 (mevedel-view-render-test--draft-offset)))
             (save-excursion
               (goto-char (point-min))
               (search-forward (concat "● Agent /root/worker " (cadr case)))
@@ -7625,8 +7577,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "^  ✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
@@ -7646,8 +7597,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "You\n" text))
         (should (string-match-p "<agent-message sender=" text))
         (should (string-match-p "partial" text))
@@ -7665,8 +7615,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "message from /root" text))
         (should (string-match-p "ordinary" text))
         (should-not (string-match-p "Bash completed" text)))))
@@ -7690,8 +7639,7 @@
       (should (string-match-p "<bash-execution" (buffer-string))))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p
                  "^  ● Background command \"Run build\" completed (exit code 0)$"
                  text))
@@ -7746,7 +7694,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (should (equal "> keep\ndraft" (mevedel-view--input-text)))
+      (should (equal "> keep\ndraft" (mevedel-view-composer-draft-text nil t)))
       (goto-char (point-min))
       (search-forward "findings")
       (let ((result-card (get-text-property (point) 'mevedel-view-mailbox-card)))
@@ -7772,8 +7720,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "● Background command \"command\" completed" text))
         (should (string-match-p "  … Thinking" text))
         (should-not (string-match-p "completed  … Thinking" text)))))
@@ -7786,8 +7733,7 @@
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "^  ● Agent /root/worker finished" text))
         (should-not (string-match-p "│" text))
         (should (string-match-p "result" text))
@@ -7824,14 +7770,13 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "Assistant\n" text))
           (should (string-match-p "<agent-result sender=" text))
           (should (string-match-p "partial" text))
           (should-not (string-match-p "Agent /root/worker" text)))
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+        (should (equal draft (mevedel-view-composer-draft-text nil t)))
+        (should (= 4 (mevedel-view-render-test--draft-offset))))))
 
   :doc "agent-result body may mention nested result blocks"
   (mevedel-view-test--with-buffers
@@ -7851,8 +7796,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Agent /root/verifier finished" text))
           (should (string-match-p "Before nested example" text))
           (should (string-match-p "After nested example" text))
@@ -7877,8 +7821,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
+        (let* ((text (mevedel-view-render-test--view-text))
                (finished-count
                 (cl-count-if (lambda (line)
                                (string-prefix-p "  ● Agent" line))
@@ -7898,8 +7841,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Agent /root/worker finished" text))
           (should (string-match-p "result" text))
           (should-not (string-match-p "</agent-result>" text))))))
@@ -7913,8 +7855,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p
                    "● Agent /root/worker finished\n\nfirst"
                    text))
@@ -7954,10 +7895,9 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
         (mevedel-view--full-rerender)
-        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text nil t)))
+        (should (= 3 (mevedel-view-render-test--draft-offset)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Agent /root/worker finished" text))
           (should-not (string-match-p "lines? collapsed" text))
           (goto-char (point-min))
@@ -7988,8 +7928,7 @@
         (search-forward "line two")
         (should-not (get-text-property (match-beginning 0) 'invisible))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Agent /root/worker finished" text))
           (should-not (string-match-p "lines? collapsed" text))
           (goto-char (point-min))
@@ -8006,8 +7945,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Agent /root/worker finished$" text))
           (should-not (string-match-p "lines? collapsed" text))))))
 
@@ -8035,8 +7973,8 @@
       (let* ((stale-source (cons 1 (with-current-buffer data-buf (point-max))))
              (start nil))
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
+          (goto-char (mevedel-view-prompt-boundary))
+          (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
           (unwind-protect
               (progn
                 (setq start (point))
@@ -8049,7 +7987,7 @@
                    mevedel-view-agent-handle-p t
                    mevedel-view-agent-status completed))
                 (mevedel-view--decorate-agent-result-blocks start (point)))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
+            (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil)))
         (goto-char start)
         (search-forward "● Agent /root/explorer finished")
         (search-backward "/root/explorer")
@@ -8073,8 +8011,7 @@
     (mevedel-view-test--insert-data data-buf "After mailbox.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let* ((text (buffer-substring-no-properties
-                    (point-min) mevedel-view--input-marker))
+      (let* ((text (mevedel-view-render-test--view-text))
              (assistant-count
               (cl-count-if (lambda (line) (string= line "Assistant"))
                            (split-string text "\n"))))
@@ -8106,8 +8043,7 @@
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "Reviewer returned clean" text))
           (should (string-match-p "● Agent /root/verifier finished" text))
           (should (string-match-p "VERDICT: FAIL" text))
@@ -8139,8 +8075,7 @@
                     'mailbox-delivery))
         (should-not (get-text-property (point) 'mevedel-view-source))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "✉ message from /root/explorer" text))
           (should (string-match-p "Hello from your Explorer Agent :)" text))
           (should (string-match-p "● Agent /root/explorer finished" text))
@@ -8549,8 +8484,8 @@
         (with-current-buffer view-buf
           (mevedel-view--render-live-region data-buf nil)
           (should (= decodes 1))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 3)))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= 3 (mevedel-view-render-test--draft-offset)))))))
   :doc "a retained tail update keeps history readers without counting history"
   (mevedel-view-test--with-buffers
     (let ((run-end (symbol-function 'mevedel-view--render-anchor-run-end))
@@ -8581,7 +8516,7 @@
                    (apply run-end args))))
         (with-current-buffer view-buf
           (mevedel-view--render-live-region data-buf nil)
-          (should (string-search "Live answer. More." (buffer-string)))
+          (should (string-search "Live answer. More." (mevedel-view-render-test--view-text)))
           (should (looking-back "Response 3" (line-beginning-position)))))
       (with-current-buffer view-buf
         (save-excursion
@@ -8732,8 +8667,7 @@
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "You" text))
           (should (string-match-p "line one (\\+4 lines)" text))
           (should-not (string-match-p "line five" text)))
@@ -8743,15 +8677,13 @@
         (should (eq 'user-input-summary
                     (get-text-property (point) 'mevedel-view-type)))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "line five" text)))
         (goto-char (point-min))
         (search-forward "line five")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "line one (\\+4 lines)" text))
           (should-not (string-match-p "line five" text))))))
   :doc "the send-path echo folds without source coordinates"
@@ -8766,16 +8698,14 @@
                     (get-text-property (point) 'mevedel-view-type)))
         (should-not (get-text-property (point) 'mevedel-view-source))
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "four" text))))))
   :doc "a short prompt renders unfolded"
   (let ((mevedel-view-user-input-collapse-line-threshold 15))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
         (mevedel-view--insert-user-message "one\ntwo")
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "one\ntwo" text)))))))
 
 (mevedel-deftest mevedel-view--mailbox-activity-entry ()
@@ -8833,7 +8763,7 @@
                child (plist-get child :source) 'derive "")
               (goto-char start)
               (search-forward "● Background command \"exec one\" completed (exit code 0)")
-              (should-not (string-match-p "lines? collapsed" (buffer-string)))
+              (should-not (string-match-p "lines? collapsed" (mevedel-view-render-test--view-text)))
               (search-forward "raw output")
               (should (invisible-p (match-beginning 0)))))))))
 
@@ -8892,8 +8822,7 @@
       (with-current-buffer view-buf
         (dolist (rebuild '(nil t))
           (when rebuild (mevedel-view--full-rerender))
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+          (let ((text (mevedel-view-render-test--view-text)))
             (should (string-match-p "read 4 files" text))
             (should-not (string-match-p "terminal output\\|Background command\\|Monitor\\|received" text)))))
       (with-current-buffer data-buf
@@ -8928,20 +8857,18 @@
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p
                    "read 4 files, 1 command completed, 1 failed" text))
           (should-not (string-match-p "Background command" text)))
         ;; The folded group still counts as projecting its completions.
         (should (mevedel-view-audit-breadcrumb-present-p
                  '(:execution-id "b" :owner "/root")
-                 mevedel-view--input-marker))
+                 (mevedel-view-prompt-boundary)))
         (goto-char (point-min))
         (search-forward "read 4 files")
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (string-match-p "● Background command \"make a\" completed (exit code 0)  \\[Show result\\]" text))
           (should (string-match-p "● Background command \"make b\" failed (exit code 1)  \\[Show result\\]"
                                   text)))
@@ -8949,8 +8876,7 @@
         (search-forward "read 4 files")
         (mevedel-view-toggle-section)
         (should-not (string-match-p
-                     "Background command" (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker))))))
+                     "Background command" (mevedel-view-render-test--view-text))))))
 
   :doc "collapsing a group removes a last call whose breadcrumb ends before it"
   ;; The breadcrumb's own source ends at its audit block, inside the call's
@@ -8975,18 +8901,15 @@
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
-      (let ((folded (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+      (let ((folded (mevedel-view-render-test--view-text)))
         (goto-char (point-min))
         (search-forward "read 4 files")
         (mevedel-view-toggle-section)
-        (should (string-match-p "f3.el" (buffer-substring-no-properties
-                                         (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "f3.el" (mevedel-view-render-test--view-text)))
         (goto-char (point-min))
         (search-forward "read 4 files")
         (mevedel-view-toggle-section)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should-not (string-match-p "f3.el" text))
           (should-not (string-match-p "Background command" text))
           (should (equal folded text)))))))
@@ -9239,8 +9162,7 @@
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
         (dotimes (_ 2)
-          (let ((lines (split-string (buffer-substring-no-properties
-                                      (point-min) mevedel-view--input-marker)
+          (let ((lines (split-string (mevedel-view-render-test--view-text)
                                      "\n")))
             (should (= 1 (cl-count
                           "  ✓ 3 calls: read 1 file, ran 2 commands · unconfined ▸"
@@ -9251,13 +9173,12 @@
                            (seq-filter (lambda (line)
                                          (string-match-p "Bash:\\|Sandbox:" line))
                                        lines))))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
           (mevedel-view--full-rerender))
         (goto-char (point-min))
         (search-forward "3 calls:")
         (mevedel-view-toggle-section)
-        (let ((lines (split-string (buffer-substring-no-properties
-                                    (point-min) mevedel-view--input-marker)
+        (let ((lines (split-string (mevedel-view-render-test--view-text)
                                    "\n")))
           (should (member "  ✓ 3 calls: read 1 file, ran 2 commands · unconfined ▾" lines))
           (should (= 4 (cl-count-if (lambda (line) (string-search sandbox line))
@@ -9269,7 +9190,7 @@
         (should (string-search sandbox (buffer-substring-no-properties
                                         (line-beginning-position)
                                         (line-end-position))))
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))))
   :doc "a run past the threshold folds into one expandable activity row"
   (mevedel-view-test--with-buffers
     (dotimes (i 4)
@@ -9296,12 +9217,11 @@
         (with-current-buffer view-buf
           (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
           (mevedel-view--full-rerender)
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ (mevedel-view--input-start) 3)))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= 3 (mevedel-view-render-test--draft-offset)))))
       (should (= parse-count 0)))
     (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "read 4 files" text))
         (should-not (string-match-p "f0\\.el" text)))
       ;; Expand the group: rows are compound-tool nested rows.
@@ -9311,8 +9231,7 @@
       (should (eq 'tool-group
                   (get-text-property (point) 'mevedel-view-type)))
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "Read: .*f0\\.el" text))
         (should (string-match-p "Read: .*f3\\.el" text)))
       (goto-char (point-min))
@@ -9323,8 +9242,7 @@
       ;; Expand one row without disturbing its siblings.
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "content 0" text))
         (should-not (string-match-p "content 1" text)))
       ;; Collapsing the group takes every row with it.
@@ -9332,8 +9250,7 @@
       (search-forward "read 4 files")
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "read 4 files" text))
         (should-not (string-match-p "f0\\.el\\|content 0" text)))))
   :doc "thinking partitions long tool runs and stays visible through either group fold"
@@ -9362,7 +9279,7 @@
         (cl-flet ((check-thinking ()
                     (save-excursion
                       (goto-char (point-min))
-                      (should (search-forward "Thinking..." mevedel-view--input-marker t))
+                      (should (search-forward "Thinking..." (mevedel-view-prompt-boundary) t))
                       (should (eq 'thinking-summary
                                   (get-text-property (match-beginning 0)
                                                      'mevedel-view-type)))
@@ -9372,16 +9289,16 @@
                         (should (eq data-buf (marker-buffer (cdr source))))
                         (should (= thought-start (marker-position (car source))))
                         (should (= thought-end (marker-position (cdr source)))))
-                      (should (search-forward thought mevedel-view--input-marker t))
+                      (should (search-forward thought (mevedel-view-prompt-boundary) t))
                       (should-not (invisible-p (match-beginning 0)))
                       (should-not (get-text-property (match-beginning 0)
                                                      'mevedel-view-collapsed))
                       (should (= 1 (mevedel-view-test--count-substring
-                                    thought (buffer-string)))))))
+                                    thought (mevedel-view-render-test--view-text)))))))
           (check-thinking)
           (should (= 2 (mevedel-view-test--count-substring
-                        "read 4 files" (buffer-string))))
-          (should-not (string-search "thought 1 time" (buffer-string)))
+                        "read 4 files" (mevedel-view-render-test--view-text))))
+          (should-not (string-search "thought 1 time" (mevedel-view-render-test--view-text)))
           (dolist (group '(0 1))
             (dotimes (_ 2)
               (save-excursion
@@ -9389,8 +9306,8 @@
                 (dotimes (_ (1+ group)) (search-forward "read 4 files"))
                 (mevedel-view-toggle-section))
               (check-thinking)
-              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-              (should (= (point) (+ 4 (mevedel-view--input-start))))))
+              (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))
+              (should (= 4 (mevedel-view-render-test--draft-offset)))))
           ;; Expand both groups to prove every tool remains on its own side.
           (goto-char (point-min))
           (search-forward "read 4 files")
@@ -9401,15 +9318,15 @@
           (goto-char (point-min))
           (dotimes (i 8)
             (when (= i 4) (search-forward thought))
-            (should (search-forward (format "f%d.el" i) mevedel-view--input-marker t)))
+            (should (search-forward (format "f%d.el" i) (mevedel-view-prompt-boundary) t)))
           (dotimes (i 8)
             (should (= 1 (mevedel-view-test--count-substring
-                          (format "f%d.el" i) (buffer-string)))))
-          (goto-char (+ 4 (mevedel-view--input-start)))
+                          (format "f%d.el" i) (mevedel-view-render-test--view-text)))))
+          (mevedel-view-render-test--goto-draft-offset 4)
           (mevedel-view--full-rerender)
           (check-thinking)
-          (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
-          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+          (should (equal "> keep\nsecond line" (mevedel-view-composer-draft-text nil t)))
+          (should (= 4 (mevedel-view-render-test--draft-offset)))))))
   :doc "a short interleaved run keeps source order"
   (mevedel-view-test--with-buffers
     (dotimes (i 2)
@@ -9431,7 +9348,7 @@
       (goto-char (point-min))
       (search-forward "f0.el")
       (search-forward "Thinking")
-      (should (search-forward "short thought" mevedel-view--input-marker t))
+      (should (search-forward "short thought" (mevedel-view-prompt-boundary) t))
       (should-not (invisible-p (match-beginning 0)))
       (search-forward "f1.el")
       (should-not (save-excursion
@@ -9471,18 +9388,17 @@
         (with-current-buffer data-buf
           (mevedel-view-stream-render-response (point-min) (point-max))))
       (with-current-buffer view-buf
-        (should-not (text-property-any (point-min) mevedel-view--input-marker
+        (should-not (text-property-any (point-min) (mevedel-view-prompt-boundary)
                                        'mevedel-view-type 'tool-group))
-        (should (string-search "keep going" (buffer-string)))
+        (should (string-search "keep going" (mevedel-view-render-test--view-text)))
         (goto-char (point-min))
         (search-forward "keep going")
         (should-not (invisible-p (match-beginning 0)))
-        (should-not (string-match-p "HiddenMixed" (buffer-string))))))
+        (should-not (string-match-p "HiddenMixed" (mevedel-view-render-test--view-text))))))
   :doc "a failed call stays in its run, counted in the folded header, through redraws"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "> draft\nsecond line"))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line"))
     (dotimes (i 9)
       (mevedel-view-test--insert-data
        data-buf
@@ -9495,11 +9411,10 @@
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))
     (with-current-buffer view-buf
       (dotimes (_ 2)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should (= 1 (cl-count-if
                         (lambda (line)
                           (string-match-p
@@ -9508,7 +9423,7 @@
           (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))
         (mevedel-view--full-rerender)
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t))))
       (goto-char (point-min))
       (search-forward "read 8 files")
       (mevedel-view-toggle-section)
@@ -9518,11 +9433,11 @@
                   (get-text-property (match-beginning 0) 'mevedel-view-type)))
       (should (string-match-p "×" (buffer-substring-no-properties
                                    (line-beginning-position) (point))))
-      (should-not (string-search "Error: command failed" (buffer-string)))
+      (should-not (string-search "Error: command failed" (mevedel-view-render-test--view-text)))
       (mevedel-view-toggle-section)
-      (should (string-search "Error: command failed" (buffer-string)))
+      (should (string-search "Error: command failed" (mevedel-view-render-test--view-text)))
       (mevedel-view--full-rerender)
-      (should (string-search "Error: command failed" (buffer-string)))))
+      (should (string-search "Error: command failed" (mevedel-view-render-test--view-text)))))
   :doc "a short run and a zero threshold keep individual rows"
   (let ((mevedel-view-tool-group-collapse-threshold 0))
     (mevedel-view-test--with-buffers
@@ -9537,8 +9452,7 @@
       (with-current-buffer data-buf
         (mevedel-view-stream-render-response (point-min) (point-max)))
       (with-current-buffer view-buf
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
+        (let ((text (mevedel-view-render-test--view-text)))
           (should-not (string-match-p "read 4 files" text))
           (should (string-match-p "Read: .*f0\\.el" text))
           (should (string-match-p "Read: .*f3\\.el" text))))))
@@ -9574,7 +9488,7 @@
       (search-forward "read 4 files, received 1 message")
       (mevedel-view-toggle-section)
       (mevedel-view--full-rerender)
-      (should-not (string-match-p "Review complete" (buffer-string)))
+      (should-not (string-match-p "Review complete" (mevedel-view-render-test--view-text)))
       (mevedel-view-toggle-section)
       (search-forward "Review complete.")
       (should-not (invisible-p (match-beginning 0)))))
@@ -9600,8 +9514,8 @@
                "<agent-message sender=\"/root/explorer\">\nSecond delivery.\n</agent-message>\n")
        nil)
       (mevedel-view-render-live-update data-buf)
-      (should (equal "> keep\ndraft" (mevedel-view--input-text)))
-      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (should (equal "> keep\ndraft" (mevedel-view-composer-draft-text nil t)))
+      (should (= 3 (mevedel-view-render-test--draft-offset)))
       (goto-char (point-min))
       (search-forward "read 4 files, received 2 messages")
       (mevedel-view-toggle-section)
@@ -9624,7 +9538,7 @@
           (should (looking-back "First delivery\\." (line-beginning-position)))
           (should-not (invisible-p (1- (point))))
           (should (= (window-start) (point-min)))
-          (should (equal "> keep\ndraft" (mevedel-view--input-text)))))
+          (should (equal "> keep\ndraft" (mevedel-view-composer-draft-text nil t)))))
       (search-forward "Second delivery.")
       (should (invisible-p (match-beginning 0)))))
 
@@ -9642,8 +9556,7 @@
          nil)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "● Agent /root/reviewer finished" text))
         (should-not (string-match-p "received [0-9] message" text)))
       (goto-char (point-min))
@@ -9664,8 +9577,7 @@
          nil)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
+      (let ((text (mevedel-view-render-test--view-text)))
         (should (string-match-p "^  ● Monitor event: event 1 · ticker$" text))
         (should (string-match-p "^  ● Monitor event: event 2 · ticker$" text))
         (should-not (string-match-p "received [0-9] message" text)))))

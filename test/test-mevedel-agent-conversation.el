@@ -1275,8 +1275,8 @@
                 (mevedel-agent-invocation-transcript-status invocation) 'completed)
           (mevedel-agent-conversation-refresh invocation)))
       (with-current-buffer view-buf
-        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))
+        (should (= 3 (mevedel-view-test--composer-point-offset)))
         (dolist (name '("first" "second"))
           (let ((pos (car (car (mevedel-view--agent-handle-refresh-points
                                (concat "/root/" name))))))
@@ -1380,10 +1380,11 @@
             (lambda (&rest _) nil)))
         (mevedel-agent-conversation-refresh invocation))
       (with-current-buffer view-buf
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (should-not
-         (get-text-property (mevedel-view--input-start) 'read-only)))))
+        (should (equal draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))
+        (let ((start (mevedel-view-composer-draft-start)))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (should-not (get-text-property start 'read-only)))))))
   :doc "queues a fast settlement until the exact parent row is inserted"
   (let* ((parent (generate-new-buffer " *agent-summary-race*"))
          (summary

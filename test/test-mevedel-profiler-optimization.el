@@ -119,13 +119,13 @@
    (lambda (data view)
      (with-current-buffer data (mevedel-benchmark--projection-history))
      (with-current-buffer view
-       (goto-char (mevedel-view--input-start))
-       (insert "> benchmark draft\nsecond line")
-       (goto-char (+ (mevedel-view--input-start) 4))
-       (set-window-point (selected-window) (point))
+       (mevedel-view-test--insert-composer-draft "> benchmark draft\nsecond line" 4)
+       (let ((composer (mevedel-view-composer-window)))
+         (set-window-point composer
+                           (+ 4 (mevedel-view-composer-draft-start))))
        (mevedel-view--full-rerender data)
        (let ((reference (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker))
+                         (point-min) (mevedel-view-prompt-boundary)))
              (source (with-current-buffer data (buffer-string))))
          (should (string-match-p "Result 39" reference))
          (should (string-match-p "Read" reference))
@@ -135,11 +135,12 @@
            (should (> (mevedel-benchmark--projection-drain) 1))
            (should-not mevedel-view-render--batch)
            (should (equal reference (buffer-substring-no-properties
-                                     (point-min) mevedel-view--input-marker)))
+                                     (point-min) (mevedel-view-prompt-boundary))))
            (should (equal "> benchmark draft\nsecond line"
-                          (mevedel-view--input-text)))
-           (should (= (point) (+ (mevedel-view--input-start) 4)))
-           (should (= (window-point (selected-window)) (point)))
+                          (mevedel-view-composer-draft-text)))
+           (should (= 4 (mevedel-view-test--composer-point-offset)))
+           (should (= (window-point (mevedel-view-composer-window))
+                      (with-current-buffer (mevedel-view-composer-buffer) (point))))
            (should (equal-including-properties
                     source (with-current-buffer data (buffer-string))))))))))
 
@@ -264,21 +265,23 @@
                                          (mapcar #'car (mevedel-transcript-segments
                                                        (point-min) (point-max))))))
                          (with-current-buffer view
-                           (goto-char (mevedel-view--input-start))
-                           (insert "> restored draft\nsecond line")
-                           (goto-char (+ (mevedel-view--input-start) 3))
-                           (set-window-point (selected-window) (point))
+                           (mevedel-view-test--insert-composer-draft
+                            "> restored draft\nsecond line" 3)
+                           (let ((composer (mevedel-view-composer-window)))
+                             (set-window-point
+                              composer (+ 3 (mevedel-view-composer-draft-start))))
                            (mevedel-view--full-rerender data)
                            (let ((text (buffer-substring-no-properties
-                                        (point-min) mevedel-view--input-marker)))
+                                        (point-min) (mevedel-view-prompt-boundary))))
                              (should (string-match-p "Saved" text))
                              (should (> (mevedel-benchmark--projection-drain) 0))
                              (should (equal text (buffer-substring-no-properties
-                                                 (point-min) mevedel-view--input-marker)))
+                                                 (point-min) (mevedel-view-prompt-boundary))))
                              (should (equal "> restored draft\nsecond line"
-                                            (mevedel-view--input-text)))
-                             (should (= (point) (+ (mevedel-view--input-start) 3)))
-                             (should (= (window-point (selected-window)) (point))))))))
+                                            (mevedel-view-composer-draft-text)))
+                             (should (= 3 (mevedel-view-test--composer-point-offset)))
+                             (should (= (window-point (mevedel-view-composer-window))
+                                        (with-current-buffer (mevedel-view-composer-buffer) (point)))))))))
               (mevedel-benchmark--projection-restored
                (file-name-concat root "output") source))
             (should called)

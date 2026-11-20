@@ -46,7 +46,6 @@
                   (data-buffer))
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
-(defvar mevedel-view--input-marker)
 
 ;; `org'
 (defvar org-mode-hook)

@@ -105,8 +105,8 @@
             (should (= 1 (length warnings)))
             (should (string-search "Observer failure" (cadr (car warnings)))))))
       (with-current-buffer view-buf
-        (should (equal draft (mevedel-view--input-text)))
-        (should (= 4 (- (point) (mevedel-view--input-start))))))))
+        (should (equal draft (mevedel-view-composer-draft-text)))
+        (should (= 4 (mevedel-view-test--composer-point-offset)))))))
 
 (mevedel-deftest mevedel-collaboration--schedule-publish
   (:doc "a publish timer lost to a TRAMP timer suspension is re-armed")

@@ -12,6 +12,7 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-tools)
@@ -59,8 +60,10 @@
 			(should (= 1 (mevedel-view-test--count-substring
 				      "2 system reminders (agent-roster, context-resources)"
 				      (buffer-string))))
-			(should (equal draft (mevedel-view--input-text)))
-			(should (= (point) (+ 4 (mevedel-view--input-start))))
+			(should (equal draft (mevedel-view-composer-draft-text)))
+			(should (= 4 (let ((view (current-buffer)))
+			      (with-current-buffer (mevedel-view-composer-buffer view)
+				(- (point) (mevedel-view-composer-draft-start view))))))
 			(save-excursion
 			  (goto-char (point-min))
 			  (search-forward "2 system reminders")

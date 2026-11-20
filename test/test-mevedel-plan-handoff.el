@@ -621,9 +621,7 @@
                 (mevedel-view--setup view data)
                 (set-window-buffer (selected-window) view)
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert draft)
-                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (mevedel-view-test--insert-composer-draft draft 3)
                   (mevedel-view--update-spinner "Preparing implementation..." owner)
                   (should (timerp mevedel-view--spinner-timer)))
                 (setf (mevedel-session-goal session) goal)
@@ -642,8 +640,8 @@
                                              owner)))
                                (when (eq owner 'plan-preparation)
                                  (should-not mevedel-view--spinner-timer))
-                               (should (equal draft (mevedel-view--input-text)))
-                               (should (= (point) (+ (mevedel-view--input-start) 3))))
+                               (should (equal draft (mevedel-view-composer-draft-text)))
+                               (should (= 3 (mevedel-view-test--composer-point-offset))))
                              (setq dispatched t)
                              fsm)))
                   (mevedel-plan-handoff--dispatch-submission

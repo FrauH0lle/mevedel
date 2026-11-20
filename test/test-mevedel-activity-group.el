@@ -16,6 +16,7 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
 
 (defun mevedel-activity-group-test--tool (name &optional status id)
@@ -276,7 +277,7 @@ POSITIONS maps each settled label to its start in the data buffer;
 PENDING labels in-flight calls, which a group header counts as running."
   (with-current-buffer view-buf
     (let ((pos (point-min)) groups seen)
-      (while (< pos mevedel-view--input-marker)
+      (while (< pos (mevedel-view-prompt-boundary))
         (let* ((eol (save-excursion (goto-char pos) (line-end-position)))
                (at (or (text-property-any pos eol 'mevedel-view-type 'tool-group)
                        (text-property-any pos eol 'mevedel-view-type 'tool-pending)))
@@ -300,7 +301,7 @@ PENDING labels in-flight calls, which a group header counts as running."
                                     (setq pending (nthcdr running pending)))))
                             line)
                       groups))))
-          (setq pos (min mevedel-view--input-marker (1+ eol)))))
+          (setq pos (min (mevedel-view-prompt-boundary) (1+ eol)))))
       (nreverse groups))))
 
 (defun mevedel-activity-group-test--projection-groups (records labels)

@@ -210,7 +210,7 @@
                                                       (get-char-property
                                                        (car mevedel-view--spinner-label-target)
                                                        'display window))))))
-                      (should (equal draft (mevedel-view--input-text)))
+                      (should (equal draft (mevedel-view-composer-draft-text)))
                       (should (= view-point (window-point window)))
                       ;; The first response consumes blank space; later chunks
                       ;; keep the filled composer viewport (ADR 0126).
@@ -411,7 +411,8 @@
         (should mevedel-note-conversation-mode)
         (goto-char (point-max))
         (insert "Follow up")
-        (mevedel-view-send))
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send)))
       (should (= 2 (length sent)))
       (should (string-search "CUSTOM-BASE-SYSTEM"
                              (gptel--json-encode (plist-get (gptel-fsm-info (car sent)) :data))))
@@ -441,7 +442,7 @@
         (with-current-buffer view
           (should (string-search "C-c C-z close · C-c C-a apply · C-c C-g merge\n> "
                                  (buffer-string)))
-          (should (equal draft (mevedel-view--input-text)))
+          (should (equal draft (mevedel-view-composer-draft-text)))
           (should (= position (point))))
         (should (eq selected (selected-window)))
         (should (= start (window-start selected))))
@@ -449,7 +450,7 @@
       (with-current-buffer view
         (should (string-search "C-c C-z close\n> " (buffer-string)))
         (should-not (string-search "C-c C-a apply" (buffer-string)))
-        (should (equal draft (mevedel-view--input-text)))))))
+        (should (equal draft (mevedel-view-composer-draft-text)))))))
 
 (mevedel-deftest mevedel-note-send/saved-settings
   (:quiet t :doc "the first real send uses the note's persisted choices, not the chat defaults")
@@ -1336,16 +1337,16 @@
         (should (string-search "First answer." payload))
         (should (string-search "And why?" payload)))
       (with-current-buffer view
-        (goto-char (point-max))
-        (insert "> multiline draft\nsecond line")
-        (let ((position (- (point) (mevedel-view--input-start)))
+        (mevedel-view-composer-insert "> multiline draft\nsecond line")
+        (let ((position (mevedel-view-test--composer-point-offset))
               (start (window-start))
               (window (selected-window)))
           (mevedel-note-conversation-test--answer (car sent) "Second answer.")
           (should (eq window (selected-window)))
-          (should (= position (- (point) (mevedel-view--input-start))))
+          (should (= position (mevedel-view-test--composer-point-offset)))
           (should (= start (window-start)))
-          (should (string-suffix-p "> multiline draft\nsecond line" (buffer-string))))))))
+          (should (equal "> multiline draft\nsecond line"
+                         (mevedel-view-composer-draft-text))))))))
 
 (mevedel-deftest mevedel-note-conversation-restart
   (:quiet t)
@@ -1539,7 +1540,8 @@
         (with-current-buffer view
           (goto-char (point-max))
           (insert "Suggest a fix")
-          (mevedel-view-send))
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-view-send)))
         (with-current-buffer main
           (mevedel-pipeline-run-tool-outcome
            (mevedel-tool-ensure "NoteWrite") (lambda (value) (setq outcome value))

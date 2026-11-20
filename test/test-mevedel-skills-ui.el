@@ -719,10 +719,8 @@ spanning lines")))
         (should (eq (mevedel-skills-skill-enabled-p skill)
                     (equal action "enable")))
         (with-current-buffer view-buf
-          (let ((start (mevedel-view--input-start)))
-            (should (equal draft
-                           (buffer-substring-no-properties start (point-max))))
-            (should (= (point) (+ start point-offset))))))))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
+          (should (= point-offset (mevedel-view-test--composer-point-offset)))))))
 
   :doc "enable and disable reject unknown skills"
   (let ((session (mevedel-skills-test--make-session)))
@@ -1131,10 +1129,8 @@ spanning lines")))
           (mevedel-test--with-captured-messages nil
             (mevedel-skills-list-toggle-enabled)))
         (with-current-buffer view-buf
-          (let ((start (mevedel-view--input-start)))
-            (should (equal draft
-                           (buffer-substring-no-properties start (point-max))))
-            (should (= (point) (+ start point-offset)))))))))
+          (should (equal draft (mevedel-view-composer-draft-text nil t)))
+          (should (= point-offset (mevedel-view-test--composer-point-offset))))))))
 
 (mevedel-deftest mevedel-skills-list-open-source ()
   ,test

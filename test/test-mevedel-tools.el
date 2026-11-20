@@ -760,7 +760,7 @@
             (goto-char (point-min))
             (should
              (search-forward
-              "steer visibly" mevedel-view--input-marker t))))
+              "steer visibly" (mevedel-view-prompt-boundary) t))))
       (when (buffer-live-p view)
         (kill-buffer view))
       (when (buffer-live-p buf)

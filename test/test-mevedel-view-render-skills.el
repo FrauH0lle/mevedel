@@ -60,8 +60,7 @@
             (mevedel-chat-install-request-hooks)
             (mevedel-view--setup view buffer)
             (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert draft))
+              (mevedel-view-composer-insert draft))
             (let* ((accepted (mevedel-plan-archive-accepted
                               (mevedel-plan-write-current plan session buffer) session))
                    (selection
@@ -109,7 +108,7 @@
                   (should (string-search "Implement accepted plan" (buffer-string)))
                   (should (string-search "2 attached skills (base, alpha)" (buffer-string)))
                   (should-not (string-search "ALPHA ATTACHMENT BODY" (buffer-string)))
-                  (should (equal draft (mevedel-view--input-text)))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))
                   (goto-char (point-min))
                   (search-forward "Prompt")
                   (mevedel-view-toggle-section)
@@ -146,7 +145,7 @@
                 (should (eq 'ask mevedel-permission-mode))
                 (with-current-buffer view
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
-                                         (point-min) (mevedel-view--input-start))))
+                                         (point-min) (mevedel-view-prompt-boundary))))
                   ;; The prompt record lists the native system prompt's changed
                   ;; observation sections beside the trailing mode constraint.
                   (should (string-search
@@ -162,7 +161,7 @@
                   (mevedel-view--full-rerender)
                   (should (string-search "You\nImplement accepted plan\n" (buffer-string)))
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
-                                         (point-min) (mevedel-view--input-start))))
+                                         (point-min) (mevedel-view-prompt-boundary))))
                   (should (string-search "ALPHA ATTACHMENT BODY" (buffer-string)))
                   (goto-char (point-min))
                   (search-forward "attached skills")
@@ -171,7 +170,7 @@
                   (goto-char (point-min))
                   (search-forward "Prompt")
                   (should-not (get-text-property (1- (point)) 'mevedel-view-collapsed))
-                  (should (equal draft (mevedel-view--input-text)))))))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-view-send/live-skills (:quiet t)
@@ -210,18 +209,17 @@
                           (setq launched t)
                           (list :meta '((responseText . "Completed")))))))
               (with-current-buffer view
-                (goto-char (mevedel-view--input-start))
-                (insert "Use $alpha")
+                (mevedel-view-composer-insert "Use $alpha")
                 (mevedel-view-send))
               (mevedel-test--await 5 "Composer skill fixture did not settle"
                 (and launched (not (mevedel-turn-busy-p buffer))))
               (with-current-buffer view
                 (should (= 1 (how-many "1 attached skill (alpha)"
-                                       (point-min) (mevedel-view--input-start))))
+                                       (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "COMPOSER SKILL BODY" (buffer-string)))
                 (mevedel-view--full-rerender)
                 (should (= 1 (how-many "1 attached skill (alpha)"
-                                       (point-min) (mevedel-view--input-start))))
+                                       (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "COMPOSER SKILL BODY" (buffer-string))))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
@@ -249,8 +247,7 @@
               (mevedel-chat-install-request-hooks)
               (mevedel-view--setup view buffer)
               (with-current-buffer view
-                (goto-char (mevedel-view--input-start))
-                (insert "> retry\ndraft"))
+                (mevedel-view-composer-insert "> retry\ndraft"))
               (let* ((accepted (mevedel-plan-archive-accepted
                                 (mevedel-plan-write-current "# Retry plan" session buffer) session))
                      (selection
@@ -275,7 +272,7 @@
                     (should (plist-get retry :failure))
                     (should (equal accepted (plist-get retry :accepted))))
                   (with-current-buffer view
-                    (should (equal "> retry\ndraft" (mevedel-view--input-text)))
+                    (should (equal "> retry\ndraft" (mevedel-view-composer-draft-text nil t)))
                     (should-not (string-search "attached skill" (buffer-string))))
                   (write-region body nil source nil 'silent)
                   (mevedel-retry-plan-implementation session buffer)
@@ -285,7 +282,7 @@
                                          :implementation-retry))
                   (with-current-buffer view
                     (should (string-search "1 attached skill (alpha)" (buffer-string)))
-                    (should (equal "> retry\ndraft" (mevedel-view--input-text)))))))
+                    (should (equal "> retry\ndraft" (mevedel-view-composer-draft-text nil t)))))))
           (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel--insert-local-user-turn/without-skills (:quiet t)
@@ -299,8 +296,7 @@
           (progn
             (mevedel-view--setup view buffer)
             (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert "> no skill\ndraft"))
+              (mevedel-view-composer-insert "> no skill\ndraft"))
             (mevedel--insert-local-user-turn "Full generated prompt" "Implement accepted plan as Goal"
                                              nil nil t)
             (with-current-buffer view
@@ -309,7 +305,7 @@
               (should-not (string-search "Prompt" (buffer-string)))
               (mevedel-view--full-rerender)
               (should (string-search "You\nImplement accepted plan as Goal\n" (buffer-string)))
-              (should (equal "> no skill\ndraft" (mevedel-view--input-text)))))
+              (should (equal "> no skill\ndraft" (mevedel-view-composer-draft-text nil t)))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-view--insert-skill-disclosures (:quiet t)
@@ -329,8 +325,7 @@
           (progn
             (mevedel-view--setup view buffer)
             (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert "> keep\ndraft"))
+              (mevedel-view-composer-insert "> keep\ndraft"))
             (mevedel--insert-local-user-turn
              (concat "Original instruction\n" hook metadata)
              "Implement accepted plan as Goal" nil hook t)
@@ -358,7 +353,7 @@
               (should (string-search "You\nImplement accepted plan as Goal\n" (buffer-string)))
               (should (string-search "EXACT SKILL BODY" (buffer-string)))
               (should (string-search "EXACT PREPARED PROMPT" (buffer-string)))
-              (should (equal "> keep\ndraft" (mevedel-view--input-text)))))
+              (should (equal "> keep\ndraft" (mevedel-view-composer-draft-text nil t)))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-view--invoke-renderer/skill-source ()

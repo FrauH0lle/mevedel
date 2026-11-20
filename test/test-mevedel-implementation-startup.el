@@ -81,8 +81,7 @@
              (sent 0)
              diagnostics)
         (with-current-buffer view
-          (goto-char (mevedel-view--input-start))
-          (insert input))
+          (mevedel-view-composer-insert input))
         (cl-letf (((symbol-function 'gptel-send)
                    (lambda (&rest _) (cl-incf sent)))
                   ((symbol-function 'mevedel-claude-code-send)
@@ -96,7 +95,7 @@
         (should-not mevedel--current-request)
         (should (equal before (buffer-string)))
         (should (eq 'pending (mevedel-prompt-submission-state submission)))
-        (should (equal input (with-current-buffer view (mevedel-view--input-text))))
+        (should (equal input (with-current-buffer view (mevedel-view-composer-draft-text))))
         (should (eq 'paused (mevedel-goal-status goal)))
         (should (string-match-p (nth 2 case) (mevedel-goal-reason goal)))
         (should (string-match-p (regexp-quote (mevedel-goal-reason goal)) diagnostics))

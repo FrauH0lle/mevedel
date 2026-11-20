@@ -78,7 +78,7 @@
                 (funcall (nth 5 callbacks) "Closed buffer callback" nil)
                 (should-not (buffer-live-p report))
                 (with-current-buffer view-buf
-                  (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))
+                  (should (equal "> quoted\nsecond line" (mevedel-view-composer-draft-text))))
                 (with-current-buffer data-buf
                   (should (equal transcript (buffer-string)))
                   (should (equal state gptel--token-usage)))

@@ -44,11 +44,11 @@
 (defun mevedel-tool-ui-test--insert-rendering (rendering)
   "Insert RENDERING before the current view's composer."
   (let ((inhibit-read-only t))
-    (goto-char mevedel-view--input-marker)
-    (set-marker-insertion-type mevedel-view--input-marker t)
+    (goto-char (mevedel-view-prompt-boundary))
+    (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) t)
     (unwind-protect
         (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-      (set-marker-insertion-type mevedel-view--input-marker nil))))
+      (set-marker-insertion-type (mevedel-view-prompt-boundary-marker) nil))))
 
 (mevedel-deftest mevedel-tool-ui--deliver-result ()
   ,test
@@ -1181,7 +1181,7 @@
                   :model-metadata (:backend "Claude Code" :model "opus" :effort "high")
                   :status running))))
           (mevedel-tool-ui-test--insert-rendering rendering)
-          (should (string= draft (mevedel-view--input-text)))))))
+          (should (string= draft (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "Started paths activate their retained transcript"
   (mevedel-view-test--with-buffers
@@ -1196,7 +1196,7 @@
                 :status running)))
             opened)
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
+          (goto-char (mevedel-view-prompt-boundary))
           (mevedel-view--insert-rendered-tool rendering (cons 1 1)))
         (goto-char (point-min))
         (search-forward "/root/spec_review")
@@ -1250,7 +1250,7 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-tool-ui-test--insert-rendering rendering)
-        (should (string= draft (mevedel-view--input-text))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t))))))
 
   :doc "renders every delivery disposition from render data"
   (dolist (case '((queued . "message queued")
@@ -1291,7 +1291,7 @@
       (should (plist-get message :initially-collapsed-p))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
+          (goto-char (mevedel-view-prompt-boundary))
           (mevedel-view--insert-rendered-tool followup (cons 1 1))
           (mevedel-view--insert-rendered-tool message (cons 2 2)))
         (goto-char (point-min))
@@ -1310,7 +1310,7 @@
                    (lambda (&rest _) followup)))
           (mevedel-view-toggle-section))
         (should (search-forward "Verify documentation"
-                                mevedel-view--input-marker t))
+                                (mevedel-view-prompt-boundary) t))
         (goto-char (point-min))
         (search-forward "SendMessage: /root/spec_review (message queued)")
         (goto-char (match-beginning 0))
@@ -1318,7 +1318,7 @@
                    (lambda (&rest _) message)))
           (mevedel-view-toggle-section))
         (should (search-forward "Detailed finding"
-                                mevedel-view--input-marker t))))))
+                                (mevedel-view-prompt-boundary) t))))))
 
 (mevedel-deftest mevedel-tool-ui--render-list-agents
   (:doc "Renders the retained-agent roster")
@@ -1342,7 +1342,7 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-tool-ui-test--insert-rendering rendering)
-        (should (string= draft (mevedel-view--input-text))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t))))))
 
   :doc "falls back to generic rendering for malformed results"
   (should-not
@@ -1410,7 +1410,7 @@
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-tool-ui-test--insert-rendering rendering)
-        (should (string= draft (mevedel-view--input-text)))))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-tool-ui--send-message ()
   ,test
@@ -1562,8 +1562,8 @@
         (should (string-match-p
                  "WaitAgent: agents"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker)))
-        (should (string= draft (mevedel-view--input-text)))))))
+                  (point-min) (mevedel-view-prompt-boundary))))
+        (should (string= draft (mevedel-view-composer-draft-text nil t)))))))
 
 (provide 'test-mevedel-tool-ui)
 

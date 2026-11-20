@@ -373,11 +373,10 @@
           (goto-char (point-min))
           (forward-line 1)
           (dotimes (n 100) (insert (format "History line %d\n" n))))
-        (goto-char (point-max))
-        (insert "> draft\nsecond line")
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")
         (let* ((window (selected-window))
                (start (save-excursion
-                        (goto-char (mevedel-view--input-start))
+                        (goto-char (mevedel-view-composer-draft-start))
                         (forward-line -12) (point)))
                (clicked (save-excursion
                           (goto-char start) (forward-line 4) (point))))
@@ -385,7 +384,7 @@
           (set-window-vscroll window 7 t)
           (redisplay t)
           (should (mevedel-view--position-screen-y
-                   (mevedel-view--input-start) window))
+                   (mevedel-view-composer-draft-start) window))
           (mouse-set-point (list 'mouse-1 (posn-at-point clicked window)))
           (let ((y (mevedel-view--position-screen-y clicked window)))
             (should y)
@@ -409,7 +408,7 @@
               (should (= start (window-start window)))
               (should (= 7 (window-vscroll window t)))
               (should (= y (mevedel-view--position-screen-y clicked window)))
-              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+              (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text)))))))))
   (outer)
   :doc "Native history click keeps pixel scrolling through status growth and shrink" nil
   :doc "An outer render transaction retains the clicked history viewport too" t)
@@ -440,12 +439,11 @@
                 (let ((inhibit-read-only t))
                   (goto-char (point-min))
                   (dotimes (n 100) (insert (format "History line %d.\n" n))))
-                (goto-char (point-max))
-                (insert draft)
+                (mevedel-view-test--insert-composer-draft draft)
                 (mevedel-view--set-viewport
                  window
                  (mevedel-view--viewport-at-y
-                  window (mevedel-view--input-start)
+                  window (mevedel-view-composer-draft-start)
                   (- (cdr (mevedel-view--window-body-geometry window)) 250)))
                 (set-window-vscroll window 7 t)
                 (redisplay t)
@@ -530,7 +528,7 @@
                           (should (= total (window-pixel-height window)))
                           (should (= start (window-start window)))
                           (should (= scroll (window-vscroll window t)))
-                          (should (equal draft (mevedel-view--input-text)))))))))
+                          (should (equal draft (mevedel-view-composer-draft-text)))))))))
             (when (frame-live-p other-frame) (delete-frame other-frame t))
             (select-frame composer-frame)
             (unless (= frame-height (frame-text-height composer-frame))

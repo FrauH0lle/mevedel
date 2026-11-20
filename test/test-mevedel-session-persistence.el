@@ -946,7 +946,7 @@
                 (with-current-buffer view-buf
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
-                    (goto-char mevedel-view--input-marker)
+                    (goto-char (mevedel-view-prompt-boundary))
                     (insert "Exit hook view chrome\n"))
                   (set-buffer-modified-p t))
                 (cl-letf (((symbol-function 'buffer-list)
@@ -5532,7 +5532,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (with-current-buffer view
                   (mevedel-view--full-rerender)
                   (let ((text (buffer-substring-no-properties
-                               (point-min) mevedel-view--input-marker)))
+                               (point-min) (mevedel-view-prompt-boundary))))
                     (should (string-match-p "hook changed prompt" text))
                     (should (string-match-p "rewritten prompt" text))
                     (should-not (string-match-p "original prompt" text)))
@@ -5540,7 +5540,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                   (search-forward "hook changed prompt")
                   (mevedel-view-toggle-section)
                   (let ((expanded (buffer-substring-no-properties
-                                   (point-min) mevedel-view--input-marker)))
+                                   (point-min) (mevedel-view-prompt-boundary))))
                     (should (string-match-p "original prompt" expanded)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)

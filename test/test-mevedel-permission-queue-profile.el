@@ -212,7 +212,7 @@
                 (should-not (string-search success-output result))
                 (should-not (file-exists-p (file-name-concat cache "run-3" "value")))
                 (with-current-buffer view
-                  (should (equal draft (mevedel-view--input-text)))))))
+                  (should (equal draft (mevedel-view-composer-draft-text nil t)))))))
         (mevedel-permission-queue-abort-all session)
         (mevedel-execution-teardown-session session)
         (when (buffer-live-p view) (kill-buffer view))

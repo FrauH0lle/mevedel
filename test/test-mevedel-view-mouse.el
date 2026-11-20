@@ -513,7 +513,7 @@ With MOTION, deliver a movement event before the release."
                (with-current-buffer data-buf (point-max)))
               (mevedel-view-test--insert-data data-buf "Live initial.\n\n" 'response)
               (mevedel-view--render-stream-update data-buf))
-            (goto-char (mevedel-view--input-start))
+            (goto-char (mevedel-view-composer-draft-start))
             (let* ((window (selected-window))
                    (input (point))
                    (y (- (cdr (mevedel-view--window-body-geometry window))

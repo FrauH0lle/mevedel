@@ -66,20 +66,20 @@ second composer window two rows higher), `reader', `status' or
      (lambda (window role)
        (pcase role
          ((or 'composer 'vscroll 'composer-2)
-          (set-window-point window (+ 4 (mevedel-view--input-start)))
+          (set-window-point window (+ 4 (mevedel-view-composer-draft-start)))
           (mevedel-view-zone-absent-test--last-page window)
           (when (eq role 'composer-2)
             (let ((y (mevedel-view--position-screen-y
-                      (mevedel-view--input-start) window)))
+                      (mevedel-view-composer-draft-start) window)))
               (redisplay t)
               (mevedel-view--set-viewport
                window (mevedel-view--viewport-at-y
-                       window (mevedel-view--input-start)
+                       window (mevedel-view-composer-draft-start)
                        (- (or y 0) (* 2 (frame-char-height)))))))
           (when (eq role 'vscroll)
             (set-window-vscroll window (+ (window-vscroll window t) 7) t t)))
          ('top
-          (set-window-point window (+ 4 (mevedel-view--input-start)))
+          (set-window-point window (+ 4 (mevedel-view-composer-draft-start)))
           (set-window-start window (point-min) t))
          (_
           (let ((visit (save-excursion
@@ -109,7 +109,7 @@ Observe the writers' result and, after redisplay, what the user sees."
                               (list (window-start window)
                                     (window-vscroll window t)
                                     (mevedel-view--position-screen-y
-                                     (mevedel-view--input-start) window)
+                                     (mevedel-view-composer-draft-start) window)
                                     (window-point window)))
                             windows))))
     (let ((written (state)))

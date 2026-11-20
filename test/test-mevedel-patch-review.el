@@ -95,7 +95,7 @@ adopt prompt.  Returns the messages the session produced."
                            (mevedel-test--read-file one)))
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search
                          "ApplyPatch · 2 files · 3/3 changes · +3 −3" text))
                 (should (string-search "M one.txt" text))
@@ -108,7 +108,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "M one.txt")
               (mevedel-patch-review-toggle-fold)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "- │ old1" text))
                 (should (string-search "@@ a" text))
                 (should-not (string-search "│ before" text)))
@@ -118,7 +118,7 @@ adopt prompt.  Returns the messages the session produced."
               (should-not (string-search
                            "- │ old1"
                            (buffer-substring-no-properties
-                            (point-min) mevedel-view--input-marker)))
+                            (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "@@ a")
               (mevedel-patch-review-toggle-fold)
@@ -128,7 +128,7 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "ApplyPatch · 2 files · 2/3 changes · +2 −2"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
@@ -190,13 +190,13 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "C-c C-c stage feedback"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (insert "unfinished draft")
               (mevedel-patch-review--render proposal)
               (should (string-search
                        "unfinished draft"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               ;; A foreign zone re-render and a queue rebuild (the
               ;; control-transfer poll path) draw the live draft through
               ;; the descriptor body function instead of a registration
@@ -207,12 +207,12 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "unfinished draft"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (mevedel-view--interaction-rebuild)
               (should (string-search
                        "unfinished draft"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "unfinished draft")
               (dolist (c (string-to-list " extended"))
@@ -221,7 +221,7 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "unfinished draft extended"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               ;; Folding the file must keep the live feedback editor
               ;; rendered so its draft and markers survive redraws.
               (goto-char (point-min))
@@ -230,7 +230,7 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "unfinished draft"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (should (text-property-any
                        (point-min) (point-max)
                        'mevedel-patch-feedback-input
@@ -271,7 +271,7 @@ adopt prompt.  Returns the messages the session produced."
               (insert "Overall: split this into two patches.")
               (mevedel-patch-review-confirm-feedback)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "[ Request revision · 4 comments ]" text))
                 (should (string-search "Keep the old public behavior." text))
                 (should (string-search "Use the newer API instead." text))
@@ -347,7 +347,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "R move.txt → moved.txt")
               (mevedel-patch-review-toggle-fold)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "- │ old" text))
                 ;; Move diffs stay whole-operation: no selectable hunk rows.
                 (should-not (string-search "@@" text))
@@ -407,7 +407,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "M one.txt")
               (mevedel-patch-review-toggle-selection)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "0/2 changes" text))
                 (should (string-search "✗ @@ first" text))
                 (should (string-search "✗ @@ second" text))
@@ -418,7 +418,7 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        "2/2 changes"
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker)))
+                        (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
@@ -462,7 +462,7 @@ adopt prompt.  Returns the messages the session produced."
               (goto-char (point-min))
               (goto-char
                (next-single-property-change
-                (point) 'mevedel-patch-hunk nil mevedel-view--input-marker))
+                (point) 'mevedel-patch-hunk nil (mevedel-view-prompt-boundary)))
               (mevedel-patch-review-toggle-selection)
               (goto-char (point-min))
               (search-forward "M one.txt")
@@ -516,7 +516,7 @@ adopt prompt.  Returns the messages the session produced."
              view-buf "@@ old" "user edited\n")
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "+ │ user edited" text))
                 (should (string-search "· edited" text)))
               (goto-char (point-min))
@@ -567,7 +567,7 @@ adopt prompt.  Returns the messages the session produced."
               (should-not
                (string-search "· edited"
                               (buffer-substring-no-properties
-                               (point-min) mevedel-view--input-marker)))
+                               (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
@@ -788,7 +788,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "A fresh.txt")
               (mevedel-patch-review-toggle-fold)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "+ │ user content" text))
                 (should (string-search "· edited" text)))
               (goto-char (point-min))
@@ -970,7 +970,7 @@ adopt prompt.  Returns the messages the session produced."
               (search-forward "M gone.txt")
               (mevedel-patch-review-toggle-fold)
               (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
+                           (point-min) (mevedel-view-prompt-boundary))))
                 (should (string-search "M gone.txt" text))
                 (should (string-search "- │ obsolete" text))
                 (should (string-search "· edited" text)))
@@ -1367,7 +1367,7 @@ adopt prompt.  Returns the messages the session produced."
               (should (string-search
                        (format "mevedel [%s]: File changed during review: two.txt (patch conflict)" root)
                        (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker))))
+                        (point-min) (mevedel-view-prompt-boundary)))))
             (should (equal "old one\n"
                            (mevedel-test--read-file one)))
             (should (equal "external change\n"
@@ -1453,7 +1453,7 @@ adopt prompt.  Returns the messages the session produced."
                (string-search
                 "parent request is still active"
                 (buffer-substring-no-properties
-                 (point-min) mevedel-view--input-marker))))
+                 (point-min) (mevedel-view-prompt-boundary)))))
             (with-current-buffer parent-data
               (setq-local mevedel--current-request
                   (mevedel-request--create :session mevedel--session)))
@@ -1466,7 +1466,7 @@ adopt prompt.  Returns the messages the session produced."
                (string-search
                 "parent request is still active"
                 (buffer-substring-no-properties
-                 (point-min) mevedel-view--input-marker)))
+                 (point-min) (mevedel-view-prompt-boundary))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
@@ -1525,7 +1525,7 @@ adopt prompt.  Returns the messages the session produced."
                 (should continuation)
                 (should-not results)
                 (let ((text (buffer-substring-no-properties
-                             (point-min) mevedel-view--input-marker))
+                             (point-min) (mevedel-view-prompt-boundary)))
                       (remote (overlay-get (plist-get proposal :overlay)
                                            'mevedel--remote)))
                   (should (string-search "Applying patch" text))
@@ -1619,7 +1619,7 @@ adopt prompt.  Returns the messages the session produced."
                     (search-forward "ApplyPatch ·")
                     (mevedel-patch-review-submit)
                     (let ((text (buffer-substring-no-properties
-                                 (point-min) mevedel-view--input-marker)))
+                                 (point-min) (mevedel-view-prompt-boundary))))
                       (should-not result)
                       (should (string-search first-address text))
                       (should-not (string-search first-path text))
@@ -1774,7 +1774,7 @@ adopt prompt.  Returns the messages the session produced."
                   (should-not result)
                   (with-current-buffer view-buf
                     (let ((text (buffer-substring-no-properties
-                                 (point-min) mevedel-view--input-marker)))
+                                 (point-min) (mevedel-view-prompt-boundary))))
                       (should (string-search address text))
                       (should-not (string-search local-path text)))
                     (goto-char (point-min))

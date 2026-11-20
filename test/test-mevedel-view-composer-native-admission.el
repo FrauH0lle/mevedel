@@ -41,17 +41,16 @@
                            (when late
                              (push session mevedel-claude-code-fork--sessions)))))
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert draft)
+                  (mevedel-view-composer-insert draft)
                   (backward-char 5)
-                  (let ((offset (- (point) (mevedel-view--input-start))))
+                  (let ((offset (mevedel-view-test--composer-point-offset)))
                     (condition-case err
                         (mevedel-view-send)
                       (user-error
                        (should (string-match-p "native history preparation"
                                                (error-message-string err)))))
                     (should (equal draft (mevedel-view--visible-draft)))
-                    (should (= offset (- (point) (mevedel-view--input-start)))))))
+                    (should (= offset (mevedel-view-test--composer-point-offset))))))
               (should (equal before (buffer-string)))
               (should (equal turn-count (mevedel-session-turn-count session)))
               (should-not mevedel--current-request)

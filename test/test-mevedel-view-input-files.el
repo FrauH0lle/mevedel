@@ -42,11 +42,12 @@
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)
           (with-current-buffer view-buf
-            (goto-char (point-max))
+            (with-current-buffer (mevedel-view-composer-buffer view-buf)
+              (goto-char (mevedel-view-composer-draft-end view-buf)))
             (mevedel-view--insert-dropped-file-mentions (list path))
             (should (equal (format "@file:{%s}" path)
-                           (mevedel-view--input-text)))
-            (let* ((input (mevedel-view--input-text))
+                           (mevedel-view-composer-draft-text)))
+            (let* ((input (mevedel-view-composer-draft-text))
                    (binding (get-text-property
                              0 'mevedel-mention-binding input)))
               (should (equal (list :kind 'file
@@ -126,8 +127,8 @@
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace ws))
           (mevedel-view--setup view-buf data-buf)
-          (with-current-buffer view-buf
-            (goto-char (point-max))
+          (with-current-buffer (mevedel-view-composer-buffer view-buf)
+            (goto-char (mevedel-view-composer-draft-end view-buf))
             (cl-letf (((symbol-function 'window-system)
                        (lambda (&optional _frame) 'x))
                       ((symbol-function 'executable-find)
@@ -135,10 +136,11 @@
                          (and (equal command "fake-clipboard") command)))
                       ((symbol-function 'format-time-string)
                        (lambda (&rest _) "20260620-121314")))
-              (mevedel-view-yank-dwim))
+              (mevedel-view-yank-dwim)))
+          (with-current-buffer view-buf
             (should (file-exists-p expected))
             (should (equal (format "@file:%s" expected)
-                           (mevedel-view--input-text)))
+                           (mevedel-view-composer-draft-text)))
             (should (equal (list expected)
                            (mevedel-session-dropped-file-grants session)))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))

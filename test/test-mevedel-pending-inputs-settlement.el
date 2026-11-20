@@ -72,10 +72,10 @@
                   (mevedel-test--await 5 "Request teardown did not finish"
                     (null mevedel--current-request)))
                 (with-current-buffer view
-                  (goto-char (mevedel-view--input-start))
-                  (insert reply)
-                  (mevedel-view-send)
-                  (should (string-empty-p (mevedel-view--input-text))))
+                  (mevedel-view-test--insert-composer-draft reply)
+                  (with-current-buffer (mevedel-view-composer-buffer)
+                    (mevedel-view-send))
+                  (should (string-empty-p (mevedel-view-composer-draft-text nil t))))
                 (should (= 1 (length (mevedel-session-pending-follow-ups session))))
                 (should-not (mevedel-session-pending-steering session))
                 (when (eq stage 'checkpoint)

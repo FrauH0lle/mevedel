@@ -110,8 +110,7 @@
         (let* ((overlay (plist-get proposal :overlay))
                (original (overlay-get overlay 'mevedel--remote)))
           (with-current-buffer view-buf
-            (goto-char (point-max))
-            (insert "> draft\nsecond line"))
+            (mevedel-view-test--insert-composer-draft "> draft\nsecond line"))
           (should (= 1 announcements))
           (should (string-search "+first" (plist-get original :body)))
           (plist-put first :selected nil)
@@ -135,7 +134,7 @@
           (should (eq overlay (plist-get proposal :overlay)))
           (with-current-buffer view-buf
             (should (equal "> draft\nsecond line"
-                           (mevedel-view--input-text))))
+                           (mevedel-view-composer-draft-text nil t))))
           (mevedel-patch-review--deselect-all proposal)
           (mevedel-patch-review--render proposal)
           (let ((remote (overlay-get overlay 'mevedel--remote)))

@@ -74,25 +74,24 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
               (setq side (buffer-local-value 'mevedel--data-buffer view))
               (with-current-buffer view
                 (should-not (string-search "Visible answer" (buffer-string)))
-                (goto-char (mevedel-view--input-start))
-                (insert "first")
-                (mevedel-side-conversation-send))
+                (mevedel-view-test--insert-composer-draft "first")
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-side-conversation-send)))
               (mevedel-test--await 10 "First native side answer"
                 (not (mevedel-turn-busy-p side)))
               (with-current-buffer view
                 (should (string-search "native-only context" (buffer-string)))
-                (goto-char (mevedel-view--input-start))
-                (insert "second")
-                (mevedel-side-conversation-send)
-                (goto-char (mevedel-view--input-start))
-                (insert "> unfinished draft\nsecond line"))
+                (mevedel-view-test--insert-composer-draft "second")
+                (with-current-buffer (mevedel-view-composer-buffer)
+                  (mevedel-side-conversation-send))
+                (mevedel-view-test--insert-composer-draft "> unfinished draft\nsecond line"))
               (mevedel-test--await 10 "Second native side answer"
                 (not (mevedel-turn-busy-p side)))
               (with-current-buffer view
                 (should (string-search "first" (buffer-string)))
                 (should (string-search "second" (buffer-string)))
                 (should (equal "> unfinished draft\nsecond line"
-                               (mevedel-view--input-text))))
+                               (mevedel-view-composer-draft-text nil t))))
               (should (equal parent-text (buffer-string)))
               (should (equal "[\"native-only context\"]"
                              (with-temp-buffer
@@ -119,9 +118,9 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
       (mevedel-test--await 10 "Side opening" view)
       (let ((side (buffer-local-value 'mevedel--data-buffer view)))
         (with-current-buffer view
-          (goto-char (mevedel-view--input-start))
-          (insert "wait")
-          (mevedel-side-conversation-send))
+          (mevedel-view-test--insert-composer-draft "wait")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-side-conversation-send)))
         (mevedel-test--await 10 "Prompt accepted"
           (string-search "wait" (with-temp-buffer
                                    (insert-file-contents fork-file) (buffer-string))))
@@ -135,12 +134,12 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
         (should-not (file-exists-p fork-file))
         (with-current-buffer view
           (should (string-match-p "[Aa]bort" (buffer-string)))
-          (goto-char (mevedel-view--input-start))
-          (insert "> keep refused draft")
-          (let ((before (point)))
-            (should-error (mevedel-side-conversation-send) :type 'user-error)
-            (should (= before (point)))
-            (should (equal "> keep refused draft" (mevedel-view--input-text)))))
+          (mevedel-view-test--insert-composer-draft "> keep refused draft")
+          (let ((before (mevedel-view-test--composer-point-offset)))
+            (should-error (with-current-buffer (mevedel-view-composer-buffer)
+                            (mevedel-side-conversation-send)) :type 'user-error)
+            (should (= before (mevedel-view-test--composer-point-offset)))
+            (should (equal "> keep refused draft" (mevedel-view-composer-draft-text nil t)))))
         (should (file-exists-p parent-file)))))
 
   :doc "prompt error and process loss delete only the fork and render terminal evidence"
@@ -149,9 +148,9 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
       (mevedel-side-conversation-open)
       (mevedel-test--await 10 "Side opening" view)
       (with-current-buffer view
-        (goto-char (mevedel-view--input-start))
-        (insert prompt)
-        (mevedel-side-conversation-send))
+        (mevedel-view-test--insert-composer-draft prompt)
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-side-conversation-send)))
       (mevedel-test--await 10 "Failed fork deletion" (not mevedel-claude-code-btw--forks))
       (should-not (file-exists-p fork-file))
       (should (file-exists-p parent-file))
@@ -163,9 +162,9 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
     (mevedel-side-conversation-open)
     (mevedel-test--await 10 "Side opening" view)
     (with-current-buffer view
-      (goto-char (mevedel-view--input-start))
-      (insert "wait")
-      (mevedel-side-conversation-send))
+      (mevedel-view-test--insert-composer-draft "wait")
+      (with-current-buffer (mevedel-view-composer-buffer)
+        (mevedel-side-conversation-send)))
     (mevedel-test--await 10 "Prompt accepted"
       (string-search "wait" (with-temp-buffer
                                (insert-file-contents fork-file) (buffer-string))))
@@ -279,9 +278,9 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
                                            (args . ((file_path . ,file))))]]))))
       (let ((side (buffer-local-value 'mevedel--data-buffer view)) owner)
         (with-current-buffer view
-          (goto-char (mevedel-view--input-start))
-          (insert "Read the evidence")
-          (mevedel-side-conversation-send))
+          (mevedel-view-test--insert-composer-draft "Read the evidence")
+          (with-current-buffer (mevedel-view-composer-buffer)
+            (mevedel-side-conversation-send)))
         (with-current-buffer side
           (setq owner mevedel--current-request)
           (should (mevedel-request-ephemeral-p owner))
@@ -334,28 +333,27 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
             (setenv "MEVEDEL_ACP_TEST_FORK_GATE" gate)
             (with-current-buffer parent-view
               (mevedel-view--full-rerender)
-              (goto-char (mevedel-view--input-start))
-              (insert "/btw")
-              (mevedel-view-send))
+              (mevedel-view-test--insert-composer-draft "/btw")
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (mevedel-test--await 10 "Command fork held" (file-exists-p (concat gate ".ready")))
             (with-temp-file context-file (insert "Later selected context must not leak"))
             (with-current-buffer parent-view
               (mevedel-view--clear-input)
-              (goto-char (mevedel-view--input-start))
-              (insert "> Parent draft edited during startup\nsecond line")
-              (setq point-before (point)))
+              (mevedel-view-test--insert-composer-draft "> Parent draft edited during startup\nsecond line")
+              (setq point-before (mevedel-view-test--composer-point-offset)))
             (with-temp-file gate)
             (mevedel-test--await 10 "Command side ready" view)
             (with-current-buffer view
-              (goto-char (mevedel-view--input-start))
-              (insert "Question from the command-created side")
-              (mevedel-view-send))
+              (mevedel-view-test--insert-composer-draft "Question from the command-created side")
+              (with-current-buffer (mevedel-view-composer-buffer)
+                (mevedel-view-send)))
             (mevedel-test--await 10 "Command side settled"
               (not (mevedel-turn-busy-p (buffer-local-value 'mevedel--data-buffer view))))
             (with-current-buffer parent-view
-              (should (= point-before (point)))
+              (should (= point-before (mevedel-view-test--composer-point-offset)))
               (should (equal "> Parent draft edited during startup\nsecond line"
-                             (mevedel-view--input-text))))
+                             (mevedel-view-composer-draft-text nil t))))
             (with-current-buffer view
               (should (string-search "parent context" (buffer-string)))
               (should (string-search "Invocation-time selected context" (buffer-string)))
@@ -378,9 +376,9 @@ Expose root, buffer, session, parent-file, fork-file, view and launches."
            (side-session (buffer-local-value 'mevedel--session side))
            segment owner)
       (with-current-buffer view
-        (goto-char (mevedel-view--input-start))
-        (insert "Keep this side prompt visible")
-        (mevedel-view-send))
+        (mevedel-view-test--insert-composer-draft "Keep this side prompt visible")
+        (with-current-buffer (mevedel-view-composer-buffer)
+          (mevedel-view-send)))
       (setq owner (buffer-local-value 'mevedel--current-request side))
       (setq segment (mevedel-session-current-segment side-session))
       (mevedel-test--await 10 "Compacted side answer" (not (mevedel-turn-busy-p side)))

@@ -486,12 +486,11 @@ anew.  The result is a plist of :transcript, :turns, :latest and :mail IDs."
        (unwind-protect
            (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore))
              (mevedel-view--setup view buffer)
-             (let (text distance)
+             (let (text offset)
                (with-current-buffer view
-                 (goto-char (point-max))
-                 (insert "> draft\nsecond line")
-                 (setq text (mevedel-view--input-text)
-                       distance (- (point-max) (point))))
+                 (mevedel-view-composer-insert "> draft\nsecond line")
+                 (setq text (mevedel-view-composer-draft-text)
+                       offset (mevedel-view-test--composer-point-offset)))
                (test-mevedel-persistence-async--type buffer "Composer answer\n")
                (test-mevedel-persistence-async--hold
                 1
@@ -502,8 +501,8 @@ anew.  The result is a plist of :transcript, :turns, :latest and :mail IDs."
                   (test-mevedel-persistence-async--idle session)))
                (should-not (buffer-modified-p buffer))
                (with-current-buffer view
-                 (should (equal text (mevedel-view--input-text)))
-                 (should (= distance (- (point-max) (point)))))))
+                 (should (equal text (mevedel-view-composer-draft-text)))
+                 (should (= offset (mevedel-view-test--composer-point-offset))))))
          (when (buffer-live-p view)
            (with-current-buffer view (setq-local kill-buffer-hook nil))
            (kill-buffer view))))))

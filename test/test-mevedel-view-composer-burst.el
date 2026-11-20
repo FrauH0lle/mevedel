@@ -23,6 +23,7 @@
         (delete-other-windows)
         (mevedel-view-test--insert-composer-draft draft 3)
         (set-window-start nil (point-min) t)
+        ;; Inline-only below: the view's physical end is the draft end.
         (let* ((window (selected-window))
                (height (window-body-height window))
                (before-y (mevedel-view-test--composer-screen-y window))
@@ -41,9 +42,10 @@
                   (goto-char (mevedel-view--history-insertion-marker))
                   (dotimes (n rows)
                     (insert (format "incoming line %d\n" n))))))))
-          (should (equal draft (mevedel-view--input-text)))
-          (should (= 3 (- (point) (mevedel-view--input-start))))
-          (should (= 3 (- (window-point window) (mevedel-view--input-start))))
+          (should (equal draft (mevedel-view-composer-draft-text)))
+          (should (= 3 (mevedel-view-test--composer-point-offset)))
+          (should (= 3 (- (window-point (mevedel-view-composer-window window))
+                          (mevedel-view-composer-draft-start))))
           (if burst
               (progn
                 ;; Derive the last page independently with unit-height rows,

@@ -929,6 +929,13 @@ handler chain would, so staged reminder entries reach the data."
          rear-nonsticky nil))
       (goto-char (+ start (or point-offset (length draft)))))))
 
+(defun mevedel-view-test--composer-point-offset (&optional view)
+  "Return the caret offset from the draft start in VIEW's composer."
+  (let* ((view (or view (current-buffer)))
+         (start (mevedel-view-composer-draft-start view)))
+    (with-current-buffer (mevedel-view-composer-buffer view)
+      (- (point) start))))
+
 (defun mevedel-view-test--abort-interactions (data-buffer)
   "Abort DATA-BUFFER's queued interactions without saving its session.
 A fixture session has no durable home, so the production abort's save would
@@ -957,7 +964,12 @@ tests use the real measurement function, including images and clipping."
 
 (defun mevedel-view-test--composer-screen-y (window)
   "Return the composer's Y in WINDOW through the geometry seam."
-  (mevedel-view--position-screen-y (mevedel-view--input-start) window))
+  (let* ((view (window-buffer window))
+         (composer (mevedel-view-composer-window window)))
+    (when composer
+      (with-current-buffer (mevedel-view-composer-buffer view)
+        (mevedel-view--position-screen-y
+         (mevedel-view-composer-draft-start view) composer)))))
 
 (defmacro mevedel-view-test--with-buffers (&rest body)
   "Execute BODY with data and view buffers bound and initialized."

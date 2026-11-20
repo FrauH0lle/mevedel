@@ -158,8 +158,7 @@
                                    (mevedel-agent-control-wake-pending-p session))
                                  (should-not admitted)
                                  (setf (mevedel-goal-status (mevedel-session-goal session)) 'active)
-                                 (with-current-buffer view
-                                   (delete-region (mevedel-view--input-start) (point-max)))))
+                                 (mevedel-view-composer-replace "" view)))
                               (_
                                (when (eq source 'mixed)
                                  (mevedel-agent-control-enqueue-wake-up session "Check CI" nil nil))
@@ -237,7 +236,7 @@
               (mevedel-schedule-run-due)
               (mevedel-test--await 5 "Wake not delivered" (mevedel-agent-control-wake-pending-p session))
               (mevedel-agent-control-enqueue-monitor-events session "mon" "CI" '(("ok")) t)
-              (with-current-buffer view (delete-region (mevedel-view--input-start) (point-max)))
+              (mevedel-view-composer-replace "" view)
               (pcase ,engine
                 ('async-preflight
                  (mevedel-pending-inputs--wake-for-event buffer)
@@ -292,7 +291,7 @@
                   (cl-incf now (if (= 3 (cadr step)) 180 60))
                   (mevedel-schedule-run-due)
                   (mevedel-test--await 5 "Missing recurring wake" (mevedel-agent-control-wake-pending-p session))
-                  (with-current-buffer view (delete-region (mevedel-view--input-start) (point-max)))
+                  (mevedel-view-composer-replace "" view)
                   (if (memq (car step) '(user user-lost)) (mevedel--submit-generated-turn "My request")
                     (mevedel-pending-inputs--wake-for-event buffer))
                   (mevedel-test--await 5 "Request not admitted" machine)

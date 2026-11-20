@@ -97,9 +97,8 @@
          (mevedel-benchmark--insert-history 32)
          (should (= 32 (- (mevedel-view--history-insertion-marker) start)))
          (should (eq 'response (get-text-property start 'mevedel-view-type)))
-         (goto-char (mevedel-view--input-start))
-         (insert "> draft\nsecond")
-         (should (equal "> draft\nsecond" (mevedel-view--input-text))))))))
+         (mevedel-view-composer-insert "> draft\nsecond")
+         (should (equal "> draft\nsecond" (mevedel-view-composer-draft-text))))))))
 
 (provide 'test-mevedel-allocation-gate)
 ;;; test-mevedel-allocation-gate.el ends here

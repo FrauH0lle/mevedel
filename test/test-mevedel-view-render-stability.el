@@ -42,7 +42,7 @@
           (should (string-search "Visible question" (mevedel-view--sticky-prompt-line)))
           (mevedel-view--full-rerender)
           (should (string-search "Visible question" (mevedel-view--sticky-prompt-line)))
-          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+          (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))))
 
   :doc "full and retained redraws preserve group readers and composer windows"
   (dolist (retained '(nil t))
@@ -83,9 +83,11 @@
             (set-window-start nil (line-beginning-position) t)
             (let ((column (current-column))
                   (other (split-window-right))
-                  (index 4))
+                  (index 4)
+                  composer-window)
               (set-window-buffer other view-buf)
-              (set-window-point other (+ (mevedel-view--input-start) 3))
+              (setq composer-window (mevedel-view-composer-window other))
+              (set-window-point composer-window (+ (mevedel-view-composer-draft-start) 3))
               (dolist (refresh '(full live live full live live))
                 (mevedel-view-test--insert-data
                  data-buf
@@ -106,9 +108,9 @@
                 (should mark-active)
                 (should (= (window-point) (point)))
                 (should (= (window-start) (line-beginning-position)))
-                (should (= (window-point other)
-                           (+ (mevedel-view--input-start) 3)))
-                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                (should (= (window-point composer-window)
+                           (+ (mevedel-view-composer-draft-start) 3)))
+                (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
                 (should (string-match-p "Read: f0.el" (buffer-string)))))))))))
 
 (mevedel-deftest mevedel-view-zone-reconcile/reader-stability ()
@@ -141,7 +143,7 @@
            (should (= (mark) (+ start 10)))
            (should mark-active)
            (should (= (window-start) start))))
-       (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+       (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))))))
 
 (mevedel-deftest mevedel-view--full-rerender/selection-stability ()
   ,test
@@ -181,7 +183,7 @@
        (search-forward "stable response")
        (mevedel-view-toggle-section)
        (let ((before (buffer-substring-no-properties (point-min) (point-max)))
-             (input-start (mevedel-view--input-start)))
+             (boundary (mevedel-view-prompt-boundary)))
          (cl-letf (((symbol-function 'mevedel-view-render-insert-expanded-disclosure)
                     (lambda (&rest _)
                       (when partial (insert "Partial replacement\n"))
@@ -189,8 +191,8 @@
            (should-error
             (mevedel-view-toggle-section)))
          (should (equal before (buffer-substring-no-properties (point-min) (point-max))))
-         (should (= input-start (mevedel-view--input-start)))
-         (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+         (should (= boundary (mevedel-view-prompt-boundary)))
+         (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
          (should-not mevedel-view-render--owner)
          (should (get-text-property (point) 'mevedel-view-collapsed))
          (mevedel-view-toggle-section)
@@ -222,8 +224,9 @@
        (should observed)
        (should (or (plist-get observed :redisplay-inhibited)
                    (plist-get observed :paragraph-present)))
-       (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
-       (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+       (should (equal "> draft\nsecond line" (mevedel-view-composer-draft-text nil t)))
+       (should (= (+ (mevedel-view-composer-draft-start) 4)
+                  (with-current-buffer (mevedel-view-composer-buffer) (point))))))))
 
 (mevedel-deftest mevedel-view--realign-markdown/cell-stability ()
   ,test
