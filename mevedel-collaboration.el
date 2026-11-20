@@ -80,6 +80,9 @@
                   "mevedel-collaboration-guest" (overlay))
 (declare-function mevedel-collaboration--on-state
                   "mevedel-collaboration-guest" (data-buffer state))
+(declare-function mevedel-collaboration--push-audience
+                  "mevedel-collaboration-guest" (session room audience))
+(autoload 'mevedel-collaboration--push-audience "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--on-control "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--on-frame "mevedel-collaboration-guest")
 (autoload 'mevedel-collaboration--on-prompt-created "mevedel-collaboration-guest")
@@ -175,8 +178,6 @@
 (autoload 'mevedel-collaboration--publish-tasks "mevedel-collaboration-task")
 
 ;; `mevedel-collaboration-transport'
-(declare-function mevedel-collaboration--transport-control
-                  "mevedel-collaboration-transport" (transport control))
 (declare-function mevedel-collaboration--transport-open
                   "mevedel-collaboration-transport" (url key &rest callbacks))
 (declare-function mevedel-collaboration--transport-open-p
@@ -185,7 +186,6 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
-(autoload 'mevedel-collaboration--transport-control "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-open-p "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
@@ -880,8 +880,7 @@ COMPLETED-TRIGGER names the finished root turn's initiator."
           (mevedel-collaboration--publish-status room)
           (when (and (eq completed-trigger 'user)
                      (not (mevedel-collaboration--busy-p room)))
-            (mevedel-collaboration--transport-control
-             (plist-get room :transport) (list :t "push"))
+            (mevedel-collaboration--push-audience (plist-get room :session) room 'all)
             (mevedel-collaboration--broadcast
              room (list :t "notice" :kind "completion"
                         :outcome (plist-get (plist-get room :status) :outcome)))))

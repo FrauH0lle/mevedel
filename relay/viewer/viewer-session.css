@@ -256,7 +256,7 @@
 /* A lobby link opens the project's session list instead of a room: the
    conversation, composer and room menu have nothing to show. */
 body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
-  #notify-button, #session-box, #requests, #own-queue, #assistant-working,
+  #session-box, #requests, #own-queue, #assistant-working,
   #composer, .live-controls) {
   display: none;
 }

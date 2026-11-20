@@ -26,12 +26,15 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-agent-control)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-permissions)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
+(require 'mevedel-collaboration-transport)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-publication)
@@ -1580,6 +1583,42 @@
     (should (equal "cat /tmp/secret" (nth 1 captured)))
     (should (= 1 (nth 5 captured)))
     (should (eq entry (nth 6 captured)))))
+
+(mevedel-deftest mevedel-permission-queue--lobby-wake ()
+  ,test
+  (test)
+  :doc "admission wakes the lobby; later display wakes only remaining room devices"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let* ((session (mevedel-skills-test--make-session "wake" mevedel-user-dir))
+             (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+             (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+             (mevedel-interaction-prompt-created-hook '(mevedel-collaboration--on-prompt-created))
+             (mevedel-collaboration-remote-interactions t)
+             (lobby-subs (make-hash-table :test #'equal))
+             (room-subs (make-hash-table :test #'equal)) controls)
+        (setq-local mevedel--session session)
+        (puthash "phone" '(:writable t :endpoint "lobby-phone") lobby-subs)
+        (puthash mevedel-user-dir (list :push-guests lobby-subs :transport 'lobby
+                                        :guests (make-hash-table)) mevedel-collaboration-lobby--lobbies)
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
+                   (lambda (transport frame) (push (cons transport frame) controls))))
+          (dotimes (_ 2)
+            (mevedel-permission-request
+             (list :kind 'generic :tool-name "Read" :origin "/root" :callback #'ignore) session))
+          (should (equal controls (make-list 2 '(lobby :t "push" :guestIds ["phone"]))))
+          ;; Share the session after admission; the old lobby is no longer available.
+          (clrhash mevedel-collaboration-lobby--lobbies)
+          (puthash "phone" '(:writable t :endpoint "room-phone") room-subs)
+          (puthash "tablet" '(:writable t :endpoint "room-tablet") room-subs)
+          (puthash data-buf (list :data-buffer data-buf :session session :push-guests room-subs
+                                  :guests (make-hash-table) :ui-requests (make-hash-table)
+                                  :transport 'room) mevedel-collaboration--rooms)
+          (setq controls nil)
+          (with-current-buffer view-buf
+            (mevedel--prompt--settle (car (hash-table-values mevedel-view--interaction-overlays))
+                                     'deny-once))
+          (should (equal controls '((room :t "push" :guestIds ["tablet"])))))))))
 
 (mevedel-deftest mevedel-permission-queue--allow-once-advance
   (:doc "allow-once settles only the visible head and renders the next prompt")

@@ -87,6 +87,13 @@
     decode: base64urlDecode,
   });
 
+  function restoreNotifications() {
+    if (notifications.enabled()) {
+      notifications.persistShare();
+      return notifications.syncPush();
+    }
+  }
+
   /* -- Small DOM helpers --------------------------------------------- */
 
   function el(tag, className, text) {
@@ -139,6 +146,8 @@
     if (className !== 'connected') {
       sessions.disconnected();
       state.connected = false;
+      state.lobbyNotifications = false;
+      notifications.render();
       state.turnCount = null;
       pendingBackgroundSource = null;
       if (backgroundSourceTimer) clearTimeout(backgroundSourceTimer);
@@ -1264,15 +1273,16 @@
   // Request ids already notified about, so a re-sent card stays silent.
   const notifiedRequests = new Set();
 
-  // ACTION, when given, is {label, href}: somewhere this ended room leads.
-  function showTerminal(connectionText, noticeText, action = null) {
+  function showTerminal(connectionText, noticeText, {label, href, keepShare = false} = {}) {
     followingLive = false;
     if (transport) transport.end();
     state.connected = false;
-    notifications.forget();
-    try { sessionStorage.removeItem('mevedel-tab-share'); }
-    catch (_error) { /* storage unavailable */ }
-    nav.leave();
+    if (!keepShare) {
+      notifications.forget();
+      try { sessionStorage.removeItem('mevedel-tab-share'); }
+      catch (_error) { /* storage unavailable */ }
+      nav.leave();
+    }
     notifications.render();
     tray.clear();
     clearRequests();
@@ -1295,9 +1305,9 @@
     document.getElementById('terminal-title').textContent = connectionText;
     document.getElementById('terminal-message').textContent = noticeText;
     const actionLink = document.getElementById('terminal-action');
-    actionLink.hidden = !action;
-    actionLink.textContent = action ? action.label : '';
-    if (action) actionLink.href = action.href;
+    actionLink.hidden = !href;
+    actionLink.textContent = label || '';
+    if (href) actionLink.href = href;
     else actionLink.removeAttribute('href');
     document.getElementById('terminal-state').hidden = false;
     window.scrollTo({top: 0, behavior: 'instant'});
@@ -1329,6 +1339,7 @@
       state.connected = true;
       state.busy = null;
       notifications.render();
+      if (!state.writable) restoreNotifications();
       setComposerVisible(!state.readOnly);
       showSkillChips(state.readOnly ? [] : frame.commands);
       state.models = Array.isArray(frame.models) ? frame.models : [];
@@ -1460,6 +1471,8 @@
       sessions.setWorkspace(frame.workspace);
       if (typeof frame.project === 'string' && frame.project) state.project = frame.project;
       lobby.show(frame);
+      state.lobbyNotifications = state.writable;
+      notifications.render();
       if (sessionLabel && typeof frame.project === 'string') {
         sessionLabel.textContent = `Lobby · ${frame.project}`;
       }
@@ -1528,6 +1541,10 @@
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');
     } else if (frame.t === 'notice') {
+      if (frame.kind === 'push-refused' && state.lobbyNotifications) {
+        state.pushSubscribed = false;
+        notifications.render();
+      }
       if (frame.kind === 'completion') {
         if (frame.outcome === 'error') {
           notifications.maybeNotify('Turn failed', 'Open the session for the failure and recovery actions.');
@@ -1685,9 +1702,6 @@
     // Handing on access is derived from the secret this page holds, so
     // the controls need it before the socket is even open.
     sessions.useCredentials(credentials);
-    // Keep an existing opt-in's persisted share pointing at the room
-    // most recently opened.
-    if (notifications.enabled()) notifications.persistShare();
     if (sessionLabel) sessionLabel.textContent = credentials.roomId.slice(0, 8);
     // The key remains only in this page's and tab's memory; the history
     // entry names the room alone, and the URL loses the key before the
@@ -1715,13 +1729,16 @@
         onConnection: setConnection,
         onFrame: handleFrame,
         onGiveUp: () => {
+          if (lobby.active() || sessions.knownLobby()) {
+            showTerminal('Lobby unavailable', 'Reload to reconnect when the host is back.', {keepShare: true});
+            return;
+          }
           showTerminal(
             'Room closed', 'This room is no longer available. '
               + 'Ask the host for a new invitation to continue.');
         },
-        onOpen: async () => {
-          if (notifications.enabled()) await notifications.syncPush();
-        },
+        // A view link can subscribe only after a session welcome, never in a lobby.
+        onOpen: () => state.writable && restoreNotifications(),
       });
       transport.connect();
     });

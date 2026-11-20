@@ -2090,6 +2090,16 @@ content; the service worker displays a generic notice and the viewer
 reconnects for sealed detail. This works for supporting Android browsers as
 well as an iOS/iPadOS Home Screen web app.
 
+For workspace-wide notifications, open the lobby with a **full or owner**
+link and turn on its bell. A view-only lobby link cannot subscribe. The lobby
+wakes for admitted permission cards, `Notify`, and terminal Goals from any
+session in that workspace, even an unshared one. A user-started turn also
+wakes the lobby on completion if the session is shared.
+The wake carries no text and does not grant access to the session or its card.
+When the same browser subscribes in both the session and its lobby, the host
+selects one Push registration for a notice. Other room interactions, such as
+an owner-only new-session request, retain their original audience.
+
 Notification preferences and Push subscriptions are owned per room, with the
 subscriptions separated by service-worker registration scopes derived locally
 from the bearer. The scope itself is never fetched, and the worker script and
@@ -2128,12 +2138,17 @@ unsupported or its subscription is unavailable, the viewer uses the live-page
 Notification fallback. The host retains
 endpoint routing metadata in memory and replays it after a relay transport
 reconnect, so background delivery survives an ordinary host network blip.
+For the lobby, the host also saves subscriptions in private workspace state.
+Restarting a recorded lobby restores them without a guest being online.
+Turn off the lobby bell to unsubscribe that device; rotating the lobby
+credentials revokes every subscription to the old lobby.
 
 Notification opt-in retains the bearer link in browser local storage so a
-suspended PWA can reconnect. The viewer clears it and unsubscribes after
-observing room termination or exhausting reconnects; otherwise browser site
-data can outlive the room, although an ended room id and key no longer
-authorize a live share.
+suspended PWA can reconnect. Explicit opt-out or an observed room termination
+clears the opt-in. Exhausting reconnects also clears a session room's opt-in;
+for a known lobby the viewer shows **Lobby unavailable** and keeps the
+registration, so a host outage does not undo the subscription. Browser site data
+can outlive a share, but revoked credentials no longer authorize access.
 
 ## Connection recovery
 

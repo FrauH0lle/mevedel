@@ -47,6 +47,12 @@
                   "mevedel-collaboration-guest" (room peer frame root))
 (declare-function mevedel-collaboration--guard-guest-frame
                   "mevedel-collaboration-guest" (room peer frame dispatch))
+(declare-function mevedel-collaboration--handle-push-subscription
+                  "mevedel-collaboration-guest" (room peer frame &optional persist))
+(declare-function mevedel-collaboration--push-endpoint-p
+                  "mevedel-collaboration-guest" (value))
+(declare-function mevedel-collaboration--restore-push-subscriptions
+                  "mevedel-collaboration-guest" (room))
 (declare-function mevedel-collaboration--model-labels
                   "mevedel-collaboration-guest" ())
 (declare-function mevedel-collaboration--project-name
@@ -221,6 +227,84 @@ link made from them."
 
 ;;
 ;;; Running across restarts
+
+(defconst mevedel-collaboration-lobby--push-limit 64
+  "Maximum subscriptions per room, as in the relay's maxPushSubscriptions.")
+
+(define-error 'mevedel-collaboration-lobby-push-refused "Lobby push refused")
+
+(defun mevedel-collaboration-lobby--push-path (workspace room-id)
+  "Return WORKSPACE's private endpoint store for the credential generation ROOM-ID."
+  (file-name-concat (mevedel-workspace-state-dir workspace)
+                    (concat "lobby-push-" room-id ".json")))
+
+(defun mevedel-collaboration-lobby--load-push (path)
+  "Read validated subscriptions from PATH; never silently replace damaged state."
+  (let ((subscriptions (make-hash-table :test #'equal)))
+    (when-let* ((attrs (file-attributes path)))
+      (unless (and (file-regular-p path) (not (file-attribute-type attrs))
+                   (= 1 (file-attribute-link-number attrs)))
+        (error "Unsafe lobby subscription file"))
+      (with-temp-buffer
+        ;; 64 IDs and double-escaped 2 KiB endpoints fit in 300 KiB.
+        (unless (<= (file-attribute-size attrs) (* 300 1024))
+          (error "Oversized lobby subscription file"))
+        (let ((coding-system-for-read 'utf-8-unix))
+          (insert-file-contents path nil 0 (* 300 1024)))
+        (let ((endpoints (json-parse-buffer)))
+          (unless (and (hash-table-p endpoints)
+                       (<= (hash-table-count endpoints) mevedel-collaboration-lobby--push-limit)
+                       (progn (skip-chars-forward " \t\r\n") (eobp)))
+            (error "Invalid lobby subscription file"))
+          (maphash (lambda (id endpoint)
+                     (unless (and (mevedel-collaboration--sanitize-guest-id id)
+                                  (mevedel-collaboration--push-endpoint-p endpoint))
+                       (error "Invalid stored lobby subscription"))
+                     (puthash id (list :endpoint endpoint :writable t) subscriptions))
+                   endpoints))))
+    subscriptions))
+
+(defun mevedel-collaboration-lobby--restore-push (workspace room-id)
+  "Load ROOM-ID's subscriptions without making WORKSPACE's lobby depend on them.
+If its damaged file cannot be quarantined privately, nil disables mutations."
+  (let ((path (mevedel-collaboration-lobby--push-path workspace room-id)))
+    (condition-case nil
+        (mevedel-collaboration-lobby--load-push path)
+      (error
+       (let ((saved
+              (ignore-errors
+                (when (and (file-regular-p path) (not (file-symlink-p path))
+                           (= 1 (file-attribute-link-number (file-attributes path))))
+                  (let ((backup (make-temp-name (concat path ".damaged-"))))
+                    (set-file-modes path #o600)
+                    (rename-file path backup nil)
+                    backup)))))
+         (mevedel-diagnostic-warning
+          (mevedel-workspace-root workspace) 'mevedel
+          (if saved
+              (format "Lobby subscriptions quarantined at %s; devices can re-enroll" saved)
+            (format "Cannot safely quarantine %s; lobby subscriptions disabled until repaired" path)))
+         (and saved (make-hash-table :test #'equal)))))))
+
+(defun mevedel-collaboration-lobby--persist-push (lobby id endpoint)
+  "Store ID's new ENDPOINT (nil to unsubscribe) before changing live LOBBY."
+  (let* ((subscriptions (or (plist-get lobby :push-guests)
+                            (signal 'mevedel-collaboration-lobby-push-refused
+                                    '("Lobby notifications are unavailable; ask the host to repair them."))))
+         (current (gethash id subscriptions)))
+    (unless (equal endpoint (plist-get current :endpoint))
+      (when (and endpoint (not current)
+                 (>= (hash-table-count subscriptions) mevedel-collaboration-lobby--push-limit))
+        (signal 'mevedel-collaboration-lobby-push-refused
+                '("Lobby notifications are full; unsubscribe another device and try again.")))
+      (let ((endpoints (make-hash-table :test #'equal)))
+        (maphash (lambda (key value) (puthash key (plist-get value :endpoint) endpoints))
+                 subscriptions)
+        (if endpoint (puthash id endpoint endpoints) (remhash id endpoints))
+        (mevedel--write-file-atomically
+         (mevedel-collaboration-lobby--push-path (plist-get lobby :workspace)
+                                                 (plist-get lobby :room-id))
+         (json-serialize endpoints) 'utf-8-unix #o600)))))
 
 (defun mevedel-collaboration-lobby--intent-path ()
   "Return the file listing the roots whose lobbies run until stopped."
@@ -564,6 +648,15 @@ returns; for the lobby's own types the value is unspecified."
     ("lobby-refresh"
      (when (mevedel-collaboration--guest lobby peer)
        (mevedel-collaboration-lobby--send-listing lobby peer)))
+    ((or "push-subscribe" "push-unsubscribe" "push-state")
+     (when (plist-get (mevedel-collaboration--guest lobby peer) :writable)
+       (condition-case refusal
+           (mevedel-collaboration--handle-push-subscription
+            lobby peer frame (apply-partially #'mevedel-collaboration-lobby--persist-push lobby))
+         (mevedel-collaboration-lobby-push-refused
+          (mevedel-collaboration--transport-send
+           (plist-get lobby :transport) peer
+           (list :t "notice" :kind "push-refused" :message (cadr refusal)))))))
     ("open-session"
      (mevedel-collaboration-lobby--handle-open lobby peer frame))
     ("delete-session"
@@ -591,12 +684,14 @@ returns; for the lobby's own types the value is unspecified."
   "Track relay transport STATE for ROOT's lobby.
 The relay collects the room with the host connection, so every guest
 rejoins with a fresh hello after a drop."
-  (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies))
-              ((eq state 'down)))
-    (when (> (hash-table-count (plist-get lobby :guests)) 0)
-      (plist-put lobby :last-guest-departure (float-time)))
-    (clrhash (plist-get lobby :guests))
-    (mevedel-collaboration-presence-publish lobby)))
+  (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies)))
+    (pcase state
+      ('open (mevedel-collaboration--restore-push-subscriptions lobby))
+      ('down
+       (when (> (hash-table-count (plist-get lobby :guests)) 0)
+         (plist-put lobby :last-guest-departure (float-time)))
+       (clrhash (plist-get lobby :guests))
+       (mevedel-collaboration-presence-publish lobby)))))
 
 
 ;;
@@ -661,6 +756,7 @@ until it is stopped."
                        :key key
                        :write-token write-token
                        :owner-token owner-token
+                       :push-guests (mevedel-collaboration-lobby--restore-push workspace room-id)
                        :guests (make-hash-table :test #'eql))
                  (mevedel-collaboration--links
                   (cdr origins) room-id key write-token owner-token))))
@@ -856,10 +952,16 @@ Every earlier lobby link stops working; the lobby restarts when it was
 running."
   (interactive)
   (let* ((workspace (mevedel-workspace-current))
-         (lobby (mevedel-collaboration-lobby--find workspace)))
+         (lobby (mevedel-collaboration-lobby--find workspace))
+         (old (or lobby (mevedel-collaboration-lobby--read-credentials
+                         (mevedel-collaboration-lobby--credentials-path workspace)))))
     (when lobby
       (mevedel-collaboration-lobby--stop lobby 'rotated))
     (mevedel-collaboration-lobby--credentials workspace t)
+    (when-let* ((room-id (plist-get old :room-id))
+                (store (mevedel-collaboration-lobby--push-path workspace room-id))
+                ((file-exists-p store)))
+      (delete-file store))
     (if lobby
         (mevedel-collaboration-share-present
          (mevedel-collaboration-lobby-start

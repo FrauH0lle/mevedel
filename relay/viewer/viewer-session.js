@@ -587,6 +587,7 @@
                           showResult, showModels, offerRoom, fork, historyAction, historyResult,
                           useCredentials, setWorkspace, disconnected,
                           rememberCurrent, rememberLobby, lobbyLink, rooms,
+                          knownLobby: () => stored().some(room => room.room === roomId && room.lobby === true),
                           hasRooms: () => elsewhere().length > 0, openRooms,
                           openNewSession: open});
   }

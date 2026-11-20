@@ -651,7 +651,8 @@ guest sees one card updated in place instead of an accumulating pile."
                                      (mevedel-collaboration--guest room peer)
                                      :guest-id))
                                   peers)))
-            (mevedel-collaboration--push-writable-guests room)))))))
+            (mevedel-collaboration--push-writable-guests
+             room (overlay-get overlay 'mevedel-lobby-woken))))))))
 
 (defun mevedel-collaboration--on-prompt-settled (overlay)
   "Dismiss OVERLAY's ui-request from every guest surface.
@@ -933,8 +934,10 @@ that step."
            mevedel-collaboration--max-push-endpoint-bytes)
        (string-match-p "\\`https://[^[:space:][:cntrl:]#]+\\'" value)))
 
-(defun mevedel-collaboration--handle-push-subscription (room peer frame)
-  "Forward authenticated PEER's push subscription FRAME for ROOM."
+(defun mevedel-collaboration--handle-push-subscription (room peer frame &optional persist)
+  "Forward authenticated PEER's push subscription FRAME for ROOM.
+Before a mutation, call PERSIST with the guest id and new endpoint
+\(nil for removal).  A failed write must not change the live subscription."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
               ((plist-get guest :ready))
               (guest-id (plist-get guest :guest-id)))
@@ -942,6 +945,7 @@ that step."
       ("push-subscribe"
        (when-let* ((endpoint (plist-get frame :endpoint))
                    ((mevedel-collaboration--push-endpoint-p endpoint)))
+         (when persist (funcall persist guest-id endpoint))
          (puthash guest-id
                   (list :endpoint endpoint
                         :writable (plist-get guest :writable))
@@ -953,6 +957,7 @@ that step."
                 :active (if (eq t (plist-get frame :active))
                             t :json-false)))))
       ("push-unsubscribe"
+       (when persist (funcall persist guest-id nil))
        (remhash guest-id (plist-get room :push-guests))
        (mevedel-collaboration--transport-control
         (plist-get room :transport)
@@ -971,25 +976,72 @@ that step."
      (plist-get room :transport)
      (list :t "push" :guestIds (vconcat guest-ids)))))
 
-(defun mevedel-collaboration--push-writable-guests (room)
-  "Wake every notification-subscribed writable guest of ROOM."
+(defun mevedel-collaboration--push-writable-guests (room &optional already-woken)
+  "Wake writable subscribers of ROOM not in ALREADY-WOKEN's ids or endpoints."
   (let (guest-ids)
     (maphash (lambda (guest-id subscription)
-               (when (plist-get subscription :writable)
+               (when (and (plist-get subscription :writable)
+                          (not (member guest-id already-woken))
+                          (not (member (plist-get subscription :endpoint) already-woken)))
                  (push guest-id guest-ids)))
              (plist-get room :push-guests))
     (mevedel-collaboration--push-guests room guest-ids)))
 
+(defun mevedel-collaboration--push-audience (session room kind)
+  "Wake subscribers to SESSION's ROOM and workspace lobby for KIND.
+`all' means user-turn completion; other kinds target writable devices.
+Return the lobby guest ids and endpoints selected for a wake."
+  (let* ((workspace (and session (mevedel-session-workspace session)))
+         (lobby (and workspace (fboundp 'mevedel-collaboration-lobby--find)
+                     (mevedel-collaboration-lobby--find workspace)))
+         (all (eq kind 'all))
+         (room-sent
+          (and room (if all
+                        (mevedel-collaboration--transport-control
+                         (plist-get room :transport) (list :t "push"))
+                      (mevedel-collaboration--push-writable-guests room))))
+         seen woken)
+    (when lobby
+      ;; A browser has one guest id but a distinct Push endpoint per room.
+      (when-let* (room-sent (subs (plist-get room :push-guests)))
+        (maphash (lambda (id sub)
+                   (when (or all (plist-get sub :writable))
+                     (push id seen)
+                     (when-let* ((endpoint (plist-get sub :endpoint)))
+                       (push endpoint seen)))) subs))
+      (let (ids)
+        (when-let* ((subs (plist-get lobby :push-guests)))
+          (maphash (lambda (id sub)
+                     (unless (or (member id seen) (member (plist-get sub :endpoint) seen))
+                       (push id ids)
+                       (push id woken)
+                       (when-let* ((endpoint (plist-get sub :endpoint)))
+                         (push endpoint woken)))) subs))
+        (unless (mevedel-collaboration--push-guests lobby ids)
+          (setq woken nil)))
+      (maphash (lambda (peer guest)
+                 (when (and (plist-get guest :ready) (plist-get guest :writable)
+                            (not (member (plist-get guest :guest-id) seen)))
+                   (mevedel-collaboration--transport-send
+                    (plist-get lobby :transport) peer
+                    (list :t "notice" :kind (if all "completion" (symbol-name kind))))))
+               (plist-get lobby :guests)))
+    woken))
+
 (defun mevedel-collaboration-push-notice (session kind)
-  "Send a content-free attention wake of KIND to SESSION's writable guests."
-  (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (mevedel-collaboration--push-writable-guests room)
-    (maphash (lambda (peer guest)
-               (when (and (plist-get guest :ready) (plist-get guest :writable))
-                 (mevedel-collaboration--transport-send
-                  (plist-get room :transport) peer
-                  (list :t "notice" :kind (symbol-name kind)))))
-             (plist-get room :guests))))
+  "Wake SESSION's writable subscribers for KIND and return lobby recipients.
+Permission cards reach room guests on display, not on admission."
+  (let* ((room (unless (eq kind 'permission)
+                 (mevedel-collaboration--room-for-session session)))
+         (woken (mevedel-collaboration--push-audience session room kind)))
+    (when room
+      (maphash (lambda (peer guest)
+                 (when (and (plist-get guest :ready) (plist-get guest :writable))
+                   (mevedel-collaboration--transport-send
+                    (plist-get room :transport) peer
+                    (list :t "notice" :kind (symbol-name kind)))))
+               (plist-get room :guests)))
+    woken))
 
 (defun mevedel-collaboration--restore-push-subscriptions (room)
   "Restore ROOM's Web Push endpoints after a relay reconnect."

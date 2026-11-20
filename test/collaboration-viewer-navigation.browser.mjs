@@ -289,6 +289,91 @@ async function liveRoom(browser, viewport) {
 
 const atLiveEdge = () => document.documentElement.scrollHeight - scrollY - innerHeight < 2;
 
+test('workspace notification bell belongs to full and owner lobby links only', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      const page = await open(browser);
+      const link = tierLink(lobbyRoom, length);
+      await page.context().addInitScript(viewOnly => {
+        window.shown = [];
+        window.Notification = class {
+          static permission = 'granted';
+          static async requestPermission() { return 'granted'; }
+          constructor(title) { window.shown.push(title); }
+        };
+        if (viewOnly) localStorage.setItem(`mevedel-notify:${location.hash.slice(1)}`, 'on');
+        Object.defineProperty(document, 'hidden', {value: true});
+        let subscription;
+        const registration = {unregister: async () => true, pushManager: {
+          getSubscription: async () => subscription,
+          subscribe: async options => (subscription = {options, endpoint: 'https://push.example/phone',
+            unsubscribe: async () => { window.unsubscribed = true; subscription = null; }}),
+        }};
+        Object.defineProperty(navigator, 'serviceWorker', {value: {
+          register: async () => registration, getRegistration: async () => registration,
+        }});
+      }, length === 32);
+      await page.context().route('**/push-key', route => route.fulfill({json: {key: base64url(Buffer.alloc(65))}}));
+      await page.goto(link);
+      await page.locator('#lobby').waitFor();
+      const bell = page.locator('#notify-button');
+      assert.equal(await bell.isVisible(), length !== 32);
+      if (length === 32) {
+        await page.push[lobbyRoom.id]({t: 'notice', kind: 'failure'});
+        await page.push[lobbyRoom.id]({t: 'notice', message: 'delivered'});
+        await page.getByText('delivered', {exact: true}).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.shown), []);
+        assert.equal(await page.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
+        assert.equal(page.received.some(({frame}) => frame.t === 'push-subscribe'), false);
+      } else {
+        assert.match(await bell.getAttribute('aria-label'), /workspace/);
+        const next = type => page.waitForEvent('host-frame', {predicate: frame => frame.t === type, timeout: 5000});
+        const subscribed = next('push-subscribe');
+        await bell.click();
+        assert.deepEqual(await subscribed, {t: 'push-subscribe', endpoint: 'https://push.example/phone', active: false});
+        await page.push[lobbyRoom.id]({t: 'notice', kind: 'push-refused', message: 'Workspace push registration refused.'});
+        await page.getByText('Workspace push registration refused.', {exact: true}).waitFor();
+        assert.match(await bell.getAttribute('aria-label'), /while this tab is away/);
+        assert.equal(await bell.getAttribute('aria-pressed'), 'true');
+        await page.push[lobbyRoom.id]({t: 'notice', kind: 'goal'});
+        await page.waitForFunction(() => window.shown.includes('New mevedel activity'));
+        const reopened = await page.context().newPage();
+        const restored = next('push-subscribe');
+        await reopened.goto('http://localhost:8765/');
+        await restored;
+        await reopened.getByRole('button', {name: /background delivery enabled/}).waitFor();
+        assert.equal(await reopened.locator('#notify-button').getAttribute('aria-pressed'), 'true');
+        if (length === 48) {
+          // A launch with no URL fragment reaches the relay while the host is down.
+          const outage = await page.context().newPage();
+          await outage.routeWebSocket(/\/r\//, socket => socket.close({code: 4004}));
+          await outage.goto('http://localhost:8765/');
+          await outage.locator('#terminal-state').waitFor();
+          assert.equal(await outage.locator('#terminal-title').textContent(), 'Lobby unavailable');
+          assert.equal(await outage.evaluate(() => localStorage.getItem('mevedel-last-share')), new URL(link).hash.slice(1));
+        }
+        const unsubscribed = next('push-unsubscribe');
+        await reopened.locator('#notify-button').click();
+        await unsubscribed;
+        assert.equal(await reopened.evaluate(() => window.unsubscribed), true);
+        assert.equal(await reopened.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
+        assert.equal(await reopened.evaluate(fragment => localStorage.getItem(`mevedel-notify:${fragment}`),
+                                             new URL(link).hash.slice(1)), null);
+        await reopened.evaluate(() => { delete window.PushManager; });
+        await reopened.locator('#notify-button').click();
+        await page.push[lobbyRoom.id]({t: 'notice', kind: 'goal'});
+        await page.push[lobbyRoom.id]({t: 'bye', reason: 'rotated'});
+        await reopened.locator('#terminal-state').waitFor();
+        assert.deepEqual(await reopened.evaluate(() => window.shown), ['New mevedel activity']);
+        assert.equal(await reopened.locator('#notify-button').isVisible(), false);
+        assert.equal(await reopened.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
+      }
+      await page.context().close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('hidden viewer without Push only notifies for explicit host notices', async () => {
   const browser = await chromium.launch();
   try {

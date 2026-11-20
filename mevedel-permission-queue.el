@@ -608,8 +608,9 @@ ENTRY plist keys:
                (append (mevedel-permission-queue--get session) (list entry))
                session)
               (mevedel-permission-queue--ensure-armed session)
-              (mevedel-notify session 'permission
-                              (map-delete (copy-sequence entry) :callback))
+              (when-let* ((woken (mevedel-notify session 'permission
+                                                 (map-delete (copy-sequence entry) :callback))))
+                (mevedel-queue--entry-metadata-put entry :lobby-woken woken))
               ;; Re-render the head so its pending count includes new siblings.
               (mevedel-permission-queue--render-head session)))
           (error

@@ -1014,8 +1014,11 @@
 (mevedel-deftest mevedel-collaboration--publish-status
   (:doc "broadcasts busy and name changes once and tells a joining guest directly")
   (let* ((guests (make-hash-table :test #'eql))
+         (workspace (mevedel-workspace--create :root "/project/"))
+         (session (mevedel-session--create :workspace workspace))
          (data-buffer (generate-new-buffer " *collab-status-data*"))
-         (room (list :data-buffer data-buffer :guests guests
+         (room (list :data-buffer data-buffer :session session :guests guests
+                     :push-guests (make-hash-table :test #'equal)
                      :transport 'transport :status nil))
          sent controls)
     (unwind-protect
@@ -1024,12 +1027,12 @@
                      (push (cons peer frame) sent)
                      t))
                   ((symbol-function 'mevedel-collaboration--transport-control)
-                   (lambda (_transport control)
-                     (push control controls)
+                   (lambda (transport control)
+                     (push (cons transport control) controls)
                      t)))
           (puthash 1 (list :name "g" :writable nil :ready t) guests)
           (with-current-buffer data-buffer
-            (setq-local gptel-model 'test-model))
+            (setq-local mevedel--session session gptel-model 'test-model))
           ;; The first publish establishes the baseline the guests hold.
           (mevedel-collaboration--publish-status room)
           (let ((frame (cdr (car sent))))
@@ -1058,10 +1061,18 @@
           (should-not sent)
           (should-not controls)
           ;; The live-page fallback needs the same explicit user edge as Push.
-          (let ((mevedel-collaboration--rooms (make-hash-table :test #'eq)))
+          (let* ((mevedel-collaboration--rooms (make-hash-table :test #'eq))
+                 (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+                 (phones (make-hash-table :test #'equal))
+                 (lobby (list :workspace workspace :guests (make-hash-table)
+                              :push-guests phones :transport 'lobby)))
+            (puthash "phone" '(:endpoint "https://push.test/phone" :writable t) phones)
+            (puthash (mevedel-workspace-root workspace) lobby mevedel-collaboration-lobby--lobbies)
             (puthash data-buffer room mevedel-collaboration--rooms)
             (mevedel-collaboration-notify-request-changed data-buffer 'user)
-            (should (equal '((:t "push")) controls))
+            (should (= 2 (length controls)))
+            (should (member '(transport :t "push") controls))
+            (should (member '(lobby :t "push" :guestIds ["phone"]) controls))
             (should (equal "completion" (plist-get (cdar sent) :kind)))
             ;; A teardown callback can already have started a new request.
             (setq controls nil sent nil)
@@ -1069,7 +1080,17 @@
               (setq-local mevedel--current-request 'successor))
             (mevedel-collaboration-notify-request-changed data-buffer 'user)
             (should-not controls)
-            (should (equal "status" (plist-get (cdar sent) :t))))
+            (should (equal "status" (plist-get (cdar sent) :t)))
+            ;; A completion in a private session is not a workspace notice.
+            (remhash data-buffer mevedel-collaboration--rooms)
+            (mevedel-collaboration-notify-request-changed data-buffer 'user)
+            (should-not controls)
+            (with-current-buffer data-buffer (setq-local mevedel--current-request nil))
+            (dolist (trigger '(nil goal-continuation workspace-schedule background-event))
+              (mevedel-collaboration-notify-request-changed data-buffer trigger))
+            (should-not controls)
+            (mevedel-collaboration-notify-request-changed data-buffer 'user)
+            (should-not controls))
           ;; The session's name heads the room and follows a rename.
           (setq controls nil)
           (let ((session (mevedel-session--create :name "2026-10-05T17-00-abc")))

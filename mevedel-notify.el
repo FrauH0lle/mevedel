@@ -25,7 +25,7 @@ See the desktop notification examples in docs/permissions.md."
 (defun mevedel-notify (session kind details)
   "Deliver KIND of notice for SESSION with DETAILS.
 DETAILS is the sanitized card plist for `permission', otherwise text.
-No text is sent to a push service."
+No text is sent to a push service.  Return the lobby wake receipt, if any."
   (when mevedel-notify-function
     (condition-case err
         (funcall mevedel-notify-function kind
@@ -35,13 +35,13 @@ No text is sent to a push service."
               (mevedel-diagnostic-scope session) 'mevedel
               (format "%s notify failed: %S" (capitalize (symbol-name kind)) err)
               :warning))))
-  (when (and (not (eq kind 'permission))
-             (fboundp 'mevedel-collaboration-push-notice))
+  (when (fboundp 'mevedel-collaboration-push-notice)
     (condition-case err
         (mevedel-collaboration-push-notice session kind)
       (error (mevedel-diagnostic-warning
               (mevedel-diagnostic-scope session) 'mevedel
-              (format "Remote notice failed: %S" err) :warning)))))
+              (format "Remote notice failed: %S" err) :warning)
+             nil))))
 
 (provide 'mevedel-notify)
 ;;; mevedel-notify.el ends here

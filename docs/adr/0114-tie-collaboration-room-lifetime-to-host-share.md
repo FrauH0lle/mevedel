@@ -37,7 +37,10 @@ stopped, its workspace root is recorded in the user directory while it runs,
 and an Emacs exit leaves that record, so the next `mevedel-install` restarts
 the lobby on the same relay room. Stopping the lobby removes the record.
 Rotating the credentials, not stopping the lobby, is its revocation
-operation. Saved-intent inspection loads only lobby and workspace foundations;
+operation. Full and owner lobby Push subscriptions follow that credential
+lifetime: the host replays private routing records after restart and drops
+them on rotation. Session room subscriptions stay in memory. Saved-intent
+inspection loads only lobby and workspace foundations;
 starting a recorded lobby loads guest, artifact, file, editing, and transport
 implementations. An absent, empty, or malformed intent record starts none of
 those features. This preserves startup timing, warning and retry behavior. The rooms a lobby opens follow the ordinary share lifecycle and

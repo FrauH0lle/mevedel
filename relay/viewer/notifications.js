@@ -11,6 +11,10 @@
       return typeof Notification !== 'undefined';
     }
 
+    function available() {
+      return state.connected || state.lobbyNotifications;
+    }
+
     function pushSupported() {
       return supported() && navigator.serviceWorker
         && typeof PushManager !== 'undefined';
@@ -39,7 +43,7 @@
 
     function render() {
       if (!button) return;
-      button.hidden = !(state.connected && supported());
+      button.hidden = !(available() && supported());
       const on = enabled();
       const blocked = supported() && Notification.permission === 'denied';
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -49,7 +53,8 @@
           ? state.pushSubscribed
             ? 'Notifications on — background delivery enabled'
             : 'Notifications on — you will be told while this tab is away'
-          : 'Notifications off — click to be told when the session needs you';
+          : state.lobbyNotifications ? 'Notifications off — notify me about sessions in this workspace'
+            : 'Notifications off — click to be told when the session needs you';
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       button.className = `bell${on ? ' on' : ''}${blocked ? ' blocked' : ''}`;
@@ -63,7 +68,7 @@
     }
 
     function maybeNotify(title, body) {
-      if (!away()) return;
+      if (!available() || !away()) return;
       markTitle(true);
       if (!enabled() || state.pushSubscribed) return;
       try { new Notification(title, body ? {body} : {}); }
@@ -191,13 +196,14 @@
     function bind() {
       if (button) {
         button.addEventListener('click', async () => {
-          if (!state.connected) return;
+          if (!available()) return;
           if (enabled()) {
+            forgetShare();
             forgetPreference();
             await dropPush();
           } else if (supported()) {
             const permission = await Notification.requestPermission();
-            if (!state.connected) return;
+            if (!available()) return;
             try {
               localStorage.setItem(`mevedel-notify:${state.fragment}`,
                                    permission === 'granted' ? 'on' : 'off');

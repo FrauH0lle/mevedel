@@ -682,6 +682,8 @@ workspace approval would store."
           (mevedel-queue--entry-metadata-put entry :displayed t)
           (mevedel-permission-queue--log 'permission-displayed entry))
         (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-lobby-woken
+                     (mevedel-queue--entry-metadata-get entry :lobby-woken))
         (overlay-put ov 'mevedel-permission-suppress-allow-session
                      suppress-allow-session)
         (overlay-put ov 'mevedel-permission-include-always include-always)
