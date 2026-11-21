@@ -25,7 +25,6 @@
 (declare-function niwa-view--tool-cache-key "niwa-view-render" (data start end collapsed))
 (declare-function niwa-view-render-batched-full "niwa-view-render" ())
 (declare-function niwa-view-render--refresh-source "niwa-view-render" (data start end))
-(declare-function niwa-view-render-invalidate-live-tail "niwa-view-render" ())
 (declare-function niwa-view-render-mutate "niwa-view-render" (key function &optional replacement cleanup))
 (defvar niwa-view--data-turn-start)
 (defvar niwa-view-render--parse-checkpoint)
@@ -223,9 +222,8 @@ INVALID requires rebuilding historical context instead of reusing its turn."
              (markerp niwa-view--data-turn-start)
              (eq (marker-buffer niwa-view--data-turn-start) source)
              (<= niwa-view--data-turn-start (niwa-view-prepare--job-start job)))
-        (progn
-          (niwa-view-render-invalidate-live-tail)
-          (niwa-view--render-live-region source nil))
+        (niwa-view--render-live-region
+         source nil (marker-position niwa-view--data-turn-start))
       (unless (and (not invalid)
                    (niwa-view-render--refresh-source
                     source (niwa-view-prepare--job-start job)

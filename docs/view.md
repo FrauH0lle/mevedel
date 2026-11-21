@@ -2200,10 +2200,10 @@ positions and share the viewport policy.
 
 The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
-positions: a composer position by its input offset, a managed-fragment
-position by zone namespace, fragment id, and offset, and rendered transcript
-text by its `niwa-view-source` data start, section role, child discriminator,
-and offset into the run. Disclosure keys supply the standalone role of grouped
+positions: a managed-fragment position by zone namespace, fragment id, and
+offset, and rendered transcript text by its `niwa-view-source` data start,
+section role, child discriminator, and offset into the run. Disclosure keys
+supply the standalone role of grouped
 rows and the identity of compound children sharing source coordinates. An
 ordinal distinguishes runs within that same section identity; separators and
 other section roles do not count toward it. This keeps a group summary distinct

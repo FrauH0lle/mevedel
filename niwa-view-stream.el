@@ -153,8 +153,6 @@
                   "niwa-view-render" (data-buf settle-p &optional start end))
 (declare-function niwa-view--retire-pending-decorations
                   "niwa-view-render" (start end))
-(declare-function niwa-view-render-invalidate-live-tail
-                  "niwa-view-render" ())
 (declare-function niwa-view-render-live-update
                   "niwa-view-render" (data-buf))
 (declare-function niwa-view-render-settle
@@ -2199,7 +2197,6 @@ NO-PROGRESS suppresses active-turn presentation."
     (set-marker niwa-view--in-flight-turn-start nil))
   (when (markerp niwa-view--data-turn-start)
     (set-marker niwa-view--data-turn-start nil))
-  (niwa-view-render-invalidate-live-tail)
   (setq niwa-view--in-flight-turn-start
         (and (not no-progress) (copy-marker view-start nil)))
   (setq niwa-view--data-turn-start
@@ -2244,7 +2241,6 @@ NO-PROGRESS suppresses active-turn presentation."
 
 (defun niwa-view-stream--release-turn ()
   "Release terminal resources even when its projection was superseded."
-  (niwa-view-render-invalidate-live-tail)
   ;; A superseding full render must not recreate progress from the old
   ;; spinner timestamp or a request that has not finished settling yet.
   (setq niwa-view--pending-tool-calls nil

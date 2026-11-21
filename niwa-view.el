@@ -263,8 +263,6 @@
 (declare-function niwa-view-render-batched-full "niwa-view-render" ())
 (declare-function niwa-view-render-initialize
                   "niwa-view-render" ())
-(declare-function niwa-view-render-invalidate-live-tail
-                  "niwa-view-render" ())
 (declare-function niwa-view-render-mutate
                   "niwa-view-render" (key function &optional replacement cleanup))
 (declare-function niwa-view-render-resume-batch "niwa-view-render" ())
@@ -1052,7 +1050,6 @@ Unlink and kill the associated data buffer if it still owns this view."
     (niwa-view-path-teardown))
   (niwa-view--stop-spinner-timer)
   (niwa-view--cancel-scheduled-render)
-  (niwa-view-render-invalidate-live-tail)
   (niwa-view-control-transfer-stop-polling)
   (unless (niwa-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))

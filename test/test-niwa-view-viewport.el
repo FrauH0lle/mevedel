@@ -39,5 +39,18 @@
             (should (= last-page (window-start reader)))
             (should (= 14 (window-start switched)))))))))
 
+(ert-deftest niwa-view-viewport/source-anchor-probe-stops-after-position ()
+  (with-temp-buffer
+    (insert (propertize (make-string 4096 ?x) 'niwa-view-source '(1 . 10)))
+    (let ((run-end (symbol-function 'niwa-view--render-anchor-run-end))
+          limits)
+      (cl-letf (((symbol-function 'niwa-view--render-anchor-run-end)
+                 (lambda (start limit)
+                   (push limit limits)
+                   (funcall run-end start limit))))
+        (should (equal (niwa-view--position-render-anchor 8 nil '(5 . 10))
+                       '(source (1 nil nil) 0 3 5 10)))
+        (should (equal limits '(9)))))))
+
 (provide 'test-niwa-view-viewport)
 ;;; test-niwa-view-viewport.el ends here

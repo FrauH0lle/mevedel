@@ -220,7 +220,7 @@
      (setq niwa-view--in-flight-turn-start (copy-marker niwa-view--status-marker))
      (niwa-view--full-rerender)
      (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
-     (niwa-view-render-invalidate-live-tail)
+     (niwa-view-render--invalidate-live-tail)
      (let ((original (symbol-function 'niwa-view--fontify-response))
            observed)
        (cl-letf (((symbol-function 'niwa-view--fontify-response)

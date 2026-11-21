@@ -3248,7 +3248,7 @@
             (should (equal line (buffer-substring-no-properties
                                  (line-beginning-position) (line-end-position))))))))))
 
-(niwa-deftest niwa-view-render-invalidate-live-tail ()
+(niwa-deftest niwa-view-render--invalidate-live-tail ()
   ,test
   (test)
   :doc "clears retained state and detaches both markers"
@@ -3260,7 +3260,7 @@
       (setq-local niwa-view--live-view-tail-start view-marker)
       (setq-local niwa-view--live-source-change-hook change-hook)
       (add-hook 'before-change-functions change-hook nil t)
-      (niwa-view-render-invalidate-live-tail)
+      (niwa-view-render--invalidate-live-tail)
       (should-not niwa-view--live-data-tail-start)
       (should-not niwa-view--live-view-tail-start)
       (should-not (memq change-hook before-change-functions))

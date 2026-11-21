@@ -118,12 +118,13 @@ returned anchor with `niwa-view--release-render-anchor'."
        (when-let* ((identity (niwa-view--render-anchor-identity pos)))
          (let ((nth 0)
                (scan (if region (car region) (point-min)))
+               (limit (min (point-max) (1+ pos)))
                anchor)
            ;; Count only runs of this section.  A retained-tail render can
            ;; give a neighboring separator the same source start; it must
            ;; not shift a group header or its first child's ordinal.
            (while (<= scan pos)
-             (let ((next (niwa-view--render-anchor-run-end scan (point-max))))
+             (let ((next (niwa-view--render-anchor-run-end scan limit)))
                (if (< pos next)
                    (setq anchor
                          (append (list 'source identity nth (- pos scan))

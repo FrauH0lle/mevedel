@@ -73,7 +73,6 @@
 (declare-function niwa-view-rerender "niwa-view" (&optional buffer))
 
 ;; `niwa-view-render'
-(declare-function niwa-view-render-invalidate-live-tail "niwa-view-render" ())
 (declare-function niwa-view-render-refresh-latest-turn "niwa-view-render" (data-buf))
 (autoload 'niwa-view-render-refresh-latest-turn "niwa-view-render")
 
@@ -707,8 +706,6 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
               (delete-region start position))
             (setq position start))))
       (when-let* ((view niwa--view-buffer) ((buffer-live-p view)))
-        (with-current-buffer view
-          (niwa-view-render-invalidate-live-tail))
         (niwa-view-rerender view)))
     (when-let* ((reset (plist-get info :niwa-retry-reset-output)))
       (funcall reset))

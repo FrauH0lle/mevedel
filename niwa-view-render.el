@@ -262,6 +262,8 @@
                   "niwa-view-composer" ())
 
 ;; `niwa-view-disclosure'
+(declare-function niwa-view-disclosure--state-key-at
+                  "niwa-view-disclosure" (position mailbox-counts))
 (declare-function niwa-view-disclosure--toggle-mailbox
                   "niwa-view-disclosure" ())
 (declare-function niwa-view-disclosure-apply-rendering-state
@@ -704,21 +706,24 @@ turns rendered as usual.")
 Each element is a row's data source start, or an in-flight call's key.")
 
 (defvar-local niwa-view-render--pending-reader-group nil
-  "Running-only group opened beneath the reader, as (TURN-MARKER START).
+  "Running-only group's fold, as (TURN-MARKER START COLLAPSED).
+Set when the group opens beneath the reader (COLLAPSED nil) or when the
+user folds it; a matching slot decides the fold over the reader's row.
 START is the data end where its first result will arrive; the canonical
 tool segment includes gptel's separator and Org wrapper.  Once a result
-lands, transfer expansion to the source-backed group's disclosure state.
+lands, transfer the fold to the source-backed group's disclosure state.
 TURN-MARKER is compared by identity so an aborted turn cannot lend its
-expansion to a later turn starting at the same data position.")
+fold to a later turn starting at the same data position.")
 
 (defvar-local niwa-view-render--batch nil
   "Pending full-history projection, owned by this view.")
 
 (defun niwa-view-render-initialize ()
   "Initialize transcript-rendering state in the current view buffer."
-  (niwa-view-render-invalidate-live-tail)
+  (niwa-view-render--invalidate-live-tail)
   (niwa-view-render-cancel-batch)
   (add-hook 'kill-buffer-hook #'niwa-view-render-cancel-batch nil t)
+  (add-hook 'kill-buffer-hook #'niwa-view-render--invalidate-live-tail nil t)
   ;; Loading the mode also registers its grammars in
   ;; `treesit-language-source-alist', so the install hint has a source.
   (require 'markdown-ts-mode nil t)
@@ -751,7 +756,7 @@ expansion to a later turn starting at the same data position.")
   (setq-local niwa-view--live-source-change-hook nil)
   (niwa-view-segments-initialize))
 
-(defun niwa-view-render-invalidate-live-tail ()
+(defun niwa-view-render--invalidate-live-tail ()
   "Forget the current view buffer's retained live-render tail."
   (let ((data-marker niwa-view--live-data-tail-start)
         (view-marker niwa-view--live-view-tail-start)
@@ -778,6 +783,18 @@ expansion to a later turn starting at the same data position.")
        (marker-position niwa-view--live-view-tail-start)
        (eq (marker-buffer niwa-view--live-view-tail-start)
            (current-buffer))))
+
+(defun niwa-view--live-tail-continues-p (data-buf)
+  "Return non-nil when the retained tail can continue DATA-BUF's current turn.
+The tail must follow the turn's view start, and its data start must still
+be where its unit was drawn: an edit that bypassed change hooks, such as a
+retry discarding output, moves it."
+  (and (niwa-view--live-tail-valid-p data-buf)
+       (when-let* ((start (niwa-view-stream-in-flight-turn-start-position)))
+         (>= niwa-view--live-view-tail-start start))
+       (eql (marker-position niwa-view--live-data-tail-start)
+            (get-text-property niwa-view--live-view-tail-start
+                               'niwa-view-live-unit-source))))
 
 (defun niwa-view--live-tail-intact-p (data-buf first-end end)
   "Return non-nil if the retained DATA-BUF unit remains whole through END.
@@ -809,7 +826,7 @@ otherwise an advancing start marker could accept a replaced unit's suffix."
       (when (and (markerp niwa-view--live-data-tail-start)
                  (niwa-view--live-tail-valid-p data-buf)
                  (< beg (marker-position niwa-view--live-data-tail-start)))
-        (niwa-view-render-invalidate-live-tail)))))
+        (niwa-view-render--invalidate-live-tail)))))
 
 (defun niwa-view--retain-last-live-render-unit (data-buf start end)
   "Retain the last live render unit between START and END for DATA-BUF."
@@ -821,7 +838,7 @@ otherwise an advancing start marker could accept a replaced unit's suffix."
                            (1+ pos) 'niwa-view-live-unit-source nil start)
                           start)))))
     (if (not source)
-        (niwa-view-render-invalidate-live-tail)
+        (niwa-view-render--invalidate-live-tail)
       (let ((view-start pos))
         (while (and (> view-start start)
                     (equal source
@@ -831,7 +848,7 @@ otherwise an advancing start marker could accept a replaced unit's suffix."
           (setq view-start (previous-single-property-change
                             view-start 'niwa-view-live-unit-source
                             nil start)))
-        (niwa-view-render-invalidate-live-tail)
+        (niwa-view-render--invalidate-live-tail)
         (unless niwa-view--live-source-change-hook
           (let ((view-buf (current-buffer)))
             (setq niwa-view--live-source-change-hook
@@ -4013,15 +4030,18 @@ header, so that row stays on screen."
                (data-buf (niwa-view-segments-display-buffer))
                (data-end (and (buffer-live-p data-buf)
                               (with-current-buffer data-buf (point-max))))
-               (open (or (niwa-view-render--reader-on-member-p nil entries)
-			 (and data-end
-                              (eq (car niwa-view-render--pending-reader-group)
-                                  niwa-view--data-turn-start)
-                              (eql (cadr niwa-view-render--pending-reader-group)
-                                   data-end)))))
-          (when (and open data-end)
+               (slot (and data-end
+                          (eq (car niwa-view-render--pending-reader-group)
+                              niwa-view--data-turn-start)
+                          (eql (cadr niwa-view-render--pending-reader-group)
+                               data-end)))
+               ;; A fold the user chose beats the reader's row.
+               (open (if slot
+                         (not (nth 2 niwa-view-render--pending-reader-group))
+                       (niwa-view-render--reader-on-member-p nil entries))))
+          (when (and open data-end (not slot))
             (setq niwa-view-render--pending-reader-group
-                  (list niwa-view--data-turn-start data-end)))
+                  (list niwa-view--data-turn-start data-end nil)))
           (niwa-view--insert-summary-region
            (niwa-view--rendering-header-line
             (list :header (plist-get group :summary)
@@ -4030,8 +4050,10 @@ header, so that row stays on screen."
                   :pending-failed (niwa-view--pending-failed-count entries)
                   :disclosure-open open
                   :pending-virtual t))
-           '(niwa-view-type tool-pending
-			       niwa-view-pending-tool-live t))
+           `(niwa-view-type tool-pending
+             niwa-view-collapsed ,(not open)
+             niwa-view-pending-group-end ,data-end
+             niwa-view-pending-tool-live t))
           (niwa-view--apply-rendering-indent start (point))
           (when open
             (mapc #'niwa-view--insert-pending-tool-row entries)))
@@ -4140,7 +4162,7 @@ from the data buffer should be filtered."
            (memq (get-text-property (1- (point)) 'niwa-view-type)
                  '(user user-input-summary))))))
 
-(defun niwa-view--render-live-region (data-buf settle-p &optional start end)
+(defun niwa-view--render-live-region (data-buf settle-p &optional start end fold)
   "Render the in-flight turn from DATA-BUF, settling it when SETTLE-P.
 
 Call from the view buffer.  Deletes the region between variable
@@ -4164,7 +4186,10 @@ Optional START / END are used by the post-response path to decide
 whether the caller already has explicit segment coordinates.  When
 supplied, they are preferred over the marker-based range so the
 final `--render-response' invocation still gets gptel's authoritative
-response bounds.
+response bounds.  An explicit START also redraws past the retained tail.
+
+FOLD, a (KEY . COLLAPSED) disclosure state, replaces the state the old
+projection still shows for KEY, so the redraw shows the requested fold.
 
 User turns inside the extracted range are filtered only when the
 current user input is still visible immediately before the in-flight
@@ -4180,7 +4205,8 @@ the render so user toggles survive streaming ticks."
          (niwa-view--path-link-memo (make-hash-table :test #'equal))
          (niwa-transcript-audit--decode-cache (make-hash-table :test #'equal))
          (retained-p (and (not settle-p)
-                          (niwa-view--live-tail-valid-p data-buf)))
+                          (not start)
+                          (niwa-view--live-tail-continues-p data-buf)))
          (turn-from (and (markerp niwa-view--data-turn-start)
                          (marker-position niwa-view--data-turn-start)))
          (data-from
@@ -4338,10 +4364,16 @@ the render so user toggles survive streaming ticks."
                        rebuild-end
                        (<= delete-start rebuild-end-pos)))
                  (saved-states
-                  (when (and replace-p capture-p)
-                    (niwa-view-disclosure-capture-state
-                     delete-start
-                     rebuild-end-pos)))
+                  (let ((states (when (and replace-p capture-p)
+                                  (niwa-view-disclosure-capture-state
+                                   delete-start
+                                   rebuild-end-pos))))
+                    ;; Capture remembered the old fold; the request wins.
+                    (when fold
+                      (niwa-view-disclosure-record-state-for-key
+                       (car fold) (cdr fold))
+                      (push fold states))
+                    states))
                  (render-start nil))
             (niwa-view--debug-log
              'incremental-decision
@@ -4424,7 +4456,7 @@ the render so user toggles survive streaming ticks."
           ;; only the last fragment of a rewritten unit.
           (when replace-p
             (if settle-p
-                (niwa-view-render-invalidate-live-tail)
+                (niwa-view-render--invalidate-live-tail)
               (niwa-view--retain-last-live-render-unit
                data-buf render-start (marker-position rebuild-end))))
           (let ((tail-first-end
@@ -4459,7 +4491,7 @@ the render so user toggles survive streaming ticks."
                                         data-buf
                                         (marker-position tail-first-end)
                                         (marker-position tail-end))))))
-                (niwa-view-render-invalidate-live-tail))
+                (niwa-view-render--invalidate-live-tail))
               (when niwa-view--live-view-tail-start
                 (set-marker-insertion-type
                  niwa-view--live-view-tail-start nil))
@@ -4654,6 +4686,15 @@ operations call their owned implementations rather than entering here again."
                   ;; after every still-current intention has been drained.
                   (while niwa-view-render--pending
                     (run (pop niwa-view-render--pending)))
+                  ;; A terminal turn has no further incremental update, and a
+                  ;; replaced turn cannot continue its tail; drop the tail and
+                  ;; the source observer with it.
+                  (when (or niwa-view-render--terminal-p
+                            (and (markerp niwa-view--live-data-tail-start)
+                                 (not (niwa-view--live-tail-continues-p
+                                       (marker-buffer
+                                        niwa-view--live-data-tail-start)))))
+                    (niwa-view-render--invalidate-live-tail))
                   ;; The paired closing-rule overlay starts on the last row's
                   ;; newline.  A splice outside the preserving entry, such as
                   ;; a disclosure toggle, would leave that row inside it.
@@ -4677,6 +4718,96 @@ turn is not on display, and drawing it would replace that segment's text."
                    (niwa-view-historical-segment-p))
          (niwa-view--render-live-region data-buf nil))))))
 
+(defconst niwa-view-render--live-folds
+  '(tool-summary tool-group thinking-summary response tool-pending)
+  "Folds the live render draws itself inside the in-flight turn.
+Each is redrawn from the recorded fold; `tool-pending' is the header of a
+running-only group, whose fold lives in
+`niwa-view-render--pending-reader-group'.  Other folds there are spliced
+and the turn redrawn around them.")
+
+(defun niwa-view-render-fold-request (vtype collapsed)
+  "Return the live writer's request to show the row at point COLLAPSED.
+VTYPE is the row's view type.  Return nil unless the row is a
+`niwa-view-render--live-folds' row of the live in-flight turn.  The
+request carries the row's identity, not its position, so it can be
+applied after other writes with `niwa-view-render-apply-fold'."
+  (let ((data-buf (niwa-view-segments-display-buffer)))
+    (when (and (eq data-buf niwa--data-buffer)
+               (buffer-live-p data-buf)
+               (memq vtype niwa-view-render--live-folds)
+               (not (and niwa-view-render--terminal-p
+                         (eq niwa-view-render--terminal-turn
+                             niwa-view--data-turn-start)))
+               (when-let* ((start (niwa-view-stream-in-flight-turn-start-position)))
+                 (>= (point) start)))
+      (if (eq vtype 'tool-pending)
+          (unless (get-text-property (point) 'niwa-view-pending-key)
+            ;; The data end the drawn group's first result lands at: a
+            ;; result arriving before TAB or delivery must still hand over.
+            (list niwa-view--data-turn-start
+                  (list 'group (get-text-property
+                                (point) 'niwa-view-pending-group-end))
+                  collapsed))
+        (when-let* (((get-text-property (point) 'niwa-view-source))
+                    (key (niwa-view-disclosure--state-key-at
+                          (point) (make-hash-table :test #'equal))))
+          (list niwa-view--data-turn-start key collapsed
+                ;; The tail marker itself: each retained render makes a
+                ;; new one, so a deferred request cannot trust a later tail.
+                (and (niwa-view--live-tail-continues-p data-buf)
+                     (>= (point) niwa-view--live-view-tail-start)
+                     niwa-view--live-view-tail-start)))))))
+
+(defun niwa-view-render-apply-fold (request)
+  "Redraw the live turn with fold REQUEST, holding projection ownership.
+REQUEST comes from `niwa-view-render-fold-request'.  A request for a
+replaced or settled turn is dropped rather than applied to another row."
+  (pcase-let ((`(,turn ,key ,collapsed ,in-tail) request)
+              (data-buf (niwa-view-segments-display-buffer)))
+    (when (and (eq turn niwa-view--data-turn-start)
+               (markerp turn) (marker-position turn)
+               (eq data-buf niwa--data-buffer)
+               (buffer-live-p data-buf)
+               (not niwa-view-render--terminal-p))
+      (when (eq (car-safe key) 'group)
+        (setq niwa-view-render--pending-reader-group
+              (list turn (cadr key) collapsed)))
+      ;; Only the retained unit and what follows is redrawn incrementally.
+      (unless (or (eq (car-safe key) 'group)
+                  (and in-tail (eq in-tail niwa-view--live-view-tail-start)
+                       (niwa-view--live-tail-continues-p data-buf)))
+        (niwa-view-render--invalidate-live-tail))
+      (niwa-view--render-live-region
+       data-buf nil nil nil
+       (if (not (eq (car-safe key) 'group))
+           (cons key collapsed)
+         ;; A result that settled the group first was drawn with its own
+         ;; fold; that projection's state must not outrank this request.
+         (let ((end (with-current-buffer data-buf (point-max))))
+           (when-let* (((< (cadr key) end))
+                       (group-key (niwa-view-disclosure-state-key
+                                   (cons (cadr key) end) 'tool-group)))
+             (cons group-key collapsed))))))))
+
+(defun niwa-view-render-set-fold (source vtype collapsed splice)
+  "Show the disclosure at point, SOURCE of VTYPE, COLLAPSED.
+Call with projection ownership held.  Inside the live in-flight turn, the
+live render redraws `niwa-view-render--live-folds' with the recorded fold.
+SPLICE rewrites any other row at point from the data buffer."
+  (if-let* ((request (and (or source (eq vtype 'tool-pending))
+                          (niwa-view-render-fold-request vtype collapsed))))
+      (niwa-view-render-apply-fold request)
+    (let ((live (and (eq (niwa-view-segments-display-buffer) niwa--data-buffer)
+                     (when-let* ((start (niwa-view-stream-in-flight-turn-start-position)))
+                       (>= (point) start)))))
+      (funcall splice)
+      (niwa-view-render--invalidate-live-tail)
+      ;; The splice drew the row from the transcript alone, without the
+      ;; running calls only the live render draws.
+      (when (and live niwa-view--pending-tool-calls)
+        (niwa-view--render-live-region niwa--data-buffer nil)))))
+
 (defun niwa-view-render-settle (data-buf start end)
   "Exactly reconcile DATA-BUF's completed response from START through END.
 Disclosure state keys are computed with their durable post-settle
@@ -4693,7 +4824,7 @@ sections the user expanded during the turn on the next render."
 
 (defun niwa-view-render--settle-now (data-buf start end)
   "Reconcile DATA-BUF's START..END with projection ownership already held."
-  (niwa-view-render-invalidate-live-tail)
+  (niwa-view-render--invalidate-live-tail)
   (let ((niwa-view-disclosure--settling-p t))
     (niwa-view--render-live-region data-buf t start end)))
 
@@ -6977,7 +7108,8 @@ join as running rows.  Return non-nil when the group row was inserted."
                      niwa-view--data-turn-start)
                  (eql (cadr niwa-view-render--pending-reader-group) group-start))
         (unless (niwa-view-disclosure-state-entry source 'tool-group)
-          (niwa-view-disclosure-record-state source 'tool-group nil))
+          (niwa-view-disclosure-record-state
+           source 'tool-group (nth 2 niwa-view-render--pending-reader-group)))
         (setq niwa-view-render--pending-reader-group nil))
       (unless (plist-get
                (niwa-view-disclosure-apply-rendering-state rendering source)
@@ -7451,33 +7583,34 @@ restore the turn with all inner section state intact.  Signals a
           (goto-char turn-start)
           ;; Let the input marker ride forward across our delete+insert
           ;; so it keeps spanning the rendered content afterwards.
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-          (unwind-protect
-              (progn
-                (delete-region turn-start turn-end)
-                (insert (propertize (concat summary
-                                            (when variant-button
-                                              (concat "  " variant-button))
-                                            "\n\n")
-                                    'font-lock-face face
-                                    'niwa-view-type 'turn-summary
-                                    'niwa-view-source source
-                                    'niwa-view-turn-role role
-                                    'niwa-view-prompt-preview prompt-preview
-                                    'niwa-view-turn-id id
-                                    'niwa-view-turn-context context
-                                    'niwa-view-collapsed t
-                                    'niwa-view-stash stash
-                                    'read-only t
-                                    'keymap niwa-view--display-map
-                                    'front-sticky '(read-only keymap)
-                                    'rear-nonsticky '(read-only keymap)))
-                ;; The trailing blank line is not a visible prompt header.
-                (when prompt-preview
-                  (remove-text-properties
-                   (- (point) 2) (point)
-                   '(niwa-view-prompt-preview nil))))
-            (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))))))
+          (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+            (unwind-protect
+                (progn
+                  (delete-region turn-start turn-end)
+                  (insert (propertize (concat summary
+                                              (when variant-button
+                                                (concat "  " variant-button))
+                                              "\n\n")
+                                      'font-lock-face face
+                                      'niwa-view-type 'turn-summary
+                                      'niwa-view-source source
+                                      'niwa-view-turn-role role
+                                      'niwa-view-prompt-preview prompt-preview
+                                      'niwa-view-turn-id id
+                                      'niwa-view-turn-context context
+                                      'niwa-view-collapsed t
+                                      'niwa-view-stash stash
+                                      'read-only t
+                                      'keymap niwa-view--display-map
+                                      'front-sticky '(read-only keymap)
+                                      'rear-nonsticky '(read-only keymap)))
+                  ;; The trailing blank line is not a visible prompt header.
+                  (when prompt-preview
+                    (remove-text-properties
+                     (- (point) 2) (point)
+                     '(niwa-view-prompt-preview nil))))
+              (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type))))))))
 
 (defun niwa-view--expand-turn ()
   "Restore a collapsed turn at point from its stashed content."
@@ -7490,12 +7623,13 @@ restore the turn with all inner section state intact.  Signals a
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (car bounds))
-        (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-        (unwind-protect
-            (progn
-              (delete-region (car bounds) (cdr bounds))
-              (insert stash))
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil))))))
+        (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+          (unwind-protect
+              (progn
+                (delete-region (car bounds) (cdr bounds))
+                (insert stash))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type)))))))
 
 (defun niwa-view-render-toggle-turn (collapsed)
   "Expand the current turn when COLLAPSED, otherwise collapse it."
@@ -7975,29 +8109,30 @@ summary the model received.  HOOK-AUDITS are audit records attached to it."
     (with-current-buffer view-buf
       (save-excursion
         (goto-char (niwa-view-transcript-tail-marker))
-        (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-        (unwind-protect
-            (let* ((source (niwa-view-disclosure-source-range
-                            data-buf (car source) (cdr source)))
-                   (saved (niwa-view-disclosure-state-entry
-                           source 'compaction-summary))
-                   (start (point)))
-              (niwa-view--insert-rendered-tool
-               (list :header (niwa-view--compaction-header
-                              (and saved (not (cdr saved))))
-                     :vtype 'compaction-summary
-                     :initially-collapsed-p t
-                     :body-mode 'markdown-mode
-                     ;; Only a remembered expansion needs the body now; a
-                     ;; collapsed row costs nothing.
-                     :body (and saved (not (cdr saved))
-                                (with-current-buffer data-buf
-                                  (niwa-transcript-summary-body source)))
-                     :hook-audits hook-audits)
-               source)
-              (niwa-view-render-add-display-properties
-               start (point) 'compaction-summary))
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil))))))
+        (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+          (unwind-protect
+              (let* ((source (niwa-view-disclosure-source-range
+                              data-buf (car source) (cdr source)))
+                     (saved (niwa-view-disclosure-state-entry
+                             source 'compaction-summary))
+                     (start (point)))
+                (niwa-view--insert-rendered-tool
+                 (list :header (niwa-view--compaction-header
+                                (and saved (not (cdr saved))))
+                       :vtype 'compaction-summary
+                       :initially-collapsed-p t
+                       :body-mode 'markdown-mode
+                       ;; Only a remembered expansion needs the body now; a
+                       ;; collapsed row costs nothing.
+                       :body (and saved (not (cdr saved))
+                                  (with-current-buffer data-buf
+                                    (niwa-transcript-summary-body source)))
+                       :hook-audits hook-audits)
+                 source)
+                (niwa-view-render-add-display-properties
+                 start (point) 'compaction-summary))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type)))))))
 
 (defun niwa-view--summary-hook-audits (data-buf start end)
   "Return hook audit records stored in DATA-BUF summary START..END."
@@ -8013,7 +8148,7 @@ SESSION-DATA-BUF supplies the live header.  HISTORICAL-P inserts the
 historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
   (unless agent-transcript-p
     (niwa-view--refresh-continuation-prompt data-buf historical-p))
-  (niwa-view-render-invalidate-live-tail)
+  (niwa-view-render--invalidate-live-tail)
   (niwa-view--forget-tool-row-starts)
   (if agent-transcript-p
       (progn

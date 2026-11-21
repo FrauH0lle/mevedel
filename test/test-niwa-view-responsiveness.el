@@ -372,7 +372,7 @@
         (put-text-property 1 8 'niwa-view-live-unit-source 1)
         (should-not (niwa-view--live-tail-intact-p data-buf 3 8))
         (should-not (niwa-view--live-tail-intact-p data-buf 3 2))
-        (niwa-view-render-invalidate-live-tail)
+        (niwa-view-render--invalidate-live-tail)
         (should-not (niwa-view--live-tail-intact-p data-buf 3 8))))))
 
 (niwa-deftest niwa-view--animation-span-in-window-p

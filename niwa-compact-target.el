@@ -172,8 +172,9 @@
 (declare-function niwa--same-file-p "niwa-utilities" (a b))
 (autoload 'niwa--same-file-p "niwa-utilities")
 
-;; `niwa-view'
-(declare-function niwa-view--full-rerender "niwa-view" ())
+;; `niwa-view-render'
+(declare-function niwa-view--full-rerender "niwa-view-render"
+                  (&optional transcript-buffer source-changed-p))
 
 ;; `niwa-view-agent'
 (declare-function niwa-view-agent-live-transcript-start

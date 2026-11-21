@@ -39,10 +39,14 @@
 (autoload 'niwa-view-audit-toggle-hook-audit "niwa-view-audit")
 
 ;; `niwa-view-render'
+(declare-function niwa-view-render-apply-fold "niwa-view-render" (request))
+(declare-function niwa-view-render-fold-request
+                  "niwa-view-render" (vtype collapsed))
 (declare-function niwa-view-render-mutate
                   "niwa-view-render" (key function &optional replacement cleanup))
+(autoload 'niwa-view-render-apply-fold "niwa-view-render")
+(autoload 'niwa-view-render-fold-request "niwa-view-render")
 (autoload 'niwa-view-render-mutate "niwa-view-render")
-(defvar niwa-view-render--owner)
 (declare-function niwa-view-render-add-display-properties
                   "niwa-view-render" (start end &optional default-vtype))
 (declare-function niwa-view-render-child-calls-end
@@ -51,12 +55,10 @@
                   "niwa-view-render" (data-buf source vtype))
 (declare-function niwa-view-render-insert-expanded-disclosure
                   "niwa-view-render" (data-buf source vtype header))
-(declare-function niwa-view-render-invalidate-live-tail
-                  "niwa-view-render" ())
-(declare-function niwa-view-render-live-update
-                  "niwa-view-render" (data-buf))
 (declare-function niwa-view-render-section-body-end
                   "niwa-view-render" (start limit))
+(declare-function niwa-view-render-set-fold
+                  "niwa-view-render" (source vtype collapsed splice))
 (declare-function niwa-view-render-toggle-child-call
                   "niwa-view-render" ())
 (declare-function niwa-view-render-toggle-hook-context
@@ -70,9 +72,8 @@
 (autoload 'niwa-view-render-collapsed-disclosure "niwa-view-render")
 (autoload 'niwa-view-render-insert-expanded-disclosure
   "niwa-view-render")
-(autoload 'niwa-view-render-invalidate-live-tail "niwa-view-render")
-(autoload 'niwa-view-render-live-update "niwa-view-render")
 (autoload 'niwa-view-render-section-body-end "niwa-view-render")
+(autoload 'niwa-view-render-set-fold "niwa-view-render")
 (autoload 'niwa-view-render-toggle-child-call "niwa-view-render")
 (autoload 'niwa-view-render-toggle-hook-context "niwa-view-render")
 (autoload 'niwa-view-render-toggle-turn "niwa-view-render")
@@ -93,7 +94,6 @@
 (autoload 'niwa-view-stream-set-in-flight-turn-start
   "niwa-view-stream")
 (defvar niwa-view--data-turn-start)
-(defvar niwa-view--pending-tool-calls)
 
 ;; `niwa-view-viewport'
 (declare-function niwa-view-transcript-tail-marker "niwa-view-viewport" ())
@@ -600,50 +600,76 @@ this helper.  Source-backed transcript/tool disclosure remains owned by
         (funcall toggle))
       t))))
 
+(defun niwa-view-disclosure--row-identity (pos)
+  "Return the identity of the disclosure row at POS.
+Source markers and type/discriminator identity survive view replacement;
+view positions do not."
+  (let ((vtype (get-text-property pos 'niwa-view-type)))
+    (list (if (memq vtype '(turn-header turn-summary)) 'turn vtype)
+          (niwa-view-disclosure-source-start
+           (get-text-property pos 'niwa-view-source))
+          (nthcdr 4 (get-text-property pos 'niwa-view-source-key))
+          (get-text-property pos 'niwa-view-mailbox-card))))
+
+(defun niwa-view-disclosure--find-row (identity hint)
+  "Return the start of the row matching IDENTITY, trying HINT first.
+Rows are stepped by changes in the properties IDENTITY compares, never
+by character."
+  (if (and hint (< hint (point-max))
+           (equal identity (niwa-view-disclosure--row-identity hint)))
+      hint
+    (let ((pos (point-min)) found)
+      (while (and (not found) (< pos (point-max)))
+        (if (equal identity (niwa-view-disclosure--row-identity pos))
+            (setq found pos)
+          (setq pos (apply #'min
+                           (mapcar (lambda (prop)
+                                     (next-single-property-change
+                                      pos prop nil (point-max)))
+                                   '(niwa-view-type niwa-view-source
+                                     niwa-view-source-key
+                                     niwa-view-mailbox-card))))))
+      found)))
+
 (defun niwa-view-disclosure--intent (source vtype collapsed function)
-  "Apply desired COLLAPSED state for SOURCE and VTYPE through FUNCTION.
-Rediscover the current row after an active writer finishes.  Source markers
-and type/discriminator identity survive view replacement; view points do not."
-  (if (not niwa-view-render--owner)
+  "Show the row at point, SOURCE of VTYPE, COLLAPSED through FUNCTION.
+The request carries the row's identity and desired state, so it holds
+when the projection writer defers it.  A live-writer row is redrawn by
+the live render from that identity; another row is found again by
+identity and FUNCTION runs there only when its fold still differs.  An
+in-flight row's request is dropped once its turn is replaced."
+  (if-let* ((request (and (or source (eq vtype 'tool-pending))
+                          (niwa-view-render-fold-request vtype collapsed))))
       (niwa-view-render-mutate
-       'disclosure (lambda () (funcall function source vtype)))
-    (let* ((data-buffer (niwa-view-segments-display-buffer))
-         (start (and source (with-current-buffer data-buffer
-                              (copy-marker (car source)))))
-         (discriminator (nthcdr 4 (get-text-property
-                                   (point) 'niwa-view-source-key)))
-         (mailbox (get-text-property (point) 'niwa-view-mailbox-card))
-         (type (if (memq vtype '(turn-header turn-summary)) 'turn vtype)))
-    (niwa-view-render-mutate
-     (list 'disclosure data-buffer (and start (marker-position start))
-           type discriminator mailbox)
-     (lambda ()
-       (let ((pos (point-min)) found)
-         (while (and (< pos (point-max)) (not found))
-           (let* ((candidate (get-text-property pos 'niwa-view-source))
-                  (candidate-type (get-text-property pos 'niwa-view-type)))
-             (when (and (eq type (if (memq candidate-type '(turn-header turn-summary))
-                                    'turn candidate-type))
-                        (if start
-                            (and (eq (marker-buffer start) data-buffer)
-                                 candidate
-                                 (equal (marker-position start)
-                                        (niwa-view-disclosure-source-start candidate))
-                                 (equal discriminator
-                                        (nthcdr 4 (get-text-property
-                                                   pos 'niwa-view-source-key))))
-                          (and mailbox
-                               (equal mailbox (get-text-property
-                                               pos 'niwa-view-mailbox-card)))))
-               (setq found pos)))
-           (setq pos (1+ pos)))
-         (when (and found
-                    (not (eq collapsed (and (get-text-property
-                                              found 'niwa-view-collapsed) t))))
+       (list 'fold (niwa-view-segments-display-buffer) (nth 1 request))
+       (lambda () (niwa-view-render-apply-fold request)))
+    (let* ((identity (niwa-view-disclosure--row-identity (point)))
+           ;; The data-buffer marker follows source edits before delivery;
+           ;; the number in IDENTITY only keys the queue.
+           (start (and source (markerp (car source))
+                       (marker-buffer (car source))
+                       (copy-marker (car source))))
+           (hint (copy-marker (point)))
+           (turn (and source (niwa-view-disclosure--in-flight-source-p source)
+                      niwa-view--data-turn-start)))
+      (niwa-view-render-mutate
+       (list 'disclosure (niwa-view-segments-display-buffer) identity turn)
+       (lambda ()
+         (when-let* (((or (not turn) (eq turn niwa-view--data-turn-start)))
+                     (found (niwa-view-disclosure--find-row
+                             (if start
+                                 (append (list (car identity)
+                                               (marker-position start))
+                                         (nthcdr 2 identity))
+                               identity)
+                             (marker-position hint)))
+                     ((not (eq collapsed (and (get-text-property
+                                               found 'niwa-view-collapsed)
+                                              t)))))
            (save-excursion
              (goto-char found)
              (funcall function (get-text-property found 'niwa-view-source)
-                      (get-text-property found 'niwa-view-type))))))))))
+                      (get-text-property found 'niwa-view-type)))))))))
 
 (defun niwa-view-toggle-section ()
   "Toggle the current disclosure, retaining its source and desired fold state."
@@ -660,56 +686,38 @@ and type/discriminator identity survive view replacement; view points do not."
   "Toggle expand/collapse of the section or turn at point.
 On a turn header or collapsed-turn summary, toggles the whole turn.
 On an inner section summary (thinking, tool, response), toggles that
-section only."
+section only.  The view render redraws the row through the writer that
+owns it; this module supplies the splice for rows the live render does
+not draw."
   (interactive)
   (let ((collapsed (get-text-property (point) 'niwa-view-collapsed))
         (source (get-text-property (point) 'niwa-view-source))
-        (vtype (get-text-property (point) 'niwa-view-type))
-        ;; Calls in flight are drawn only by the live render, into the
-        ;; turn's trailing run.  A toggle there rebuilds the section from
-        ;; the transcript alone, so the live turn must be drawn again.
-        (live-running
-         (and (bound-and-true-p niwa-view--pending-tool-calls)
-              ;; An archived segment shares the view but not the live turn.
-              (eq niwa--data-buffer (niwa-view-segments-display-buffer))
-              (when-let* ((start (niwa-view-stream-in-flight-turn-start-position)))
-                (>= (point) start)))))
+        (vtype (get-text-property (point) 'niwa-view-type)))
     (if (niwa-view-disclosure--toggle-fragment)
         t
-      (prog1
-          (cond
-           ((memq vtype '(turn-header turn-summary))
-            (niwa-view-render-toggle-turn collapsed))
-           ((eq vtype 'mailbox-delivery)
-            (niwa-view-disclosure--toggle-mailbox))
-           ((eq vtype 'hook-context)
-            (niwa-view-render-toggle-hook-context))
-           ((eq vtype 'hook-audit)
-            (niwa-view-audit-toggle-hook-audit))
-           ((eq vtype 'tool-child)
-            (niwa-view-render-toggle-child-call))
-           ((eq vtype 'user-input-summary)
-            (niwa-view-render-toggle-user-input))
-           ((and source
-                 (memq vtype niwa-view-disclosure--collapsible-vtypes))
-            (if collapsed
-                (niwa-view-disclosure--expand-now source vtype)
-              (niwa-view-disclosure--collapse-now source vtype)))
-           (t
-            (niwa-diagnostic-user-error (niwa-diagnostic-scope (current-buffer)) "No collapsible section at point")))
-        ;; A toggle deletes and re-inserts view text.  The retained
-        ;; live-tail view marker can be dragged backwards by that
-        ;; delete relative to its data-buffer twin, after which the
-        ;; next retained render deletes rendered history its narrowed
-        ;; reparse cannot regenerate -- the section visibly vanishes
-        ;; until a later full render.  Dropping the retained pair
-        ;; sends the next update down the non-retained path, whose
-        ;; capture/restore preserves this toggle.
-        (niwa-view-render-invalidate-live-tail)
-        ;; Queued behind this toggle, so the reader never sees the
-        ;; transcript-only section.
-        (when (and live-running (buffer-live-p niwa--data-buffer))
-          (niwa-view-render-live-update niwa--data-buffer))))))
+      (niwa-view-render-set-fold
+       source vtype (not collapsed)
+       (lambda ()
+         (cond
+          ((memq vtype '(turn-header turn-summary))
+           (niwa-view-render-toggle-turn collapsed))
+          ((eq vtype 'mailbox-delivery)
+           (niwa-view-disclosure--toggle-mailbox))
+          ((eq vtype 'hook-context)
+           (niwa-view-render-toggle-hook-context))
+          ((eq vtype 'hook-audit)
+           (niwa-view-audit-toggle-hook-audit))
+          ((eq vtype 'tool-child)
+           (niwa-view-render-toggle-child-call))
+          ((eq vtype 'user-input-summary)
+           (niwa-view-render-toggle-user-input))
+          ((and source
+                (memq vtype niwa-view-disclosure--collapsible-vtypes))
+           (if collapsed
+               (niwa-view-disclosure--expand-now source vtype)
+             (niwa-view-disclosure--collapse-now source vtype)))
+          (t
+           (niwa-diagnostic-user-error (niwa-diagnostic-scope (current-buffer)) "No collapsible section at point"))))))))
 
 (defun niwa-view-disclosure--mailbox-bounds ()
   "Return bounds of the mailbox card at point, or nil."
@@ -902,11 +910,6 @@ from signalling `args-out-of-range' on stale source coordinates."
               (buffer-substring s e)
             (buffer-substring-no-properties s e)))))))
 
-(defun niwa-view-disclosure--expand-section (source vtype)
-  "Expand a collapsed section with SOURCE coordinates and VTYPE."
-  (niwa-view-disclosure--intent
-   source vtype nil #'niwa-view-disclosure--expand-now))
-
 (defun niwa-view-disclosure--expand-now (source vtype)
   "Expand SOURCE of VTYPE while holding projection ownership."
   (let* ((bounds (niwa-view-disclosure-section-bounds))
@@ -924,40 +927,41 @@ from signalling `args-out-of-range' on stale source coordinates."
               (niwa-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-          (unwind-protect
-              (atomic-change-group
-                (delete-region view-start view-end)
-                (setq source
-                      (niwa-view-render-insert-expanded-disclosure
-                       data-buf source vtype header))
-                (let ((body-end
-                       (niwa-view-render-section-body-end
-                        view-start (point))))
-                  (add-text-properties
-                   view-start body-end
-                   `(niwa-view-source ,source
-                     niwa-view-source-key
-                     ,(niwa-view-disclosure-state-key
-                       source vtype source-key)
-                     niwa-view-type ,vtype
-                     niwa-view-collapsed nil))
-                  (niwa-view-disclosure-record-state source vtype nil)
-                  (when turn-id
-                    (put-text-property
-                     view-start body-end 'niwa-view-turn-id turn-id)))
-                ;; The delete above collapsed an in-flight marker that
-                ;; sat inside the section to VIEW-START, which is where
-                ;; the turn content still starts, so only a marker that
-                ;; sat exactly at the old section end -- meaning the
-                ;; turn begins after this section -- must be moved past
-                ;; the re-inserted text.  Re-anchoring an interior
-                ;; marker at the end instead would leave everything
-                ;; above it stale for the next incremental render.
-                (when (and in-flight-pos
-                           (= in-flight-pos view-end))
-                  (niwa-view-stream-set-in-flight-turn-start (point))))
-            (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))))))
+          (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+            (unwind-protect
+                (atomic-change-group
+                  (delete-region view-start view-end)
+                  (setq source
+                        (niwa-view-render-insert-expanded-disclosure
+                         data-buf source vtype header))
+                  (let ((body-end
+                         (niwa-view-render-section-body-end
+                          view-start (point))))
+                    (add-text-properties
+                     view-start body-end
+                     `(niwa-view-source ,source
+                                        niwa-view-source-key
+                                        ,(niwa-view-disclosure-state-key
+                                          source vtype source-key)
+                                        niwa-view-type ,vtype
+                                        niwa-view-collapsed nil))
+                    (niwa-view-disclosure-record-state source vtype nil)
+                    (when turn-id
+                      (put-text-property
+                       view-start body-end 'niwa-view-turn-id turn-id)))
+                  ;; The delete above collapsed an in-flight marker that
+                  ;; sat inside the section to VIEW-START, which is where
+                  ;; the turn content still starts, so only a marker that
+                  ;; sat exactly at the old section end -- meaning the
+                  ;; turn begins after this section -- must be moved past
+                  ;; the re-inserted text.  Re-anchoring an interior
+                  ;; marker at the end instead would leave everything
+                  ;; above it stale for the next incremental render.
+                  (when (and in-flight-pos
+                             (= in-flight-pos view-end))
+                    (niwa-view-stream-set-in-flight-turn-start (point))))
+              (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type))))))))
 
 (defun niwa-view-disclosure--collapse-now (source vtype)
   "Collapse SOURCE of VTYPE while holding projection ownership."
@@ -983,39 +987,40 @@ from signalling `args-out-of-range' on stale source coordinates."
               (niwa-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-          (unwind-protect
-              (progn
-                (delete-region view-start view-end)
-                (let ((ins-start (point)))
-                  (insert (plist-get rendering :summary))
-                  (unless (and (> (point) ins-start)
-                               (eq (char-before) ?\n))
-                    (insert "\n"))
-                  (add-text-properties
-                   ins-start (point)
-                   `(niwa-view-type ,vtype
-                     niwa-view-collapsed t
-                     niwa-view-source ,source
-                     niwa-view-source-key
-                     ,(niwa-view-disclosure-state-key
-                       source vtype source-key)))
-                  (niwa-view-render-add-display-properties
-                   ins-start (point) vtype)
-                  (niwa-view-disclosure-record-state source vtype t)
-                  (when tool-use-id
-                    (put-text-property
-                     ins-start (point) 'niwa-view-tool-use-id tool-use-id))
-                  (when turn-id
-                    (put-text-property
-                     ins-start (point) 'niwa-view-turn-id turn-id))
-                  ;; See the matching comment in `--expand-section': an
-                  ;; interior in-flight marker already collapsed to
-                  ;; VIEW-START; only a marker at the old section end
-                  ;; belongs after the re-inserted summary.
-                  (when (and in-flight-pos
-                             (= in-flight-pos view-end))
-                    (niwa-view-stream-set-in-flight-turn-start (point)))))
-            (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))))))
+          (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+            (unwind-protect
+                (progn
+                  (delete-region view-start view-end)
+                  (let ((ins-start (point)))
+                    (insert (plist-get rendering :summary))
+                    (unless (and (> (point) ins-start)
+                                 (eq (char-before) ?\n))
+                      (insert "\n"))
+                    (add-text-properties
+                     ins-start (point)
+                     `(niwa-view-type ,vtype
+                                      niwa-view-collapsed t
+                                      niwa-view-source ,source
+                                      niwa-view-source-key
+                                      ,(niwa-view-disclosure-state-key
+                                        source vtype source-key)))
+                    (niwa-view-render-add-display-properties
+                     ins-start (point) vtype)
+                    (niwa-view-disclosure-record-state source vtype t)
+                    (when tool-use-id
+                      (put-text-property
+                       ins-start (point) 'niwa-view-tool-use-id tool-use-id))
+                    (when turn-id
+                      (put-text-property
+                       ins-start (point) 'niwa-view-turn-id turn-id))
+                    ;; See the matching comment in `--expand-section': an
+                    ;; interior in-flight marker already collapsed to
+                    ;; VIEW-START; only a marker at the old section end
+                    ;; belongs after the re-inserted summary.
+                    (when (and in-flight-pos
+                               (= in-flight-pos view-end))
+                      (niwa-view-stream-set-in-flight-turn-start (point)))))
+              (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type))))))))
 (provide 'niwa-view-disclosure)
 ;;; niwa-view-disclosure.el ends here

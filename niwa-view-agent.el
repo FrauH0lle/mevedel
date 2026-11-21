@@ -1309,19 +1309,20 @@ Return non-nil on success."
           ;; Preserve those rows and their fold state when replacing the handle.
           (setq rendering (plist-put rendering :hook-audits nil))
           (goto-char view-start)
-          (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
-          (unwind-protect
-              (let ((ins-start (point)))
-                (delete-region view-start view-end)
-                (niwa-view--insert-rendered-tool rendering source)
-                (niwa-view-render-add-display-properties
-                 ins-start (point) (plist-get rendering :vtype))
-                (when turn-id
-                  (put-text-property ins-start (point)
-                                     'niwa-view-turn-id turn-id))
-                (when in-flight-after-section-p
-                  (set-marker niwa-view--in-flight-turn-start ins-start)))
-            (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil))
+          (let ((tail-type (marker-insertion-type (niwa-view-transcript-tail-marker))))
+            (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+            (unwind-protect
+                (let ((ins-start (point)))
+                  (delete-region view-start view-end)
+                  (niwa-view--insert-rendered-tool rendering source)
+                  (niwa-view-render-add-display-properties
+                   ins-start (point) (plist-get rendering :vtype))
+                  (when turn-id
+                    (put-text-property ins-start (point)
+                                       'niwa-view-turn-id turn-id))
+                  (when in-flight-after-section-p
+                    (set-marker niwa-view--in-flight-turn-start ins-start)))
+              (set-marker-insertion-type (niwa-view-transcript-tail-marker) tail-type)))
           t)))))
 
 (defun niwa-view--refresh-agent-rendering-now (agent-path)

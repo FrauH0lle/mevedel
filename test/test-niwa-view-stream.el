@@ -7947,4 +7947,457 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (should (equal "Newer" niwa-view--spinner-status))))))
 
+;; Live in-flight disclosure folds
+
+(defun niwa-view-stream-test--live-row (target)
+  "Move point to the start of the first view row showing TARGET."
+  (goto-char (point-min))
+  (search-forward target)
+  (goto-char (line-beginning-position)))
+
+(defun niwa-view-stream-test--fold-state (view-buf target shown)
+  "Return VIEW-BUF's (COLLAPSED SHOWN-P ROW) for TARGET's row.
+SHOWN is text visible only while that row is expanded."
+  (with-current-buffer view-buf
+    (save-excursion
+      (niwa-view-stream-test--live-row target)
+      (list (and (get-text-property (point) 'niwa-view-collapsed) t)
+            (and (string-search shown (niwa-view-stream-test--history view-buf)) t)
+            (buffer-substring-no-properties
+             (line-beginning-position) (line-end-position))))))
+
+(defun niwa-view-stream-test--tab-live-row (data-buf view-buf data target shown)
+  "Stream DATA from DATA-BUF and a running call, then TAB TARGET's row.
+DATA is a list of (TEXT . GPTEL-PROPERTY) for the live turn in VIEW-BUF.
+SHOWN is text visible only while the row is expanded.  Return the fold
+states before TAB, right after it and after the next chunk, then the row
+at point after TAB and the composer draft."
+  (let ((niwa-view-tool-boundary-render-delay 0))
+    (niwa-view-stream-test--insert-data data-buf "*** Q\n\n" nil)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (niwa-view-test--insert-composer-draft "> draft\nsecond line" 3)
+      (niwa-view-stream-begin-turn
+       niwa-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-max)))))
+    (pcase-dolist (`(,text . ,property) data)
+      (niwa-view-stream-test--insert-data data-buf text property))
+    (with-current-buffer data-buf
+      (niwa-view-stream-pre-tool '(:name "Bash" :args (:command "sleep 9"))))
+    (with-current-buffer view-buf
+      (niwa-view-render-live-update data-buf)
+      (let ((before (niwa-view-stream-test--fold-state view-buf target shown))
+            tab row)
+        (niwa-view-stream-test--live-row target)
+        (niwa-view-toggle-section)
+        (setq row (buffer-substring-no-properties
+                   (line-beginning-position) (line-end-position))
+              tab (niwa-view-stream-test--fold-state view-buf target shown))
+        (niwa-view-stream-test--insert-data data-buf "More text.\n" 'response)
+        (niwa-view-render-live-update data-buf)
+        (list before tab
+              (niwa-view-stream-test--fold-state view-buf target shown)
+              row
+              (niwa-view-composer-draft-text nil t))))))
+
+(niwa-deftest niwa-view-render-set-fold ()
+  ,test
+  (test)
+  :doc "TAB on each live-writer fold redraws it and keeps it through the next chunk"
+  (pcase-dolist (`(,data ,target ,shown)
+                 `(;; tool-group: three reads join the running call's run.
+                   ((("Reading.\n\n" . response)
+                     ,@(mapcar
+                        (lambda (i)
+                          (cons (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n" i i)
+                                (cons 'tool (format "c%d" i))))
+                        '(0 1 2)))
+                    "calls: read 3 files" "Read: f0.el")
+                   ;; tool-summary
+                   ((("Reading.\n\n" . response)
+                     ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0")
+                     ("Then.\n\n" . response)
+                     ("(:name \"Read\" :args (:file_path \"f1.el\"))\n\ncontent 1\n" tool . "c1"))
+                    "Read: f0.el" "content 0")
+                   ;; thinking-summary
+                   ((("#+begin_reasoning\nPondering deeply.\nSecond thought here.\n#+end_reasoning\n" . ignore)
+                     ("Answer.\n\n" . response)
+                     ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+                    "Thinking" "Second thought here")
+                   ;; response
+                   ((("First paragraph here.\n\nSecond paragraph.\n\n" . response)
+                     ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+                    "First paragraph" "Second paragraph")))
+    (niwa-view-stream-test--with-buffers
+      (pcase-let ((`(,before ,tab ,chunk ,row ,draft)
+                   (niwa-view-stream-test--tab-live-row
+                    data-buf view-buf data target shown)))
+        (ert-info ((format "%s: %S" target (list before tab chunk)))
+          (should (string-search target row))
+          (should (eq (car before) (not (cadr before))))
+          (should-not (eq (car before) (car tab)))
+          (should (equal (butlast tab) (butlast chunk)))
+          (should (eq (car tab) (not (cadr tab))))
+          (should (string-match-p "sleep 9\\|running"
+                                  (niwa-view-stream-test--history view-buf)))
+          (should (equal "> draft\nsecond line" draft))))))
+
+  :doc "control: the fold must reach the live writer"
+  (niwa-view-stream-test--with-buffers
+    (let ((original (symbol-function 'niwa-view--render-live-region)))
+      (cl-letf (((symbol-function 'niwa-view--render-live-region)
+                 (lambda (data-buf settle-p &optional start end _fold)
+                   (funcall original data-buf settle-p start end))))
+        (pcase-let ((`(,before ,tab . ,_)
+                     (niwa-view-stream-test--tab-live-row
+                      data-buf view-buf
+                      '(("First paragraph here.\n\nSecond paragraph.\n\n" . response)
+                        ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+                      "First paragraph" "Second paragraph")))
+          (should (equal (butlast before) (butlast tab)))))))
+
+  :doc "a spliced history row keeps the transcript tail's resting insertion type"
+  (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--insert-data
+     data-buf "First answer paragraph.\n\nSecond paragraph.\n" 'response)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (should (marker-insertion-type (niwa-view-transcript-tail-marker)))
+      (dolist (_ '(collapse expand))
+        (niwa-view-stream-test--live-row "First answer")
+        (niwa-view-toggle-section)
+        (should (marker-insertion-type (niwa-view-transcript-tail-marker)))))))
+
+;; Running-only activity group folds
+
+(defconst niwa-view-stream-test--running-calls
+  (mapcar (lambda (i) (list :name "Bash" :args (list :command (format "job %d" i))))
+          '(1 2 3))
+  "Three parallel calls that form a running-only group.")
+
+(defun niwa-view-stream-test--running-group (data-buf view-buf)
+  "Begin a live turn in VIEW-BUF with a running-only group from DATA-BUF."
+  (let ((niwa-view-tool-boundary-render-delay 0))
+    (niwa-view-stream-test--insert-data data-buf "*** Q\n\n" nil)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (niwa-view-stream-begin-turn
+       niwa-view--status-marker
+       (with-current-buffer data-buf (copy-marker (point-max)))))
+    (niwa-view-stream-test--insert-data data-buf "Running jobs.\n\n" 'response)
+    (niwa-view-stream-test--batch data-buf niwa-view-stream-test--running-calls)
+    (with-current-buffer view-buf
+      (niwa-view-render-live-update data-buf))))
+
+(defun niwa-view-stream-test--first-result (data-buf view-buf)
+  "Deliver the first running call's result from DATA-BUF and redraw VIEW-BUF."
+  (let ((call (car niwa-view-stream-test--running-calls)))
+    (niwa-view-stream-test--insert-data
+     data-buf (format "%S\n\nresult\n" (list :name (plist-get call :name)
+                                              :args (plist-get call :args)))
+     (cons 'tool (format "%S" (plist-get call :args))))
+    (with-current-buffer data-buf (niwa-view-stream-post-tool call))
+    (with-current-buffer view-buf (niwa-view-render-live-update data-buf))))
+
+(defun niwa-view-stream-test--group-open-p (view-buf)
+  "Return non-nil when VIEW-BUF shows the group's member rows."
+  (string-search "Bash: job 2" (niwa-view-stream-test--history view-buf)))
+
+(niwa-deftest niwa-view--insert-pending-run/running-fold ()
+  ,test
+  (test)
+  :doc "an expanded running-only group stays open across the first result"
+  (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--running-group data-buf view-buf)
+    (with-current-buffer view-buf
+      (should-not (niwa-view-stream-test--group-open-p view-buf))
+      (niwa-view-stream-test--live-row "3 calls")
+      (niwa-view-toggle-section)
+      (should (niwa-view-stream-test--group-open-p view-buf))
+      (should (looking-at-p ".*3 calls")))
+    (niwa-view-stream-test--first-result data-buf view-buf)
+    (with-current-buffer view-buf
+      (niwa-view-stream-test--live-row "3 calls")
+      (should (eq 'tool-group (get-text-property (point) 'niwa-view-type)))
+      (should (niwa-view-stream-test--group-open-p view-buf))))
+
+  :doc "a collapse beats a reader on a member row and survives the first result"
+  (dolist (reader '(member elsewhere))
+    (save-window-excursion
+      (niwa-view-stream-test--with-buffers
+        (niwa-view-stream-test--running-group data-buf view-buf)
+        (with-current-buffer view-buf
+          (switch-to-buffer view-buf)
+          (delete-other-windows)
+          (niwa-view-stream-test--live-row "3 calls")
+          (niwa-view-toggle-section)
+          (should (niwa-view-stream-test--group-open-p view-buf))
+          (let ((other (split-window-right)))
+            (set-window-buffer other view-buf)
+            (when (eq reader 'member)
+              (set-window-point other (save-excursion
+                                        (niwa-view-stream-test--live-row "job 2")
+                                        (point)))))
+          (niwa-view-stream-test--live-row "3 calls")
+          (niwa-view-toggle-section)
+          (ert-info ((format "reader %s" reader))
+            (should-not (niwa-view-stream-test--group-open-p view-buf))
+            (niwa-view-render-live-update data-buf)
+            (should-not (niwa-view-stream-test--group-open-p view-buf))))
+        (niwa-view-stream-test--first-result data-buf view-buf)
+        (ert-info ((format "reader %s after result" reader))
+          (should-not (niwa-view-stream-test--group-open-p view-buf))))))
+
+  :doc "an aborted turn's fold does not reach a later turn at the same position"
+  (dolist (abort '(nil t))
+    (niwa-view-stream-test--with-buffers
+      (niwa-view-stream-test--running-group data-buf view-buf)
+      (with-current-buffer view-buf
+        (niwa-view-stream-test--live-row "3 calls")
+        (niwa-view-toggle-section)
+        (should (niwa-view-stream-test--group-open-p view-buf))
+        (when abort
+          (niwa-view-stream-stop)
+          (niwa-view-stream-begin-turn
+           niwa-view--status-marker
+           (with-current-buffer data-buf (copy-marker (point-max))))
+          (niwa-view-stream-test--batch data-buf niwa-view-stream-test--running-calls))
+        (niwa-view-render-live-update data-buf)
+        (ert-info ((format "aborted %s" abort))
+          (should (eq (not abort)
+                      (and (niwa-view-stream-test--group-open-p view-buf) t))))))))
+
+(niwa-deftest niwa-view-disclosure--intent ()
+  ,test
+  (test)
+  :doc "a TAB queued behind the writer folds its row unless its turn was replaced"
+  (dolist (replace '(nil t))
+    (niwa-view-stream-test--with-buffers
+      (niwa-view-stream-test--tab-live-row
+       data-buf view-buf
+       '(("First paragraph here.\n\nSecond paragraph.\n\n" . response)
+         ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+       "Read: f0.el" "content 0")
+      (with-current-buffer view-buf
+        (should (string-search "content 0" (niwa-view-stream-test--history view-buf)))
+        (niwa-view-render-mutate
+         'test
+         (lambda ()
+           (niwa-view-stream-test--live-row "Read: f0.el")
+           (niwa-view-toggle-section)
+           ;; Queued: the owner still holds the view.
+           (should (string-search "content 0" (niwa-view-stream-test--history view-buf)))
+           (when replace
+             ;; A retry rewrites the turn; the same call lands at the same
+             ;; data position.
+             (let ((start (marker-position niwa-view--data-turn-start))
+                   (row (niwa-view-disclosure-source-start
+                         (get-text-property (point) 'niwa-view-source))))
+               (with-current-buffer data-buf (delete-region row (point-max)))
+               (niwa-view-stream--begin-turn-now
+                niwa-view--in-flight-turn-start
+                (with-current-buffer data-buf (copy-marker start)) nil)
+               (niwa-view-stream-test--insert-data
+                data-buf "(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n"
+                '(tool . "c0"))
+               (niwa-view--render-live-region data-buf nil)
+               (niwa-view-disclosure-record-state-for-key
+                (niwa-view-disclosure--state-key-at
+                 (progn (niwa-view-stream-test--live-row "Read: f0.el") (point))
+                 nil)
+                nil)
+               (niwa-view--render-live-region data-buf nil)))))
+        (ert-info ((format "replaced %s" replace))
+          (should (eq (and (string-search "content 0"
+                                          (niwa-view-stream-test--history view-buf))
+                           t)
+                      replace)))))))
+
+(defun niwa-view-stream-test--folded-p (target)
+  "Return non-nil when the row showing TARGET is collapsed."
+  (save-excursion
+    (niwa-view-stream-test--live-row target)
+    (and (get-text-property (point) 'niwa-view-collapsed) t)))
+
+(niwa-deftest niwa-view-disclosure--intent/mouse-deferral ()
+  ,test
+  (test)
+  :doc "TABs deferred by mouse tracking fold their own rows, not the row at point"
+  (dolist (moved '(nil t))
+    (niwa-view-stream-test--with-buffers
+      (niwa-view-stream-test--insert-data data-buf "*** Q1\n\n" nil)
+      (niwa-view-stream-test--insert-data data-buf "First answer.\n\nMore first.\n" 'response)
+      (niwa-view-stream-test--insert-data data-buf "\n\n*** Q2\n\n" nil)
+      (niwa-view-stream-test--insert-data data-buf "Second answer.\n\nMore second.\n" 'response)
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (let ((track-mouse t))
+          (niwa-view-stream-test--live-row "First answer")
+          (niwa-view-toggle-section)
+          (unless moved
+            (niwa-view-stream-test--live-row "Second answer")
+            (niwa-view-toggle-section)))
+        ;; Deferred: nothing changed yet.
+        (should-not (niwa-view-stream-test--folded-p "First answer"))
+        (when moved (niwa-view-stream-test--live-row "Second answer"))
+        (niwa-view-render--resume-after-mouse view-buf)
+        (ert-info ((format "moved %s" moved))
+          (should (niwa-view-stream-test--folded-p "First answer"))
+          (should (eq (not moved) (niwa-view-stream-test--folded-p "Second answer")))))))
+
+  :doc "a deferred TAB on a live row is drawn by the live writer after other writes"
+  (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--tab-live-row
+     data-buf view-buf
+     '(("First paragraph here.\n\nSecond paragraph.\n\n" . response)
+       ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+     "Read: f0.el" "content 0")
+    (with-current-buffer view-buf
+      (should-not (niwa-view-stream-test--folded-p "Read: f0.el"))
+      (let ((track-mouse t))
+        (niwa-view-stream-test--live-row "Read: f0.el")
+        (niwa-view-toggle-section)
+        (niwa-view-stream-test--insert-data data-buf "Later.\n" 'response)
+        (niwa-view-render-live-update data-buf))
+      (niwa-view-stream-test--live-row "First paragraph")
+      (niwa-view-render--resume-after-mouse view-buf)
+      (should (niwa-view-stream-test--folded-p "Read: f0.el"))
+      (should-not (niwa-view-stream-test--folded-p "First paragraph"))
+      (should (string-search "Later." (niwa-view-stream-test--history view-buf)))))
+
+  :doc "a deferred live-row TAB applies after a live render queued ahead of it"
+  (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--tab-live-row
+     data-buf view-buf
+     '(("First paragraph here.\n\nSecond paragraph.\n\n" . response)
+       ("(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" tool . "c0"))
+     "Read: f0.el" "content 0")
+    (with-current-buffer view-buf
+      (let ((track-mouse t))
+        (niwa-view-stream-test--insert-data data-buf "Later.\n" 'response)
+        (niwa-view-render-live-update data-buf)
+        (niwa-view-stream-test--live-row "Read: f0.el")
+        (niwa-view-toggle-section))
+      (niwa-view-stream-test--live-row "First paragraph")
+      (niwa-view-render--resume-after-mouse view-buf)
+      (should (niwa-view-stream-test--folded-p "Read: f0.el"))
+      (should (string-search "Later." (niwa-view-stream-test--history view-buf)))))
+
+  :doc "a deferred history TAB follows its source across an earlier insertion"
+  (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--insert-data data-buf "*** Q1\n\n" nil)
+    (niwa-view-stream-test--insert-data data-buf "First answer.\n\nMore first.\n" 'response)
+    (niwa-view-stream-test--insert-data data-buf "\n\n*** Q2\n\n" nil)
+    (niwa-view-stream-test--insert-data data-buf "Second answer.\n\nMore second.\n" 'response)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (let ((track-mouse t))
+        (niwa-view-stream-test--live-row "Second answer")
+        (niwa-view-toggle-section))
+      (with-current-buffer data-buf
+        (save-excursion (goto-char (point-min)) (insert "Preamble.\n")))
+      (niwa-view-render--resume-after-mouse view-buf)
+      (should (niwa-view-stream-test--folded-p "Second answer"))
+      (should-not (niwa-view-stream-test--folded-p "First answer"))))
+
+  :doc "a deferred running-group TAB survives a first result in either order"
+  (dolist (result-first '(nil t))
+   (niwa-view-stream-test--with-buffers
+    (niwa-view-stream-test--running-group data-buf view-buf)
+    (with-current-buffer view-buf
+      (let ((track-mouse t))
+        (when result-first (niwa-view-stream-test--first-result data-buf view-buf))
+        (niwa-view-stream-test--live-row "3 calls")
+        (niwa-view-toggle-section)
+        (unless result-first (niwa-view-stream-test--first-result data-buf view-buf)))
+      (should-not (niwa-view-stream-test--group-open-p view-buf))
+      (niwa-view-render--resume-after-mouse view-buf)
+      (niwa-view-stream-test--live-row "3 calls")
+      (ert-info ((format "result first %s" result-first))
+        (should (eq 'tool-group (get-text-property (point) 'niwa-view-type)))
+        (should (niwa-view-stream-test--group-open-p view-buf)))))))
+
+(niwa-deftest niwa-view--live-tail-continues-p ()
+  ,test
+  (test)
+  :doc "a new turn, with or without a stop, does not continue the old turn's tail"
+  (dolist (stop '(nil t))
+   (niwa-view-stream-test--with-buffers
+    (let ((niwa-view-tool-boundary-render-delay 0))
+      (niwa-view-stream-test--insert-data data-buf "*** Q\n\n" nil)
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (niwa-view-stream-begin-turn
+         niwa-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        (niwa-view-stream-test--insert-data data-buf "Alpha one.\n\nAlpha two.\n\n" 'response)
+        (dotimes (_ 2) (niwa-view-render-live-update data-buf))
+        (should niwa-view--live-view-tail-start)
+        (when stop (niwa-view-stream-stop))
+        (niwa-view-stream-test--insert-data data-buf "\n\n*** Second question\n\n" nil)
+        (niwa-view--insert-user-message "Second question")
+        (niwa-view-stream-begin-turn
+         niwa-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        ;; The old turn's source observer leaves with its tail.
+        (should-not (memq niwa-view--live-source-change-hook
+                          (with-current-buffer data-buf before-change-functions)))
+        (niwa-view-stream-test--insert-data data-buf "Beta one.\n\n" 'response)
+        (niwa-view-render-live-update data-buf)
+        (let ((text (niwa-view-stream-test--history view-buf)))
+         (ert-info ((format "stop %s: %s" stop text))
+          (should (= 1 (niwa-view-stream-test--count-substring "Alpha two." text)))
+          (should (= 1 (niwa-view-stream-test--count-substring "Beta one." text)))
+          ;; Continuing the old turn's tail would redraw past the send echo,
+          ;; replacing it with the transcript's prompt.
+          (should (= 1 (niwa-view-stream-test--count-substring "Second question" text)))
+          (should-not (string-search "*** Second question" text))
+          (should (< (string-search "Alpha two." text)
+                     (string-search "Beta one." text)))))))))
+
+  :doc "output discarded without change hooks is not continued from the old tail"
+  (niwa-view-stream-test--with-buffers
+    (let ((niwa-view-tool-boundary-render-delay 0))
+      (niwa-view-stream-test--insert-data data-buf "*** Q\n\n" nil)
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (niwa-view-stream-begin-turn
+         niwa-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        (niwa-view-stream-test--insert-data data-buf "Alpha one.\n\nAlpha two.\n\n" 'response)
+        (niwa-view-stream-test--insert-data
+         data-buf "(:name \"Read\" :args (:file_path \"f0.el\"))\n\ncontent 0\n" '(tool . "c0"))
+        (niwa-view-stream-test--insert-data data-buf "Alpha three.\n\n" 'response)
+        (dotimes (_ 2) (niwa-view-render-live-update data-buf))
+        (should niwa-view--live-view-tail-start)
+        ;; A retry discards the attempt's output the way its reset does.
+        (with-current-buffer data-buf
+          (let ((inhibit-modification-hooks t))
+            (delete-region (with-current-buffer view-buf
+                             (marker-position niwa-view--data-turn-start))
+                           (point-max))))
+        (niwa-view-stream-test--insert-data data-buf "Beta one.\n\n" 'response)
+        (niwa-view-render-live-update data-buf)
+        (let ((text (niwa-view-stream-test--history view-buf)))
+          (should-not (string-search "Alpha" text))
+          (should-not (string-search "Read: f0.el" text))
+          (should (= 1 (niwa-view-stream-test--count-substring "Beta one." text)))))))
+
+  :doc "killing a view detaches its observer from a surviving source"
+  (niwa-view-stream-test--with-buffers
+    (let ((niwa-view-tool-boundary-render-delay 0)
+          (hooks (with-current-buffer data-buf before-change-functions)))
+      (with-current-buffer view-buf
+        (niwa-view-stream-begin-turn
+         niwa-view--status-marker
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        (niwa-view-stream-test--insert-data data-buf "Alpha one.\n\nAlpha two.\n\n" 'response)
+        (dotimes (_ 2) (niwa-view-render-live-update data-buf)))
+      (should-not (equal hooks (with-current-buffer data-buf before-change-functions)))
+      ;; The source now belongs to another view, so it outlives this one.
+      (with-current-buffer data-buf (setq niwa--view-buffer nil))
+      (kill-buffer view-buf)
+      (should (buffer-live-p data-buf))
+      (should (equal hooks (with-current-buffer data-buf before-change-functions))))))
+
 ;;; test-niwa-view-stream.el ends here

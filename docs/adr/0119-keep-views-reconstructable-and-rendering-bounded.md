@@ -84,8 +84,25 @@ state, so restoration is a fallback that normally toggles nothing. Disclosure
 restoration preserves an untouched final unit using its pre-restoration
 boundaries and uninterrupted source identity; rewriting that unit or failing
 restoration invalidates retention. Expanding an earlier section therefore does
-not force complete-turn parsing on each subsequent chunk. Re-rendering the
-mutable unit reuses work that its unchanged contents already paid for: tool
+not force complete-turn parsing on each subsequent chunk.
+
+Inside the in-flight turn, the live render is the only writer of the folds it
+draws: tool rows, activity groups (running-only ones included), reasoning, and
+responses. TAB on such a row records the desired fold and the live render
+redraws the turn, from the retained unit when the row lies in it, otherwise
+from the turn start. Other folds there (turn headers, mailbox cards, hook
+context and audits, nested calls, and collapsed input) are named exceptions:
+they are spliced from the transcript, after which the render drops its retained
+tail; while calls are running it also redraws the turn, because the splice
+draws the row without them. A TAB request carries the row's identity and
+desired fold, so a write deferred behind another writer or mouse tracking
+folds that row, not the one at point. The render keeps the retained tail
+private and validates it itself: a tail continues only while it follows the
+turn's view start and its source start still sits where its unit was drawn, so
+a new turn, a discarded retry attempt or a killed view cannot reuse it, and a
+terminal request drops it when its writer queue drains.
+
+Re-rendering the mutable unit reuses work that its unchanged contents already paid for: tool
 parses keyed by source span, archived breadcrumb keys keyed by archive content
 identity, execution completions indexed once per transcript change, and path
 links resolved once per projection. Boundary bookkeeping steps by property
@@ -486,6 +503,15 @@ parser, and the Emacs notice reads them with a regular expression. A shared
 reader would either widen the projection's trusted-tag acceptance or add an XML
 parse to the render path. Revisit if a third consumer appears or the parser's
 checkpoint coupling changes.
+
+Letting disclosure splice live-turn rows from the transcript and then drop the
+render's retained tail was rejected on November 21, 2026. It put two writers on
+one region: the splice drew the row without running calls, so the disclosure
+module had to know about pending calls, the in-flight start and the retained
+tail, and call the render back in the right order. Every live-turn TAB also
+discarded the retained tail. With one writer, a matched compiled replay (a
+30-call in-flight turn, 15 repetitions) parsed the turn once per TAB instead of
+twice, and a TAB on the retained unit parsed only that unit.
 
 ## Consequences
 

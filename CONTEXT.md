@@ -140,7 +140,7 @@ Memory terms below are defined operationally in the [curated-memory](docs/memory
 - **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
 - **view buffer** — The compact rendered transcript buffer with status and interaction zones, but no draft input region.
 - **composer** — The editable draft buffer owned by a view. Each paired transcript window shows this same buffer in a dock immediately below it. The user writes and submits the draft there. _Avoid_: prompt, prompt header
-- **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Avoid “handler,” which refers to executable tool behavior.
+- **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Its fold is remembered by source identity; inside the in-flight turn, a fold the live render draws is redrawn only by that render, and TAB records the desired fold. Avoid “handler,” which refers to executable tool behavior.
 - **activity group** — A collapsible summary of consecutive routine tool calls, agent messages, and the transcript owner's background completions within one transcript scope; its members remain individually inspectable. Notices, individual-presentation rows, and scope boundaries end a group. _Avoid_: tool group, collapsed tools
 - **status strip** — The niwa-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
