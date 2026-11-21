@@ -115,6 +115,8 @@
 
 ;; `niwa-structs'
 (declare-function niwa-session-name "niwa-structs" (cl-x) t)
+(declare-function niwa-session-session-id "niwa-structs" (cl-x) t)
+(declare-function niwa-session-turn-count "niwa-structs" (cl-x) t)
 (declare-function niwa-session-working-directory
                   "niwa-structs" (cl-x) t)
 (defvar niwa--session)
