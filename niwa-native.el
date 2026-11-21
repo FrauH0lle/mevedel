@@ -30,7 +30,7 @@
 A failure is not retried in this session; set this to nil to retry.")
 
 (defconst niwa-native--release-url
-  "https://github.com/FrauH0lle/niwa/releases/download/native-%s/niwa-native-%s.so"
+  "https://github.com/FrauH0lle/niwa.el/releases/download/native-%s/niwa-native-%s.so"
   "Prebuilt module download, by source hash and architecture.")
 
 (defun niwa-native--include-flags ()

@@ -832,7 +832,7 @@ whichever tab is shown.
 
 An artifact room shares one artifact with consumers elsewhere, such as Claude
 Code or Codex through the
-[remote-artifact package](https://github.com/FrauH0lle/niwa/blob/master/remote-artifact/README.md), without giving them
+[remote-artifact package](https://github.com/FrauH0lle/niwa.el/blob/master/remote-artifact/README.md), without giving them
 the workspace. It is the third room kind beside session rooms and the lobby and
 runs independently of the lobby: starting, stopping or rotating the lobby does
 not touch it. This Emacs, the artifact's origin, stays authoritative and carries
@@ -1119,7 +1119,7 @@ cards carry the latest one this Emacs heard, so an open panel can offer a
 to the origin, which it closes after 5 idle minutes.
 
 niwa does not reimplement the relay transport: it runs the
-[remote-artifact package's](https://github.com/FrauH0lle/niwa/blob/master/remote-artifact/README.md#the-bridge-for-niwa)
+[remote-artifact package's](https://github.com/FrauH0lle/niwa.el/blob/master/remote-artifact/README.md#the-bridge-for-niwa)
 `bridge` command as one private subprocess, by default the copy shipped with
 niwa under `niwa-shared-editing-node-program`
 (`niwa-remote-artifact-command` chooses another). The package's pool

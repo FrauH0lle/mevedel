@@ -571,7 +571,7 @@ which locates the client-side profiler output.
 ## Comparing session instrumentation modes
 
 The maintained
-[controlled session performance workload](https://github.com/FrauH0lle/niwa/blob/master/benchmark/session-performance-workload.md)
+[controlled session performance workload](https://github.com/FrauH0lle/niwa.el/blob/master/benchmark/session-performance-workload.md)
 exercises the native ApplyPatch tool, a child-agent permission request, retained
 agent coordination, focused Bash tests, and an ignored-file-safe Elisp Xref
 search.  It defines normal, profiler-only, and full-debug runs from equivalent

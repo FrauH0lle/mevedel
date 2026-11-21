@@ -1,7 +1,7 @@
 site_name: niwa docs
 site_description: User and architecture manual for niwa, for humans and agents.
-site_url: https://frauh0lle.github.io/niwa/
-repo_url: https://github.com/FrauH0lle/niwa
+site_url: https://frauh0lle.github.io/niwa.el/
+repo_url: https://github.com/FrauH0lle/niwa.el
 edit_uri: edit/master/docs/
 docs_dir: docs
 nav:

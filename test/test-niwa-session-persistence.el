@@ -3969,9 +3969,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (should (= 1 (length (plist-get result :incompatible))))
                 (should (equal old (file-name-as-directory
                                     (plist-get incompatible :save-path))))
-                ;; A plain sidecar without a lease is an unmigrated session.
+                ;; A plain sidecar without a lease uses an unsupported format.
                 (should (eq 'unsupported (plist-get incompatible :status)))
-                (should (string-search "migrate-sessions.el"
+                (should (string-search "unsupported transcript format"
                                        (plist-get incompatible :diagnostic))))))
         (test-niwa-session-persistence--release-and-kill buffer session)
         (delete-directory tempdir t)
@@ -3981,7 +3981,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
 (niwa-deftest niwa-session-persistence/pre-lease-file-session (:quiet t)
   ,test
   (test)
-  :doc "an unmigrated PID-lock file session points discovery and resume at migration"
+  :doc "discovery and resume report an unsupported PID-lock transcript format"
   (dolist (lock '(nil t))
     (cl-destructuring-bind (workspace . tempdir)
         (test-niwa-session-persistence--make-tempdir-workspace)
@@ -4005,9 +4005,9 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                              (niwa-session-persistence--enumerate-sessions workspace)
                              :incompatible))))
               (should (eq 'unsupported (plist-get row :status)))
-              (should (string-search "migrate-sessions.el" (plist-get row :diagnostic))))
+              (should (string-search "unsupported transcript format" (plist-get row :diagnostic))))
             (should (string-search
-                     "migrate-sessions.el"
+                     "unsupported transcript format"
                      (cadr (should-error
                             (niwa-session-persistence-restore old nil nil workspace)
                             :type 'user-error)))))

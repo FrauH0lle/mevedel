@@ -1579,7 +1579,7 @@ The returned observations belong to this call only, never a status cache."
           (unless (memq (plist-get listing :status) '(ok absent))
             (error "Unreadable portable lease directory"))
           (when (eq 'absent (plist-get listing :status))
-            (error "Session has no portable lease; run scripts/migrate-sessions.el"))
+            (error "Session has no portable lease; old transcript formats are unsupported"))
           (setq names (plist-get listing :value))
           (niwa-session-durability--validate-generation-names names)
           (setq head

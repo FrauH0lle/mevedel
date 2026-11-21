@@ -26,6 +26,9 @@ dist/
 *.~undo-tree
 
 # Local niwa project state.
+/.mevedel/
+/.mevedel.pre-niwa-*/
+/.niwa.staging/
 !/.niwa/
 .niwa/*
 # Project-local

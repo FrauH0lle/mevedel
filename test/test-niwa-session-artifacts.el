@@ -25,6 +25,7 @@
 (require 'niwa-journal-evidence)
 (require 'niwa-session-artifacts)
 (require 'niwa-session-durability)
+(require 'niwa-transcript-audit)
 (require 'niwa-utilities)
 (require 'so-long)
 
@@ -3995,6 +3996,38 @@ With DIRECTIVE, wrap the turn in old directive boundary records."
       (should (equal expected (niwa-session-artifacts-fork-point-spans (current-buffer))))
       (should (equal expected
                      (cdr (niwa-session-artifacts--prompt-derive (current-buffer))))))))
+
+(niwa-deftest niwa-session-artifacts--prompt-derive/first-drawer-span
+  (:doc "a first drawer span added by a metadata edit is found, and unchanged derives never scan")
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response))\n:END:\nQuestion\n")
+    (niwa-session-artifacts--prompt-derive (current-buffer))
+    (niwa-transcript-source-call-with-metadata-change
+     (lambda ()
+       (goto-char (point-min))
+       (forward-line 1)
+       (insert (niwa--format-hook-audit-record
+                '(:type fork-point :fork-point-id "drawer" :turn 1)))))
+    (let ((original (symbol-function 'niwa-transcript-audit-buffer-spans))
+          calls)
+      (cl-letf (((symbol-function 'niwa-transcript-audit-buffer-spans)
+                 (lambda (&optional type start end)
+                   (push (list type start end) calls)
+                   (funcall original type start end))))
+        (let ((expected (niwa-session-artifacts-fork-point-spans (current-buffer))))
+          (should (equal "drawer" (plist-get (car expected) :fork-point-id)))
+          (setq calls nil)
+          (should (equal expected
+                         (cdr (niwa-session-artifacts--prompt-derive
+                               (current-buffer)))))
+          (should (= 1 (length calls)))
+          ;; Repeated unchanged derivations, with a pre-origin span cached.
+          (setq calls nil)
+          (dotimes (_ 3)
+            (should (equal expected
+                           (cdr (niwa-session-artifacts--prompt-derive
+                                 (current-buffer))))))
+          (should-not calls))))))
 
 (niwa-deftest niwa-session-artifacts--prompt-derive (:quiet t)
   ,test

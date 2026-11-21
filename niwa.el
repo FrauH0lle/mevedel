@@ -7,7 +7,7 @@
 ;; Version: 0.5.0
 ;; Keywords: convenience, tools, llm, gptel
 ;; Package-Requires: ((emacs "31.1") (gptel "0.9.9.6") (acp "0.15.2") (yaml "1.2.0") (orderless "1.1") (websocket "1.15") (qrencode "1.4"))
-;; URL: https://github.com/FrauH0lle/niwa
+;; URL: https://github.com/FrauH0lle/niwa.el
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; This program is free software; you can redistribute it and/or modify it under

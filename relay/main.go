@@ -384,6 +384,9 @@ func main() {
 	vapidKeyFile := flag.String("vapid-key-file", "niwa-relay-vapid.pem",
 		"persistent Web Push signing key")
 	flag.Parse()
+	if err := checkHostToken(flag.CommandLine, *hostToken); err != nil {
+		log.Fatal(err)
+	}
 	push, err := loadOrCreateWebPushSender(newPushHTTPClient(), *vapidKeyFile)
 	if err != nil {
 		log.Fatalf("load Web Push key: %v", err)
@@ -396,4 +399,15 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// checkHostToken rejects an explicit empty -host-token, which would silently
+// leave an intended-private relay open. Omitting the flag stays allowed.
+func checkHostToken(flags *flag.FlagSet, token string) error {
+	given := false
+	flags.Visit(func(f *flag.Flag) { given = given || f.Name == "host-token" })
+	if given && token == "" {
+		return fmt.Errorf("-host-token was given an empty value; omit it for an unauthenticated relay")
+	}
+	return nil
 }

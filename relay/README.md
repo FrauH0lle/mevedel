@@ -132,7 +132,8 @@ With `-host-token` set, a `role=host` upgrade must carry the token in the
 `X-Niwa-Host-Token` header or it is answered 404. Use this mode for a
 public-facing relay to keep strangers from opening rooms, holding idle
 connections, or driving outbound Web Push. Omit it for a tokenless localhost
-or test relay.
+or test relay. Passing `-host-token` with an empty value (for example from an
+unset shell variable) is a startup error rather than an open relay.
 Guests are never asked for it: their authority is the bearer link, and a
 stranger's room carries only their own ciphertext. Set the matching
 `niwa-collaboration-relay-host-token` in Emacs when the relay uses one. A

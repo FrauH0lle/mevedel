@@ -1,7 +1,7 @@
 # niwa-remote-artifact
 
 Work on whiteboards, documents and HTML artifacts that live in a
-[niwa](https://github.com/FrauH0lle/niwa) workspace on another machine
+[niwa](https://github.com/FrauH0lle/niwa.el) workspace on another machine
 (their *origin*) from Claude Code, Codex or any MCP client. The origin shares
 an artifact and gives you an *artifact link*; you attach the link here, and
 your agent reads the artifact through MCP tools. Every read goes live to the

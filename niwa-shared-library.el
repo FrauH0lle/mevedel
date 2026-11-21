@@ -60,7 +60,7 @@ each library under `libraries/'."
   (let ((data (make-hash-table :test #'equal)))
     (puthash "type" "excalidrawlib" data)
     (puthash "version" 2 data)
-    (puthash "source" "https://github.com/FrauH0lle/niwa" data)
+    (puthash "source" "https://github.com/FrauH0lle/niwa.el" data)
     (puthash "libraryItems" items data)
     (decode-coding-string
      (json-serialize data :null-object :null :false-object :false) 'utf-8-unix)))

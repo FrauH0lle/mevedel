@@ -991,8 +991,8 @@ span consumed: a later close could still pair it.  FRONTIER is
 \(POSITION TOOL SUMMARY), relative to ORIGIN: the org block depths counted up
 to a position near the
 buffer end, so the next prompt scan resumes there instead of at the last
-prompt."
-  source segments origin units spans unresolved frontier)
+prompt.  PREFIX is the text before ORIGIN, including its properties."
+  source segments origin units spans unresolved frontier prefix)
 
 (defvar-local niwa-session-artifacts--prompt-cache nil
   "Incremental prompt-index state of the current transcript buffer.")
@@ -1015,26 +1015,32 @@ prompt."
             niwa-session-artifacts--prompt-cache cache))
     cache))
 
-(defun niwa-session-artifacts--audit-spans-cached (cache origin d full)
+(defun niwa-session-artifacts--audit-spans-cached (cache origin d full prefix)
   "Return (SPANS . UNRESOLVED) for the current buffer, updating nothing.
 SPANS are every audit span relative to ORIGIN, as one whole-buffer scan finds
 them.  D is the first dirty offset relative to ORIGIN, nil when the source is
-unchanged; FULL forces a complete scan.  A cached span ending at or before the
+unchanged; FULL forces a complete scan.  PREFIX is the text before ORIGIN.
+A cached span ending at or before the
 restart point is reused: its end is where the sequential scan stood, so
 scanning on from there is the scan the whole buffer would have run.  The
 restart point is the first change or the earliest opener without a span,
 whichever comes first, because a later close can pair such an opener."
   (let* ((spans (niwa-session-artifacts--prompt-cache-spans cache))
          (unresolved (niwa-session-artifacts--prompt-cache-unresolved cache))
-         ;; Body-relative offsets cannot track audit records inside the drawer:
-         ;; known metadata edits can move the origin without moving those records.
-         (old-p (and (not full)
-                     (niwa-session-artifacts--prompt-cache-origin cache)
-                     (>= (or (caar spans) 0) 0)
-                     (>= (or unresolved 0) 0)))
+         ;; Metadata edits before the origin leave the change proof clean, so
+         ;; compare the pre-origin text itself: only a change there can add,
+         ;; move or remove spans in it.
+         (full (or full
+                   (not (equal-including-properties
+                         prefix
+                         (niwa-session-artifacts--prompt-cache-prefix cache)))
+                   ;; Offsets of pre-origin records drift with the origin.
+                   (and d (or (< (or (caar spans) 0) 0)
+                              (< (or unresolved 0) 0)))))
+         (old-p (and (not full) (niwa-session-artifacts--prompt-cache-origin cache)))
          (old (and old-p spans)))
     (if (and old-p (null d))
-        (cons old unresolved)
+        (cons spans unresolved)
       (let* ((limit (if old-p (min d (or unresolved d)) (- (point-min) origin)))
              (reused (cl-loop for span in old
                               while (<= (nth 1 span) limit)
@@ -1256,8 +1262,9 @@ buffer is scanned in full, since its fork points are restriction-relative."
         (when full
           (set-marker marker origin)
           (setq d 0))
-        (let* ((audit (niwa-session-artifacts--audit-spans-cached
-                       cache origin d full))
+        (let* ((prefix (buffer-substring (point-min) origin))
+               (audit (niwa-session-artifacts--audit-spans-cached
+                       cache origin d full prefix))
                ;; The parser's neighbor repair reads the same fork-point
                ;; spans: hand it the cached ones instead of a whole scan.
                (prepared
@@ -1281,6 +1288,7 @@ buffer is scanned in full, since its fork points are restriction-relative."
           (setf (niwa-session-artifacts--prompt-cache-origin cache) origin
                 (niwa-session-artifacts--prompt-cache-units cache) units
                 (niwa-session-artifacts--prompt-cache-spans cache) (car audit)
+                (niwa-session-artifacts--prompt-cache-prefix cache) prefix
                 (niwa-session-artifacts--prompt-cache-unresolved cache) (cdr audit)
                 (niwa-session-artifacts--prompt-cache-frontier cache)
                 (cdr derived-units))

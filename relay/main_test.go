@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,26 @@ func startRelay(t *testing.T) (*relay, *httptest.Server) {
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 	return rl, srv
+}
+
+func TestCheckHostToken(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		wantErr bool
+	}{
+		{nil, false},
+		{[]string{"-host-token", "x"}, false},
+		{[]string{"-host-token="}, true},
+	} {
+		flags := flag.NewFlagSet("relay", flag.ContinueOnError)
+		token := flags.String("host-token", "", "")
+		if err := flags.Parse(tc.args); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkHostToken(flags, *token); (err != nil) != tc.wantErr {
+			t.Errorf("args %q: err = %v, wantErr %v", tc.args, err, tc.wantErr)
+		}
+	}
 }
 
 func dial(t *testing.T, srv *httptest.Server, roomID, role string) *websocket.Conn {

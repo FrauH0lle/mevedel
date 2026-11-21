@@ -833,7 +833,7 @@ string characters, vector cells and GC count. Only conses gate acceptance;
 budgets are the recorded baseline plus 100 conses per operation. A breach
 signals an error and returns a nonzero process status. The baseline and
 repeatability evidence live in
-[`benchmark/profiler-optimization-results.md`](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md).
+[`benchmark/profiler-optimization-results.md`](https://github.com/FrauH0lle/niwa.el/blob/master/benchmark/profiler-optimization-results.md).
 ERT covers counter arithmetic and path guards, not absolute budgets.
 
 ### Minimal-edit twin report

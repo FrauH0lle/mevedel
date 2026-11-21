@@ -677,7 +677,7 @@ admitted, and its prompt sent, only after both succeed (overlapping them took a
 warm launch from about 500 to 380 ms);
 `M-x niwa-claude-code-setup` runs the same check, plus the packaged MCP
 bridge, without a model request. Installation, maintenance and user steps are
-in the [README](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions). Status commands run
+in the [README](https://github.com/FrauH0lle/niwa.el/blob/master/README.md#claude-promax-subscriptions). Status commands run
 asynchronously, each with a ten-second timeout, and are cancelled with their
 owning request. Successful version checks are reused while the resolved
 executable and its enclosing package metadata stay unchanged. Every launch
@@ -910,7 +910,7 @@ require copying or discarding native history. Read-only following remains availa
 For adapter crashes, diagnostic logs default to `~/.niwa/claude-agent-logs`
 on the Emacs host, controlled by `niwa-claude-code-agent-log-directory`;
 an inherited `CLAUDE_AGENT_LOGS` value takes precedence. See
-[Claude subscription setup](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions) for configuration.
+[Claude subscription setup](https://github.com/FrauH0lle/niwa.el/blob/master/README.md#claude-promax-subscriptions) for configuration.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
 provider, including direct `gptel-menu`, prefixed send and niwa's bridge menu.
@@ -2654,7 +2654,7 @@ unreadable-store warning is shown only once while the failure lasts.
 
 ### Explicit session migration
 
-The standalone [migration script](https://github.com/FrauH0lle/niwa/blob/master/scripts/migrate-sessions.el)
+The standalone [migration script](https://github.com/FrauH0lle/niwa.el/blob/master/scripts/migrate-sessions.el)
 accepts a session directory, a project root, or its `.niwa/sessions`
 directory. The migration chain is empty: the command checks closed sessions,
 accepts `v0.6.0` without rewriting or backing up the originals, and rejects

@@ -9,13 +9,13 @@ codebase. The sidebar groups workflows, architecture, tool reference, and
 development guidance. [Decision records](adr/README.md) explain architectural
 choices and their history; [the backlog](backlog.md) is the sole future-work
 section. The repository root
-[`AGENTS.md`](https://github.com/FrauH0lle/niwa/blob/master/AGENTS.md) is
+[`AGENTS.md`](https://github.com/FrauH0lle/niwa.el/blob/master/AGENTS.md) is
 the agent entry point. The documentation map below locates area contracts;
 [module-map.md](module-map.md) locates implementation modules.
 
 Good starting points:
 
-- [Claude subscription setup](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions) — use an installed Claude Pro/Max login through the guided setup.
+- [Claude subscription setup](https://github.com/FrauH0lle/niwa.el/blob/master/README.md#claude-promax-subscriptions) — use an installed Claude Pro/Max login through the guided setup.
 - [Architecture](architecture.md) — data structures, workspace context chain,
   gptel integration, persistence layout
 - [Tools](tools.md) and [Permissions](permissions.md) — the tool pipeline and

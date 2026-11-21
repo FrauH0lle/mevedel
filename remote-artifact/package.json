@@ -22,12 +22,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/FrauH0lle/niwa.git",
+    "url": "git+https://github.com/FrauH0lle/niwa.el.git",
     "directory": "remote-artifact"
   },
-  "homepage": "https://github.com/FrauH0lle/niwa/tree/master/remote-artifact#readme",
+  "homepage": "https://github.com/FrauH0lle/niwa.el/tree/master/remote-artifact#readme",
   "bugs": {
-    "url": "https://github.com/FrauH0lle/niwa/issues"
+    "url": "https://github.com/FrauH0lle/niwa.el/issues"
   },
   "keywords": [
     "mcp",

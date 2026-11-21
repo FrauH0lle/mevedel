@@ -1618,8 +1618,8 @@ root for the client doing the restore."
      (plist-get saved :type) root root (plist-get saved :name))))
 
 (defconst niwa-session-persistence--pre-lease-message
-  "Session %s predates file sessions on the portable lease; close it and run scripts/migrate-sessions.el on it"
-  "Format for an unmigrated PID-lock file session, given its directory.")
+  "Session %s uses an unsupported transcript format (before portable leases)"
+  "Diagnostic for an unsupported PID-lock session, given its directory.")
 
 (defun niwa-session-persistence--pre-lease-p (session-dir)
   "Return non-nil when SESSION-DIR is a file session from before the lease.

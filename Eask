@@ -4,7 +4,7 @@
          "0.5.0"
          "Instructed LLM programmer/assistant")
 
-(website-url "https://github.com/FrauH0lle/niwa")
+(website-url "https://github.com/FrauH0lle/niwa.el")
 (keywords "convenience" "tools" "llm" "gptel")
 
 (package-file "niwa.el")

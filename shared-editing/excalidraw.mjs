@@ -7,7 +7,7 @@ import { check, identifier, validateElement, validateFile, fieldValid, validBack
 import { complete, resolveScene, seedOf, pointBounds, LINEAR } from './scene.mjs';
 import { lineHeightOf } from './text.mjs';
 
-export const SOURCE = 'https://github.com/FrauH0lle/niwa';
+export const SOURCE = 'https://github.com/FrauH0lle/niwa.el';
 const COMMON = ['id', 'type', 'x', 'y', 'width', 'height', 'angle', 'strokeColor', 'backgroundColor',
   'fillStyle', 'strokeWidth', 'strokeStyle', 'roughness', 'opacity', 'roundness', 'seed', 'index',
   'groupIds', 'frameId', 'link', 'locked', 'customData', 'created'];
