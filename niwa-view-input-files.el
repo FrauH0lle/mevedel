@@ -104,12 +104,6 @@
                                   exit-code))))))
    (list (cons :command "xclip")
          (cons :save (lambda (file-path)
-                       (when-let* ((targets (and (eq (window-system) 'x)
-                                                 (gui-get-selection
-                                                  'CLIPBOARD 'TARGETS)))
-                                   ((vectorp targets))
-                                   ((not (cl-position 'image/png targets))))
-                         (error "No image/png in clipboard"))
                        (with-temp-buffer
                          (set-buffer-multibyte nil)
                          (let ((exit-code
@@ -283,12 +277,28 @@ instead of signaling when no image is available."
      (unless no-error
        (signal (car err) (cdr err))))))
 
+(defun niwa-view--clipboard-text-only-p ()
+  "Return non-nil when the clipboard advertises only text and metadata."
+  (let ((targets (ignore-errors (gui-get-selection 'CLIPBOARD 'TARGETS)))
+        text)
+    (and (vectorp targets)
+         (cl-every (lambda (target)
+                     (or (memq target '(TARGETS TIMESTAMP MULTIPLE SAVE_TARGETS))
+                         (when (or (memq target '(UTF8_STRING STRING TEXT COMPOUND_TEXT text/plain))
+                                   (and (symbolp target)
+                                        (string-prefix-p "text/plain;" (symbol-name target))))
+                           (setq text t))))
+                   targets)
+         text)))
+
 (put 'niwa-view-yank-dwim 'delete-selection 'yank)
 (defun niwa-view-yank-dwim (&optional arg)
   "Yank text, or save a clipboard image and insert it as an `@file'.
 ARG is passed through from the interactive prefix."
   (interactive "*P")
   (if-let* (((window-system))
+            ;; Avoid workspace I/O (possibly TRAMP) for a known text clipboard.
+            ((not (niwa-view--clipboard-text-only-p)))
             (path (niwa-view--save-clipboard-image t)))
       (niwa-view--insert-dropped-file-mentions (list path))
     (yank arg)))

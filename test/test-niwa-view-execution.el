@@ -186,7 +186,7 @@ mouse events in them, which later interactive calls would read."
                 (setq agents nil)
                 (dotimes (_ 2)
                   (niwa-view--render-status)
-                  (should (string-search "✓ Finished  agent    /root/counter" (buffer-string)))
+                  (should (string-search "· Ended     agent    /root/counter" (buffer-string)))
                   (should (= action-line (save-excursion
                                            (niwa-view-execution-test--at "[Full output]")
                                            (line-number-at-pos)))))
@@ -266,7 +266,7 @@ mouse events in them, which later interactive calls would read."
             (niwa-view--render-status)
             (ert-info ("a finished row that was hidden is not brought back as held")
               (should-not niwa-view-execution--held)
-              (should-not (string-search "✓ Completed" (buffer-string)))))
+              (should-not (string-search "· Ended" (buffer-string)))))
         (niwa-view-execution--cancel-release))))
   :doc "at capacity under point, shown rows stay put and new work is only counted"
   (niwa-view-execution-test--with-view
@@ -295,7 +295,7 @@ mouse events in them, which later interactive calls would read."
                                                     :command "cmd 6" :started-at 6.0))))
                 (niwa-view--render-status)
                 (ert-info ("the finished row stays and no shown row moves")
-                  (should (string-search "✓ Completed bash     cmd 1" (buffer-string)))
+                  (should (string-search "· Ended     bash     cmd 1" (buffer-string)))
                   (should-not (string-search "cmd 6" (buffer-string)))
                   (should (= line (funcall line-of "cmd 3")))
                   (should (string-search "[Show all 6]" (buffer-string))))
@@ -303,7 +303,7 @@ mouse events in them, which later interactive calls would read."
                 (goto-char (niwa-view-transcript-tail))
                 (niwa-view-execution--check-release view-buf)
                 (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
-                (should (string-search "✓ Completed" (buffer-string))))
+                (should (string-search "· Ended" (buffer-string))))
             (niwa-view-execution--cancel-release))))))
   :doc "a row finishing while point is elsewhere lingers for the grace period"
   (niwa-view-execution-test--with-view
@@ -319,10 +319,10 @@ mouse events in them, which later interactive calls would read."
           (unwind-protect
               (progn
                 (niwa-view--render-status)
-                (should (string-search "✓ Completed bash     same command" (buffer-string)))
+                (should (string-search "· Ended     bash     same command" (buffer-string)))
                 (setq clock (+ 1000.0 (1- niwa-view-execution-grace-seconds)))
                 (niwa-view-execution--check-release view-buf)
-                (should (string-search "✓ Completed" (buffer-string)))
+                (should (string-search "· Ended" (buffer-string)))
                 (setq clock (+ 1000.0 niwa-view-execution-grace-seconds 0.5))
                 (niwa-view-execution--check-release view-buf)
                 (should-not (niwa-view-execution-fragment session))
@@ -374,7 +374,7 @@ mouse events in them, which later interactive calls would read."
               (unwind-protect
                   (progn
                     (niwa-view--render-status)
-                    (should (string-search "✓ Finished" (buffer-string)))
+                    (should (string-search "· Ended" (buffer-string)))
                     (should (= before (length (funcall panel-lines))))
                     (dolist (line (funcall panel-lines))
                       (should (< (string-width line) (niwa-view-zone-width)))))
@@ -440,7 +440,7 @@ mouse events in them, which later interactive calls would read."
           (unwind-protect
               (progn
                 (niwa-view--render-status)
-                (should (string-search "✓ Finished  agent    /root/worker" (buffer-string)))
+                (should (string-search "· Ended     agent    /root/worker" (buffer-string)))
                 (should (looking-at-p "same command"))
                 (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text))))
             (niwa-view-execution--cancel-release))))))
@@ -568,14 +568,14 @@ mouse events in them, which later interactive calls would read."
               (should-not niwa-view-execution--reflow-pending)
               (should niwa-view-execution--hovering)
               (should (string-search "▾ Running   bash     cmd 1" (buffer-string)))
-              (should (string-search "✓ Completed bash     cmd 2" (buffer-string)))
+              (should (string-search "· Ended     bash     cmd 2" (buffer-string)))
               (should (string-search "▸ Running   bash     cmd 8" (buffer-string)))
               (should-not (string-search "bash     cmd 3" (buffer-string)))
               (should (= 4 (niwa-view-test--count-substring "▸ Running" (buffer-string))))
               ;; Time alone must not release the completion under real point.
               (setf (plist-get (nth 2 (car niwa-view-execution--held)) :release-at) 0.0)
               (niwa-view--render-status)
-              (should (string-search "✓ Completed bash     cmd 2" (buffer-string)))
+              (should (string-search "· Ended     bash     cmd 2" (buffer-string)))
               (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text))))
           (niwa-view-execution--cancel-release)))))
   :doc "Show all supersedes a queued Show fewer through the still-rendered control"
@@ -908,8 +908,8 @@ mouse events in them, which later interactive calls would read."
                   (niwa-view--render-status)
                   (setq clock 1059.0 live nil agents nil)
                   (niwa-view--render-status)
-                  (should (string-search "✓ Completed bash" (buffer-string)))
-                  (should (string-search "✓ Finished  agent" (buffer-string)))
+                  (should (string-search "· Ended     bash" (buffer-string)))
+                  (should (string-search "· Ended     agent" (buffer-string)))
                   (should (timerp niwa-view-execution--release-timer))
                   (let ((tick (buffer-chars-modified-tick)))
                     ;; Unchanged release polls do not mutate the view.
@@ -921,11 +921,11 @@ mouse events in them, which later interactive calls would read."
                   (should-not niwa-view-execution--hovering)
                   (setq clock (+ clock 9.0))
                   (niwa-view-execution--check-release view-buf)
-                  (should (string-search "✓ Completed bash" (buffer-string)))
+                  (should (string-search "· Ended     bash" (buffer-string)))
                   (setq clock (+ clock 1.0))
                   (niwa-view-execution--check-release view-buf)
-                  (should-not (string-search "✓ Completed bash" (buffer-string)))
-                  (should-not (string-search "✓ Finished  agent" (buffer-string)))
+                  (should-not (string-search "· Ended     bash" (buffer-string)))
+                  (should-not (string-search "· Ended     agent" (buffer-string)))
                   (should-not niwa-view-execution--held)
                   (should-not niwa-view-execution--release-timer)
                   (should (= draft-offset (niwa-view-execution-test--draft-offset)))
@@ -1234,14 +1234,16 @@ mouse events in them, which later interactive calls would read."
   :doc "both terminal event orders render bounded command outcomes, leaving unknown gaps dim"
   (dolist (order '(terminal-first removal-first))
     (dolist (case '(((:state completed :outcome success :termination exited :exit-code 0)
-                    . success)
+                    "✓ Completed" success)
                    ((:state completed :outcome no-match :termination exited :exit-code 1)
-                    . success)
+                    "✓ Completed" success)
                    ((:state completed :outcome failure :termination exited :exit-code 7)
-                    . error)
+                    "✓ Completed" error)
                    ((:state completed :outcome failure :termination stopped)
-                    . niwa-view-tool-warning)
-                   ((:state completed) . niwa-view-tool-metadata)))
+                    "· Stopped" niwa-view-tool-warning)
+                   ((:state lost) "· Lost" error)
+                   ((:state failed) "· Failed" error)
+                   ((:state completed) "✓ Completed" niwa-view-tool-metadata)))
       (ert-info ((format "event order: %S facts: %S" order (car case)))
         (niwa-view-execution-test--with-view
           (niwa-view--render-status)
@@ -1259,7 +1261,8 @@ mouse events in them, which later interactive calls would read."
                   (setq live nil)
                   (niwa-view--render-status)
                   (when (eq order 'removal-first)
-                    (niwa-view-execution-test--at "✓ Completed")
+                    (should-not (string-search "Completed" (buffer-string)))
+                    (niwa-view-execution-test--at "· Ended")
                     (dolist (property '(face font-lock-face))
                       (should (eq 'niwa-view-tool-metadata
                                   (get-text-property (point) property)))
@@ -1272,7 +1275,7 @@ mouse events in them, which later interactive calls would read."
                       (should (equal (plist-get held key) (plist-get (car case) key)))))
                   (dotimes (_ 2)
                     (niwa-view-execution-test--assert-held-row
-                     "✓ Completed" (cdr case) '("bash" "same command"))
+                     (cadr case) (nth 2 case) '("bash" "same command"))
                     (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text)))
                     (niwa-view--render-status)))
               (niwa-view-execution--cancel-release))))))))
@@ -1281,9 +1284,9 @@ mouse events in them, which later interactive calls would read."
   ,test
   (test)
   :doc "held agents snapshot settled record outcomes and keep only glyph/state colored"
-  (dolist (case '((completed . success) (errored . error)
-                  (interrupted . niwa-view-tool-warning)
-                  (nil . niwa-view-tool-metadata)))
+  (dolist (case '((completed "✓ Finished" success) (errored "· Errored" error)
+                  (interrupted "· Stopped" niwa-view-tool-warning)
+                  (nil "· Ended" niwa-view-tool-metadata)))
     (ert-info ((format "settled agent outcome: %S" (car case)))
       (niwa-view-execution-test--with-view
         (let* ((agents '((:path "/root/worker" :status running :depth 0)))
@@ -1306,7 +1309,7 @@ mouse events in them, which later interactive calls would read."
                         (if (eq (car case) 'completed) 'errored 'completed))
                   (dotimes (_ 2)
                     (niwa-view-execution-test--assert-held-row
-                     "✓ Finished" (cdr case) '("agent" "/root/worker"))
+                     (cadr case) (nth 2 case) '("agent" "/root/worker"))
                     (niwa-view--render-status))
                   (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text))))
               (niwa-view-execution--cancel-release))))))))
@@ -1569,9 +1572,10 @@ mouse events in them, which later interactive calls would read."
               (progn
                 (niwa-view--render-status)
                 (should (equal "/root/counter" niwa-view-execution--selected-agent))
-                (should (string-search "✓ Finished  agent    /root/counter" (buffer-string)))
+                (should (string-search "· Ended     agent    /root/counter" (buffer-string)))
                 (should (string-search "    Model     opus\n" (buffer-string)))
-                (should (string-search "    Agent finished.\n" (buffer-string)))
+                (should-not (string-search "Agent finished." (buffer-string)))
+                (should (string-search "    Agent turn ended.\n" (buffer-string)))
                 (should-not (string-search "[Interrupt]" (buffer-string)))
                 (should (= expanded (funcall lines)))
                 (should-error (funcall callback) :type 'user-error)
@@ -1580,7 +1584,7 @@ mouse events in them, which later interactive calls would read."
                 (niwa-view-execution--check-release view-buf)
                 (niwa-view--render-status)
                 (should-not niwa-view-execution--selected-agent)
-                (should-not (string-search "Agent finished." (buffer-string)))
+                (should-not (string-search "Agent turn ended." (buffer-string)))
                 (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text))))
             (niwa-view-execution--cancel-release)))))))
 

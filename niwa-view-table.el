@@ -78,8 +78,9 @@ running to the window edge instead of stopping at the last cell."
   "Regexp matching one Markdown pipe-table row.")
 
 (defconst niwa-view-table--separator-regexp
-  "^[ \t]*|[-:| \t]+|[ \t]*$"
-  "Regexp matching a table separator row such as `|---|---|'.")
+  "^[ \t]*|\\(?:[ \t]*:?-+:?[ \t]*|\\)+[ \t]*$"
+  "Regexp matching a table separator row such as `|---|:--:|'.
+Every cell needs a dash; a row of empty cells is data.")
 
 (defconst niwa-view-table--carried-properties
   '(niwa-view-source
@@ -291,6 +292,10 @@ not a delimiter."
             (goto-char end)))))
     (nreverse cells)))
 
+(defun niwa-view-table--separator-p (row-number)
+  "Return non-nil at a delimiter directly after the header (ROW-NUMBER 1)."
+  (and (= row-number 1) (looking-at-p niwa-view-table--separator-regexp)))
+
 (defun niwa-view-table--collect-rows ()
   "Collect table rows in the current (temporary) buffer.
 Each row is a plist with :start, :end, :num, and :separator."
@@ -303,9 +308,7 @@ Each row is a plist with :start, :end, :num, and :separator."
         (push (list :start (point)
                     :end (line-end-position)
                     :num row-num
-                    :separator (and (looking-at
-                                     niwa-view-table--separator-regexp)
-                                    t))
+                    :separator (niwa-view-table--separator-p row-num))
               rows)
         (setq row-num (1+ row-num))
         (forward-line 1))
@@ -322,6 +325,11 @@ Each row is a plist with :start, :end, :num, and :separator."
   "Per-cell width vectors computed while finding cramped-table glyph floors.
 Bound for one render only, so wrapping can reuse those measurements.")
 
+(defvar niwa-view-table--measured nil
+  "Pixel widths of strings measured during one render, or nil.
+Wrapping measures each character; repeated glyphs and faces share one
+temporary-buffer measurement.")
+
 (defun niwa-view-table--pixel-capable-p (window)
   "Return non-nil when WINDOW supports pixel-accurate measurement."
   (and window
@@ -333,20 +341,23 @@ Bound for one render only, so wrapping can reuse those measurements.")
 Measured in a temporary buffer shown briefly in WINDOW so its frame
 font applies; `face-remapping-alist' is copied from WINDOW's buffer so
 text scaling measures at its scaled width."
-  ;; ponytail: one temp-buffer measurement per call, uncached; add a
-  ;; string->pixels cache (equal-including-properties keyed) if graphical
-  ;; tables stutter during streaming re-renders.
-  (let ((remapping (buffer-local-value 'face-remapping-alist
-                                       (window-buffer window))))
-    (with-temp-buffer
-      (setq-local display-line-numbers nil
-                  line-prefix nil
-                  wrap-prefix nil
-                  face-remapping-alist remapping)
-      (insert str)
-      (remove-text-properties (point-min) (point-max)
-                              '(line-prefix nil wrap-prefix nil display nil))
-      (car (buffer-text-pixel-size nil window t)))))
+  (or (and niwa-view-table--measured
+           (gethash str niwa-view-table--measured))
+      (let* ((remapping (buffer-local-value 'face-remapping-alist
+                                            (window-buffer window)))
+             (pixels
+              (with-temp-buffer
+                (setq-local display-line-numbers nil
+                            line-prefix nil
+                            wrap-prefix nil
+                            face-remapping-alist remapping)
+                (insert str)
+                (remove-text-properties (point-min) (point-max)
+                                        '(line-prefix nil wrap-prefix nil display nil))
+                (car (buffer-text-pixel-size nil window t)))))
+        (when niwa-view-table--measured
+          (puthash str pixels niwa-view-table--measured))
+        pixels)))
 
 (defun niwa-view-table--char-pixel-width (window)
   "Return the pixel width of one box-drawing column in WINDOW."
@@ -645,11 +656,11 @@ Empty cells between two borders are kept so columns stay aligned."
             (push (string-join cells "\t") lines)))))
     (string-join (nreverse lines) "\n")))
 
-(defun niwa-view-table--render-data-row (cells col-widths row-face window)
+(defun niwa-view-table--render-data-row (cells col-widths row-face window indent)
   "Build the rendered string for data row CELLS, possibly multi-line.
 COL-WIDTHS is the allocated column width list.  ROW-FACE, when
 non-nil, is layered under each cell's own faces.  WINDOW is used for
-pixel-accurate padding."
+pixel-accurate padding.  INDENT precedes each physical line."
   (let* ((pipe (niwa-view-table--border "│"))
          (space (if (niwa-view-table--pixel-capable-p window)
                     (propertize " " 'display
@@ -684,7 +695,7 @@ pixel-accurate padding."
                (niwa-view-table--layer-face padded row-face))
              (push padded parts)))
          wrapped col-widths)
-        (push (concat pipe (string-join (nreverse parts) pipe) pipe)
+        (push (concat indent pipe (string-join (nreverse parts) pipe) pipe)
               lines)))
     (mapconcat #'identity (nreverse lines) "\n")))
 
@@ -737,9 +748,14 @@ table's position."
                                          :foundry (font-get font :foundry)
                                          :size (font-get font :size)))))))
            (niwa-view-table--cell-widths nil)
+           (niwa-view-table--measured
+            (make-hash-table :test 'niwa-view-table--layout-equal))
            (niwa-view-table--column-pixels
             (when (niwa-view-table--pixel-capable-p window)
               (niwa-view-table--char-pixel-width window)))
+           (indent (make-string (save-excursion
+                                  (goto-char (point-min))
+                                  (current-indentation)) ?\s))
            (rows (niwa-view-table--collect-rows))
            (separator-row-num
             (seq-position rows 'separator
@@ -770,7 +786,7 @@ table's position."
              (lambda (cell)
                (niwa-view-table--display-width cell window)))))
       (let* ((target (floor (* (niwa-view-table--usable-columns
-                                window inset)
+                                window (+ inset (length indent)))
                                niwa-view-table--max-width-fraction)))
              (col-widths
               (if (> (niwa-view-table--total-width natural-widths) target)
@@ -799,7 +815,7 @@ table's position."
                  (row-face (plist-get row :face)))
             (push (propertize
                    (if is-separator
-                       (niwa-view-table--render-separator-row col-widths)
+                       (concat indent (niwa-view-table--render-separator-row col-widths))
                      ;; Ragged rows can have fewer cells than columns;
                      ;; pad with empty cells so borders stay aligned.
                      (niwa-view-table--render-data-row
@@ -807,7 +823,7 @@ table's position."
                               (make-list (max 0 (- (length col-widths)
                                                    (length cells)))
                                          ""))
-                      col-widths row-face window))
+                      col-widths row-face window indent))
                    'niwa-view-table-row (cons (plist-get row :num) is-separator))
                   rendered-rows)))
         (string-join (nreverse rendered-rows) "\n")))))
@@ -881,7 +897,7 @@ surrounding transcript properties."
                  (raw (looking-at-p "[ \t]*|"))
                  (sep (or (cdr tag)
                           (looking-at-p "[ \t]*[├┼─]" )
-                          (looking-at-p niwa-view-table--separator-regexp)))
+                          (niwa-view-table--separator-p row-number)))
                  borders)
             (while (< (point) end)
               (cond
@@ -915,6 +931,8 @@ surrounding transcript properties."
                                      (cond
                                       ((= pos (cadr line)) (cadr target))
                                       ((or (< (length borders) 2) (< (length new-borders) 2)) (car target))
+                                      ((< pos (aref borders 0))
+                                       (min (+ (car target) (- pos (car line))) (aref new-borders 0)))
                                       (t
                                        (let* ((col (max 0 (1- (seq-count (lambda (b) (<= b pos)) borders))))
                                               (new-col (min col (1- (length new-borders))))

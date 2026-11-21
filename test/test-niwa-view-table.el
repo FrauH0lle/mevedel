@@ -150,6 +150,26 @@
       (should (string-suffix-p "after\n" text))
       (should-not (string-match-p "^| Name" text))))
 
+  :doc "list tables keep their indent on every line without changing copy or markers"
+  (with-temp-buffer
+    (insert "- item\n  | H |\n  |---|\n  | alpha beta |")
+    (search-backward "beta")
+    (let ((beta (point-marker))
+          (indent (copy-marker (1+ (line-beginning-position))))
+          (niwa-view-table--max-width-fraction 1))
+      (cl-letf (((symbol-function 'niwa-view-table--usable-columns)
+                 (lambda (_window inset) (- 14 inset))))
+        (niwa-view-table-decorate (point-min) (point-max) nil))
+      (goto-char (point-min))
+      (forward-line 1)
+      (should (equal (split-string (buffer-substring-no-properties (point) (point-max)) "\n")
+                     '("  │ H        │" "  ├──────────┤" "  │ alpha    │" "  │ beta     │")))
+      (should (equal (niwa-view-table-plain-text (point) (point-max)) "H\nalpha\nbeta"))
+      (goto-char indent)
+      (should (looking-at-p " │ alpha"))
+      (goto-char beta)
+      (should (looking-at-p "beta"))))
+
   :doc "retains the canonical source and layout width as text properties"
   (with-temp-buffer
     (let ((source "| A | B |\n|---|---|\n| 1 | 2 |"))
@@ -180,6 +200,22 @@
       (should (string-match-p "│ a │ b │" text))
       (should (string-match-p "│ c │ d │" text))
       (should-not (string-match-p "├" text))))
+
+  :doc "a dash in a body row renders and copies as data"
+  (with-temp-buffer
+    (insert "| H |\n|---|\n| - |")
+    (niwa-view-table-decorate (point-min) (point-max) nil)
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   "│ H │\n├───┤\n│ - │"))
+    (should (equal (niwa-view-table-plain-text (point-min) (point-max)) "H\n-")))
+
+  :doc "a row of empty cells is data, not a separator"
+  (with-temp-buffer
+    (insert "| | |\n|---|---|\n| a | 1 |\n| | |\n| b | 2 |\n")
+    (niwa-view-table-decorate (point-min) (point-max) nil)
+    (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                   (concat "│   │   │\n├───┼───┤\n│ a │ 1 │\n"
+                           "│   │   │\n│ b │ 2 │\n"))))
 
   :doc "escaped pipes are literal cell content"
   (with-temp-buffer

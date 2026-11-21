@@ -526,7 +526,17 @@ continuation column of a window without fringes is left free."
      "  "
      (make-string (* 2 (or (plist-get data :depth) 0)) ?\s)
      (niwa-view-execution--face
-      (concat "✓ " (string-pad (if (eq kind 'agent) "Finished" "Completed") 9))
+      (string-pad
+       (cond
+        ((eq kind 'agent)
+         (pcase (plist-get data :outcome)
+           ('completed "✓ Finished") ('errored "· Errored")
+           ('interrupted "· Stopped") (_ "· Ended")))
+        ((memq (plist-get data :termination) '(stopped owner-stopped interrupted)) "· Stopped")
+        (t (pcase (plist-get data :state)
+             ('completed "✓ Completed") ('lost "· Lost")
+             ('failed "· Failed") (_ "· Ended"))))
+       11)
       (niwa-view-execution--state-face data))
      (niwa-view-execution--face
       (concat " "
@@ -864,7 +874,7 @@ height, so completion cannot pull a wrapped row from under the pointer."
     (when finished
       (setq rows (cons (niwa-view-execution--fit
                         (concat indent (niwa-view-execution--face
-                                        "Agent finished." 'niwa-view-tool-metadata)))
+                                        "Agent turn ended." 'niwa-view-tool-metadata)))
                        (make-list (1- (length rows)) ""))))
     (concat (string-join rows "\n") "\n")))
 

@@ -135,6 +135,8 @@
             (goto-char (niwa-view-composer-draft-end view-buf))
             (cl-letf (((symbol-function 'window-system)
                        (lambda (&optional _frame) 'x))
+                      ((symbol-function 'gui-get-selection)
+                       (lambda (_selection _target) '[image/tiff]))
                       ((symbol-function 'executable-find)
                        (lambda (command)
                          (and (equal command "fake-clipboard") command)))
@@ -150,6 +152,28 @@
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))
       (delete-directory dir t)))
+
+  :doc "skips media setup only for a known text-only clipboard"
+  (dolist (case '(([TARGETS TIMESTAMP MULTIPLE SAVE_TARGETS UTF8_STRING STRING
+                    TEXT COMPOUND_TEXT text/plain text/plain\;charset=utf-8] . nil)
+                  ([UTF8_STRING application/custom] . t) ([image/png] . t)
+                  ([TARGETS] . t) ([] . t) (nil . t) (unknown . t) (error . t)))
+    (with-temp-buffer
+      (let ((kill-ring '("latest" "older"))
+            (kill-ring-yank-pointer nil)
+            (interprogram-paste-function nil)
+            media-called)
+        (cl-letf (((symbol-function 'window-system) (lambda (&rest _) 'pgtk))
+                  ((symbol-function 'gui-get-selection)
+                   (lambda (selection target)
+                     (should (eq selection 'CLIPBOARD))
+                     (should (eq target 'TARGETS))
+                     (if (eq (car case) 'error) (error "Unavailable") (car case))))
+                  ((symbol-function 'niwa-view--media-dir)
+                   (lambda () (setq media-called t) (error "No session"))))
+          (niwa-view-yank-dwim 2))
+        (should (eq media-called (cdr case)))
+        (should (equal "older" (buffer-string))))))
 
   :doc "falls back to text yank when image saving has no session"
   (with-temp-buffer

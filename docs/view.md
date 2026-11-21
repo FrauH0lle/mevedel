@@ -1702,10 +1702,12 @@ age and last reported feature count, with Stop to discard the child. A busy
 sandbox uses one annotated Eval execution row instead of a separate service row.
 Idle sandbox rows do not arm periodic redraw timers or count as active work.
 Sandbox call and idle rows replace one another directly, without a finished row.
-Other finished items stay in place for ten seconds
-(`niwa-view-execution-grace-seconds`) as an inert `✓ Completed` (or
-`✓ Finished` for an agent) line, so a glance shows what just ended; its
-transcript notice remains the durable record. The glyph and state label use
+Other items that leave the panel stay in place for ten seconds
+(`niwa-view-execution-grace-seconds`) as inert rows. Without an observed
+terminal state or settled agent outcome, the row reads `· Ended`. Known
+outcomes use specific labels such as `✓ Completed`, `✓ Finished` (agent),
+`· Lost`, or `· Stopped`; the transcript notice remains the durable record.
+The glyph and state label use
 the theme's success or error face for a known successful or failed outcome;
 explicit stops use the warning face, and unknown outcomes stay subdued until
 terminal facts arrive. Successful command outcomes include expected no-match,
