@@ -86,6 +86,33 @@
       (should (equal "> draft\nsecond line"
                      (niwa-view-composer-graphical--draft view-buf))))))
 
+(ert-deftest niwa-view-pair-graphical/toggle-latest-tool-row ()
+  "TAB on the row above the hidden closing rule keeps the row displayed."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (let* ((dock (selected-window))
+           (transcript (niwa-view-transcript-window dock)))
+      (niwa-view-test--insert-data
+       data-buf "(:name \"Read\" :args (:file_path \"last.el\"))\n\nTool detail\n"
+       '(tool . "last-tool"))
+      (with-current-buffer view-buf (niwa-view--full-rerender))
+      (select-window transcript)
+      (goto-char (point-min))
+      (search-forward "Read: last.el")
+      (let ((row (line-beginning-position)))
+        (cl-flet ((rows ()
+                    ;; The row, its body when expanded, and the native
+                    ;; end-of-buffer row; the closing rule shows nothing.
+                    (count-screen-lines row (niwa-view-transcript-tail) t transcript)))
+          (should (= 2 (rows)))
+          (goto-char row)
+          (niwa-view-composer-graphical--keys "TAB" 'niwa-view-toggle-section)
+          (should (search-forward "Tool detail" (niwa-view-transcript-tail) t))
+          (should (< 2 (rows)))
+          (goto-char row)
+          (niwa-view-composer-graphical--keys "TAB" 'niwa-view-toggle-section)
+          (should (= 2 (rows))))))))
+
 (ert-deftest niwa-view-pair-graphical/delete-other-windows ()
   "Keeping either half via the native command preserves the pair and draft caret."
   :tags '(niwa-docked-composer)

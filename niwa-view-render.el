@@ -4635,7 +4635,11 @@ operations call their owned implementations rather than entering here again."
                   ;; or replacement behind it.  Report the first error only
                   ;; after every still-current intention has been drained.
                   (while niwa-view-render--pending
-                    (run (pop niwa-view-render--pending))))
+                    (run (pop niwa-view-render--pending)))
+                  ;; The paired closing-rule overlay starts on the last row's
+                  ;; newline.  A splice outside the preserving entry, such as
+                  ;; a disclosure toggle, would leave that row inside it.
+                  (niwa-view-pair-refresh-turn-rule))
                 (if failure (signal (car failure) (cdr failure)) result))
             (setq niwa-view-render--owner nil
                   niwa-view-render--pending nil)))))))
