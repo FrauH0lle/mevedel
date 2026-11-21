@@ -10,7 +10,7 @@ export function storePath(env = process.env) {
   const base = env.XDG_CONFIG_HOME
     || (process.platform === 'win32' && env.APPDATA)
     || path.join(env.HOME || homedir(), '.config');
-  return path.join(base, 'mevedel-remote-artifact', 'links.json');
+  return path.join(base, 'niwa-remote-artifact', 'links.json');
 }
 
 /* The stored attachments: { artifacts: { NAME: ENTRY } }. */

@@ -24,7 +24,7 @@ function originError(code, message) {
 
 const unavailable = () => originError('origin-unavailable', 'Origin unavailable (revoked, deleted, or offline)');
 /* The relay connected, but the origin never bound the connection. */
-const olderOrigin = () => originError('older-origin', 'Origin may run an older protocol; update mevedel on the host');
+const olderOrigin = () => originError('older-origin', 'Origin may run an older protocol; update niwa on the host');
 
 const GOODBYES = {
   revoked: 'Origin unavailable: the host revoked this artifact link; ask them for a new one',
@@ -178,8 +178,8 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
       if (settled) return;
       if (frame.t === 'error') {
         fail(frame.code === 'protocol-mismatch'
-          ? originError(frame.code, `Origin speaks protocol ${frame.proto}, this package speaks ${PROTOCOL}; update mevedel or the remote-artifact package.`)
-          : new Error(`The origin refused the connection: ${frame.message}. If the protocol differs, update mevedel or the remote-artifact package.`));
+          ? originError(frame.code, `Origin speaks protocol ${frame.proto}, this package speaks ${PROTOCOL}; update niwa or the remote-artifact package.`)
+          : new Error(`The origin refused the connection: ${frame.message}. If the protocol differs, update niwa or the remote-artifact package.`));
       } else if (frame.t === 'welcome' && frame.room === 'artifact') {
         settled = true;
         clearTimeout(timer);

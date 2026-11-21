@@ -27,7 +27,7 @@ export async function serve({ input, output, env = process.env, idleMs }) {
         return reply({
           protocolVersion: VERSIONS.includes(params?.protocolVersion) ? params.protocolVersion : VERSIONS[0],
           capabilities: { tools: {} },
-          serverInfo: { name: 'mevedel-remote-artifact', version: '0.1.0' },
+          serverInfo: { name: 'niwa-remote-artifact', version: '0.1.0' },
         });
       case 'ping':
         return reply({});

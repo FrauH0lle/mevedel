@@ -1,11 +1,11 @@
 {
-  "name": "mevedel-remote-artifact",
+  "name": "niwa-remote-artifact",
   "version": "0.1.0",
-  "description": "Work on artifacts shared from a mevedel origin through an MCP server, from Claude Code, Codex or any MCP client.",
+  "description": "Work on artifacts shared from a niwa origin through an MCP server, from Claude Code, Codex or any MCP client.",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "bin": {
-    "mevedel-remote-artifact": "bin/mevedel-remote-artifact.mjs"
+    "niwa-remote-artifact": "bin/niwa-remote-artifact.mjs"
   },
   "files": [
     "bin",
@@ -22,16 +22,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/FrauH0lle/mevedel.git",
+    "url": "git+https://github.com/FrauH0lle/niwa.git",
     "directory": "remote-artifact"
   },
-  "homepage": "https://github.com/FrauH0lle/mevedel/tree/master/remote-artifact#readme",
+  "homepage": "https://github.com/FrauH0lle/niwa/tree/master/remote-artifact#readme",
   "bugs": {
-    "url": "https://github.com/FrauH0lle/mevedel/issues"
+    "url": "https://github.com/FrauH0lle/niwa/issues"
   },
   "keywords": [
     "mcp",
-    "mevedel",
+    "niwa",
     "whiteboard",
     "collaboration",
     "claude-code",

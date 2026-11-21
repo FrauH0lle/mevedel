@@ -1,7 +1,7 @@
-# mevedel-remote-artifact
+# niwa-remote-artifact
 
 Work on whiteboards, documents and HTML artifacts that live in a
-[mevedel](https://github.com/FrauH0lle/mevedel) workspace on another machine
+[niwa](https://github.com/FrauH0lle/niwa) workspace on another machine
 (their *origin*) from Claude Code, Codex or any MCP client. The origin shares
 an artifact and gives you an *artifact link*; you attach the link here, and
 your agent reads the artifact through MCP tools. Every read goes live to the
@@ -12,15 +12,15 @@ origin; nothing is copied. Needs Node 22.4 or newer and nothing else.
 Attach links in a terminal, never in a chat: a link is a secret.
 
 ```sh
-npx mevedel-remote-artifact attach 'https://relay.example/#ROOM.SECRET' [--name NAME] [--as DISPLAY-NAME]
-npx mevedel-remote-artifact detach NAME
+npx niwa-remote-artifact attach 'https://relay.example/#ROOM.SECRET' [--name NAME] [--as DISPLAY-NAME]
+npx niwa-remote-artifact detach NAME
 ```
 
 An attached artifact is named by its id at the origin unless `--name`
 chooses another; attaching refuses a name that is already taken. `--as` sets
 the name the origin shows for you (default `user@machine (client)`). Session
 and lobby links are refused. Links are stored in one file per user,
-`$XDG_CONFIG_HOME/mevedel-remote-artifact/links.json` (default
+`$XDG_CONFIG_HOME/niwa-remote-artifact/links.json` (default
 `~/.config/...`), readable only by you.
 
 ## Install and set up a client
@@ -30,37 +30,37 @@ first use. Attach a link first (above), then register the MCP server once.
 
 Until the package is on the npm registry, fetch it from GitHub instead: the
 `remote-artifact-dist` branch holds this directory as its root and follows
-`master`. Wherever this README says `npx mevedel-remote-artifact`, use
+`master`. Wherever this README says `npx niwa-remote-artifact`, use
 
 ```sh
-npx -y --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist
+npx -y --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist
 ```
 
 for example
-`claude mcp add remote-artifacts -- npx -y --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist mcp`.
+`claude mcp add remote-artifacts -- npx -y --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist mcp`.
 npm 12 refuses packages from git unless `--allow-git=all` allows them;
 older npm accepts the option or ignores it. A global install starts faster:
-`npm install -g --allow-git=all github:FrauH0lle/mevedel#remote-artifact-dist`,
-then `mevedel-remote-artifact mcp`; repeat the install to update.
+`npm install -g --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist`,
+then `niwa-remote-artifact mcp`; repeat the install to update.
 
 Claude Code:
 
 ```sh
-claude mcp add remote-artifacts -- npx mevedel-remote-artifact mcp
+claude mcp add remote-artifacts -- npx niwa-remote-artifact mcp
 ```
 
-Codex (`codex mcp add remote-artifacts -- npx mevedel-remote-artifact mcp`, or
+Codex (`codex mcp add remote-artifacts -- npx niwa-remote-artifact mcp`, or
 in `~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.remote-artifacts]
 command = "npx"
-args = ["mevedel-remote-artifact", "mcp"]
+args = ["niwa-remote-artifact", "mcp"]
 ```
 
-Any other MCP client: run `npx mevedel-remote-artifact mcp` as a stdio server.
-To install globally instead, `npm install -g mevedel-remote-artifact` and use
-`mevedel-remote-artifact mcp` as the command.
+Any other MCP client: run `npx niwa-remote-artifact mcp` as a stdio server.
+To install globally instead, `npm install -g niwa-remote-artifact` and use
+`niwa-remote-artifact mcp` as the command.
 
 ## Connection lifecycle
 
@@ -69,9 +69,9 @@ it, reuses the connection for later calls, and closes it after 5 idle minutes
 so an open client does not keep the origin awake. The next call reconnects
 transparently. If the origin speaks another protocol version, tools fail with
 "origin speaks protocol N, this package speaks M; update one": update the
-package (or the origin's mevedel) so both match. An origin too old to bind
+package (or the origin's niwa) so both match. An origin too old to bind
 the connection never answers; after the open timeout tools fail with "Origin
-may run an older protocol; update mevedel on the host".
+may run an older protocol; update niwa on the host".
 
 Tools:
 
@@ -79,7 +79,7 @@ Tools:
   explicitly configured welcome name, or the relay host when none is supplied;
   an unreachable origin uses the name attach stored, or the relay host), link
   tier (view or edit) and whether its origin is reachable. Origins omit their
-  name by default; only `mevedel-collaboration-artifact-room-origin-name`
+  name by default; only `niwa-collaboration-artifact-room-origin-name`
   explicitly set at the origin discloses one, never a generated workspace or
   machine name.
 - `read_artifact(name, file?, history?)`: the whiteboard or document as
@@ -95,7 +95,7 @@ Tools:
   of a whiteboard (`LIBRARY/ITEM-ID` from `whiteboard_libraries`; not with
   `image`).
 - `edit_artifact(name, action, ...)`: `patch`, `image`, `rename`,
-  `background`, `insert` and `revert` with mevedel `SharedEdit`'s argument
+  `background`, `insert` and `revert` with niwa `SharedEdit`'s argument
   names and results: the stored lines of what changed and, for a whiteboard,
   the picture. A stale
   hash rejects the patch and returns its targets' current lines. `image`
@@ -143,11 +143,11 @@ that ends the connection says why, and tools report it: the host revoked the
 link (ask for a new one), the artifact was deleted, or the origin Emacs
 stopped (try again once it is back).
 
-## The bridge for mevedel
+## The bridge for niwa
 
-mevedel uses this package as its remote-artifact backend: `M-x
-mevedel-remote-artifact-attach` keeps the link in mevedel's own private
-record and runs `mevedel-remote-artifact bridge` as a subprocess. The bridge
+niwa uses this package as its remote-artifact backend: `M-x
+niwa-remote-artifact-attach` keeps the link in niwa's own private
+record and runs `niwa-remote-artifact bridge` as a subprocess. The bridge
 is a machine interface, not a command for people. It reads one JSON request
 per line on standard input and answers one JSON line each on standard output:
 
@@ -169,5 +169,5 @@ link travels only over the pipe and is never written out.
 
 ## Licence
 
-GPL-3.0-or-later, like mevedel (`LICENSE`). The package has no dependencies
+GPL-3.0-or-later, like niwa (`LICENSE`). The package has no dependencies
 and bundles no third-party code (`NOTICE.md`).

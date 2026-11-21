@@ -24,7 +24,7 @@ async function attached(t, origin, tier = 'edit') {
 
 /* A fresh directory for image files. */
 function scratch(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'mevedel-remote-artifact-images-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'niwa-remote-artifact-images-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -3,7 +3,7 @@
 These instructions apply to `remote-artifact/` and its descendants.
 
 The package is the consumer side of artifact links: an attach/detach CLI and
-a stdio MCP server. The origin side is `mevedel-collaboration-artifact-room.el`;
+a stdio MCP server. The origin side is `niwa-collaboration-artifact-room.el`;
 see [artifact rooms](../docs/collaboration.md#artifact-rooms) for the room's
 contract.
 
@@ -27,7 +27,7 @@ npm test --prefix remote-artifact
 ```
 
 Origin-side changes also run
-`python3 test/run_tests.py test/test-mevedel-collaboration-artifact-room.el`.
+`python3 test/run_tests.py test/test-niwa-collaboration-artifact-room.el`.
 Before merging, run the end-to-end check with a real relay, origin and browser:
 `node --test test/remote-artifact.browser.mjs` (see
 [artifact-link acceptance](../docs/development.md#artifact-link-acceptance)).
