@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .mevedel/hooks/policy.py generated-file-guard",
+            "command": "python3 .niwa/hooks/policy.py generated-file-guard",
             "timeout": 5,
             "failClosed": true,
             "description": "Block edits to generated runtime artifacts"

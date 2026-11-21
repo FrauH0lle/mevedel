@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project-local mevedel hook policy helpers."""
+"""Project-local niwa hook policy helpers."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def generated_file_guard() -> None:
     for path in patch_paths(payload()):
         blocked = [
             (path.endswith(".elc"), "generated .elc files must not be edited"),
-            ("/.mevedel/sessions/" in path or path.startswith(".mevedel/sessions/"), "session transcripts are generated runtime artifacts"),
+            ("/.niwa/sessions/" in path or path.startswith(".niwa/sessions/"), "session transcripts are generated runtime artifacts"),
         ]
         for matched, reason in blocked:
             if matched:

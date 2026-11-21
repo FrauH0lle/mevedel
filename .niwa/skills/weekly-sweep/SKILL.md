@@ -87,7 +87,7 @@ The architecture track runs this skill unattended, with the overrides in
   the repository, and on 2026-11-14 one worker popped another's stash. Base
   controls use a throwaway worktree or `git show REV:FILE` copies.
 - Workers commit with the pre-commit hook on. Briefs export
-  `MEVEDEL_TEST_JOBS=4` and `MEVEDEL_AFFECTED_BASE=<branch-base-sha>`, so the
+  `NIWA_TEST_JOBS=4` and `NIWA_AFFECTED_BASE=<branch-base-sha>`, so the
   hook's `check -- --affected` (standards, commit message, strict compile,
   affected tests) stays bounded and compares with the branch base. After only
   rewording a checked commit's message, run `python3 scripts/check-standards.py`.
@@ -137,7 +137,7 @@ The architecture track runs this skill unattended, with the overrides in
    Done when the ledger holds the schedule.
 3. **Watchdog.** Get Emacs's PID with `(emacs-pid)`, then start a Monitor
    (unconfined, it must see Emacs) running
-   `.mevedel/skills/weekly-sweep/watchdog.sh PID`. On `PRESSURE` or `STALL`,
+   `.niwa/skills/weekly-sweep/watchdog.sh PID`. On `PRESSURE` or `STALL`,
    pause dispatch and reduce active workers.
    Done when the first `OK` line arrives.
 4. **Resume or start.** If the ledger has workstreams, continue its open ones.

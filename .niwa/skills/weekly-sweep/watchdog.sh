@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
     *) interval=$1; shift ;;
   esac
 done
-log=${XDG_CACHE_HOME:-$HOME/.cache}/mevedel-sweep-watchdog.log
+log=${XDG_CACHE_HOME:-$HOME/.cache}/niwa-sweep-watchdog.log
 warn_kb=$((8 * 1024 * 1024))
 kill_kb=$((4 * 1024 * 1024))
 rss_warn_kb=$((12 * 1024 * 1024))

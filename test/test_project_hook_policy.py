@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 
-POLICY = Path(__file__).resolve().parents[1] / ".mevedel/hooks/policy.py"
+POLICY = Path(__file__).resolve().parents[1] / ".niwa/hooks/policy.py"
 
 
 class ProjectHookPolicyTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class ProjectHookPolicyTests(unittest.TestCase):
                     with self.subTest(event=event, command=handler["command"]):
                         command = handler["command"].split()
                         self.assertEqual(
-                            ["python3", ".mevedel/hooks/policy.py"], command[:-1]
+                            ["python3", ".niwa/hooks/policy.py"], command[:-1]
                         )
                         self.assertEqual("generated-file-guard", command[-1])
                         self.assertTrue(handler["failClosed"])
@@ -46,9 +46,9 @@ class ProjectHookPolicyTests(unittest.TestCase):
             "*** Delete File: generated.elc\n",
             "*** Update File: source.el\n*** Move to: generated.elc\n@@\n-old\n+new\n",
             "*** Update File: generated.elc\n*** Move to: source.el\n@@\n-old\n+new\n",
-            "*** Delete File: .mevedel/sessions/session/session.meta.el\n",
-            "*** Delete File: /tmp/project/.mevedel/sessions/session/data\n",
-            "*** Delete File: .mevedel/other/../sessions/session/data\n",
+            "*** Delete File: .niwa/sessions/session/session.meta.el\n",
+            "*** Delete File: /tmp/project/.niwa/sessions/session/data\n",
+            "*** Delete File: .niwa/other/../sessions/session/data\n",
             "  *** Delete File: generated.elc  \r\n",
         ):
             with self.subTest(operation=operation):
@@ -64,7 +64,7 @@ class ProjectHookPolicyTests(unittest.TestCase):
             "*** Add File: source.el\n+source\n",
             "*** Update File: source.el\n*** Move to: new.el\n@@\n-old\n+new\n",
             "*** Add File: example.txt\n+*** Delete File: generated.elc\n",
-            "*** Delete File: .mevedel/sessions/../source.el\n",
+            "*** Delete File: .niwa/sessions/../source.el\n",
         ):
             with self.subTest(operation=operation):
                 self.assertIsNone(self.decision(
