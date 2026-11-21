@@ -12,12 +12,7 @@
 (require 'niwa-subscription-usage-provider)
 
 (defvar-local niwa-subscription-usage--buffer nil "Report owned by this data buffer.")
-(defvar-local niwa-subscription-usage--backend nil "Backend of the displayed result.")
-(defvar-local niwa-subscription-usage--result nil "Last successful provider text.")
-(defvar-local niwa-subscription-usage--retrieved nil "Time of last successful retrieval.")
-(defvar-local niwa-subscription-usage--error nil "Last retrieval error.")
-(defvar-local niwa-subscription-usage--loading nil "Non-nil during retrieval.")
-(defvar-local niwa-subscription-usage--cancel nil "Pending retrieval cancellation function.")
+(defvar-local niwa-subscription-usage--states nil "Alist of backend to retrieval state.")
 (defvar-local niwa-subscription-usage--generation 0 "Refresh generation, including cancellations.")
 
 (defvar-keymap niwa-subscription-usage-mode-map
@@ -29,11 +24,12 @@
   (add-hook 'kill-buffer-hook #'niwa-subscription-usage--stop nil t))
 
 (defun niwa-subscription-usage--stop ()
-  "Cancel the current retrieval and invalidate callbacks before closing."
+  "Invalidate callbacks and cancel every pending retrieval."
   (cl-incf niwa-subscription-usage--generation)
-  (when-let* ((cancel niwa-subscription-usage--cancel))
-    (setq niwa-subscription-usage--cancel nil)
-    (funcall cancel)))
+  (pcase-dolist (`(,_ . ,state) niwa-subscription-usage--states)
+    (when-let* ((cancel (plist-get state :cancel)))
+      (setf (plist-get state :cancel) nil)
+      (funcall cancel))))
 
 (defun niwa-subscription-usage--render ()
   "Render this report without touching its owner or moving focus."
@@ -41,65 +37,64 @@
    (list :title "Subscription usage" :mode #'niwa-subscription-usage-mode
          :subtitle "Account-wide quotas include activity outside niwa.  g refresh · q close"
          :sections
-         (list
-          (list :id 'status :title "Retrieval"
-                :body
-                (concat
-                 (format "Provider: %s\nLast successful retrieval: %s\n"
-                         (if niwa-subscription-usage--backend
-                             (gptel-backend-name niwa-subscription-usage--backend) "Unavailable")
-                         (if niwa-subscription-usage--retrieved
-                             (format-time-string "%Y-%m-%d %H:%M:%S %Z" niwa-subscription-usage--retrieved)
-                           "Unavailable"))
-                 (when niwa-subscription-usage--loading "Loading...\n")
-                 (when niwa-subscription-usage--error (concat niwa-subscription-usage--error "\n"))
-                 (when (and niwa-subscription-usage--result
-                            (or niwa-subscription-usage--loading niwa-subscription-usage--error))
-                   "STALE — previous successful result; see its retrieval time above.\n")))
-          (list :id 'quotas :title "Subscription quotas"
-                :body (or niwa-subscription-usage--result "Unavailable"))))))
+         (or (cl-loop for (backend . state) in niwa-subscription-usage--states
+                      for name = (gptel-backend-name backend)
+                      for result = (plist-get state :result)
+                      for retrieved = (plist-get state :retrieved)
+                      for loading = (plist-get state :cancel)
+                      for error = (plist-get state :error)
+                      collect
+                      (list :id (plist-get state :id)
+                            :title (if (plist-get state :current) (concat name " (current session)") name)
+                            :body (concat "Last successful retrieval: "
+                                          (if retrieved (format-time-string "%Y-%m-%d %H:%M:%S %Z" retrieved)
+                                            "Unavailable") "\n"
+                                          (when loading "Loading...\n")
+                                          (when error (concat error "\n"))
+                                          (when (and result (or loading error))
+                                            "STALE — previous successful result; see its retrieval time above.\n")
+                                          (or result "Unavailable"))))
+             (list (list :id 'empty :title "No Codex OAuth or Claude Code backend is configured."))))))
 
 (defun niwa-subscription-usage-refresh ()
-  "Resolve the current session backend and refresh its account-wide quotas."
+  "Refresh account-wide quotas for all configured subscription backends."
   (interactive)
   (niwa-subscription-usage--stop)
   (let* ((data (niwa-cockpit-context-data-buffer niwa-cockpit--context))
-         (backend (and data (buffer-local-value 'gptel-backend data)))
+         (backends (and data (with-current-buffer data (niwa-subscription-usage-provider-backends))))
          (model (and data (buffer-local-value 'gptel-model data)))
          (buffer (current-buffer))
-         (generation niwa-subscription-usage--generation)
-         completed)
-    (unless (eq backend niwa-subscription-usage--backend)
-      (setq niwa-subscription-usage--result nil
-            niwa-subscription-usage--retrieved nil))
-    (setq niwa-subscription-usage--backend backend
-          niwa-subscription-usage--error nil
-          niwa-subscription-usage--loading t)
+         (generation niwa-subscription-usage--generation))
+    (setq niwa-subscription-usage--states
+          (cl-loop for (backend . current) in backends
+                   for old = (alist-get backend niwa-subscription-usage--states)
+                   collect (cons backend (list :current current :cancel #'ignore :error nil
+                                               :id (or (plist-get old :id) (gensym "usage-"))
+                                               :result (plist-get old :result)
+                                               :retrieved (plist-get old :retrieved)))))
     (niwa-subscription-usage--render)
-    (let* ((gptel-model model)
-           (cancel
-            (niwa-subscription-usage-provider-fetch
-             backend
-             (lambda (text error)
-               (when (and (buffer-live-p buffer)
-                          (= generation (buffer-local-value 'niwa-subscription-usage--generation buffer)))
-                 (setq completed t)
-                 (with-current-buffer buffer
-                   (setq niwa-subscription-usage--loading nil
-                         niwa-subscription-usage--cancel nil
-                         niwa-subscription-usage--error error)
-                   (when text
-                     (setq niwa-subscription-usage--result text
-                           niwa-subscription-usage--retrieved (current-time)))
-                   (niwa-subscription-usage--render)))))))
-      (if (and (not completed) (buffer-live-p buffer)
-               (= generation niwa-subscription-usage--generation))
-          (setq niwa-subscription-usage--cancel cancel)
-        (funcall cancel)))))
+    (pcase-dolist (`(,backend . ,state) niwa-subscription-usage--states)
+      (let* ((gptel-model (niwa-subscription-usage-provider-model backend (plist-get state :current) model))
+             (cancel
+              (niwa-subscription-usage-provider-fetch
+               backend
+               (lambda (text error)
+                 (when (and (buffer-live-p buffer)
+                            (= generation (buffer-local-value 'niwa-subscription-usage--generation buffer)))
+                   (with-current-buffer buffer
+                     (setf (plist-get state :cancel) nil
+                           (plist-get state :error) error)
+                     (when text
+                       (setf (plist-get state :result) text
+                             (plist-get state :retrieved) (current-time)))
+                     (niwa-subscription-usage--render)))))))
+        (if (plist-get state :cancel)
+            (setf (plist-get state :cancel) cancel)
+          (funcall cancel))))))
 
 ;;;###autoload
 (defun niwa-subscription-usage-show ()
-  "Open and retrieve subscription quotas for the current session backend."
+  "Open and retrieve subscription quotas for all configured subscription backends."
   (interactive)
   (let* ((context (niwa-cockpit-current-context))
          (_ (niwa-cockpit-require-owner "subscription usage report" context))

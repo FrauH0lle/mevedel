@@ -297,8 +297,8 @@ canonical `ask`, `edits`, and `full-auto` values. Entering and leaving
 reminders.
 
 `/usage` calls `niwa-subscription-usage-show`, also available as cockpit `U`.
-It inspects the selected backend's account-wide subscription quotas in a separate
-read-only report, including while a model request is active. It does not enter
+It inspects all configured Codex OAuth and Claude Code backends' account-wide
+quotas in a read-only report, including while a model request is active. It does not enter
 conversation admission, history, token accounting, or Goal continuation.
 `/tokens` continues to estimate the current conversation context.
 

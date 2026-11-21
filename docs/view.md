@@ -1527,13 +1527,14 @@ returns to the owner. Long supporting records can start folded; their complete
 text remains available. `g` refreshes reports with a live refresh source.
 `U Usage` in the cockpit and `/usage` share one disposable report per
 originating session. The report opens with a loading state and retrieves the
-current backend's account-wide quotas on opening or `g`, without polling. It
-shows the provider, available account/plan details and last successful retrieval
-time, and explains that activity outside niwa counts toward these quotas.
+account-wide quotas from all configured Codex OAuth and Claude Code backends
+in parallel on opening or `g`, without polling. Each backend has its own
+section with available account/plan details and last successful retrieval
+time. The session's backend comes first and is marked `current session`.
 Missing fields are unavailable, never inferred as zero. A failed refresh retains
 previous successful data only with a STALE label and its original timestamp.
-Changing backends clears that data. Refresh supersedes any pending retrieval;
-`q` or killing the buffer cancels it, and late callbacks cannot change the report.
+Only the affected backend is marked stale. Refresh supersedes all pending
+retrievals; `q` or killing the buffer cancels them, and late callbacks are ignored.
 The composer, transcript, Goal state, and model accounting stay untouched.
 
 Codex OAuth uses gptel's token restoration, account selection and authentication

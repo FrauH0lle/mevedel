@@ -1468,7 +1468,8 @@ Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/usage`, `/
 `/compact`, `/btw`, `/buddy`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`,
 `/review`, and `/verify`.
 `/usage` (or `U Usage` in the session cockpit) opens account-wide
-subscription quotas for the session's Codex OAuth or Claude Code backend.
+subscription quotas for all configured Codex OAuth and Claude Code backends,
+with the session's backend first when applicable.
 The read-only report fetches on opening and on `g`; `q` cancels any pending
 retrieval and returns to the session. `/tokens` still estimates conversation
 context size. Quotas include activity outside niwa.

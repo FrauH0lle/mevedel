@@ -3,8 +3,8 @@
 ;;; Commentary:
 ;; SubscriptionUsage gives the model plain quota readings for the session's
 ;; backend and every other configured Codex OAuth or Claude Code backend.
-;; Retrieval is the usage provider's asynchronous path; this module only selects
-;; backends and serializes the provider's plain readings as JSON.
+;; Retrieval is the usage provider's asynchronous path; this module only
+;; serializes the provider's plain readings as JSON.
 
 ;;; Code:
 
@@ -15,20 +15,10 @@
 
 (declare-function niwa-subscription-usage-provider-readings
                   "niwa-subscription-usage-provider" (backend callback))
-(declare-function gptel-openai-oauth-p "gptel-openai-oauth" (object))
-(declare-function niwa-claude-code-backend-p "niwa-claude-code" (backend))
-
-(defun niwa-tool-usage--backends ()
-  "Return (BACKEND . CURRENT) for the session and other subscription backends."
-  (require 'niwa-subscription-usage-provider)
-  (let ((current gptel-backend)
-        (result nil))
-    (dolist (backend (cons current (mapcar #'cdr gptel--known-backends)))
-      (when (and (or (gptel-openai-oauth-p backend)
-                     (niwa-claude-code-backend-p backend))
-                 (not (assq backend result)))
-        (push (cons backend (eq backend current)) result)))
-    (nreverse result)))
+(declare-function niwa-subscription-usage-provider-backends
+                  "niwa-subscription-usage-provider" ())
+(declare-function niwa-subscription-usage-provider-model
+                  "niwa-subscription-usage-provider" (backend current session-model))
 
 (defun niwa-tool-usage--entry (backend current readings error)
   "Return the JSON object for BACKEND, CURRENT, its READINGS or ERROR."
@@ -49,7 +39,8 @@
 (defun niwa-tool-usage--handle (callback _args)
   "Deliver plain subscription quota readings as JSON to CALLBACK.
 Return (:cancel FN); FN cancels every pending provider retrieval."
-  (let* ((backends (niwa-tool-usage--backends))
+  (require 'niwa-subscription-usage-provider)
+  (let* ((backends (niwa-subscription-usage-provider-backends))
          (entries (make-vector (length backends) nil))
          (pending (length backends))
          (model gptel-model)
@@ -59,8 +50,7 @@ Return (:cancel FN); FN cancels every pending provider retrieval."
         (funcall callback (list :result "No Codex OAuth or Claude Code backend is configured."))
       (pcase-dolist (`(,backend . ,current) backends)
         (let ((slot index)
-              (gptel-model (if current model
-                             (or (car (gptel-backend-models backend)) model))))
+              (gptel-model (niwa-subscription-usage-provider-model backend current model)))
           (push (niwa-subscription-usage-provider-readings
                  backend
                  (lambda (readings error)

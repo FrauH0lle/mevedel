@@ -380,7 +380,7 @@
   "Root completion annotations for included slash commands.")
 
 (defun niwa-cmd--usage (_args)
-  "Display the session backend's account-wide subscription quotas."
+  "Display account-wide quotas for all configured subscription backends."
   (niwa-subscription-usage-show))
 
 (defun niwa-cmd--tokens (_args)

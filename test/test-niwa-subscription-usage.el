@@ -19,6 +19,7 @@
              (other (niwa-claude-code--make-backend :name "Selected Claude"))
              (session (niwa-session--create :session-id "usage-test"
                                               :goal (niwa-goal--create :id "g" :status 'active :tokens-used 42)))
+             (gptel--known-backends nil)
              callbacks selections cancellations report retrieved)
         (with-current-buffer data-buf
           (setq-local niwa--session session gptel-backend backend gptel-model 'gpt-5.5)
@@ -48,12 +49,12 @@
                   (should (eq backend (car selections)))
                   (should (string-match-p "Loading" (buffer-string)))
                   (funcall (nth 0 callbacks) "Quota: 11%" nil)
-                  (setq retrieved niwa-subscription-usage--retrieved)
-                  (should retrieved)
+                  (should (string-match "Last successful retrieval: [0-9].*" (buffer-string)))
+                  (setq retrieved (match-string 0 (buffer-string)))
                   (call-interactively (key-binding "g"))
                   (should (string-match-p "STALE" (buffer-string)))
                   (funcall (nth 1 callbacks) nil "Offline")
-                  (should (equal retrieved niwa-subscription-usage--retrieved))
+                  (should (string-search retrieved (buffer-string)))
                   (should (string-match-p "STALE" (buffer-string)))
                   (should (string-match-p "Quota: 11%" (buffer-string)))
                   (niwa-subscription-usage-refresh)
@@ -64,8 +65,7 @@
                   (with-current-buffer data-buf (setq gptel-backend other))
                   (niwa-subscription-usage-refresh)
                   (should (eq other (car selections)))
-                  (should-not niwa-subscription-usage--result)
-                  (should-not niwa-subscription-usage--retrieved)
+                  (should (string-search "Last successful retrieval: Unavailable" (buffer-string)))
                   (should-not (string-match-p "Quota: 11%" (buffer-string)))
                   (funcall (nth 3 callbacks) "Wrong backend" nil)
                   (should-not (string-match-p "Wrong backend" (buffer-string)))
@@ -91,33 +91,58 @@
 (niwa-deftest niwa-subscription-usage-refresh ()
   (save-window-excursion
     (niwa-view-test--with-buffers
-      (let (report cancelled callback)
+      (let* ((codex (gptel--make-openai-oauth :name "Quota"))
+             (claude (niwa-claude-code--make-backend :name "Quota" :models '(sonnet)))
+             (gptel--known-backends `(("Quota" . ,claude)))
+             callbacks cancelled report)
+        (with-current-buffer data-buf
+          (setq-local gptel-backend codex gptel-model 'selected))
         (unwind-protect
             (cl-letf (((symbol-function 'niwa-subscription-usage-provider-fetch)
-                       (lambda (_backend complete)
-                         (setq callback complete)
-                         (lambda () (setq cancelled t)))))
+                       (lambda (backend complete)
+                         (push (list backend gptel-model complete) callbacks)
+                         (lambda () (push backend cancelled)))))
               (with-current-buffer view-buf (setq report (niwa-subscription-usage-show)))
+              (with-current-buffer report
+                (goto-char (point-min))
+                (should (search-forward "** Quota (current session)" nil t))
+                (push-button (1- (point)))
+                (should (search-forward "** Quota\n" nil t))
+                (should (equal (mapcar #'cadr callbacks) '(sonnet selected)))
+                (funcall (caddar callbacks) "Claude quotas" nil)
+                (goto-char (point-min))
+                (should (search-forward "Claude quotas" nil t))
+                (should-not (invisible-p (1- (point))))
+                (should (string-match-p "Loading" (buffer-string)))
+                (should (string-match-p "Claude quotas" (buffer-string)))
+                (funcall (caddr (cadr callbacks)) nil "Codex offline")
+                (should (string-match-p "Codex offline" (buffer-string)))
+                (should (string-match-p "Claude quotas" (buffer-string)))
+                (niwa-subscription-usage-refresh)
+                (let ((late (caddar callbacks)))
+                  (niwa-subscription-usage-refresh)
+                  (funcall late "Superseded Claude" nil)
+                  (should-not (string-match-p "Superseded Claude" (buffer-string))))
+                (should (equal cancelled (list claude codex)))
+                (setq cancelled nil))
               (kill-buffer report)
-              (should cancelled)
-              (funcall callback "late" nil)
+              (should (equal cancelled (list claude codex)))
+              (funcall (caddar callbacks) "late" nil)
               (should-not (buffer-live-p report)))
           (when (buffer-live-p report) (kill-buffer report)))))))
 
 (niwa-deftest niwa-subscription-usage--render ()
   (save-window-excursion
     (niwa-view-test--with-buffers
-      (let (report)
+      (let (gptel--known-backends report)
         (unwind-protect
             (progn
               (with-current-buffer data-buf
                 (setq-local gptel-backend (gptel--make-openai :name "API backend")))
               (with-current-buffer view-buf (setq report (niwa-subscription-usage-show)))
               (with-current-buffer report
-                (should (string-match-p "Provider: API backend" (buffer-string)))
-                (should (string-match-p "Last successful retrieval: Unavailable" (buffer-string)))
-                (should-not (string-match-p "STALE\\|Loading" (buffer-string)))
-                (should-not niwa-subscription-usage--cancel)))
+                (should (string-search "No Codex OAuth or Claude Code backend is configured." (buffer-string)))
+                (should-not (string-match-p "STALE\\|Loading" (buffer-string)))))
           (when (buffer-live-p report) (kill-buffer report)))))))
 
 (niwa-deftest niwa-subscription-usage-show/codex-http (:quiet t)
@@ -130,7 +155,7 @@
              (niwa-auth--operations (make-hash-table :test #'equal))
              (backend (gptel--make-openai-oauth :name "Selected Codex"))
              (original-retrieve (symbol-function 'url-retrieve))
-             request report)
+             gptel--known-backends request report)
         (gptel-oauth--write-token
          gptel--openai-oauth-token-file
          (list :access_token "current" :refresh_token "refresh"
@@ -149,7 +174,7 @@
                  (with-current-buffer view-buf (niwa-view-run-invocation "usage" ""))
                  (setq report (buffer-local-value 'niwa-subscription-usage--buffer data-buf))
                  (niwa-test--await 5 "Usage report did not settle"
-                   (not (with-current-buffer report niwa-subscription-usage--cancel)))
+                   (with-current-buffer report (not (string-search "Loading" (buffer-string)))))
                  (with-current-buffer report
                    (should (string-match-p "Account: chosen" (buffer-string)))
                    (should (string-match-p "Plan: plus" (buffer-string)))

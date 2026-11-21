@@ -16,6 +16,21 @@
 (require 'niwa-acp-text)
 (require 'json)
 
+(defun niwa-subscription-usage-provider-backends ()
+  "Return (BACKEND . CURRENT) for the session and other subscription backends."
+  (let ((current gptel-backend)
+        (result nil))
+    (dolist (backend (cons current (mapcar #'cdr gptel--known-backends)))
+      (when (and (or (gptel-openai-oauth-p backend)
+                     (niwa-claude-code-backend-p backend))
+                 (not (assq backend result)))
+        (push (cons backend (eq backend current)) result)))
+    (nreverse result)))
+
+(defun niwa-subscription-usage-provider-model (backend current session-model)
+  "Choose the quota model for BACKEND, using SESSION-MODEL when CURRENT."
+  (or (unless current (car (gptel-backend-models backend))) session-model))
+
 (defun niwa-subscription-usage-provider--value (value)
   "Format a JSON scalar VALUE, keeping missing values distinct from zero."
   (cond ((null value) "Unavailable")
