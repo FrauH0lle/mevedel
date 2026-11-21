@@ -1,5 +1,9 @@
 # niwa
 
+<p align="center">
+  <img src=".assets/images/niwa-androgynous.webp" width="800" alt="niwa.el: Niwa Is a Workbench for Agents, inside Emacs. A programmer offers a golden idea seed; three spirits receive it, plant a seedling, and water a golden flower beneath a bonsai.">
+</p>
+
 *niwa* is an Emacs LLM workflow package, originally inspired by `evedel`,
 now focused on chat sessions, notes, tool use, agents, and
 persistent project context. It is built on
