@@ -1773,7 +1773,7 @@ holder identity is recorded by an owner lease acquired before the call."
           (with-temp-file lock (insert "unmigrated"))
           (should
            (string-match-p
-            "scripts/migrate-sessions\\.el"
+            "Unsupported transcript format"
             (error-message-string
              (should-error (niwa-session-durability--assert-no-pid-lock root)
                            :type 'error))))
@@ -1782,7 +1782,7 @@ holder identity is recorded by an owner lease acquired before the call."
                                (list operation)))))
             (should
              (string-match-p
-              "scripts/migrate-sessions\\.el"
+              "Unsupported transcript format"
               (error-message-string
                (should-error
                 (niwa-session-durability--settle-pid-lock root result)
@@ -5114,7 +5114,7 @@ holder identity is recorded by an owner lease acquired before the call."
             (should (file-directory-p recovery))
             (should (equal recovery
                            (plist-get pending :manual-recovery-local)))
-            (should (string-match-p "scripts/migrate-sessions\\.el"
+            (should (string-match-p "Unsupported transcript format"
                                     (plist-get pending :reason)))
             (should-not
              (file-exists-p (file-name-concat session-dir ".recovery")))

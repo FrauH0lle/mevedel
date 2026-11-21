@@ -105,7 +105,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
 ``` emacs-lisp
 (straight-use-package
  '(niwa :host github
-           :repo "FrauH0lle/niwa"
+           :repo "FrauH0lle/niwa.el"
            :files ("*.el"
                    ("native" "native/*.c" "native/*.eld")
                    ("scripts" "scripts/niwa-mcp-stdio.py")

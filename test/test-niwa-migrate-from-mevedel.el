@@ -8,9 +8,12 @@
 (require 'ert)
 (require 'cl-lib)
 
-(load (expand-file-name "../scripts/migrate-from-mevedel.el"
-                        (file-name-directory (or load-file-name buffer-file-name)))
-      nil t)
+(defconst niwa-mig-test--script
+  (expand-file-name "../scripts/migrate-from-mevedel.el"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Absolute path of the standalone script under test.")
+
+(load niwa-mig-test--script nil t)
 
 (defun niwa-mig-test--w (root rel &optional text)
   "Write TEXT (default REL) to REL below ROOT."
@@ -131,8 +134,10 @@
           (niwa-mig-test--w src "skills-state.el" "(:disabled-keys (\"workspace:.mevedel/a\"))")
           (niwa-mig-test--w src "permissions.el"
                             "(:rules nil :resource-grants ((:path \"/h/.mevedel/x\" :access read)))")
+          (niwa-mig-test--w src "workspace-schedules/w.el" "\"/work/.mevedel/project\"\n")
+          (niwa-mig-test--w src "workspace-schedules/unchanged.el" "\"/work/project\"\n\n")
           (dolist (f '("trusted-hooks.el" "native/lib.so" "wake-ups/w.el"
-                       "claude-agent-logs/agent.log" "agent-stderr.log" "workspace-schedules/w.el"))
+                       "claude-agent-logs/agent.log" "agent-stderr.log"))
             (niwa-mig-test--w src f))
           (should (niwa-migrate-from-mevedel--migrate src))
           (let ((dst (expand-file-name ".niwa" home)))
@@ -140,20 +145,23 @@
                          "artifact-rooms.eld" "plugins/p/x" "whiteboard-libraries/w.excalidrawlib"))
               (should (equal f (niwa-mig-test--r dst f))))
             (dolist (f '("trusted-hooks.el" "native" "wake-ups"
-                         "claude-agent-logs" "agent-stderr.log" "workspace-schedules"))
+                         "claude-agent-logs" "agent-stderr.log"))
               (should-not (file-exists-p (expand-file-name f dst))))
+            (should (equal "\"/work/.niwa/project\"\n" (niwa-mig-test--r dst "workspace-schedules/w.el")))
+            (should (equal "\"/work/project\"\n\n" (niwa-mig-test--r dst "workspace-schedules/unchanged.el")))
             (should (string-match-p "\\.niwa/a" (niwa-mig-test--r dst "skills-state.el")))
             (should (string-match-p "\\.niwa/x" (niwa-mig-test--r dst "permissions.el")))
             (should (= 1 (length (niwa-mig-test--backups home))))))
       (delete-directory home t))))
 
-(defmacro niwa-mig-test--refuses (name setup)
-  "Define refusal test NAME with the fixture changes in SETUP."
+(defmacro niwa-mig-test--refuses (name setup &optional reason)
+  "Define refusal test NAME with fixture changes SETUP and optional REASON."
   `(ert-deftest ,(intern (format "niwa-migrate-from-mevedel/refuses-%s" name)) ()
      (niwa-mig-test--with-ws
       ,setup
       (let ((before (niwa-mig-test--r src "workspace-id")))
-        (should-error (niwa-migrate-from-mevedel--migrate root))
+        (let ((err (should-error (niwa-migrate-from-mevedel--migrate root))))
+          ,(when reason `(should (string-search ,reason (error-message-string err)))))
         (should (equal before (niwa-mig-test--r src "workspace-id")))
         (should-not (niwa-mig-test--backups root))
         (should-not (and (not (equal ,name "collision"))
@@ -172,6 +180,12 @@
   (niwa-mig-test--w src "state/shared-notes/pending/p.el" "(:id \"p\")\n"))
 (niwa-mig-test--refuses "unfinished-memory-write"
   (niwa-mig-test--w src "state/memory-write/pending/p.el" "(:id \"p\")\n"))
+(niwa-mig-test--refuses "unfinished-file-batch"
+  (make-directory (file-name-concat src "state/memory-write/.file-batch-123456") t)
+  "Unfinished file batch")
+(niwa-mig-test--refuses "inflight-shared-note-cycle"
+  (niwa-mig-test--w src "state/shared-notes/cycle.el" "(:id \"c\" :inflight t)")
+  "Inflight shared-note cycle")
 (niwa-mig-test--refuses "active-lease"
   (niwa-mig-test--w src "leases/artifacts/a1/00000000000000000001.el"
                     (format "(:status active :expires-at %S)\n" (+ (float-time) 3600))))
@@ -210,7 +224,7 @@
      (niwa-mig-test--w src digest bytes)
      (niwa-mig-test--w src ready "")
      (niwa-mig-test--w src pin "{}")
-     (niwa-mig-test--w src "state/shared-notes/cycle.el" "(:id \"c\" :inflight t)")
+     (niwa-mig-test--w src "state/shared-notes/cycle.el" "(:id \"c\" :inflight nil)")
      (cl-letf (((symbol-function 'message)
                 (lambda (fmt &rest args)
                   (push (apply #'format fmt args) messages))))
@@ -253,6 +267,91 @@
    (should-not (niwa-mig-test--backups root))
    (should-not (file-exists-p (file-name-concat root ".niwa")))
    (should-not (file-exists-p (file-name-concat root ".niwa.staging")))))
+
+(ert-deftest niwa-migrate-from-mevedel/held-writer-locks ()
+  (niwa-mig-test--with-ws
+   (dolist (subdir '("state/memory-write" "state/shared-notes"))
+     (let ((dir (file-name-concat src subdir)))
+       (make-directory dir t)
+       (with-temp-buffer
+         (let ((process (make-process
+                         :name "niwa-cutover-lock-test" :buffer (current-buffer) :noquery t
+                         :connection-type 'pipe
+                         :command (list "bash" "-c"
+                                        "exec 9<\"$1\"; flock -n 9 || exit; echo locked; read -r line"
+                                        "bash" dir)))
+               (deadline (+ (float-time) 5)))
+           (unwind-protect
+               (progn
+                 (while (and (zerop (buffer-size)) (process-live-p process) (< (float-time) deadline))
+                   (accept-process-output process 0.1))
+                 (should (equal (buffer-string) "locked\n"))
+                 (should (process-live-p process))
+                 (should (string-search "Active writer lock"
+                                        (error-message-string
+                                         (should-error (niwa-migrate-from-mevedel--migrate root)))))
+                 (should (file-directory-p src))
+                 (should-not (file-exists-p (file-name-concat root ".niwa"))))
+             (delete-process process))))))))
+
+(ert-deftest niwa-migrate-from-mevedel/refuses-linked-argument-or-ancestor ()
+  (niwa-mig-test--with-ws
+   (let ((alias (file-name-concat root "alias"))
+         (real (file-name-concat root "real")))
+     (make-directory real)
+     (make-symbolic-link real alias)
+     (dolist (path (list alias (file-name-concat alias ".mevedel") (concat alias "/..")))
+       (should (string-search "Refusing symbolic link"
+                              (error-message-string
+                               (should-error (niwa-migrate-from-mevedel--migrate path))))))
+     (delete-file alias))
+   (should (file-directory-p src))
+   (should-not (file-exists-p (file-name-concat root ".niwa")))
+   (should-not (niwa-mig-test--backups root))))
+
+(ert-deftest niwa-migrate-from-mevedel/resumes-after-promotion ()
+  (niwa-mig-test--with-ws
+   (let ((emacs (file-name-concat invocation-directory invocation-name))
+         (dst (file-name-concat root ".niwa"))
+         (form `(let ((rename (symbol-function 'rename-file)))
+                  (cl-letf (((symbol-function 'rename-file)
+                             (lambda (from to &optional overwrite)
+                               (when (equal from ,src) (kill-emacs 70))
+                               (funcall rename from to overwrite))))
+                    (niwa-migrate-from-mevedel--migrate ,root)))))
+     (with-temp-buffer
+       (should (= 70 (call-process emacs nil t nil "-Q" "--batch" "-l" niwa-mig-test--script
+                                   "--eval" (prin1-to-string form)))))
+     (should (file-directory-p src))
+     (should (file-regular-p (file-name-concat dst ".cutover-ready")))
+     (should-not (niwa-mig-test--backups root))
+     (let ((inode (file-attribute-inode-number (file-attributes dst)))
+           (backup (niwa-migrate-from-mevedel--migrate root)))
+       (should (equal inode (file-attribute-inode-number (file-attributes dst))))
+       (should (equal "abc123\n" (niwa-mig-test--r backup "workspace-id"))))
+     (should-not (file-exists-p (file-name-concat dst ".cutover-ready")))
+     (should-not (file-exists-p src))
+     (should-not (niwa-migrate-from-mevedel--migrate root)))))
+
+(ert-deftest niwa-migrate-from-mevedel/rewrites-only-kept-paths ()
+  (niwa-mig-test--with-ws
+   (niwa-mig-test--w src "hooks/spaced hook.sh" "kept")
+   (with-temp-file (file-name-concat src "instructions.el")
+     (prin1 '(:files ((".mevedel/hooks/spaced hook.sh" :instructions nil)
+                      (".mevedel/sessions/s1/session.org" :instructions nil)
+                      (".mevedel/sample" :instructions nil))) (current-buffer)))
+   (let* ((command "bash '.mevedel/hooks/spaced hook.sh'; printf '.mevedel/sample'; cat .mevedel/sessions/s1/session.org")
+          (expected (string-replace ".mevedel/hooks/" ".niwa/hooks/" command))
+          (dst (file-name-concat root ".niwa")))
+     (with-temp-file (file-name-concat src "hooks.el")
+       (prin1 `((PreToolUse (:hooks ((:type command :command ,command))))) (current-buffer)))
+     (niwa-mig-test--w src "hooks.json"
+                       (json-serialize `(:hooks (:PreToolUse [(:hooks [(:command ,command)])]))))
+     (should (niwa-migrate-from-mevedel--migrate root))
+     (should (equal '(".niwa/hooks/spaced hook.sh" ".mevedel/sessions/s1/session.org" ".mevedel/sample")
+                    (mapcar #'car (plist-get (read (niwa-mig-test--r dst "instructions.el")) :files))))
+     (dolist (file '("hooks.el" "hooks.json"))
+       (should (string-search expected (niwa-mig-test--r dst file)))))))
 
 (provide 'test-niwa-migrate-from-mevedel)
 ;;; test-niwa-migrate-from-mevedel.el ends here

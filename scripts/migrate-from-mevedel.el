@@ -18,15 +18,18 @@
 (defconst niwa-migrate-from-mevedel--old ".mevedel"
   "Legacy state directory component.")
 
+(defconst niwa-migrate-from-mevedel--marker ".cutover-ready"
+  "Receipt in a validated tree awaiting the legacy source backup.")
+
 (defconst niwa-migrate-from-mevedel--legacy
   '((keep-workspace artifacts memory shared journal skills hooks.el hooks.json hooks
      permissions.el workspace-id lobby instructions.el skills-state.el exports
      input-history.el plugins.el recovery-archives)
     (keep-user memory skills skills-state.el permissions.el lobbies.el artifact-rooms.eld
-     remote-artifacts.eld whiteboard-libraries plugins hooks.el hooks.json hooks)
+     remote-artifacts.eld whiteboard-libraries plugins hooks.el hooks.json hooks workspace-schedules)
     (drop-workspace sessions sessions.pre-store sessions.pre-v0.5.12 sessions.pre-v0.5.13
      leases wake-ups .mevedel-pending-executions)
-    (drop-user trusted-hooks.el native wake-ups workspace-schedules claude-agent-logs agent-stderr.log)
+    (drop-user trusted-hooks.el native wake-ups claude-agent-logs agent-stderr.log)
     (scratch .mevedel-save-as- .mevedel-spool- .mevedel-spool-view- .mevedel-staging-
      .mevedel-write- .mevedel-control-fs-)
     (properties mevedel-instruction mevedel-id mevedel-uuid mevedel-instruction-type
@@ -70,6 +73,42 @@
              "\\(/\\|$\\)")
      "\\1.niwa\\2" text)))
 
+(defun niwa-migrate-from-mevedel--kept-path (path source kept)
+  "Rename PATH only when it addresses a KEPT entry under SOURCE."
+  (save-match-data
+    (let ((legacy (regexp-quote (concat niwa-migrate-from-mevedel--old "/"))))
+      (or (when (string-match (concat "\\(?:\\`\\|/\\)\\(" legacy "\\)") path)
+            (let* ((begin (match-beginning 1)) (end (match-end 1))
+                   (root (expand-file-name (substring path 0 (1- end)) (file-name-directory source)))
+                   (leaf (substring path end)))
+              (when (and (equal root source) (gethash (directory-file-name leaf) kept))
+                (concat (substring path 0 begin) ".niwa/" leaf))))
+          path))))
+
+(defun niwa-migrate-from-mevedel--command (command source kept)
+  "Rewrite literal path arguments in COMMAND from SOURCE using KEPT entries."
+  (let* ((single "'[^'\n]*'")
+         (double "\"\\(?:\\\\.\\|[^\"\\\\\n]\\)*\"")
+         (quoted (concat single "\\|" double)))
+    ;; Keep adjacent fragments in the same word, but do not interpret shell expansion.
+    (replace-regexp-in-string
+     (concat "\\(?:" quoted "\\|\\\\.\\|[^ \t\n\"'\\\\;|&<>()`]\\)+")
+     (lambda (token)
+       (save-match-data
+         (let* ((assignment (and (string-match "\\`[[:alnum:]_-]+=" token) (match-end 0)))
+                (prefix (substring token 0 (or assignment 0)))
+                (word (substring token (or assignment 0))))
+           (concat prefix
+                   (cond
+                    ((string-match-p (concat "\\`\\(?:" quoted "\\)\\'") word)
+                     (concat (substring word 0 1)
+                             (niwa-migrate-from-mevedel--kept-path (substring word 1 -1) source kept)
+                             (substring word -1)))
+                    ((not (string-match-p "[\"'\\\\$]" word))
+                     (niwa-migrate-from-mevedel--kept-path word source kept))
+                    (t word))))))
+     command t t)))
+
 (defun niwa-migrate-from-mevedel--preset (value)
   "Rename a persisted preset symbol or string VALUE."
   (let ((name (if (symbolp value) (symbol-name value) value)))
@@ -78,9 +117,14 @@
           (if (symbolp value) (intern new) new))
       value)))
 
-(defun niwa-migrate-from-mevedel--instructions (record)
-  "Rename only instruction properties and note settings in RECORD."
+(defun niwa-migrate-from-mevedel--instructions (record source kept)
+  "Rename instruction properties, note settings and KEPT anchors from SOURCE in RECORD."
   (dolist (entry (plist-get record :files))
+    (let ((path (niwa-migrate-from-mevedel--kept-path (car entry) source kept)))
+      (unless (equal path (car entry))
+        (when (assoc path (plist-get record :files))
+          (error "Instruction anchors collide at %s" path))
+        (setcar entry path)))
     (dolist (instruction (plist-get (cdr entry) :instructions))
       (cl-loop for cell on (plist-get instruction :properties) by #'cddr do
                (when (memq (car cell) (alist-get 'properties niwa-migrate-from-mevedel--legacy))
@@ -104,40 +148,40 @@
   (mapc #'niwa-migrate-from-mevedel--path-property (plist-get record :resource-grants))
   record)
 
-(defun niwa-migrate-from-mevedel--hooks (record)
-  "Rewrite command paths in Lisp hook RECORD."
+(defun niwa-migrate-from-mevedel--hooks (record source kept)
+  "Rewrite command paths in Lisp hook RECORD from SOURCE using KEPT entries."
   (dolist (rule record)
     (dolist (group (cdr rule))
       (dolist (hook (plist-get group :hooks))
         (when-let* ((command (plist-member hook :command)))
-          (setcar (cdr command) (niwa-migrate-from-mevedel--paths (cadr command)))))))
+          (setcar (cdr command) (niwa-migrate-from-mevedel--command (cadr command) source kept))))))
   record)
 
-(defun niwa-migrate-from-mevedel--json-hooks (record)
-  "Rewrite command paths in JSON hook RECORD."
+(defun niwa-migrate-from-mevedel--json-hooks (record source kept)
+  "Rewrite command paths in JSON hook RECORD from SOURCE using KEPT entries."
   (when-let* ((hooks (gethash "hooks" record)))
     (maphash
      (lambda (_event groups)
        (mapc (lambda (group)
                (mapc (lambda (handler)
                        (when-let* ((command (gethash "command" handler)))
-                         (puthash "command" (niwa-migrate-from-mevedel--paths command) handler)))
+                         (puthash "command" (niwa-migrate-from-mevedel--command command source kept) handler)))
                      (gethash "hooks" group)))
              groups))
      hooks))
   record)
 
-(defun niwa-migrate-from-mevedel--transform (path relative)
-  "Return rewritten text for PATH at RELATIVE, or nil for an unchanged file."
+(defun niwa-migrate-from-mevedel--transform (path relative source kept)
+  "Rewrite PATH at RELATIVE from SOURCE using KEPT entries, or return nil."
   (cond
    ((equal relative "hooks.json")
     (let* ((record (niwa-migrate-from-mevedel--json path))
            (before (json-serialize record :null-object :null :false-object :false))
-           (after (json-serialize (niwa-migrate-from-mevedel--json-hooks record)
+           (after (json-serialize (niwa-migrate-from-mevedel--json-hooks record source kept)
                                   :null-object :null :false-object :false)))
       (unless (equal before after) (concat after "\n"))))
    ((or (member relative '("instructions.el" "skills-state.el" "permissions.el" "hooks.el"))
-        (string-match-p "\\`\\(?:exports/.+\\.el\\|schedules/[^/]+/schedule\\.el\\)\\'" relative))
+        (string-match-p "\\`\\(?:exports/.+\\.el\\|schedules/[^/]+/schedule\\.el\\|workspace-schedules/[^/]+\\.el\\)\\'" relative))
     (let* ((record (niwa-migrate-from-mevedel--read path))
            (print-length nil) (print-level nil) (print-quoted t)
            (before (prin1-to-string record))
@@ -145,7 +189,9 @@
             (prin1-to-string
              (pcase relative
                ("permissions.el" (niwa-migrate-from-mevedel--permissions record))
-               ("hooks.el" (niwa-migrate-from-mevedel--hooks record))
+               ("hooks.el" (niwa-migrate-from-mevedel--hooks record source kept))
+               ((pred (string-prefix-p "workspace-schedules/"))
+                (niwa-migrate-from-mevedel--paths record))
                ("skills-state.el"
                 (when-let* ((keys (plist-member record :disabled-keys)))
                   (setcar (cdr keys) (mapcar #'niwa-migrate-from-mevedel--paths (cadr keys))))
@@ -154,7 +200,7 @@
                 (when-let* ((preset (plist-member record :preset)))
                   (setcar (cdr preset) (niwa-migrate-from-mevedel--preset (cadr preset))))
                 record)
-               (_ (niwa-migrate-from-mevedel--instructions record))))))
+               (_ (niwa-migrate-from-mevedel--instructions record source kept))))))
       (unless (equal before after) (concat after "\n"))))))
 
 (defun niwa-migrate-from-mevedel--listing (directory &optional prefix)
@@ -233,14 +279,20 @@
 
 (defun niwa-migrate-from-mevedel--closed (source rows)
   "Require the legacy SOURCE described by ROWS to be quiescent."
-  (let ((schedule (file-name-concat source "schedules")))
-    (when (and (file-directory-p schedule)
-               (not (equal 0 (call-process "flock" nil nil nil "-n" schedule "true"))))
-      (error "Active schedule writer: %s" schedule)))
+  (dolist (lock '("schedules" "state/memory-write" "state/memory-write/root" "state/shared-notes"))
+    (let ((path (file-name-concat source lock)))
+      (when (and (file-directory-p path)
+                 (not (equal 0 (call-process "flock" nil nil nil "-n" path "true"))))
+        (error "Active writer lock: %s" path))))
   (dolist (row rows)
     (let* ((relative (car row)) (dir (cadr row))
            (path (file-name-concat source relative)))
       (cond
+       ((and dir (string-prefix-p ".file-batch-" (file-name-nondirectory relative)))
+        (error "Unfinished file batch: %s" path))
+       ((equal relative "state/shared-notes/cycle.el")
+        (when (plist-get (niwa-migrate-from-mevedel--read path) :inflight)
+          (error "Inflight shared-note cycle: %s" path)))
        ((and dir (string-match-p "\\(?:\\(?:^\\|/\\)\\.lease\\|^leases/artifacts/[^/]+\\)\\'" relative))
         (niwa-migrate-from-mevedel--lease path))
        ((and (not dir) (string-match-p "\\`sessions/[^/]+/\\.lock\\'" relative))
@@ -275,23 +327,25 @@
 
 (defun niwa-migrate-from-mevedel--stage (source stage rows)
   "Copy and validate selected ROWS from SOURCE into the private STAGE."
-  (dolist (row rows)
-    (pcase-let* ((`(,relative ,dir ,_size ,_mtime ,mode) row)
-                 (from (file-name-concat source relative))
-                 (to (file-name-concat stage relative)))
-      (if dir
-          (make-directory to)
-        (copy-file from to nil t nil t)
-        (if-let* ((text (niwa-migrate-from-mevedel--transform from relative)))
-            (let ((coding-system-for-write 'utf-8-unix))
-              (write-region text nil to nil 'silent)
-              (unless (equal (secure-hash 'sha256 (encode-coding-string text 'utf-8-unix))
-                             (niwa-migrate-from-mevedel--hash to))
-                (error "Staging rewrite changed bytes: %s" to)))
-          (unless (equal (niwa-migrate-from-mevedel--hash from)
-                         (niwa-migrate-from-mevedel--hash to))
-            (error "Staging copy changed bytes: %s" to)))
-        (set-file-modes to mode))))
+  (let ((kept (make-hash-table :test #'equal)))
+    (dolist (row rows) (puthash (car row) t kept))
+    (dolist (row rows)
+      (pcase-let* ((`(,relative ,dir ,_size ,_mtime ,mode) row)
+                   (from (file-name-concat source relative))
+                   (to (file-name-concat stage relative)))
+        (if dir
+            (make-directory to)
+          (copy-file from to nil t nil t)
+          (if-let* ((text (niwa-migrate-from-mevedel--transform from relative source kept)))
+              (let ((coding-system-for-write 'utf-8-unix))
+                (write-region text nil to nil 'silent)
+                (unless (equal (secure-hash 'sha256 (encode-coding-string text 'utf-8-unix))
+                               (niwa-migrate-from-mevedel--hash to))
+                  (error "Staging rewrite changed bytes: %s" to)))
+            (unless (equal (niwa-migrate-from-mevedel--hash from)
+                           (niwa-migrate-from-mevedel--hash to))
+              (error "Staging copy changed bytes: %s" to)))
+          (set-file-modes to mode)))))
   (dolist (row (reverse rows))
     (when (cadr row)
       (set-file-modes (file-name-concat stage (car row)) (nth 4 row))))
@@ -308,59 +362,92 @@
                                     "ls-files" "--" (concat niwa-migrate-from-mevedel--old "/")))
              (> (buffer-size) 0))))))
 
+(defun niwa-migrate-from-mevedel--receipt (source rows)
+  "Bind a validated promotion to the identity and observed ROWS of SOURCE."
+  (let ((attributes (file-attributes source 'integer))
+        (print-length nil) (print-level nil))
+    (secure-hash 'sha256
+                 (prin1-to-string (list source (file-attribute-device-number attributes)
+                                        (file-attribute-inode-number attributes) rows)))))
+
+(defun niwa-migrate-from-mevedel--physical (directory)
+  "Return physical DIRECTORY, refusing any linked path component."
+  (when (file-remote-p directory) (error "Migration requires a local directory"))
+  (let ((path (directory-file-name directory)))
+    ;; Walk the original spelling, so a parent traversal cannot hide a link.
+    (while path
+      (unless (equal (directory-file-name (expand-file-name path))
+                     (directory-file-name (file-truename path)))
+        (error "Refusing symbolic link in path: %s" path))
+      (let ((parent (and (file-name-directory path)
+                         (directory-file-name (file-name-directory path)))))
+        (setq path (unless (equal parent path) parent))))
+    (directory-file-name (expand-file-name directory))))
+
 (defun niwa-migrate-from-mevedel--migrate (directory)
   "Migrate DIRECTORY without changing the original bytes.
 Return the backup name, or nil when already migrated."
-  (when (file-remote-p directory) (error "Migration requires a local directory"))
   (let* ((case-fold-search nil)
-         (directory (directory-file-name (expand-file-name directory)))
+         (directory (niwa-migrate-from-mevedel--physical directory))
          (user (equal (file-name-nondirectory directory) niwa-migrate-from-mevedel--old))
          (parent (if user (file-name-directory directory) directory))
          (source (file-name-concat parent niwa-migrate-from-mevedel--old))
          (target (file-name-concat parent ".niwa"))
          (stage (file-name-concat parent ".niwa.staging"))
+         (marker (file-name-concat target niwa-migrate-from-mevedel--marker))
          (backup (concat source ".pre-niwa-" (format-time-string "%Y%m%d-%H%M%S"))))
     (when (file-symlink-p source) (error "Refusing symbolic link: %s" source))
     (if (and (not (niwa-migrate-from-mevedel--present-p source))
              (file-directory-p target) (not (file-symlink-p target)))
         nil
       (unless (file-directory-p source) (error "No legacy directory: %s" source))
-      (when (niwa-migrate-from-mevedel--present-p target)
-        (error "Destination already exists; both directories are untouched: %s" target))
       (when (niwa-migrate-from-mevedel--present-p backup)
         (error "Backup already exists: %s" backup))
-      (let* ((rows (niwa-migrate-from-mevedel--listing source))
-             (keep (cl-remove-if-not (lambda (row) (niwa-migrate-from-mevedel--keep-p (car row) user))
-                                     rows))
+      (let* ((recover (niwa-migrate-from-mevedel--present-p target))
+             (rows (niwa-migrate-from-mevedel--listing source))
+             (receipt (niwa-migrate-from-mevedel--receipt source rows))
              (captures (niwa-migrate-from-mevedel--pending-captures source rows))
-             (tracked (niwa-migrate-from-mevedel--tracked-p parent))
-             promoted)
+             (tracked (niwa-migrate-from-mevedel--tracked-p parent)))
         (niwa-migrate-from-mevedel--closed source rows)
-        (when (niwa-migrate-from-mevedel--present-p stage)
-          (unless (and (file-directory-p stage) (not (file-symlink-p stage)))
-            (error "Unsafe staging directory: %s" stage))
-          (delete-directory stage t))
-        (make-directory stage)
-        (set-file-modes stage #o700)
-        (unwind-protect
+        (if recover
             (progn
-              (niwa-migrate-from-mevedel--stage source stage keep)
-              (unless (equal rows (niwa-migrate-from-mevedel--listing source))
-                (error "Source changed during staging: %s" source))
-              (niwa-migrate-from-mevedel--closed source rows)
-              (rename-file stage target)
-              (setq promoted t)
-              (rename-file source backup)
-              (setq promoted nil)
-              (when captures
-                (message "Pending journal captures left in backup for %s: %s"
-                         directory (string-join captures ", ")))
-              (when tracked (message "Commit the tracked state move for %s" parent))
-              (when (file-exists-p (file-name-concat backup "trusted-hooks.el"))
-                (message "Hook approvals were not carried over; re-approve the migrated hook configs"))
-              backup)
-          (when promoted (rename-file target stage))
-          (when (file-directory-p stage) (delete-directory stage t)))))))
+              (unless (and (not (file-symlink-p target)) (file-directory-p target)
+                           (not (file-symlink-p marker)) (file-regular-p marker)
+                           (= 64 (file-attribute-size (file-attributes marker)))
+                           (equal (secure-hash 'sha256 receipt) (niwa-migrate-from-mevedel--hash marker)))
+                (error "Destination exists without a matching cutover receipt: %s" target))
+              (rename-file source backup))
+          (let ((keep (cl-remove-if-not (lambda (row) (niwa-migrate-from-mevedel--keep-p (car row) user))
+                                        rows))
+                promoted)
+            (when (niwa-migrate-from-mevedel--present-p stage)
+              (unless (and (file-directory-p stage) (not (file-symlink-p stage)))
+                (error "Unsafe staging directory: %s" stage))
+              (delete-directory stage t))
+            (make-directory stage)
+            (set-file-modes stage #o700)
+            (unwind-protect
+                (progn
+                  (niwa-migrate-from-mevedel--stage source stage keep)
+                  (let ((current (niwa-migrate-from-mevedel--listing source)))
+                    (unless (equal receipt (niwa-migrate-from-mevedel--receipt source current))
+                      (error "Source changed during staging: %s" source))
+                    (niwa-migrate-from-mevedel--closed source current))
+                  (write-region receipt nil (file-name-concat stage niwa-migrate-from-mevedel--marker)
+                                nil 'silent)
+                  (rename-file stage target)
+                  (setq promoted t)
+                  (rename-file source backup)
+                  (setq promoted nil))
+              (when promoted (rename-file target stage))
+              (when (file-directory-p stage) (delete-directory stage t)))))
+        (delete-file marker)
+        (when captures
+          (message "Pending journal captures left in backup for %s: %s" directory (string-join captures ", ")))
+        (when tracked (message "Commit the tracked state move for %s" parent))
+        (when (file-exists-p (file-name-concat backup "trusted-hooks.el"))
+          (message "Hook approvals were not carried over; re-approve the migrated hook configs"))
+        backup))))
 
 (defun niwa-migrate-from-mevedel-main ()
   "Migrate the command-line directories and exit nonzero on refusal."

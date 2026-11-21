@@ -299,7 +299,7 @@ materialize durable state.  An obsolete or unknown explicit mode is rejected."
                         (niwa-session-authority-mode-for-workspace
                          workspace))))
     (when (eq mode 'pid-lock)
-      (error "Pre-lease session requires migration with scripts/migrate-sessions.el"))
+      (error "Unsupported transcript format (before portable leases)"))
     (unless (memq mode '(nil portable))
       (error "Invalid session authority mode: %S" mode))
     (unless mode

@@ -212,7 +212,7 @@ add more, and we don't want to act on actions we don't understand).")
 (defun niwa-session-codec-validate-authority-mode (mode)
   "Validate the sole persisted authority MODE, `portable'."
   (when (eq mode 'pid-lock)
-    (error "Pre-lease session requires migration with scripts/migrate-sessions.el"))
+    (error "Unsupported transcript format (before portable leases)"))
   (unless (eq mode 'portable)
     (error "Invalid session authority mode: %S" mode))
   mode)

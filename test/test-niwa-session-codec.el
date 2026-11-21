@@ -23,9 +23,9 @@
   (dolist (mode '(nil unknown))
     (should-error (niwa-session-codec-validate-authority-mode mode)
                   :type 'error))
-  :doc "obsolete PID authority directs the user to standalone migration"
+  :doc "obsolete PID authority reports an unsupported format"
   (should (string-match-p
-           "scripts/migrate-sessions\\.el"
+           "Unsupported transcript format"
            (error-message-string
             (should-error
              (niwa-session-codec-validate-authority-mode 'pid-lock)
@@ -60,7 +60,7 @@
             (dolist (mode '(nil portable pid-lock))
               (should
                (string-match-p
-                "scripts/migrate-sessions\\.el"
+                "Unsupported transcript format"
                 (error-message-string
                  (should-error
                   (niwa-session-codec-authority-mode-for-path root nil mode)

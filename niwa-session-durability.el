@@ -492,7 +492,7 @@ not declare the variables; a lexical binding would silently share nothing."
                   (car niwa-session-durability--asserted-directories))
     (when (niwa-session-control-fs-path-exists-p
            (file-name-concat session-dir ".lock"))
-      (error "Pre-lease session requires migration with scripts/migrate-sessions.el: %s"
+      (error "Unsupported transcript format (before portable leases): %s"
              session-dir))
     (when niwa-session-durability--asserted-directories
       (push session-dir
@@ -516,7 +516,7 @@ operation inside its own program settles it with
   "Interpret RESULT of SESSION-DIR's legacy `.lock' absence operation."
   (pcase (plist-get result :status)
     ('absent (niwa-session-durability-note-no-pid-lock session-dir))
-    ('ok (error "Pre-lease session requires migration with scripts/migrate-sessions.el: %s"
+    ('ok (error "Unsupported transcript format (before portable leases): %s"
                 (niwa-session-control-fs-physical-path session-dir)))
     (_ (niwa-session-control-fs-program-value result))))
 

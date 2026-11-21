@@ -106,7 +106,7 @@
                        (should (string-match-p "pending publication"
                                                (error-message-string err))))
                       ('fresh-mixed
-                       (should (string-match-p "scripts/migrate-sessions[.]el"
+                       (should (string-match-p "Unsupported transcript format"
                                                (error-message-string err)))
                        (with-temp-buffer
                          (insert-file-contents (file-name-concat session-dir ".lock"))

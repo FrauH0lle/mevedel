@@ -2,7 +2,7 @@ name: remote-artifact-dist
 
 # Publishes remote-artifact/ as the root of the remote-artifact-dist branch,
 # so the package installs straight from GitHub without the npm registry:
-#   npx -y --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist mcp
+#   npx -y --allow-git=all github:FrauH0lle/niwa.el#remote-artifact-dist mcp
 # `git subtree split' is deterministic, so each run fast-forwards the branch.
 on:
   push:
