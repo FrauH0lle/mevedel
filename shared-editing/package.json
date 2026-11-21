@@ -32,6 +32,6 @@
   "devDependencies": {
     "esbuild": "0.28.2",
     "jsdom": "31.0.0",
-    "playwright": "1.65.0"
+    "playwright": "1.65.1"
   }
 }
