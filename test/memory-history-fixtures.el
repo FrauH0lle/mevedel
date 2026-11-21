@@ -83,9 +83,13 @@ root would have, so no topic rows, identities or proofs carry over."
                   (hash-table-p (symbol-value symbol)))
          (let ((table (symbol-value symbol)) stale)
            (maphash (lambda (key _)
-                      (let ((text (prin1-to-string key)))
-                        (when (seq-some (lambda (name) (string-search name text)) names)
-                          (push key stale))))
+                      ;; Identity keys (e.g. permission callbacks) aren't paths.
+                      (when-let* ((text (cond ((niwa-workspace-p key) (niwa-workspace-root key))
+                                              ((stringp key) key)
+                                              ((not (memq (hash-table-test table) '(eq eql)))
+                                               (prin1-to-string key))))
+                                  ((seq-some (lambda (name) (string-search name text)) names)))
+                        (push key stale)))
                     table)
            ;; Live ownership is a teardown leak, not a disposable read cache.
            (when (memq symbol '(niwa-memory-decision--operations

@@ -16,6 +16,7 @@
 (require 'niwa-memory-notes)
 (require 'niwa-memory-store)
 (require 'niwa-memory-write)
+(require 'niwa-permission-queue)
 (require 'niwa-resource)
 (require 'niwa-session-control-fs)
 (require 'niwa-tool-patch)
@@ -109,16 +110,21 @@ the public verb, not this helper, constructs and drives the operation."
 
 (niwa-deftest niwa-test-application-fixture
   (:doc "restored setup has independent bytes and proposal data, with no decisions or live ownership")
-  (let (original-file original-path original-id)
+  (let ((niwa-permission-queue--settled-cells (make-hash-table :test #'eq))
+        original-file original-path original-id entry cell)
     (niwa-test-application-fixture
       (setq original-file (copy-sequence (plist-get proposal :file))
             original-path (copy-sequence path)
-            original-id (copy-sequence (plist-get proposal :id)))
+            original-id (copy-sequence (plist-get proposal :id))
+            entry (list :workspace workspace)
+            cell (niwa-permission-queue--ensure-settled-cell entry))
       ;; Change both the live data and disk; neither may alter the snapshot.
       (aset (plist-get proposal :file) 0 ?X)
       (plist-put proposal :fixture-tampered t)
       (write-region "Changed fixture bytes" nil path nil 'silent))
     (niwa-test-application-fixture
+      ;; Restoring a path must not reset an unrelated permission's identity.
+      (should (eq cell (niwa-permission-queue--ensure-settled-cell entry)))
       (should (equal original-path path))
       (should (equal original-file (plist-get proposal :file)))
       (should (equal original-id (plist-get proposal :id)))
