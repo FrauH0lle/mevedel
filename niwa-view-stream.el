@@ -106,10 +106,6 @@
 (declare-function niwa-view--agent-fsm-p
                   "niwa-view-composer" (info data-buffer))
 (autoload 'niwa-view--agent-fsm-p "niwa-view-composer")
-(declare-function niwa-view-call-preserving-user-view-state
-                  "niwa-view-composer" (thunk &optional region))
-(declare-function niwa-view--call-with-render-boundaries-advancing
-                  "niwa-view-composer" (thunk))
 (declare-function niwa-view--composer-mode-badge
                   "niwa-view-composer" (&optional mode))
 (autoload 'niwa-view--composer-mode-badge "niwa-view-composer")
@@ -170,6 +166,12 @@
 
 ;; `niwa-transcript-audit'
 (defvar niwa--hook-audit-open)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-call-preserving-user-view-state
+                  "niwa-view-viewport" (thunk &optional region follow-output))
+(declare-function niwa-view--call-with-render-boundaries-advancing
+                  "niwa-view-viewport" (thunk &optional types))
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-clear "niwa-view-zone" (namespace))

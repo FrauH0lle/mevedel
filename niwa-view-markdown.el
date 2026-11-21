@@ -78,11 +78,6 @@
                   (agent-path))
 (autoload 'niwa-view-open-agent-transcript "niwa-view-agent")
 
-;; `niwa-view-composer'
-(declare-function niwa-view--call-preserving-window-state
-                  "niwa-view-composer"
-                  (thunk &optional positions-preserved region))
-
 ;; `niwa-view-fontify'
 (declare-function niwa-view--fontify-as "niwa-view-fontify" (text mode))
 
@@ -96,6 +91,11 @@
                   (start end avoid-ranges))
 (declare-function niwa-view-table-rerender "niwa-view-table"
                   (&optional window))
+
+;; `niwa-view-viewport'
+(declare-function niwa-view--call-preserving-window-state
+                  "niwa-view-viewport"
+                  (thunk &optional positions-preserved region follow-output))
 
 (require 'niwa-mention-bindings)
 (require 'niwa-view-path)

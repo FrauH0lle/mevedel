@@ -78,10 +78,6 @@
 (declare-function niwa-view-audit-show-result "niwa-view-audit" (record))
 (autoload 'niwa-view-audit-show-result "niwa-view-audit" nil t)
 
-;; `niwa-view-composer'
-(declare-function niwa-view-call-preserving-user-view-state
-                  "niwa-view-composer" (thunk &optional region))
-
 ;; `niwa-view-render'
 (declare-function niwa-view-render--mouse-held-p "niwa-view-render" ())
 (declare-function niwa-view-render-mutate
@@ -91,6 +87,10 @@
 ;; `niwa-view-stream'
 (declare-function niwa-view--animation-target-visible-p
                   "niwa-view-stream" (target property &optional any-value))
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-call-preserving-user-view-state
+                  "niwa-view-viewport" (thunk &optional region follow-output))
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-collapse-state

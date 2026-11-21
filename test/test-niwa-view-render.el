@@ -22,6 +22,7 @@
 
 ;; Focused dependencies moved with the rendering tests.
 (require 'niwa-view-stream)
+(require 'niwa-view-viewport)
 (require 'niwa-transcript)
 (require 'niwa-transcript-audit)
 (require 'niwa-transcript-restore)

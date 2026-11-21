@@ -57,7 +57,6 @@
                   "niwa-view-composer" ())
 (declare-function niwa-view-composer-set-historical-visible
                   "niwa-view-composer" (visible))
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
 
 ;; `niwa-view-render'
 (declare-function niwa-view-render-capture-segment-state
@@ -73,6 +72,9 @@
 (autoload 'niwa-view-render-capture-segment-state "niwa-view-render")
 (autoload 'niwa-view-render-project-segment "niwa-view-render")
 (defvar niwa-view-render--batch)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
 
 
 ;;

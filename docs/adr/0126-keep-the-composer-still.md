@@ -18,8 +18,12 @@ pending actions and request activity. Its fixed cells repaint without moving
 draft or undo positions. The transcript keeps its status and interaction zones
 at the end; their width is independent of composer windows.
 
-Zone reconciliation and its enclosing render transaction restore logical
-positions first and then apply the viewport rule for each window:
+Zone reconciliation resolves fragment positions; the transcript render
+transaction resolves render anchors. Both ask `niwa-view-viewport` to capture
+each window before the write and apply the same rule after position restoration.
+Without a surviving visit, restore the logical start **before** checking whether
+the new end still fits: the check must use the restored page, not the start
+left by the write.
 
 | Context before mutation | Result |
 | --- | --- |

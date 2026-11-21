@@ -151,10 +151,6 @@
 ;; `niwa-view-composer'
 (declare-function niwa-view--transcript-gptel-send-blocked
                   "niwa-view-composer" (&optional arg))
-(declare-function niwa-view-call-preserving-user-view-state
-                  "niwa-view-composer" (thunk &optional region))
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
-(declare-function niwa-view-transcript-tail-marker "niwa-view-composer" ())
 
 ;; `niwa-view-disclosure'
 (declare-function niwa-view-disclosure-apply-rendering-state
@@ -210,6 +206,12 @@
 (declare-function niwa-view-stream-stop "niwa-view-stream" ())
 (defvar niwa-view--data-turn-start)
 (defvar niwa-view--in-flight-turn-start)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-call-preserving-user-view-state
+                  "niwa-view-viewport" (thunk &optional region follow-output))
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
+(declare-function niwa-view-transcript-tail-marker "niwa-view-viewport" ())
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-collapse-state "niwa-view-zone" (key &optional default))

@@ -38,9 +38,6 @@
                   "niwa-view-audit" ())
 (autoload 'niwa-view-audit-toggle-hook-audit "niwa-view-audit")
 
-;; `niwa-view-composer'
-(declare-function niwa-view-transcript-tail-marker "niwa-view-composer" ())
-
 ;; `niwa-view-render'
 (declare-function niwa-view-render-mutate
                   "niwa-view-render" (key function &optional replacement cleanup))
@@ -97,6 +94,9 @@
   "niwa-view-stream")
 (defvar niwa-view--data-turn-start)
 (defvar niwa-view--pending-tool-calls)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-transcript-tail-marker "niwa-view-viewport" ())
 
 
 ;;

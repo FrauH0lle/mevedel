@@ -31,31 +31,24 @@
 (autoload 'niwa-diagnostic-scope "niwa-utilities")
 (autoload 'niwa-diagnostic-user-error "niwa-utilities")
 
-;; `niwa-view'
-(defvar niwa-view--interaction-marker)
-(defvar niwa-view--status-marker)
-
-;; `niwa-view-composer'
-(declare-function niwa-view--clamp-window-starts "niwa-view-composer"
-                  (tails &optional force))
-(declare-function niwa-view--keep-native-vscroll "niwa-view-composer" ())
-(declare-function niwa-view--history-reader-windows "niwa-view-composer" ())
-(declare-function niwa-view--position-screen-y
-                  "niwa-view-composer" (position window &optional fully))
-(declare-function niwa-view--restore-window-blank-pixels
-                  "niwa-view-composer" (window blank))
-(declare-function niwa-view--set-viewport "niwa-view-composer" (window viewport))
-(declare-function niwa-view--viewport-at-y "niwa-view-composer" (window position y))
-(declare-function niwa-view--window-blank-pixels "niwa-view-composer" (window))
-(declare-function niwa-view--window-tail-lengths "niwa-view-composer" ())
-(declare-function niwa-view-transcript-tail-marker "niwa-view-composer" ())
-
 ;; `niwa-view-render'
 (declare-function niwa-view--debug-log "niwa-view-render"
                   (event &rest data))
 (declare-function niwa-view--debug-state "niwa-view-render"
                   (&optional data-buf start end))
 (defvar niwa-view-render-debug)
+
+
+;; `niwa-view-viewport'
+(declare-function niwa-view--call-with-render-boundaries-advancing "niwa-view-viewport"
+                  (thunk &optional types))
+(declare-function niwa-view--keep-native-vscroll "niwa-view-viewport" ())
+(declare-function niwa-view-viewport-apply "niwa-view-viewport" (snapshot resolved))
+(declare-function niwa-view-viewport-capture "niwa-view-viewport" (follow-output))
+(autoload 'niwa-view--call-with-render-boundaries-advancing "niwa-view-viewport")
+(autoload 'niwa-view--keep-native-vscroll "niwa-view-viewport")
+(autoload 'niwa-view-viewport-apply "niwa-view-viewport")
+(autoload 'niwa-view-viewport-capture "niwa-view-viewport")
 
 (defvar-local niwa-view-zone--collapse-states nil
   "Buffer-local UI collapse state keyed by fragment collapse keys.")
@@ -601,32 +594,14 @@ table discards the proof."
       (error "Fragment namespace mismatch: %S" fragment))))
 
 (defun niwa-view-zone--marker-types (zone)
-  "Return insertion types for status, interaction, and input in ZONE."
+  "Return insertion types for status, interaction, and tail in ZONE."
   (pcase zone
     ('status '(nil t t))
     ((or 'interaction 'progress) '(nil nil t))))
 
 (defun niwa-view-zone--call-with-marker-types (zone thunk)
-  "Call THUNK with lower view markers advancing appropriately for ZONE."
-  (let* ((markers (list (bound-and-true-p niwa-view--status-marker)
-                        (bound-and-true-p niwa-view--interaction-marker)
-                        (niwa-view-transcript-tail-marker)))
-         (old-types (mapcar (lambda (marker)
-                              (and (markerp marker)
-                                   (marker-insertion-type marker)))
-                            markers))
-         (new-types (niwa-view-zone--marker-types zone)))
-    (unwind-protect
-        (progn
-          (cl-mapc (lambda (marker type)
-                     (when (markerp marker)
-                       (set-marker-insertion-type marker type)))
-                   markers new-types)
-          (funcall thunk))
-      (cl-mapc (lambda (marker type)
-                 (when (markerp marker)
-                   (set-marker-insertion-type marker type)))
-               markers old-types))))
+  "Call THUNK with the boundary insertion types for ZONE."
+  (niwa-view--call-with-render-boundaries-advancing thunk (niwa-view-zone--marker-types zone)))
 
 (defun niwa-view-zone--capture-view-state ()
   "Capture point, mark and displayed-window positions."
@@ -875,10 +850,7 @@ position instead of applying the reading-start policy."
        (niwa-view-zone-position-anchor position)))
 
 (defun niwa-view-zone--capture-logical-state (zone region)
-  "Capture logical positions and each window's viewport policy for ZONE REGION.
-REGION may be nil on first render.  A visible interaction or status
-visit anchors point's screen row, even when another zone is being
-reconciled.  Only visiting windows pay for the display-row measurement."
+  "Capture logical positions in ZONE REGION for the buffer and its windows."
   (list
    :point (and region
                (niwa-view-zone--fragment-position-state zone region (point)))
@@ -887,59 +859,33 @@ reconciled.  Only visiting windows pay for the display-row measurement."
    :windows
    (mapcar
     (lambda (window)
-      (let* ((position (window-point window))
-             (visit (niwa-view-zone-visit-anchor position))
-             (y (and visit (niwa-view--position-screen-y position window))))
-        (list window
-              (and region (niwa-view-zone--fragment-position-state
-                           zone region position))
-              (and region (niwa-view-zone--fragment-position-state
-                           zone region (window-start window) window))
-              visit y
-              (and y (eq (car visit) 'interaction)
-                   (or (niwa-view--window-blank-pixels window) 0)))))
+      (list window
+            (and region (niwa-view-zone--fragment-position-state
+                         zone region (window-point window)))
+            (and region (niwa-view-zone--fragment-position-state
+                         zone region (window-start window) window))))
     (niwa-view--windows 'geometry))))
 
-(defun niwa-view-zone--restore-logical-state (zone state)
-  "Restore positions for ZONE STATE, returning (VISITED-WINDOWS LOST-STARTS).
-A surviving visible visit keeps point's screen row.
-Other windows retain their logical or marker-backed reading starts."
+(defun niwa-view-zone--restore-logical-state (zone state snapshot)
+  "Resolve positions in ZONE from STATE, then apply the viewport SNAPSHOT."
   (when-let* ((position (niwa-view-zone--restore-fragment-position
                          zone (plist-get state :point))))
     (goto-char position))
   (when-let* ((position (niwa-view-zone--restore-fragment-position
                          zone (plist-get state :mark))))
     (set-marker (mark-marker) position))
-  (let (visited-windows lost-starts)
-    (dolist (window-state (plist-get state :windows))
-      (pcase-let ((`(,window ,point-state ,start-state ,visit ,y ,blank)
-                   window-state))
-        (when (and (window-live-p window)
-                   (eq (window-buffer window) (current-buffer)))
-          (when-let* ((position (niwa-view-zone--restore-fragment-position
-                                 zone point-state)))
+  (let (resolved)
+    (dolist (entry (plist-get state :windows))
+      (pcase-let ((`(,window ,point-state ,start-state) entry))
+        (when (and (window-live-p window) (eq (window-buffer window) (current-buffer)))
+          (when-let* ((position (niwa-view-zone--restore-fragment-position zone point-state)))
             (set-window-point window position))
-          (let ((visited (and y (niwa-view-zone-anchor-position visit)))
-                (start (niwa-view-zone--restore-fragment-position
-                        zone start-state t)))
-            (when (and start-state (not start))
-              (push window lost-starts))
-            (cond
-             (visited
-              (set-window-point window visited)
-              (niwa-view--set-viewport
-               window (niwa-view--viewport-at-y window visited y))
-              ;; Only interaction shrink repairs blank space.  Status shrink
-              ;; must not move the row the user is reading or toggling.
-              (when blank
-                (niwa-view--restore-window-blank-pixels window blank))
-              (push window visited-windows))
-             (t
-              (when-let* ((position (or start
-                                       (niwa-view-zone--restore-fragment-position
-                                        zone start-state))))
-                (set-window-start window position t))))))))
-    (list visited-windows lost-starts)))
+          (let ((start (niwa-view-zone--restore-fragment-position zone start-state t)))
+            (push (list window (or start (niwa-view-zone--restore-fragment-position
+                                          zone start-state))
+                        :lost-p (and start-state (not start)))
+                  resolved)))))
+    (niwa-view-viewport-apply snapshot (nreverse resolved))))
 
 (defun niwa-view-zone-reconcile (zone start end fragments)
   "Reconcile complete FRAGMENTS for fixed ZONE between START and END.
@@ -966,11 +912,9 @@ live zone text keeps its current bounds until reconciliation finishes."
         (if (or (niwa-view-zone--absent-p zone region fragments)
                 (and region (niwa-view-zone--unchanged-p region zone text)))
             region
-          (let* ((readers (niwa-view--history-reader-windows))
-		 (logical-state (niwa-view-zone--capture-logical-state
-				 zone region))
-		 (window-tails (niwa-view--window-tail-lengths))
-		 owned-p)
+          (let* ((snapshot (niwa-view-viewport-capture nil))
+                 (logical-state (niwa-view-zone--capture-logical-state zone region))
+                 owned-p)
             (if (and (null fragments) (null region))
 		(niwa-view-zone--call-preserving
 		 zone
@@ -1007,18 +951,7 @@ live zone text keeps its current bounds until reconciliation finishes."
 		  (niwa-view-zone--restore-neighbor-regions neighbors)
 		  (when (overlay-buffer region)
                     (niwa-view-zone--restore-trailing-overlays region trailing)))))
-            (pcase-let ((`(,visited-windows ,lost-starts)
-			 (niwa-view-zone--restore-logical-state zone logical-state)))
-              ;; A lost logical start fills the last page even if anchoring
-              ;; exposes longer lines and therefore increases the character tail.
-              (niwa-view--clamp-window-starts
-               (seq-remove (lambda (tail)
-                             (or (and (memq (car tail) readers)
-                                      (not (memq (car tail) lost-starts)))
-				 (memq (car tail) visited-windows)))
-			   window-tails)
-               lost-starts)
-              (niwa-view--keep-native-vscroll))
+            (niwa-view-zone--restore-logical-state zone logical-state snapshot)
             (if fragments
 		region
               (when region

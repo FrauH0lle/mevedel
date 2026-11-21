@@ -12,6 +12,7 @@
 (require 'niwa-view-composer)
 (require 'niwa-view-render)
 (require 'niwa-view-stream)
+(require 'niwa-view-viewport)
 (require 'niwa-view-zone)
 (require 'helpers
          (file-name-concat

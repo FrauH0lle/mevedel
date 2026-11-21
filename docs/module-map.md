@@ -126,7 +126,7 @@ Chat / view
   niwa-view.el             view mode, zones, and session coordination
   niwa-view-agent.el       agent transcript inspection, status rows, refresh
   niwa-view-execution.el   background-work panel: agent and execution rows, inline inspection, actions
-  niwa-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
+  niwa-view-composer.el    dock fitting, submission, root dispatch, fork/send flow
   niwa-view-pair.el        transcript/composer window lookup, command rules and deferred repair
   niwa-view-input-files.el local file drops and clipboard-image input
   niwa-view-animation.el   prepared status frames, styles, and bounded color cache
@@ -151,6 +151,7 @@ Chat / view
   niwa-view-stream.el      request progress, view animation timer, streaming redraws
   niwa-gptel-stream-bridge.el private gptel stream compatibility advice
   niwa-view-audit.el       audit disclosure rendering
+  niwa-view-viewport.el    transcript render anchors, per-window viewport capture and restoration
   niwa-view-zone.el        managed view-zone lifecycle + fragments
   niwa-view-history.el     view input history ring and persistence
   niwa-view-fontify.el     quiet generic and reusable Markdown fontification

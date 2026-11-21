@@ -203,10 +203,6 @@
 (declare-function niwa-view-pair-toggle-focus "niwa-view-pair" ())
 (declare-function niwa-view-transcript-window "niwa-view-pair" (&optional window))
 (declare-function niwa-view--install-dnd "niwa-view-input-files" ())
-(declare-function niwa-view-transcript-tail-initialize
-                  "niwa-view-composer" ())
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
-(declare-function niwa-view-transcript-tail-marker "niwa-view-composer" ())
 
 ;; `niwa-view-control-transfer'
 (declare-function niwa-view-control-transfer-stop-polling
@@ -301,6 +297,12 @@
 (declare-function niwa-view--spinner-active-p "niwa-view-stream" ())
 (declare-function niwa-view-stream--schedule-execution-row-recovery
                   "niwa-view-stream" (data-buffer tool-use-id))
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-transcript-tail-initialize
+                  "niwa-view-viewport" ())
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
+(declare-function niwa-view-transcript-tail-marker "niwa-view-viewport" ())
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-collapse-state

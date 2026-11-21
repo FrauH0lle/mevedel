@@ -26,6 +26,7 @@
 (require 'niwa-view-fontify)
 (require 'niwa-view-render)
 (require 'niwa-view-stream)
+(require 'niwa-view-viewport)
 (require 'niwa-execution-target)
 (require 'niwa-transcript)
 (require 'niwa-structs)

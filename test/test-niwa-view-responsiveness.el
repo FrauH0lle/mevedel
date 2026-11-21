@@ -14,6 +14,7 @@
 (require 'niwa-view-composer)
 (require 'niwa-view-stream)
 (require 'niwa-view-render)
+(require 'niwa-view-viewport)
 
 (defun niwa-view-responsiveness-test--draft-offset ()
   "Return the caret offset from the draft start, read in the composer buffer."

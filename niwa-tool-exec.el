@@ -151,11 +151,11 @@
 (declare-function niwa--warn-once
                   "niwa-utilities" (scope key format &rest args))
 
-;; `niwa-view-composer'
+;; `niwa-view-viewport'
 (declare-function niwa-view-call-preserving-window-configuration
-                  "niwa-view-composer" (thunk))
+                  "niwa-view-viewport" (thunk))
 (autoload 'niwa-view-call-preserving-window-configuration
-  "niwa-view-composer")
+  "niwa-view-viewport")
 
 ;; `niwa-workspace'
 (declare-function niwa--all-allowed-roots

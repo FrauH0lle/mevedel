@@ -118,5 +118,36 @@ A child that outlives two minutes is killed and fails the test."
       (should (equal 0 status))
       (should (equal "ok" output)))))
 
+(ert-deftest niwa-loading/viewport-entries ()
+  (dolist (entry '(niwa-view-zone niwa-view-viewport niwa-view-composer))
+    (pcase-let ((`(,status ,output)
+                 (niwa-loading--emacs
+                  `(progn
+                     (setq load-path ',load-path)
+                     (require ',entry)
+                     (with-temp-buffer
+                       (switch-to-buffer (current-buffer))
+                       (pcase ',entry
+                         ('niwa-view-zone
+                          (cl-assert (not (featurep 'niwa-view-viewport)))
+                          (let ((start (point-marker)))
+                            (niwa-view-zone-reconcile
+                             'status start start '((:namespace status :id row :body "Status"))))
+                          (cl-assert (string-search "Status" (buffer-string))))
+                         ('niwa-view-viewport
+                          (niwa-view-viewport-apply
+                           (niwa-view-viewport-capture nil)
+                           (list (list (selected-window) 1 :lost-p nil))))
+                         ('niwa-view-composer
+                          (niwa-view-call-preserving-user-view-state
+                           (lambda () (insert "written")))
+                          (cl-assert (equal "written" (buffer-string))))))
+                     (cl-assert (featurep 'niwa-view-viewport))
+                     ,(unless (eq entry 'niwa-view-composer)
+                        '(cl-assert (not (featurep 'niwa-view-composer))))))))
+      (ert-info ((format "Cold %s: %s" entry output))
+        (should (zerop status))
+        (should (equal output ""))))))
+
 (provide 'test-niwa-loading)
 ;;; test-niwa-loading.el ends here

@@ -256,18 +256,8 @@
 (defvar niwa-view--agent-path)
 
 ;; `niwa-view-composer'
-(declare-function niwa-view-call-preserving-user-view-state
-                  "niwa-view-composer" (thunk &optional region follow-output))
-(declare-function niwa-view--call-with-render-boundaries-advancing
-                  "niwa-view-composer" (thunk))
 (declare-function niwa-view--ensure-interactive-chat-view
                   "niwa-view-composer" ())
-(declare-function niwa-view--position-render-anchor
-                  "niwa-view-composer" (pos &optional window region))
-(declare-function niwa-view--render-anchor-position
-                  "niwa-view-composer" (anchor &optional strict))
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
-(declare-function niwa-view-transcript-tail-marker "niwa-view-composer" ())
 (declare-function niwa-view-refresh-input-prompt
                   "niwa-view-composer" ())
 
@@ -391,6 +381,18 @@
 
 ;; `niwa-view-table'
 (defvar niwa-view-table--streaming-p)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-call-preserving-user-view-state
+                  "niwa-view-viewport" (thunk &optional region follow-output))
+(declare-function niwa-view--call-with-render-boundaries-advancing
+                  "niwa-view-viewport" (thunk &optional types))
+(declare-function niwa-view--position-render-anchor
+                  "niwa-view-viewport" (pos &optional window region))
+(declare-function niwa-view--render-anchor-position
+                  "niwa-view-viewport" (anchor &optional strict))
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
+(declare-function niwa-view-transcript-tail-marker "niwa-view-viewport" ())
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-bounds-at

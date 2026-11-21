@@ -15,9 +15,11 @@
 ;; `niwa-view-composer'
 (declare-function niwa-composer--fit "niwa-view-composer"
                   (dock transcript &optional fresh))
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
 (defvar niwa-composer--view)
 (defvar niwa-view--composer-buffer)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
 
 (defvar niwa-view-pair--frames nil
   "Frames queued for deferred repair.")

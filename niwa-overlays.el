@@ -91,12 +91,12 @@
 ;; `niwa-structs'
 (declare-function niwa-workspace-root "niwa-structs" (cl-x) t)
 
-;; `niwa-view-composer'
-(autoload 'niwa-view-call-preserving-window-configuration
-  "niwa-view-composer")
-
 ;; `niwa-view-fontify'
 (declare-function niwa-view--markdown-fontify-mode "niwa-view-fontify" ())
+
+;; `niwa-view-viewport'
+(autoload 'niwa-view-call-preserving-window-configuration
+  "niwa-view-viewport")
 
 ;; `niwa-workspace'
 (declare-function niwa-workspace "niwa-workspace" (&optional buffer))

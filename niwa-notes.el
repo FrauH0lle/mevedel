@@ -57,9 +57,9 @@
 ;; `niwa-buddy'
 (autoload 'niwa-buddy-mode "niwa-buddy" nil t)
 
-;; `niwa-view-composer'
+;; `niwa-view-viewport'
 (declare-function niwa-view-call-preserving-window-configuration
-                  "niwa-view-composer" (thunk))
+                  "niwa-view-viewport" (thunk))
 
 ;; `rmc'
 (declare-function rmc--add-key-description "rmc" (elem))

@@ -94,7 +94,6 @@
 (declare-function niwa-view--session "niwa-view-composer" nil)
 (declare-function niwa-view-composer-draft-end "niwa-view-composer" (&optional view))
 (declare-function niwa-view-composer-draft-start "niwa-view-composer" (&optional view))
-(declare-function niwa-view-transcript-tail "niwa-view-composer" ())
 (defvar niwa-composer--view)
 (defvar niwa-view--prompt-hook-pending)
 
@@ -124,6 +123,9 @@
 (declare-function niwa-view--start-spinner-timer "niwa-view-stream" (&optional resumed))
 (declare-function niwa-view--render-request-progress
                   "niwa-view-stream" nil)
+
+;; `niwa-view-viewport'
+(declare-function niwa-view-transcript-tail "niwa-view-viewport" ())
 
 ;; `niwa-view-zone'
 (declare-function niwa-view-zone-fragment-bounds

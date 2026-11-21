@@ -25,6 +25,7 @@
 (require 'niwa-view-execution)
 (require 'niwa-view-render)
 (require 'niwa-view-stream)
+(require 'niwa-view-viewport)
 (require 'niwa-view-zone)
 
 (defconst niwa-view-user-state-test--draft "> active draft\nsecond line"
@@ -1005,6 +1006,67 @@ WINDOW defaults to the selected window, but need not be selected."
   :doc "status readers retain their rows across minibuffer resizing, right selected" t nil
   :doc "status readers retain their rows after preview resets the baseline, left selected" nil t
   :doc "status readers retain their rows after preview resets the baseline, right selected" t t)
+
+(ert-deftest niwa-view-user-state/viewport-stream-follow-and-tool ()
+  ;; Batch Emacs cannot answer the native visibility query that elects followers.
+  (skip-unless (not noninteractive))
+  (niwa-view-user-state-test--with-view
+    (niwa-view-user-state-test--begin-turn data-buf)
+    (niwa-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"visited.el\"))\n\nTool detail\n"
+     '(tool . "visited-tool"))
+    (niwa-view--render-stream-update data-buf)
+    (let ((visit (selected-window)) (follow (split-window-right)))
+      (goto-char (point-min))
+      (search-forward "Read: visited.el")
+      (beginning-of-line)
+      (let ((row (point)))
+        (set-window-start visit row t)
+        (set-window-start follow row t)
+        (set-window-point follow (point-max))
+        (redisplay t)
+        (should (eq 'tool-summary (get-text-property row 'niwa-view-type)))
+        (should (pos-visible-in-window-p row visit))
+        (dolist (window (list visit follow))
+          (should (pos-visible-in-window-p (point-max) window)))
+        (niwa-view-user-state-test--add-chunk
+         data-buf (apply #'concat (make-list 60 "\nNext response line.")))
+        (niwa-view--render-stream-update data-buf)
+        ;; Inspect the start chosen by the writer before redisplay can scroll.
+        (should (> (window-start follow) row))
+        (should (= row (window-start visit)))
+        (should (looking-at-p ".*Read: visited\\.el"))
+        (redisplay t)
+        (should (pos-visible-in-window-p (point-max) follow))
+        (should-not (pos-visible-in-window-p (point-max) visit))))))
+
+(ert-deftest niwa-view-user-state/viewport-zone-visit-and-reader ()
+  (niwa-view-user-state-test--with-view
+    (pcase-let* ((`(,visit . ,reader) (niwa-view-user-state-test--arrange))
+                 (reader-start (window-start reader))
+                 (reader-point (window-point reader)))
+      (with-selected-window visit
+        (goto-char (point-min))
+        (search-forward "[Manage]")
+        (backward-char (length "[Manage]"))
+        (set-window-start visit (line-beginning-position) t)
+        (unless noninteractive (redisplay t))
+        (let ((y (niwa-view--position-screen-y (point) visit)))
+          (should y)
+          (dolist (zone '(status interaction))
+            (if (eq zone 'status)
+                (progn
+                  (setq agents (list (list :path "/root/new" :status 'running
+                                           :started-at 990.0)))
+                  (niwa-view--render-status)
+                  (should (string-search "1 agent" (buffer-string))))
+              (niwa-view--interaction-register '(:kind ask :id ask :body "Question"))
+              (should (niwa-view-zone-region 'interaction)))
+            (unless noninteractive (redisplay t))
+            (should (looking-at-p (regexp-quote "[Manage]")))
+            (should (equal y (niwa-view--position-screen-y (point) visit)))
+            (should (= reader-start (window-start reader)))
+            (should (= reader-point (window-point reader)))))))))
 
 (provide 'test-niwa-view-user-state)
 ;;; test-niwa-view-user-state.el ends here
