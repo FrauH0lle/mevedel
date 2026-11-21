@@ -243,6 +243,72 @@
       (should (equal "Next draft" (niwa-view-composer-draft-text)))
       (should (= 4 (niwa-view-responsiveness-test--draft-offset))))))
 
+(niwa-deftest niwa-view--settle-reader-anchors
+  (:doc "Settling a turn keeps readers in place without rescanning history.")
+  (save-window-excursion
+    (delete-other-windows)
+    (niwa-view-test--with-buffers
+      (dotimes (i 12)
+        (niwa-view-test--insert-data data-buf (format "Old prompt %d\n\n" i) nil)
+        (niwa-view-test--insert-data
+         data-buf (format "Old answer %d\nsecond line %d\n\n" i i) 'response))
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (niwa-view-test--insert-data data-buf "New prompt\n\n" nil)
+        (niwa-view-stream-begin-turn
+         (niwa-view--insert-user-message "New prompt")
+         (with-current-buffer data-buf (copy-marker (point-max))))
+        (niwa-view-test--insert-data data-buf "First words\n\n" 'response)
+        (niwa-view-render-live-update data-buf)
+        (let* ((reader (selected-window))
+               (end (split-window reader))
+               (turn-start (niwa-view-stream-in-flight-turn-start-position))
+               (history-end (save-excursion
+                              (goto-char (point-min))
+                              (search-forward "second line 10")))
+               (data-start (with-current-buffer data-buf
+                             (save-excursion
+                               (goto-char (point-min))
+                               (search-forward "First words")
+                               (match-beginning 0))))
+               (old-start (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Old answer 3")
+                            (line-beginning-position)))
+               (old-point (+ 2 (save-excursion
+                                 (goto-char old-start)
+                                 (search-forward "second line 4")
+                                 (line-beginning-position))))
+               scans)
+          (set-window-buffer reader view-buf)
+          (set-window-buffer end view-buf)
+          (set-window-start reader old-start)
+          (set-window-point reader old-point)
+          (set-window-start end turn-start)
+          (set-window-point end (point-max))
+          (niwa-view-test--insert-data data-buf "More words\n\n" 'response)
+          (cl-letf* (((symbol-function 'niwa-view--recover-in-flight-turn-start)
+                      (lambda (&rest _) (ert-fail "Scanned history despite a live source")))
+                     (run-end (symbol-function 'niwa-view--render-anchor-run-end))
+                     ((symbol-function 'niwa-view--render-anchor-run-end)
+                      (lambda (pos limit)
+                        (push (+ 0 pos) scans)
+                        (funcall run-end pos limit))))
+            (with-current-buffer data-buf
+              (niwa-view-stream-render-response data-start (point-max))))
+          (should (string-search "More words" (buffer-string)))
+          (should (string-search "Old answer 11" (buffer-string)))
+          ;; The settle rewrites only the newest turns; older rows are not
+          ;; counted.
+          (should scans)
+          (should (cl-every (lambda (pos) (> pos history-end)) scans))
+          (should (= old-start (window-start reader)))
+          (should (= old-point (window-point reader)))
+          (should (string-prefix-p "Old answer 3"
+                                   (buffer-substring (window-start reader)
+                                                     (point-max))))
+          (should (= (point-max) (window-point end))))))))
+
 (niwa-deftest niwa-view--retain-last-live-render-unit
   (:doc "Only the final unit, across its property runs, is retained.")
   (niwa-view-test--with-buffers

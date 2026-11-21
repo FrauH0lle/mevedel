@@ -4224,7 +4224,41 @@ the render so user toggles survive streaming ticks."
          (fresh-tail-p (and (not settle-p)
                             in-flight-p (>= in-flight-p history-tail)
                             pre-rendered-user-visible-p))
-         (pending niwa-view--pending-tool-calls))
+         (pending niwa-view--pending-tool-calls)
+         ;; Known before the write, so the reader anchors below can be
+         ;; scoped to the text this render may replace.
+         (history-start (niwa-view--after-header-position))
+         ;; Reject markers that pass `markerp' but are detached
+         ;; (`marker-position' returns nil): they would crash
+         ;; `<=' / `delete-region' / `apply-collapse-states' below.
+         (status-pos (and (markerp niwa-view--status-marker)
+                          (marker-position niwa-view--status-marker)))
+         (status-valid-p
+          (and status-pos
+               (>= status-pos history-tail)
+               (not (niwa-view--non-history-view-position-p
+                     status-pos))
+               (not (and (> status-pos history-start)
+                         (niwa-view--non-history-view-position-p
+                          (1- status-pos))))))
+         (rebuild-end
+          (or (and status-valid-p niwa-view--status-marker)
+              (copy-marker history-tail t)
+              (niwa-view-transcript-tail-marker)))
+         (rebuild-end-pos (marker-position rebuild-end))
+         ;; A retained tail already knows where to delete from.
+         (recovered-start
+          (unless (or fresh-tail-p (and retained-p in-flight-p)
+                      ;; A qualifying source here proves the first one (and
+                      ;; its header) cannot follow the valid delete marker.
+                      (and settle-p data-from in-flight-p
+                           (<= history-start in-flight-p)
+                           (< in-flight-p rebuild-end-pos)
+                           (when-let* ((source (niwa-view-disclosure-source-start
+                                                (get-text-property in-flight-p 'niwa-view-source))))
+                             (>= source data-from))))
+            (niwa-view--recover-in-flight-turn-start
+             data-from history-start rebuild-end-pos))))
     (niwa-view--debug-log
      'incremental-extract
      :state (niwa-view--debug-state data-buf data-from data-to)
@@ -4286,30 +4320,6 @@ the render so user toggles survive streaming ticks."
                  ;; that case keep the previous in-flight rendering instead of
                  ;; replacing it with a blank region.
                  (replace-p (or turns pending))
-                 ;; Reject markers that pass `markerp' but are detached
-                 ;; (`marker-position' returns nil): they would crash
-                 ;; `<=' / `delete-region' / `apply-collapse-states' below.
-                 (history-start (niwa-view--after-header-position))
-                 (status-pos (and (markerp niwa-view--status-marker)
-                                  (marker-position niwa-view--status-marker)))
-                 (status-valid-p
-                  (and status-pos
-                       (>= status-pos history-tail)
-                       (not (niwa-view--non-history-view-position-p
-                             status-pos))
-                       (not (and (> status-pos history-start)
-                                 (niwa-view--non-history-view-position-p
-                                  (1- status-pos))))))
-                 (rebuild-end
-                  (or (and status-valid-p niwa-view--status-marker)
-                      (copy-marker history-tail t)
-                      (niwa-view-transcript-tail-marker)))
-                 (rebuild-end-pos (marker-position rebuild-end))
-                 ;; A retained tail already knows where to delete from.
-                 (recovered-start
-                  (unless (or fresh-tail-p (and retained-p in-flight-p))
-                    (niwa-view--recover-in-flight-turn-start
-                     data-from history-start rebuild-end-pos)))
                  (delete-start
                   (or (and retained-p in-flight-p)
                       (and in-flight-p
@@ -4463,13 +4473,19 @@ the render so user toggles survive streaming ticks."
             (niwa-view--interaction-rebuild)
             (when (fboundp 'niwa-note-frame-refresh)
               (niwa-note-frame-refresh))))))
-      ;; A fresh or retained tail rewrites only the in-flight turn and the
-      ;; zones below it; anchor readers there without counting old history.
-      (and (or fresh-tail-p retained-p) in-flight-p
-           (cons (min (if fresh-tail-p history-tail in-flight-p)
-                      (or (niwa-view-stream-in-flight-turn-start-position)
-                          in-flight-p))
-                 (point-max)))
+      ;; A render rewrites only the in-flight turn and the zones below it;
+      ;; anchor readers there without counting old history.
+      (let ((turn-start (niwa-view-stream-in-flight-turn-start-position)))
+        (cond
+         ((and (or fresh-tail-p retained-p) in-flight-p)
+          (cons (min (if fresh-tail-p history-tail in-flight-p)
+                     (or turn-start in-flight-p))
+                (point-max)))
+         ;; Without a turn start, retiring running rows starts at the top.
+         (turn-start
+          (cons (apply #'min history-tail turn-start
+                       (delq nil (list in-flight-p recovered-start)))
+                (point-max)))))
       t)))
 
 (defvar-local niwa-view-render--owner nil

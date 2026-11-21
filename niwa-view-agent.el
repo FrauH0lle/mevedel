@@ -141,6 +141,7 @@
 (declare-function niwa-view--indent-region-lines
                   "niwa-view" (start end prefix))
 (declare-function niwa-view--render-status "niwa-view" (&optional data-buf))
+(declare-function niwa-view--status-anchor "niwa-view" ())
 (declare-function niwa-view--status-trailing-newline-suffix "niwa-view" (body))
 (declare-function niwa-view--zone-separator "niwa-view" (label))
 (declare-function niwa-view-activate-at-point "niwa-view" (&optional event))
@@ -1210,12 +1211,18 @@ does not search the transcript."
          (eq (marker-buffer end) data-buf)
          (< start end))))
 
+(defvar-local niwa-view--agent-refresh-prefix nil
+  "Last refresh's ((PATH TICK MIN) . START), with no matching handles before START.")
+
 (defun niwa-view--agent-handle-refresh-points (agent-path)
   "Return source-backed visible handle positions for AGENT-PATH.
 The return value is (POINTS . STALE-P), where STALE-P means a visible
 non-status handle existed but lacked usable source metadata."
-  (let ((pos (point-min))
-        (limit (or (niwa-view-transcript-tail) (point-max)))
+  (let ((pos (if (equal (car niwa-view--agent-refresh-prefix)
+                        (list agent-path (buffer-modified-tick) (point-min)))
+                 (cdr niwa-view--agent-refresh-prefix)
+               (point-min)))
+        (limit (min (point-max) (or (niwa-view-transcript-tail) (point-max))))
         points
         stale-p)
     (while (< pos limit)
@@ -1326,14 +1333,25 @@ Return non-nil on success."
 
 (defun niwa-view-agent--refresh-owned (agent-path)
   "Rediscover and refresh AGENT-PATH's handles with projection ownership held."
-  (let ((start-time (float-time))
-        stale-p)
+  (let* ((start-time (float-time))
+         (found (niwa-view--agent-handle-refresh-points agent-path))
+         ;; Only the handle sections and the status zone change; readers
+         ;; elsewhere need no anchor scan through the whole transcript.
+         (region (cons (apply #'min (niwa-view--status-anchor)
+                              (mapcar (lambda (point)
+                                        (save-excursion
+                                          (goto-char point)
+                                          (or (car (niwa-view-disclosure-section-bounds))
+                                              point)))
+                                      (car found)))
+                       (point-max)))
+         (prefix-end (min (point-max) (car region) (or (niwa-view-transcript-tail) (point-max))))
+         stale-p)
     (niwa-view-call-preserving-user-view-state
      (lambda ()
        (let ((inhibit-read-only t)
              (inhibit-modification-hooks t))
-         (pcase-let ((`(,points . ,stale)
-                      (niwa-view--agent-handle-refresh-points agent-path)))
+         (pcase-let ((`(,points . ,stale) found))
            (setq stale-p (or stale
                              (and (null points)
                                   (niwa-view--agent-source-present-p
@@ -1341,7 +1359,13 @@ Return non-nil on success."
            (dolist (point points)
              (unless (niwa-view--refresh-agent-handle-at point agent-path)
                (setq stale-p t))))
-         (niwa-view--render-agent-status))))
+         (niwa-view--render-agent-status)
+         ;; REGION bounds this writer.  Reuse its unchanged prefix only
+         ;; until another writer changes text or properties in the view.
+         (unless stale-p
+           (setq niwa-view--agent-refresh-prefix
+                 (cons (list agent-path (buffer-modified-tick) (point-min)) prefix-end)))))
+     region)
     (niwa-view--debug-log
      'agent-refresh
      :agent-path agent-path

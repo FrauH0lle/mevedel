@@ -152,13 +152,13 @@ Return (VIEW-WINDOW . READER)."
   (niwa-view-user-state-test--add-chunk data-buf "Streaming response begins.\n")
   (niwa-view--render-stream-update data-buf))
 
-(defun niwa-view-user-state-test--register-agent (data-buf)
-  "Register a tool rendering an agent handle and add two calls to DATA-BUF."
+(defun niwa-view-user-state-test--register-agent (data-buf &optional header)
+  "Add two agent calls to DATA-BUF, optionally calling HEADER for their label."
   (niwa-tool-register
    (niwa-tool--create
     :name "UserStateAgent" :category "niwa"
     :renderer (lambda (_name _args result _data)
-                (list :header "Agent: user-state worker" :body result
+                (list :header (if header (funcall header) "Agent: user-state worker") :body result
                       :body-mode 'text-mode :vtype 'agent-handle
                       :agent-path "/root/worker" :agent-status 'running
                       :initially-collapsed-p t))))
@@ -256,6 +256,72 @@ Return (VIEW-WINDOW . READER)."
     (should (niwa-view--refresh-agent-rendering-now "/root/worker"))
     (should (= 2 (niwa-view-test--count-substring
                   "Agent: user-state worker" (buffer-string))))))
+
+(niwa-deftest niwa-view-user-state/agent-refresh-region
+  (:doc "An agent handle refresh anchors readers without scanning old history.")
+  (niwa-view-user-state-test--with-view
+    (niwa-view-user-state-test--register-agent data-buf)
+    (let ((windows (niwa-view-user-state-test--arrange))
+          (history-end (save-excursion
+                         (goto-char (point-min))
+                         (search-forward "Line 59 of the earlier response.")))
+          (run-end (symbol-function 'niwa-view--render-anchor-run-end))
+          scans)
+      (niwa-view-user-state-test--preserves windows
+        (cl-letf (((symbol-function 'niwa-view--render-anchor-run-end)
+                   (lambda (pos limit)
+                     (push (+ 0 pos) scans)
+                     (funcall run-end pos limit))))
+          (should (niwa-view--refresh-agent-rendering-now "/root/worker"))))
+      (should (= 2 (niwa-view-test--count-substring
+                    "Agent: user-state worker" (buffer-string))))
+      (should scans)
+      (should (cl-every (lambda (pos) (> pos history-end)) scans)))))
+
+(niwa-deftest niwa-view-user-state/agent-refresh-reader
+  (:doc "A reader stays on the second handle when the first handle grows.")
+  (niwa-view-user-state-test--with-view
+    (let ((label "Agent: user-state worker"))
+      (niwa-view-user-state-test--register-agent data-buf (lambda () label))
+      (let ((reader (cdr (niwa-view-user-state-test--arrange))))
+        (cl-flet ((second-row ()
+                    (save-excursion
+                      (goto-char (point-min))
+                      (search-forward label nil nil 2)
+                      (line-beginning-position))))
+          (let ((old (second-row)))
+            (set-window-start reader old)
+            (set-window-point reader (+ old 4))
+            (setq label (concat label " processing a much longer request"))
+            (should (niwa-view--refresh-agent-rendering-now "/root/worker"))
+            (let ((new (second-row)))
+              (should (> new old))
+              (should (= (window-start reader) new))
+              (should (= (window-point reader) (+ new 4))))))))))
+
+(niwa-deftest niwa-view-user-state/agent-refresh-prefix
+  (:doc "Repeated refresh skips unchanged history but notices earlier new handles.")
+  (niwa-view-user-state-test--with-view
+    (niwa-view-user-state-test--register-agent data-buf)
+    (let ((path "/root/worker")
+          (next (symbol-function 'next-single-property-change))
+          (history-end (save-excursion (goto-char (point-min)) (forward-line 40) (point)))
+          scans)
+      (should (niwa-view--refresh-agent-rendering-now path))
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (pos prop &rest args)
+                   (when (eq prop 'niwa-view-agent-path) (push pos scans))
+                   (apply next pos prop args))))
+        (should (= 2 (length (car (niwa-view--agent-handle-refresh-points path)))))
+        (should scans)
+        (should (cl-every (lambda (pos) (> pos history-end)) scans)))
+      (save-restriction
+        (narrow-to-region (point-min) history-end)
+        (should (equal (niwa-view--agent-handle-refresh-points path) '(nil))))
+      (let ((inhibit-read-only t))
+        (add-text-properties (point-min) (1+ (point-min))
+                             `(niwa-view-agent-path ,path niwa-view-agent-handle-p t)))
+      (should (cdr (niwa-view--agent-handle-refresh-points path))))))
 
 (niwa-deftest niwa-view-user-state/nesting ()
   (niwa-view-user-state-test--with-view
