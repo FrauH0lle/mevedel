@@ -33,14 +33,14 @@ Until the package is on the npm registry, fetch it from GitHub instead: the
 `master`. Wherever this README says `npx niwa-remote-artifact`, use
 
 ```sh
-npx -y --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist
+npx -y --allow-git=all github:FrauH0lle/niwa.el#remote-artifact-dist
 ```
 
 for example
-`claude mcp add remote-artifacts -- npx -y --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist mcp`.
+`claude mcp add remote-artifacts -- npx -y --allow-git=all github:FrauH0lle/niwa.el#remote-artifact-dist mcp`.
 npm 12 refuses packages from git unless `--allow-git=all` allows them;
 older npm accepts the option or ignores it. A global install starts faster:
-`npm install -g --allow-git=all github:FrauH0lle/niwa#remote-artifact-dist`,
+`npm install -g --allow-git=all github:FrauH0lle/niwa.el#remote-artifact-dist`,
 then `niwa-remote-artifact mcp`; repeat the install to update.
 
 Claude Code:
