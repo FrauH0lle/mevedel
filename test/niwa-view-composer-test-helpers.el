@@ -23,11 +23,15 @@
   (sit-for 0.02)
   (redisplay t))
 
+(defvar niwa-view-composer-graphical--allow-batch nil
+  "Non-nil lets a layout-only test use the chat fixture in batch Emacs.")
+
 (defmacro niwa-view-composer-graphical--with-chat (&rest body)
   "Show a real chat and run BODY with its `data-buf' and `view-buf'."
   (declare (indent 0) (debug t))
   `(progn
-     (skip-unless (not noninteractive))
+     (skip-unless (or niwa-view-composer-graphical--allow-batch
+                      (not noninteractive)))
      (save-window-excursion
        (delete-other-windows)
        (let* ((root (file-name-as-directory (make-temp-file "composer-chat-" t)))

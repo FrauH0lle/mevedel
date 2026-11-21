@@ -175,6 +175,7 @@
                   "niwa-view-agent" ())
 (declare-function niwa-view-agent-initialize
                   "niwa-view-agent" (options data-buffer))
+(declare-function niwa-view-quit "niwa-view-agent" ())
 (declare-function niwa-view-close-agent-transcript
                   "niwa-view-agent" ())
 (declare-function niwa-view-open-agent-transcript-at-point
@@ -710,7 +711,7 @@ above the prompt boundary."
   "n" #'niwa-view-next-display
   "p" #'niwa-view-previous-display
   "t" #'niwa-view-toggle-transcript
-  "q" #'niwa-view-close-agent-transcript)
+  "q" #'niwa-view-quit)
 
 (defvar-keymap niwa-surface-mode-map
   :doc "Keymap inherited by editable niwa surfaces."
@@ -975,9 +976,14 @@ new view buffer is created."
 ;;
 ;;; Lifecycle
 
+(defvar niwa-view--closing-data nil
+  "The data buffer a view's teardown is killing right now, or nil.")
+
 (defun niwa-view--allow-session-close-p ()
-  "Return non-nil when the current session may be closed safely."
+  "Return non-nil when the current session may be closed safely.
+A data buffer killed by its view's teardown was already approved with the view."
   (cond
+   ((eq niwa-view--closing-data (current-buffer)) t)
    ((and niwa--session
          (niwa-session-pending-publication niwa--session))
     (niwa-diagnostic-message
@@ -1069,7 +1075,8 @@ Unlink and kill the associated data buffer if it still owns this view."
                 (when (eq niwa--view-buffer view-buffer)
                   (setq niwa--view-buffer nil)
                   t))
-          (kill-buffer db))))))
+          (let ((niwa-view--closing-data db))
+            (kill-buffer db)))))))
 
 (defun niwa-view--on-data-killed ()
   "Hook run when the data buffer is killed.

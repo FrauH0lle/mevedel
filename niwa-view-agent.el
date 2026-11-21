@@ -803,6 +803,13 @@ retained projections that can follow another turn."
              nil #'niwa-view-stream--release-turn))))
       views)))
 
+(defun niwa-view-quit ()
+  "Close an agent transcript inspection, or quit the selected view window."
+  (interactive)
+  (if niwa-view--agent-transcript-p
+      (niwa-view-close-agent-transcript)
+    (quit-window)))
+
 (defun niwa-view-close-agent-transcript ()
   "Close the selected transcript inspection and return to its parent view.
 Saved transcript file buffers are killed with the view.  Retained

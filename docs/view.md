@@ -72,7 +72,9 @@ authoritative transcript.
 | Key in the transcript or composer | Effect |
 | --- | --- |
 | `C-x 1` | Keeps both windows in the pair while closing other windows. |
-| `C-x 0` | Closes the pair, subject to Emacs's last-window rule. |
+| `C-x 0` | Closes the pair. A pair that fills the frame is quit instead, like `quit-window`: the view is buried, the draft is kept, and Emacs chooses what the window shows. |
+| `q` in the transcript, or `quit-window` in either window | Closes this pair using Emacs's normal quit behavior; the draft is kept. For a pair that fills the frame, the composer's quit buries the view and leaves one window whose buffer Emacs chooses, unless the draft is shown in several windows, where only Emacs's own handling applies. A literal `q` in the composer is text. |
+| `C-x k` in the composer | Asks to close the chat exactly as `C-x k` in the transcript does. A veto leaves the view, the composer and the draft untouched. |
 | `C-x 2` / `C-x 3` | Splits outside the pair; the new transcript gets its own dock. |
 | `C-x b` | Changes the transcript's buffer; the draft stays with its view. |
 | `C-x o` | Cycles through windows normally, including the composer. |

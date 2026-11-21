@@ -13,6 +13,7 @@
           "niwa-view-composer-test-helpers"))
 (require 'niwa-interaction-prompt)
 (require 'niwa-session-persistence)
+(require 'niwa-view)
 (require 'niwa-view-pair)
 (require 'which-key)
 
@@ -163,6 +164,58 @@
       (should-not (window-live-p other))
       (niwa-view-pair-graphical--pairs view-buf 1)
       (should (equal "> keep this draft" (niwa-view-composer-graphical--draft view-buf))))))
+
+(ert-deftest niwa-view-pair-graphical/quit-sole-pair ()
+  "Quitting either member of a frame-filling pair ends as one window."
+  :tags '(niwa-docked-composer)
+  (dolist (member '(composer transcript))
+    (niwa-view-composer-graphical--with-chat
+      (let* ((dock (selected-window))
+             (draft (window-buffer dock))
+             (transcript (get-buffer-window view-buf)))
+        (set-window-prev-buffers transcript
+                                 (list (list (get-buffer-create "*scratch*")
+                                             (point-min-marker) (point-min-marker))))
+        (select-window (if (eq member 'composer) dock transcript))
+        (if (eq member 'composer)
+            (quit-window)
+          ;; A literal q in the composer is text, so only the transcript has the key.
+          (goto-char (point-min))
+          (niwa-view-composer-graphical--keys "q" 'niwa-view-quit))
+        (niwa-test--await 2 "Expected the quit pair to settle to one window"
+          (progn (niwa-view-composer-graphical--settle)
+                 (= 1 (length (window-list nil 'nomini)))))
+        (niwa-view-composer-graphical--settle)
+        (should (= 1 (length (window-list nil 'nomini))))
+        (should (eq (get-buffer "*scratch*") (window-buffer (selected-window))))
+        (should (buffer-live-p draft))
+        (should-not (get-buffer-window draft t))
+        (should-not (get-buffer-window view-buf t))))))
+
+(ert-deftest niwa-view-pair-graphical/kill-dock-requests-close ()
+  "Killing the dock buffer asks the view once; a veto keeps view, dock and draft."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (let ((dock (selected-window))
+          (draft (current-buffer))
+          (asked 0)
+          (allow nil))
+      (niwa-view-composer-graphical--type "unsent")
+      (cl-letf (((symbol-function 'niwa-view--allow-session-close-p)
+                 (lambda () (when (eq (current-buffer) view-buf) (cl-incf asked))
+                   allow)))
+        (execute-kbd-macro (kbd "C-x k RET"))
+        (should (= 1 asked))
+        (should (buffer-live-p view-buf))
+        (should (buffer-live-p draft))
+        (niwa-view-pair-graphical--pairs view-buf 1)
+        (should (eq dock (selected-window)))
+        (should (equal "unsent" (niwa-view-composer-graphical--draft view-buf)))
+        (setq allow t asked 0)
+        (execute-kbd-macro (kbd "C-x k RET"))
+        (should (= 1 asked))
+        (should-not (buffer-live-p view-buf))
+        (should-not (buffer-live-p draft))))))
 
 (ert-deftest niwa-view-pair-graphical/settlement-after-return ()
   "A settled card does not rewind a draft the user returned to edit."

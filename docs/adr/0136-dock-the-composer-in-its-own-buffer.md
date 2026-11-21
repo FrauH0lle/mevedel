@@ -43,8 +43,9 @@ transcript is weakly dedicated: automatic popup display skips it, but explicit
 `C-x b` can still replace its buffer. Its `visible` parameter lets workspace
 commands that filter out dedicated windows count the pair once. Window
 parameters route split and delete
-through the pair's parent and `delete-other-windows` in the dock through the
-transcript. The dock's
+through the pair's parent, or quit the pair when it fills the frame and the
+parent cannot be deleted, and route `delete-other-windows`
+in the dock through the transcript. The dock's
 `C-x b` switches the transcript's buffer instead of replacing the draft.
 Native split and switch-back can install and fit the dock before the first
 paint. See [window commands](../view.md#docked-composer) for the user contract.
@@ -73,6 +74,21 @@ owns the viewport rules and their exceptions.
   deletion commands can error when that root is the frame root. Restoring a
   window configuration also drops `window-atom`. They do not remove the need
   for repair and give less control over ordinary window commands.
+- **Quitting the dock of a frame-filling pair** cannot delete the pair's parent.
+  Emacs runs `quit-window-hook` in the buffer of the window being quit, so when
+  exactly one window shows the draft that window is the target. The hook then
+  unpairs, keeps the dock's window with the transcript window's buffer history
+  and quit parameters, deletes the transcript window and buries the view; native
+  quit switches that window. With several windows on the draft the target is
+  unknown and only native handling applies. The hook runs before native quit
+  decides to kill, so a vetoed kill-quit leaves view and draft alive but
+  unpaired; repair re-docks when the view is displayed again. Repair stays
+  observational. Deleting either member of such a pair (`C-x 0`, or
+  window-closing commands that call `delete-window`) runs the same quit from the
+  delete parameter, because refusing left the user unable to close the view. The
+  view's kill path releases the dock through `niwa-view-pair-hide` before the draft dies. A user's
+  `kill-buffer` of the draft is turned into a close request for its view, so the
+  view's close policy applies once; only the view's own release kills the draft.
 - **A native side window as the dock** belongs to a frame-wide slot, not one
   transcript. It can collide with a popup or span multiple transcript windows.
   Conversely, a display rule that places the *transcript* in a native side

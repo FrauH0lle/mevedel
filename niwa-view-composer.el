@@ -892,6 +892,7 @@ rail's displayed first line besides overwriting the prompt's prefix."
 (define-derived-mode niwa-composer-mode text-mode "Composer"
   "Edit the draft of a niwa conversation."
   (visual-line-mode 1)
+  (add-hook 'kill-buffer-query-functions #'niwa-composer--request-close nil t)
   ;; Parent mode hooks run after this body, so refuse from the mode's hook.
   (add-hook 'adaptive-wrap-prefix-mode-hook
             #'niwa-composer--refuse-adaptive-wrap nil t)
@@ -917,10 +918,26 @@ rail's displayed first line besides overwriting the prompt's prefix."
               scroll-margin 0
               other-window-scroll-default #'niwa-view-transcript-window))
 
+(defvar niwa-view-composer--releasing nil
+  "The draft buffer a view is releasing right now, or nil.")
+
 (defun niwa-view-composer-kill ()
-  "Kill the composer belonging to the current view."
+  "Release the current view's dock, then kill its composer.
+View kill and major-mode change both come here, so pair teardown does not
+depend on the composer's own kill hook running first."
   (when (buffer-live-p niwa-view--composer-buffer)
-    (kill-buffer niwa-view--composer-buffer)))
+    (niwa-view-pair-hide (current-buffer))
+    (let ((niwa-view-composer--releasing niwa-view--composer-buffer))
+      (kill-buffer niwa-view--composer-buffer))))
+
+(defun niwa-composer--request-close ()
+  "Turn a user's kill of this draft into a close request for its view.
+The view applies its normal close policy once and, if it accepts, kills the
+draft itself.  Return non-nil only when the view is already gone or is
+releasing this draft."
+  (or (eq niwa-view-composer--releasing (current-buffer))
+      (not (buffer-live-p niwa-composer--view))
+      (progn (kill-buffer niwa-composer--view) nil)))
 
 (defun niwa-view-composer-owner ()
   "Return the current composer's transcript, or the current buffer."

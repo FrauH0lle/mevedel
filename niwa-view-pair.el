@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'niwa-structs)
 (require 'niwa-utilities)
 
@@ -205,13 +206,34 @@ Use overlays so source anchors and unpaired windows keep the original text."
         (niwa-view-pair--schedule (window-frame transcript))))
     new))
 
+(defun niwa-view-pair--parent (window)
+  "Return the parent of WINDOW's pair when it can be deleted with the pair.
+The frame's root and main windows cannot be deleted, so a pair that fills
+either has no such parent."
+  (when-let* ((transcript (niwa-view-transcript-window window))
+              ((niwa-view-composer-window transcript))
+              (parent (window-parent transcript))
+              ((window-parent parent))
+              ((not (eq parent (window-main-window (window-frame parent))))))
+    parent))
+
+(defun niwa-view-pair--paired-p (window)
+  "Return non-nil when WINDOW is a member of a transcript and dock pair."
+  (when-let* ((transcript (niwa-view-transcript-window window)))
+    (niwa-view-composer-window transcript)))
+
 (defun niwa-view-pair--delete (window)
-  "Delete WINDOW's whole pair, subject to the native last-window rule."
-  (let* ((transcript (niwa-view-transcript-window window))
-         (ignore-window-parameters t))
-    (delete-window (if (and transcript (niwa-view-composer-window transcript))
-                       (window-parent transcript)
-                     window))))
+  "Delete WINDOW's whole pair; a pair that fills the frame is quit instead.
+Its parent cannot be deleted, so the known dock is unpaired directly and
+native quit-restore with `bury' shows the previous buffer, never killing."
+  (let ((ignore-window-parameters t)
+        (dock (niwa-view-pair--paired-p window)))
+    (cond ((niwa-view-pair--parent window)
+           (delete-window (niwa-view-pair--parent window)))
+          (dock
+           (niwa-view-pair--unpair-sole dock)
+           (quit-restore-window dock 'bury))
+          (t (delete-window window)))))
 
 (defun niwa-view-pair--only (window)
   "Keep WINDOW's pair rather than a lone composer."
@@ -405,8 +427,47 @@ whose rules need reinstalling), :add transcripts, and :remove docks."
     (niwa-view-composer-display (selected-window))))
 
 (defun niwa-view-pair--window-deletable-p (window _frame)
-  "Keep native buffer teardown from deleting a weakly dedicated WINDOW."
-  (not (eq (window-dedicated-p window) 'niwa-view-pair)))
+  "Keep native teardown from deleting a weak or undeletable pair WINDOW.
+Window teardown consults this hook but `delete-window' does not, so explicit
+deletion refuses in `niwa-view-pair--delete' and teardown falls back to a
+buffer switch."
+  (and (not (eq (window-dedicated-p window) 'niwa-view-pair))
+       (or (not (niwa-view-pair--paired-p window))
+           (niwa-view-pair--parent window))))
+
+(defun niwa-view-pair--unpair-sole (dock)
+  "Unpair the pair of DOCK, which fills its frame, so native quit can finish.
+DOCK's window survives as the sole window with the transcript window's buffer
+history and quit parameters; the view is buried and the draft kept."
+  (let* ((transcript (niwa-view-transcript-window dock))
+         (view (window-buffer transcript)))
+    (niwa-view-pair--unbind dock)
+    (niwa-view-pair--unbind transcript)
+    (set-window-prev-buffers dock (window-prev-buffers transcript))
+    ;; Native quit checks that a record's fourth element is the buffer it
+    ;; acts on, which is now the draft rather than the view.  Set both
+    ;; parameters unconditionally so the dock's own stale record cannot win.
+    (dolist (parameter '(quit-restore quit-restore-prev))
+      (let ((record (copy-sequence (window-parameter transcript parameter))))
+        (when (eq (nth 3 record) view)
+          (setf (nth 3 record) (window-buffer dock)))
+        (set-window-parameter dock parameter record)))
+    (let ((ignore-window-parameters t))
+      (delete-window transcript))
+    (bury-buffer view)))
+
+(defun niwa-view-pair--quit-dock ()
+  "Before `quit-window' acts on an undeletable pair's dock, unpair it.
+Emacs runs this hook in the buffer of the window being quit, so when exactly
+one window shows this draft that window is the quit target; with several the
+target is unknown and native quit proceeds alone."
+  (let ((docks (get-buffer-window-list nil nil t)))
+    (when-let* (((null (cdr docks)))
+                (dock (car docks))
+                ((niwa-view-pair--paired-p dock))
+                ((not (niwa-view-pair--parent dock)))
+                ((eq (niwa-view-composer-window dock) dock)))
+      (niwa-view-pair--unpair-sole dock))))
 
 (defun niwa-view-pair-watch (draft)
   "Observe layout changes for the current view and its DRAFT buffer."
@@ -415,6 +476,8 @@ whose rules need reinstalling), :add transcripts, and :remove docks."
   (add-hook 'window-buffer-change-functions #'niwa-view-pair--buffer-change nil t)
   (with-current-buffer draft
     (add-hook 'window-buffer-change-functions #'niwa-view-pair--buffer-change nil t)
+    (add-hook 'window-deletable-functions #'niwa-view-pair--window-deletable-p nil t)
+    (add-hook 'quit-window-hook #'niwa-view-pair--quit-dock nil t)
     (add-hook 'kill-buffer-hook #'niwa-view-pair--kill-draft nil t))
   (add-hook 'window-buffer-change-functions #'niwa-view-pair--frame-change)
   (add-hook 'window-configuration-change-hook #'niwa-view-pair--configuration-change))
