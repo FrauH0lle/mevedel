@@ -95,6 +95,41 @@
         (should (= (window-pixel-height dock) short))
         (should (= (window-start dock) (point-min)))))))
 
+(ert-deftest niwa-view-composer-graphical/hidden-count-follows-edits-above ()
+  "Typing below the hidden lines reuses their count; edits above update it."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (let ((dock (selected-window))
+          (counts 0))
+      (insert (mapconcat (lambda (n) (format "Draft line %d" n))
+                         (number-sequence 1 200) "\n"))
+      (niwa-view-composer-graphical--settle)
+      (let ((label (lambda ()
+                     (format "↑ %d more"
+                             (- (line-number-at-pos (window-start dock)) 2))))
+            (counter (lambda (&rest _) (cl-incf counts))))
+        (should (> (window-start dock) (niwa-view-composer-draft-start)))
+        (should (string-search (funcall label) (niwa-view-composer-graphical--header dock)))
+        (advice-add 'count-screen-lines :before counter)
+        (unwind-protect
+            (let ((start (window-start dock)))
+              (niwa-view-composer-graphical--type "abc")
+              (should (= (window-start dock) start))
+              (should (zerop counts)))
+          (advice-remove 'count-screen-lines counter))
+        ;; Keep the window start's position but add a hidden line above it.
+        (let ((start (window-start dock))
+              (before (funcall label)))
+          (save-excursion
+            (goto-char (niwa-view-composer-draft-start))
+            (delete-char 1)
+            (insert "\n"))
+          (niwa-view-composer-graphical--settle)
+          (should (= (window-start dock) start))
+          (should-not (equal before (funcall label)))
+          (should (string-search (funcall label)
+                                 (niwa-view-composer-graphical--header dock))))))))
+
 (ert-deftest niwa-view-composer-graphical/wrap-in-narrow-split ()
   "Native splitting wraps a single logical line and grows the dock."
   :tags '(niwa-docked-composer)
@@ -502,6 +537,192 @@
       (should (eq 'composer-draft
                   (niwa-pending-inputs--event-wake-refusal session data-buf view-buf)))
       (should (equal view-text (with-current-buffer view-buf (buffer-string)))))))
+
+(defun niwa-view-composer-graphical--faces-match (from to)
+  "Check the draft's faces from FROM to TO against whole-draft fontification."
+  (let* ((start (niwa-view-composer-draft-start))
+         (reference (niwa-view--fontify-as
+                     (buffer-substring-no-properties start (point-max))
+                     'markdown-mode)))
+    (cl-loop for pos from from below to
+             do (should (equal (list pos (get-text-property pos 'font-lock-face))
+                               (list pos (get-text-property (- pos start) 'font-lock-face
+                                                            reference)))))))
+
+(defun niwa-view-composer-graphical--check-faces ()
+  "Redisplay, then show and check the whole draft."
+  (niwa-view-composer-graphical--settle)
+  (jit-lock-fontify-now (niwa-view-composer-draft-start) (point-max))
+  (niwa-view-composer-graphical--faces-match (niwa-view-composer-draft-start) (point-max)))
+
+(defun niwa-view-composer-graphical--goto (text)
+  "Move to the start of TEXT in the draft."
+  (goto-char (niwa-view-composer-draft-start))
+  (search-forward text)
+  (goto-char (match-beginning 0)))
+
+(defun niwa-view-composer-graphical--fixture (text)
+  "Replace the draft with TEXT and check its faces."
+  (delete-region (niwa-view-composer-draft-start) (point-max))
+  (goto-char (point-max))
+  (insert text)
+  (niwa-view-composer-graphical--check-faces))
+
+(defun niwa-view-composer-graphical--emphasis-p (text)
+  "Return non-nil when the text just after the first TEXT is emphasized."
+  (save-excursion
+    (niwa-view-composer-graphical--goto text)
+    (memq 'markdown-ts-emphasis
+          (ensure-list (get-text-property (+ (point) (length text)) 'font-lock-face)))))
+
+(ert-deftest niwa-view-composer-graphical/faces-match-whole-draft ()
+  "Edits restyle other lines as fontifying the whole draft would."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (skip-unless (niwa-view--markdown-fontify-mode))
+    ;; A Setext underline restyles the line above it; undo restores it.
+    (niwa-view-composer-graphical--fixture "Heading candidate\nsecond line\n\nAfter *x*.")
+    (should-not (get-text-property (1+ (niwa-view-composer-draft-start)) 'font-lock-face))
+    (niwa-view-composer-graphical--goto "second line")
+    (end-of-line)
+    (niwa-view-composer-graphical--keys "RET" 'newline)
+    ;; Queued events add no automatic undo boundaries, so mark the underline
+    ;; as its own change group; a motion command keeps insertion from
+    ;; amalgamating across the first boundary.
+    (niwa-view-composer-graphical--keys "C-b" 'backward-char)
+    (niwa-view-composer-graphical--keys "C-f" 'forward-char)
+    (undo-boundary)
+    (niwa-view-composer-graphical--type "===")
+    (undo-boundary)
+    (niwa-view-composer-graphical--check-faces)
+    (should (get-text-property (1+ (niwa-view-composer-draft-start)) 'font-lock-face))
+    (niwa-view-composer-graphical--keys "C-/" 'undo)
+    (should (string-search "second line\n\n\nAfter" (niwa-view-composer-draft-text view-buf t)))
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (get-text-property (1+ (niwa-view-composer-draft-start)) 'font-lock-face))
+    ;; A heading split off a paragraph's end unpairs emphasis above it.
+    (niwa-view-composer-graphical--fixture "First *line\nmiddle\nend* line\n\nAfter *x*.")
+    (should (niwa-view-composer-graphical--emphasis-p "First *"))
+    (niwa-view-composer-graphical--goto "end*")
+    (niwa-view-composer-graphical--type "# ")
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (niwa-view-composer-graphical--emphasis-p "First *"))
+    ;; Removing an opener ends emphasis on the next line.
+    (niwa-view-composer-graphical--fixture "First *line\nsecond* line\n\nAfter *x*.")
+    (should (niwa-view-composer-graphical--emphasis-p "line\nsec"))
+    (niwa-view-composer-graphical--goto "*line")
+    (delete-char 1)
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (niwa-view-composer-graphical--emphasis-p "line\nsec"))
+    ;; A fence opened far above and closed far below restyles later blocks.
+    (niwa-view-composer-graphical--fixture
+     (mapconcat (lambda (n) (format "Filler %d with *emphasis*." n))
+                (number-sequence 1 60) "\n\n"))
+    (should (niwa-view-composer-graphical--emphasis-p "Filler 55 with *"))
+    (goto-char (niwa-view-composer-draft-start))
+    (insert "```\n")
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (niwa-view-composer-graphical--emphasis-p "Filler 55 with *"))
+    (niwa-view-composer-graphical--goto "Filler 50")
+    (insert "```\n")
+    (niwa-view-composer-graphical--check-faces)
+    (should (niwa-view-composer-graphical--emphasis-p "Filler 55 with *"))
+    ;; Fences inside a quote and a list item restyle their later lines.
+    (niwa-view-composer-graphical--fixture "> quoted *a*\n> more *b*\n\nAfter *c*.")
+    (should (niwa-view-composer-graphical--emphasis-p "> more *"))
+    (niwa-view-composer-graphical--goto "> quoted")
+    (end-of-line)
+    (insert "\n> ```")
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (niwa-view-composer-graphical--emphasis-p "> more *"))
+    (niwa-view-composer-graphical--fixture "- item *one*\n\n  more *two*\n\nAfter *c*.")
+    (should (niwa-view-composer-graphical--emphasis-p "more *"))
+    (niwa-view-composer-graphical--goto "- item")
+    (end-of-line)
+    (insert "\n  ```")
+    (niwa-view-composer-graphical--check-faces)
+    (should-not (niwa-view-composer-graphical--emphasis-p "more *"))
+    ;; A large yank.
+    (niwa-view-composer-graphical--fixture "Intro *x*.\n\n")
+    (kill-new (mapconcat (lambda (n) (format "Yanked *%d* with `code`\n\n```\nin *fence*\n```" n))
+                         (number-sequence 1 40) "\n\n"))
+    (goto-char (point-max))
+    ;; `yank' names itself as the command for a following `yank-pop'.
+    (niwa-view-composer-graphical--keys "C-y" 'yank)
+    (niwa-view-composer-graphical--check-faces)))
+
+(ert-deftest niwa-view-composer-graphical/keystroke-fontifies-its-block ()
+  "Typing in a long draft fontifies the edited block, not the whole draft."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (skip-unless (niwa-view--markdown-fontify-mode))
+    (insert (mapconcat (lambda (n) (format "Paragraph %d with *emphasis*." n))
+                       (number-sequence 1 600) "\n\n"))
+    (niwa-view-composer-graphical--settle)
+    (let* ((fontified 0)
+           (count (lambda (&optional beg end)
+                    (when (eq (current-buffer) niwa-view--markdown-fontify-buffer)
+                      (cl-incf fontified (- (or end (point-max)) (or beg (point-min))))))))
+      (advice-add 'font-lock-ensure :before count)
+      (unwind-protect (niwa-view-composer-graphical--type "x")
+        (advice-remove 'font-lock-ensure count))
+      ;; The draft holds about 20,000 characters.
+      (should (< 0 fontified 500)))))
+
+(ert-deftest niwa-view-composer-graphical/caret-stays-in-draft ()
+  "Motion above the draft stops at its start, so typing and selection edit it."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (let ((start (niwa-view-composer-draft-start)))
+      (niwa-view-composer-graphical--type "abc")
+      (niwa-view-composer-graphical--keys "C-p" 'previous-line)
+      (should (= (point) start))
+      (niwa-view-composer-graphical--type "x")
+      (niwa-view-composer-graphical--keys "<up>" 'previous-line)
+      (niwa-view-composer-graphical--type "y")
+      (niwa-view-composer-graphical--keys "M-<" 'beginning-of-buffer)
+      (niwa-view-composer-graphical--type "z")
+      (should (equal "zyxabc" (niwa-view-composer-graphical--draft view-buf)))
+      (niwa-view-composer-graphical--keys "C-x h" 'mark-whole-buffer)
+      (niwa-view-composer-graphical--keys "DEL" 'delete-backward-char)
+      (should (equal "" (niwa-view-composer-graphical--draft view-buf)))
+      (should (= (point) start))
+      ;; Clicking the rail's pending count visits the card and keeps the caret.
+      (niwa-view-composer-graphical--type "unsent draft")
+      (backward-char 5)
+      (let ((caret (point))
+            (transcript (niwa-view-transcript-window))
+            (dock (selected-window)))
+        (with-current-buffer data-buf
+          (niwa-tool-ask-ui-show #'ignore [(:question "Use the dock?" :options ["Yes" "No"])]))
+        (redisplay t)
+        (let ((pos (cl-loop with y = (+ (window-header-line-height dock)
+                                         (window-tab-line-height dock) 2)
+                            for x below (window-pixel-width dock)
+                            for pos = (posn-at-x-y x y dock)
+                            for (string . index) = (posn-string pos)
+                            when (and string (get-text-property index 'keymap string))
+                            return pos)))
+          (should pos)
+          (niwa-view-composer-graphical--events
+           (list (list 'down-mouse-1 pos) (list 'mouse-1 pos))
+           'niwa-view--click-rail-attention))
+        (should (eq transcript (selected-window)))
+        (should (get-text-property (point) 'niwa-prompt-focus))
+        (niwa-view-composer-graphical--keys "C-c C-SPC" 'niwa-view-pair-toggle-focus)
+        (should (eq dock (selected-window)))
+        (should (= caret (point)))))))
+
+(ert-deftest niwa-view-composer-graphical/yank-keeps-draft-reachable ()
+  "Yanked prompt text stays reachable for the caret."
+  :tags '(niwa-docked-composer)
+  (niwa-view-composer-graphical--with-chat
+    (let ((start (niwa-view-composer-draft-start)))
+      (kill-new (propertize "copied" 'cursor-intangible t))
+      (niwa-view-composer-graphical--keys "C-y" 'yank)
+      (should (equal "copied" (niwa-view-composer-graphical--draft view-buf)))
+      (niwa-view-composer-graphical--keys "C-b" 'backward-char)
+      (should (= (point) (+ start 5))))))
 
 (ert-deftest niwa-view-composer-graphical/send-and-history ()
   "Send folds the echo and clears input; history restores an unfinished draft."

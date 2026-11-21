@@ -23,6 +23,7 @@
 
 (require 'niwa-view)
 (require 'niwa-view-composer)
+(require 'niwa-view-fontify)
 (require 'niwa-view-render)
 (require 'niwa-view-stream)
 (require 'niwa-execution-target)

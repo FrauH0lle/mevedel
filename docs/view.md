@@ -83,6 +83,9 @@ authoritative transcript.
 | `C-c C-j` in the composer | Visits the next interaction card. If you are still visiting it when it settles, focus returns to the saved draft position. |
 
 Draft lines wrap in narrow windows and have no line numbers by default.
+The caret stays in the draft: `C-p`, `M-<` and `C-x h` stop at its start,
+with the rail in view, and clicking a rail count visits its card without
+moving the caret.
 The composer grows from one draft line plus its rail and chrome up to a third
 of the pair. When the whole draft fits, scrolling keeps its rail in view.
 At the cap it scrolls with the caret and shows `↑ N more` when draft lines are

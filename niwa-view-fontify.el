@@ -11,6 +11,12 @@
 
 ;; `markdown-ts-mode'
 (declare-function markdown-ts-mode "ext:markdown-ts-mode" ())
+(declare-function treesit-node-at "treesit" (pos &optional parser-or-lang named))
+(declare-function treesit-node-parent "treesit.c" (node))
+(declare-function treesit-node-type "treesit.c" (node))
+(declare-function treesit-node-start "treesit.c" (node))
+(declare-function treesit-node-end "treesit.c" (node))
+(declare-function treesit-parser-list "treesit.c" (&optional buffer language tag))
 (defvar markdown-ts-enable-code-block-context-mode)
 (defvar markdown-ts-enable-table-mode)
 (defvar markdown-ts-hide-markup)
@@ -373,6 +379,68 @@ buffer's font-lock refontification cycles."
            (font-lock-ensure)
            (buffer-substring (point-min) (1- (point-max)))))))
     (error text)))
+
+(defun niwa-view--markdown-top-block (pos)
+  "Return the top-level Markdown block node at POS, or nil.
+Sections only group headings with their content, so a block in a section
+counts as top-level."
+  (let ((node (treesit-node-at pos 'markdown)))
+    (while (and node (treesit-node-parent node)
+                (not (member (treesit-node-type (treesit-node-parent node))
+                             '("section" "document"))))
+      (setq node (treesit-node-parent node)))
+    (unless (member (treesit-node-type node) '("section" "document"))
+      node)))
+
+(defun niwa-view--fontify-markdown-blocks (text from to)
+  "Fontify the Markdown blocks of TEXT that overlap offsets FROM to TO.
+Return (START . FONTIFIED), where FONTIFIED is TEXT's substring from offset
+START with faces promoted as `niwa-view--fontify-as' does.  All of TEXT is
+parsed, so the faces equal those of fontifying all of TEXT; only the
+top-level blocks covering the range, and the block before it, are
+fontified and copied.  Lines are parsed in order, so an edit can change
+only blocks still open at its line: those now end just before it.
+Without a Markdown parse tree, the result covers all of TEXT."
+  (condition-case _
+      (if-let* ((buffer (niwa-view--markdown-fontify-target)))
+          (let ((niwa-view--markdown-fontify-active-buffers
+                 (cons buffer niwa-view--markdown-fontify-active-buffers)))
+            (unwind-protect
+                (with-current-buffer buffer
+                  (let ((inhibit-read-only t)
+                        (start (point-min))
+                        end)
+                    (erase-buffer)
+                    ;; The sentinel newline stays out of the result, as above.
+                    (insert text "\n")
+                    (setq end (1- (point-max)))
+                    (when (and (fboundp 'treesit-parser-list)
+                               (treesit-parser-list nil 'markdown))
+                      (goto-char (1+ from))
+                      (setq start (pos-bol))
+                      (goto-char (1+ to))
+                      (setq end (min end (1+ (pos-eol))))
+                      (goto-char start)
+                      (skip-chars-backward " \t\n")
+                      (dolist (block (list (niwa-view--markdown-top-block start)
+                                           (niwa-view--markdown-top-block
+                                            (max start (1- end)))
+                                           (and (> (point) (point-min))
+                                                (niwa-view--markdown-top-block
+                                                 (1- (point))))))
+                        (when block
+                          (setq start (min start (treesit-node-start block))
+                                end (min (1- (point-max))
+                                         (max end (treesit-node-end block)))))))
+                    (font-lock-ensure start (1+ end))
+                    (cons (1- start)
+                          (niwa-view--promote-face-to-font-lock-face
+                           (buffer-substring start end)))))
+              (when (and (not (eq buffer niwa-view--markdown-fontify-buffer))
+                         (buffer-live-p buffer))
+                (kill-buffer buffer))))
+        (cons 0 text))
+    (error (cons 0 text))))
 
 (provide 'niwa-view-fontify)
 ;;; niwa-view-fontify.el ends here

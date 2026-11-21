@@ -620,6 +620,8 @@ FRAME selects the display palette for the animated label."
   (niwa-view-jump-to-interaction))
 
 (defvar-keymap niwa-view--rail-attention-map
+  ;; A press would first move the draft caret onto the rail.
+  "<down-mouse-1>" #'ignore
   "<mouse-1>" #'niwa-view--click-rail-attention
   "<mouse-2>" #'niwa-view--click-rail-attention
   "<header-line> <mouse-1>" #'niwa-view--click-rail-attention

@@ -430,7 +430,8 @@
                   "niwa-view-disclosure" (source))
 
 ;; `niwa-view-fontify'
-(declare-function niwa-view--fontify-as "niwa-view-fontify" (text mode))
+(declare-function niwa-view--fontify-markdown-blocks "niwa-view-fontify"
+                  (text from to))
 
 ;; `niwa-view-history'
 (declare-function niwa-view-history-add "niwa-view-history"
@@ -534,14 +535,16 @@
 (defun niwa-view--propertize-input-prompt (start end)
   "Mark START..END as the read-only input prompt.
 The prompt is its own field, so line and word motion stop at the input
-start instead of entering the prompt."
+start instead of entering the prompt.  The caret cannot rest in it: the
+draft starts where the prompt ends."
   (add-text-properties
    start end
    '(read-only t
      niwa-view-prompt t
      field niwa-view-prompt
-     front-sticky (read-only niwa-view-prompt)
-     rear-nonsticky (read-only niwa-view-prompt field font-lock-face))))
+     cursor-intangible t
+     front-sticky (read-only niwa-view-prompt cursor-intangible)
+     rear-nonsticky (read-only niwa-view-prompt field font-lock-face cursor-intangible))))
 
 (defface niwa-view-note-scope
   '((t :inherit font-lock-keyword-face :weight bold))
@@ -715,13 +718,15 @@ their distinct labels."
 (defvar niwa-view-table--fontset-generation)
 
 (defun niwa-composer--hidden-label (window)
-  "Return a cached label for draft screen lines hidden above WINDOW."
+  "Return a cached label for draft screen lines hidden above WINDOW.
+`niwa-composer--forget-hidden' drops the count when an edit lands above
+the window start; edits below it cannot change the count."
   (let ((start (window-start window))
         (draft (and niwa-composer--draft-start
                     (marker-position niwa-composer--draft-start))))
     (if (and start draft (> start draft))
         (let* ((cache (window-parameter window 'niwa-composer-hidden))
-               (key (list (current-buffer) (buffer-chars-modified-tick) start
+               (key (list (current-buffer) start
                           (window-body-width window t) (window-hscroll window)
                           face-remapping-alist
                           (bound-and-true-p niwa-view-table--font-generation)
@@ -738,6 +743,12 @@ their distinct labels."
                                     (cons (copy-tree key) label))
               label)))
       "")))
+
+(defun niwa-composer--forget-hidden (beg _end _length)
+  "Drop hidden-line counts of windows whose start follows an edit at BEG."
+  (dolist (window (get-buffer-window-list nil nil t))
+    (when (> (window-start window) beg)
+      (set-window-parameter window 'niwa-composer-hidden nil))))
 
 (defun niwa-composer-invalidate-transcript-end (window)
   "Discard the header's view of WINDOW before native transcript redisplay."
@@ -880,6 +891,14 @@ END distinguishes a draft edit from a one-argument window notification."
   (when (niwa-composer--rail-clipped-p dock start)
     (niwa-composer--queue-fit)))
 
+(defun niwa-composer--reveal-rail ()
+  "Show the rail after a command moved the caret above the draft.
+`cursor-intangible-mode' then returns the caret to the draft start."
+  (when (and niwa-composer--draft-start
+             (< (point) niwa-composer--draft-start)
+             (eq (window-buffer) (current-buffer)))
+    (set-window-start nil (point-min) t)))
+
 (declare-function adaptive-wrap-prefix-mode "ext:adaptive-wrap" (&optional arg))
 
 (defun niwa-composer--refuse-adaptive-wrap ()
@@ -909,10 +928,15 @@ rail's displayed first line besides overwriting the prompt's prefix."
   (add-hook 'window-buffer-change-functions #'niwa-composer--queue-fit nil t)
   (add-hook 'window-size-change-functions #'niwa-composer--queue-fit nil t)
   (add-hook 'after-change-functions #'niwa-composer--queue-fit nil t)
+  (add-hook 'after-change-functions #'niwa-composer--forget-hidden nil t)
+  ;; Motion above the draft, such as C-p or M-<, stops at the draft start.
+  (cursor-intangible-mode 1)
+  (add-hook 'post-command-hook #'niwa-composer--reveal-rail nil t)
   (unless (eq yank-excluded-properties t)
     (setq-local yank-excluded-properties
                 (append niwa-view-zone-owned-properties
-                        '(niwa-view-interaction-id)
+                        ;; Copied prompt text must not become unreachable draft.
+                        '(niwa-view-interaction-id cursor-intangible)
                         yank-excluded-properties)))
   (setq-local scroll-conservatively 101
               scroll-margin 0
@@ -967,7 +991,8 @@ releasing this draft."
         ;; Display cells keep draft undo positions stable when the rail changes.
         (insert (propertize "   " 'display "") "\n")
         (add-text-properties (point-min) (point)
-                             '(read-only t front-sticky (read-only)
+                             '(read-only t cursor-intangible t
+                               front-sticky (read-only cursor-intangible)
                                rear-nonsticky t))
         (let ((start (point)))
           (insert (niwa-view--input-prompt-string))
@@ -1822,31 +1847,51 @@ buffer, so frequent small writers stay cheap."
 ;;
 ;;; Initialization
 
-(defun niwa-view--fontify-composer (_beg end)
-  "Highlight Markdown in the draft when redisplay reaches END.
-Fontify the whole draft so multiline syntax updates across edited lines.
-Copy only faces: markup stays visible and editable, and mention bindings
-and other input properties remain untouched."
+(defun niwa-view--composer-faces-p (from to face)
+  "Return non-nil when the draft from FROM to TO already has FACE."
+  (while (and (< from to) (equal face (get-text-property from 'font-lock-face)))
+    (setq from (next-single-property-change from 'font-lock-face nil to)))
+  (>= from to))
+
+(defun niwa-view--fontify-composer (beg end)
+  "Highlight Markdown in the draft blocks from BEG to END.
+Parse the whole draft but fontify only the top-level blocks covering the
+region and the rest of the displayed draft, so a keystroke does not
+refontify a long draft.  An edit cannot change earlier blocks; later text
+is refontified when it is next displayed.  Copy only faces: markup stays
+visible and editable, and mention bindings and other input properties
+remain untouched."
   (when-let* (((eq (current-buffer) (niwa-view-composer-buffer)))
               (start (niwa-view-composer-draft-start))
               ((> end start)))
     (save-restriction
       (widen)
       (let* ((draft-end (niwa-view-composer-draft-end))
-             (text (buffer-substring-no-properties start draft-end))
-             (fontified (niwa-view--fontify-as text 'markdown-mode))
-             (pos 0)
-             (limit (length text)))
+             ;; Only windows showing the region: another may be far away.
+             (shown (apply #'max end
+                           (mapcar #'window-end
+                                   (seq-filter (lambda (window)
+                                                 (<= (window-start window) beg
+                                                     (window-end window)))
+                                               (get-buffer-window-list nil nil t)))))
+             (blocks (niwa-view--fontify-markdown-blocks
+                      (buffer-substring-no-properties start draft-end)
+                      (- (max beg start) start) (- (min shown draft-end) start)))
+             (base (+ start (car blocks)))
+             (text (cdr blocks))
+             (pos 0))
         (with-silent-modifications
-          (remove-text-properties start draft-end '(font-lock-face nil))
-          (while (< pos limit)
-            (let ((next (next-single-property-change
-                         pos 'font-lock-face fontified limit))
-                  (face (get-text-property pos 'font-lock-face fontified)))
-              (when face
-                (put-text-property (+ start pos) (+ start next)
-                                   'font-lock-face face))
-              (setq pos next))))))))
+          (while (< pos (length text))
+            (let ((next (next-single-property-change pos 'font-lock-face text (length text)))
+                  (face (get-text-property pos 'font-lock-face text)))
+              (unless (niwa-view--composer-faces-p (+ base pos) (+ base next) face)
+                (if face
+                    (put-text-property (+ base pos) (+ base next) 'font-lock-face face)
+                  (remove-text-properties (+ base pos) (+ base next) '(font-lock-face nil))))
+              (setq pos next)))
+          ;; This edit may restyle later blocks, as an opened or closed fence does.
+          (when (< (+ base pos) draft-end)
+            (put-text-property (+ base pos) draft-end 'fontified nil)))))))
 
 (defun niwa-view-composer-initialize ()
   "Install editing support in the new composer."
