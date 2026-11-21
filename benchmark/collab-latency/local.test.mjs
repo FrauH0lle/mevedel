@@ -14,7 +14,7 @@ test('local runner rejects prompt without starting a host', () => {
 });
 
 test('local runner reaps its host and relay before removing the workspace after failure', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'mevedel-bench-check-'));
+  const root = await mkdtemp(join(tmpdir(), 'niwa-bench-check-'));
   t.after(async () => {
     for (const name of ['host', 'relay']) {
       try { process.kill(Number(await readFile(join(root, `${name}.pid`), 'utf8')), 'SIGKILL'); }
@@ -36,8 +36,8 @@ chmod +x "$3"
     curl: '#!/bin/sh\nexit 0\n',
     emacs: `#!/bin/sh
 echo $$ > "$TEST_STATE/host.pid"
-echo "$MEVEDEL_BENCH_ROOT" > "$TEST_STATE/workspace"
-printf '%s' '{"full":"http://localhost/#room.secret"}' > "$MEVEDEL_BENCH_ROOT/links.json"
+echo "$NIWA_BENCH_ROOT" > "$TEST_STATE/workspace"
+printf '%s' '{"full":"http://localhost/#room.secret"}' > "$NIWA_BENCH_ROOT/links.json"
 exec sleep 300
 `,
     node: '#!/bin/sh\nexit 19\n',

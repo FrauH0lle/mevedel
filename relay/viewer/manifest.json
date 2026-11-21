@@ -1,7 +1,7 @@
 {
   "name": "MevView",
   "short_name": "MevView",
-  "description": "mevedel live session viewer",
+  "description": "niwa live session viewer",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#14161a",

@@ -144,7 +144,7 @@ export const tools = [
     name: 'list_artifacts',
     description: 'List the remote artifacts attached on this machine: whiteboards, documents and HTML '
       + 'artifacts that '
-      + 'live in a mevedel workspace elsewhere (their origin). Shows each one\'s name, title, kind, '
+      + 'live in a niwa workspace elsewhere (their origin). Shows each one\'s name, title, kind, '
       + 'its configured origin name (or relay host), whether this link may only view or also edit '
       + 'it, and whether its origin is reachable now.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -152,7 +152,7 @@ export const tools = [
       const attached = Object.entries(readStore(ctx.env).artifacts);
       if (!attached.length) {
         return 'No remote artifacts attached. The user attaches one in a terminal: '
-          + 'npx mevedel-remote-artifact attach LINK';
+          + 'npx niwa-remote-artifact attach LINK';
       }
       const lines = await Promise.all(attached.map(async ([name, found]) => {
         let { title, kind, origin } = found;
@@ -296,7 +296,7 @@ export const tools = [
   },
   {
     name: 'edit_artifact',
-    description: 'Change a remote whiteboard or document, exactly as mevedel\'s SharedEdit does at its '
+    description: 'Change a remote whiteboard or document, exactly as niwa\'s SharedEdit does at its '
       + 'origin; needs an edit link. Read it first with read_artifact: each line is HASH then an '
       + 'element\'s or block\'s JSON. patch: changes are {id,hash,set?,unset?,after?,afterId?}; set merges '
       + 'fields and unset removes them, after replaces the whole element or block and null deletes it; a '
@@ -354,7 +354,7 @@ export const tools = [
   },
   {
     name: 'whiteboard_libraries',
-    description: 'Browse the element libraries of the user whose mevedel shares a remote whiteboard '
+    description: 'Browse the element libraries of the user whose niwa shares a remote whiteboard '
       + '(their own, installed ones and the built-in one; sharing a whiteboard exposes them). Without '
       + 'library it lists every item as LIBRARY/ITEM-ID, the ref edit_artifact insert takes; library '
       + 'limits the listing to one library; preview returns the picture of the library (or of all of '

@@ -226,7 +226,7 @@ test('Excalidraw scenes round trip with their images; unusable imports are refus
     ['excalidraw', JSON.stringify({ type: 'excalidrawlib', version: 2, libraryItems: [] }), /Not an Excalidraw scene/],
     ['excalidraw', scene([rect('a', 0, 0, { strokeColor: 'url(#x)' }), { ...rect('b', 0, 0), points: 'x' }]), null],
     ['excalidraw', scene(Array.from({ length: 4001 }, (_, i) => rect(`r${i}`, i, 0))), /Too many elements/],
-    ['native', JSON.stringify({ format: 'mevedel-editable-1', kind: 'whiteboard', title: 'Old', content: [] }), /Unsupported native file/],
+    ['native', JSON.stringify({ format: 'niwa-editable-1', kind: 'whiteboard', title: 'Old', content: [] }), /Unsupported native file/],
     ['html', '<script>bad</script>', /Unsupported import/],
   ]) {
     const attempt = handle({ action: 'import', format, id: 'invalid', actor: 'Guest', opId: 'bad', data });

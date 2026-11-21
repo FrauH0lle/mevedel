@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run loadbot against a local relay and an isolated host of SOURCE.
 #   benchmark/collab-latency/local.sh SOURCE SCENARIO [loadbot options]
-# SOURCE is a byte-compiled mevedel checkout; dependencies come from this
+# SOURCE is a byte-compiled niwa checkout; dependencies come from this
 # checkout's .eask.  Prints loadbot's JSON line, then the host stage report.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -12,7 +12,7 @@ case "${1:-}" in
   edit|presence) ;;
   *) echo "local.sh supports edit and presence; prompt needs a host that drains prompts" >&2; exit 2 ;;
 esac
-eask=${MEVEDEL_BENCH_EASK:-$repo/.eask}
+eask=${NIWA_BENCH_EASK:-$repo/.eask}
 root=$(mktemp -d)
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 relay= host=
@@ -42,7 +42,7 @@ curl -sf --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null || exit 1
 
 deps=()
 for d in "$eask"/*/elpa/*/; do deps+=(-L "$d"); done
-(cd "$root" && exec env HOME="$root" XDG_CONFIG_HOME="$root/.config" XDG_CACHE_HOME="$root/.cache" XDG_DATA_HOME="$root/.local/share" XDG_STATE_HOME="$root/.local/state" MEVEDEL_BENCH_ROOT="$root" MEVEDEL_BENCH_RELAY="ws://127.0.0.1:$port" \
+(cd "$root" && exec env HOME="$root" XDG_CONFIG_HOME="$root/.config" XDG_CACHE_HOME="$root/.cache" XDG_DATA_HOME="$root/.local/share" XDG_STATE_HOME="$root/.local/state" NIWA_BENCH_ROOT="$root" NIWA_BENCH_RELAY="ws://127.0.0.1:$port" \
   emacs -Q --batch -L "$source" "${deps[@]}" -l "$here/local-host.el") >"$root/host.log" 2>&1 &
 host=$!
 for _ in $(seq 300); do [ -s "$root/links.json" ] && break; sleep 0.1; done

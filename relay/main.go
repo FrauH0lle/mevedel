@@ -1,4 +1,4 @@
-// Command relay is the content-blind rendezvous point for mevedel live
+// Command relay is the content-blind rendezvous point for niwa live
 // browser collaboration.
 //
 // It serves the static viewer at "/", upgrades "/r/<roomId>?role=host|guest"
@@ -17,7 +17,7 @@
 // Close codes: 4001 room closed, 4004 no such room, 4009 second host.
 //
 // With -host-token set, a role=host upgrade must carry the token in the
-// X-Mevedel-Host-Token header or it is answered 404.
+// X-Niwa-Host-Token header or it is answered 404.
 package main
 
 import (
@@ -63,7 +63,7 @@ var roomIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{10,64}$`)
 
 // hostTokenHeader carries -host-token. A header rather than a query
 // parameter: reverse proxies log query strings.
-const hostTokenHeader = "X-Mevedel-Host-Token"
+const hostTokenHeader = "X-Niwa-Host-Token"
 
 const viewerContentSecurityPolicy = "default-src 'none'; " +
 	"script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; " +
@@ -145,7 +145,7 @@ type relay struct {
 	// ponytail: one global lock; per-room locks if guest counts ever matter.
 	mu    sync.Mutex
 	rooms map[string]*room
-	// hostToken, when non-empty, is required in the X-Mevedel-Host-Token
+	// hostToken, when non-empty, is required in the X-Niwa-Host-Token
 	// header of a role=host upgrade. Guests stay tokenless: their authority
 	// is the bearer link, and their room carries only its host's ciphertext.
 	hostToken string
@@ -381,7 +381,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7466", "listen address")
 	hostToken := flag.String("host-token", "",
 		"optional "+hostTokenHeader+" token for room creation")
-	vapidKeyFile := flag.String("vapid-key-file", "mevedel-relay-vapid.pem",
+	vapidKeyFile := flag.String("vapid-key-file", "niwa-relay-vapid.pem",
 		"persistent Web Push signing key")
 	flag.Parse()
 	push, err := loadOrCreateWebPushSender(newPushHTTPClient(), *vapidKeyFile)
@@ -389,7 +389,7 @@ func main() {
 		log.Fatalf("load Web Push key: %v", err)
 	}
 	rl := newRelay(*hostToken, push)
-	log.Printf("mevedel relay listening on %s", *addr)
+	log.Printf("niwa relay listening on %s", *addr)
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           rl.mux(),

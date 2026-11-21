@@ -1,4 +1,4 @@
-module github.com/FrauH0lle/mevedel/relay
+module github.com/FrauH0lle/niwa/relay
 
 go 1.24
 

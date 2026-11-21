@@ -35,5 +35,5 @@ Watch repeated events from a command's stdout and wake the model when they arriv
   restarted when a session resumes.
 - Uses Bash's permission checks and confinement. Request needed capabilities
   through `sandbox_permissions`, `additional_permissions`, and `justification`.
-  For exact grant shapes and escalation rules, read `mevedel://tools/execution.md`.
+  For exact grant shapes and escalation rules, read `niwa://tools/execution.md`.
   Do not use Monitor to bypass a denied Bash command.

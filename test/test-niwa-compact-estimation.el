@@ -1,0 +1,745 @@
+;;; test-niwa-compact-estimation.el -- Tests for compaction estimation -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'gptel-request)
+(require 'niwa-compact-estimation)
+(require 'niwa-models)
+(require 'niwa-structs)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+(defvar gptel--request-params)
+(defvar gptel-backend)
+(defvar gptel-max-tokens)
+(defvar gptel-model)
+(defvar gptel-reasoning-effort)
+
+(niwa-deftest niwa-compact-estimation--file-local-variables-start ()
+  ,test
+  (test)
+  :doc "returns nil when no file-local variables"
+  (with-temp-buffer
+    (insert "Hello world\n")
+    (should (null (niwa-compact-estimation--file-local-variables-start))))
+
+  :doc "detects elisp-style file-local variables"
+  (with-temp-buffer
+    (insert "Content here\n\n")
+    (let ((start (point)))
+      (insert ";; Local Variables:\n")
+      (insert ";; gptel-model: \"test\"\n")
+      (insert ";; End:\n")
+      (should (= (niwa-compact-estimation--file-local-variables-start) start))))
+
+  :doc "detects markdown-style file-local variables"
+  (with-temp-buffer
+    (insert "# Markdown content\n\n")
+    (let ((start (point)))
+      (insert "<!-- Local Variables: -->\n")
+      (insert "<!-- gptel-model: \"test\" -->\n")
+      (insert "<!-- End: -->\n")
+      (should (= (niwa-compact-estimation--file-local-variables-start) start))))
+
+  :doc "finds first Local Variables block when multiple exist"
+  (with-temp-buffer
+    (insert "Content here\n\n")
+    (let ((first-start (point)))
+      (insert ";; Local Variables:\n")
+      (insert ";; gptel-model: \"test\"\n")
+      (insert ";; End:\n\n")
+      (insert ";; Local Variables:\n")
+      (insert ";; gptel-model: \"test2\"\n")
+      (insert ";; End:\n")
+      (should (= (niwa-compact-estimation--file-local-variables-start) first-start)))))
+
+(niwa-deftest niwa-compact-estimation-estimate-tokens ()
+  ,test
+  (test)
+  :doc "counts retained guidance but not encoded provider fragments after a baseline"
+  (with-temp-buffer
+    (insert "Task")
+    (let ((marker (point-marker)))
+      (insert (niwa--format-hook-audit-record
+               '(:type injected-reminders :items ((:type fixture :body "keep")))))
+      (insert (niwa--format-hook-audit-record
+               (list :type 'provider-tool-batch :messages (make-string 10000 ?x))))
+      (should (= 11 (niwa-compact-estimation-estimate-tokens)))
+      (setq-local niwa-compact-estimation--known-token-baseline
+                  (list :tokens 100 :position marker))
+      (should (= 110 (niwa-compact-estimation-estimate-tokens)))))
+
+  :doc "counts tokens without file-local variables"
+  (with-temp-buffer
+    (insert "Hello world")  ; 11 chars / 4 = 2 tokens
+    (should (= (niwa-compact-estimation-estimate-tokens) 2)))
+
+  :doc "excludes elisp-style file-local variables from count"
+  (with-temp-buffer
+    (insert "Hello world\n\n")  ; 13 chars / 4 = 3 tokens
+    (insert ";; Local Variables:\n")
+    (insert ";; gptel-model: \"claude-sonnet-4\"\n")
+    (insert ";; End:\n")
+    (should (= (niwa-compact-estimation-estimate-tokens) 3)))
+
+  :doc "excludes markdown-style file-local variables from count"
+  (with-temp-buffer
+    (insert "# Title\n\nContent\n\n")  ; 18 chars / 4 = 4 tokens
+    (insert "<!-- Local Variables: -->\n")
+    (insert "<!-- gptel-model: \"test\" -->\n")
+    (insert "<!-- End: -->\n")
+    (should (= (niwa-compact-estimation-estimate-tokens) 4)))
+
+  :doc "respects gptel ignore property"
+  (with-temp-buffer
+    (insert "Hello ")
+    (let ((start (point)))
+      (insert "ignored ")
+      (put-text-property start (point) 'gptel 'ignore))
+    (insert "world")
+    (should (= (niwa-compact-estimation-estimate-tokens) 2)))  ; "Hello world" = 11 chars / 4 = 2 tokens
+
+  :doc "combines gptel ignore property and file-local variables exclusion"
+  (with-temp-buffer
+    (insert "Hello ")
+    (let ((start (point)))
+      (insert "ignored ")
+      (put-text-property start (point) 'gptel 'ignore))
+    (insert "world\n\n")
+    (insert ";; Local Variables:\n")
+    (insert ";; gptel-model: \"test\"\n")
+    (insert ";; End:\n")
+    (should (= (niwa-compact-estimation-estimate-tokens) 3)))  ; "Hello world\n\n" = 13 chars / 4 = 3 tokens
+
+  :doc "excludes all file-local variables when multiple blocks exist"
+  (with-temp-buffer
+    (insert "Hello world\n\n")  ; 13 chars / 4 = 3 tokens
+    (insert ";; Local Variables:\n")
+    (insert ";; gptel-model: \"test\"\n")
+    (insert ";; End:\n\n")
+    (insert ";; Local Variables:\n")
+    (insert ";; gptel-model: \"test2\"\n")
+    (insert ";; End:\n")
+    (should (= (niwa-compact-estimation-estimate-tokens) 3))))
+
+(niwa-deftest niwa-compact-estimation-estimate-transformed-request-tokens ()
+  ,test
+  (test)
+  :doc "combines a baseline and visible growth without subtracting contractions"
+  (with-temp-buffer
+    (insert "abcdefgh")
+    (let ((source (current-buffer)))
+      (setq-local niwa-compact-estimation--known-token-baseline
+                  (list :tokens 100 :position (point-marker)))
+      (with-temp-buffer
+        (insert "abcdefghijklmnop")
+        (insert (propertize "metadata" 'gptel 'ignore))
+        (should (= 102 (niwa-compact-estimation-estimate-transformed-request-tokens
+                        source (current-buffer))))
+        (erase-buffer)
+        (should (= 100 (niwa-compact-estimation-estimate-transformed-request-tokens
+                        source (current-buffer))))
+        (with-current-buffer source
+          (niwa-compact-estimation-clear-baseline))
+        (should (= 0 (niwa-compact-estimation-estimate-transformed-request-tokens
+                      source (current-buffer)))))))
+  :doc "returns nil if either buffer is dead"
+  (let ((dead (generate-new-buffer " *dead-compaction-input*")))
+    (kill-buffer dead)
+    (should-not (niwa-compact-estimation-estimate-transformed-request-tokens
+                 dead (current-buffer)))
+    (should-not (niwa-compact-estimation-estimate-transformed-request-tokens
+                 (current-buffer) dead))))
+
+(niwa-deftest niwa-compact-estimation-estimate-data-tokens ()
+  ,test
+  (test)
+  :doc "keeps chars/4 behavior for plain realized data"
+  (should (= (niwa-compact-estimation-estimate-data-tokens
+              (list :messages
+                    (vector (list :role "user"
+                                  :content "abcdefgh"))))
+             3))
+
+  :doc "counts OpenAI Responses input_image data URLs as image tokens"
+  (let* ((niwa-compact-estimation-image-token-estimate 123)
+         (prefix "data:image/png;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :type "input_image" :image_url url))
+         (expected (+ niwa-compact-estimation-image-token-estimate
+                      (/ (+ (length "input_image") (length prefix)) 4))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts OpenAI chat image_url data URLs as image tokens"
+  (let* ((niwa-compact-estimation-image-token-estimate 123)
+         (prefix "data:image/jpeg;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :type "image_url"
+                     :image_url (list :url url)))
+         (expected (+ niwa-compact-estimation-image-token-estimate
+                      (/ (+ (length "image_url") (length prefix)) 4))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts Anthropic base64 image blocks as image tokens"
+  (let* ((niwa-compact-estimation-image-token-estimate 123)
+         (data (list :type "image"
+                     :source (list :type "base64"
+                                   :media_type "image/png"
+                                   :data (make-string 4000 ?A))))
+         (expected (+ niwa-compact-estimation-image-token-estimate
+                      (/ (+ (length "image")
+                            (length "base64")
+                            (length "image/png"))
+                         4))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts Bedrock image bytes blocks as image tokens"
+  (let* ((niwa-compact-estimation-image-token-estimate 123)
+         (data (list :image (list :format "png"
+                                  :source (list :bytes
+                                                (make-string 4000 ?A)))))
+         (expected (+ niwa-compact-estimation-image-token-estimate
+                      (/ (length "png") 4))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               expected)))
+
+  :doc "adds image estimates for multiple images"
+  (let* ((niwa-compact-estimation-image-token-estimate 123)
+         (prefix "data:image/png;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :content
+                     (vector "abcd"
+                             (list :type "input_image" :image_url url)
+                             (list :type "input_image" :image_url url))))
+         (expected (+ (* 2 niwa-compact-estimation-image-token-estimate)
+                      (/ (+ (length "abcd")
+                            (* 2 (+ (length "input_image")
+                                    (length prefix))))
+                         4))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               expected)))
+
+  :doc "leaves non-image data URLs as text"
+  (let* ((url (concat "data:text/plain;base64,"
+                      (make-string 400 ?A)))
+         (data (list :url url)))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               (/ (length url) 4))))
+
+  :doc "leaves quoted image data URLs as text"
+  (let* ((url (concat "data:image/png;base64,"
+                      (make-string 400 ?A)))
+         (data (list :content url)))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               (/ (length url) 4))))
+
+  :doc "leaves unrelated base64 strings as text"
+  (let ((payload (make-string 400 ?A)))
+    (should (= (niwa-compact-estimation-estimate-data-tokens
+                (list :data payload))
+               (/ (length payload) 4))))
+
+  :doc "falls back to text counting for malformed image blocks"
+  (let ((data (list :type "image"
+                    :source (list :type "base64"
+                                  :media_type "image/png"))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               (/ (+ (length "image")
+                     (length "base64")
+                     (length "image/png"))
+                  4))))
+
+  :doc "falls back to text counting for malformed Bedrock image blocks"
+  (let* ((payload (make-string 400 ?A))
+         (data (list :image (list :source (list :bytes payload)))))
+    (should (= (niwa-compact-estimation-estimate-data-tokens data)
+               (/ (length payload) 4)))))
+
+(niwa-deftest niwa-compact-estimation--token-usage-input ()
+  ,test
+  (test)
+  :doc "sums valid prompt token fields"
+  (should (= 10 (niwa-compact-estimation--token-usage-input
+                 '(:input 1 :cached 2 :cache-read 3 :cache_read 4))))
+  :doc "treats absent optional fields as zero"
+  (should (= 4 (niwa-compact-estimation--token-usage-input '(:input 4))))
+  :doc "rejects absent, malformed, and negative usage"
+  (dolist (tokens '(nil (:output 4) (:input "4") (:input -1)
+                         (:input . 4)))
+    (should-not (niwa-compact-estimation--token-usage-input tokens))))
+
+(niwa-deftest niwa-compact-estimation--token-usage-count ()
+  ,test
+  (test)
+  :doc "adds valid output usage to prompt usage"
+  (should (= 12 (niwa-compact-estimation--token-usage-count
+                 '(:input 4 :cached 3 :output 5))))
+  :doc "treats an absent output field as zero"
+  (should (= 4 (niwa-compact-estimation--token-usage-count '(:input 4))))
+  :doc "rejects absent, malformed, and negative usage"
+  (dolist (tokens '(nil (:output 5) (:input "4") (:input -1)
+                         (:input 4 :output "5") (:input 4 :output -1)
+                         (:input . 4)))
+    (should-not (niwa-compact-estimation--token-usage-count tokens))))
+
+(niwa-deftest niwa-compact-estimation-record-token-baseline ()
+  ,test
+  (test)
+  :doc "records gptel-reported tokens as estimate baseline"
+  (with-temp-buffer
+    (insert "abcd")
+    (let* ((gptel-model nil)
+           (chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :model 'provider-model
+                             :tokens '(:input 10
+                                       :cached 5
+                                       :output 7)
+                             :tokens-full '(:input 10
+                                            :cached 5
+                                            :output 7)))))
+      (cl-letf (((symbol-function 'niwa-compact-estimation-estimate-buffer-tokens)
+                 (lambda (_) (error "Valid provider usage rescanned the transcript"))))
+        (niwa-compact-estimation-record-token-baseline fsm))
+      (should-not (plist-get niwa-compact-estimation--known-token-baseline
+                             :fresh-visible-prompt-estimate))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :tokens) 22))
+      (should (eq (plist-get niwa-compact-estimation--known-token-baseline :source)
+                  'provider-context))
+      (should (eq (plist-get niwa-compact-estimation--known-token-baseline :model)
+                  'provider-model))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline
+                            :provider-context-tokens)
+                 22))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline
+                            :cumulative-usage-tokens)
+                 22))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :input-tokens) 15))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :output-tokens) 7))
+      (goto-char (point-max))
+      (insert "abcdefgh")
+      (should (= (niwa-compact-estimation-estimate-tokens) 24))))
+
+  :doc "normalizes nested diagnostic usage without changing the active baseline"
+  (with-temp-buffer
+    (let* ((niwa-telemetry-enabled t)
+           (session (niwa-session--create :session-id "baseline-usage"
+                                             :turn-count 5))
+           (tokens '(:input 10 :cached 50 :cache 3 :output 4
+                            :payload "DO NOT RETAIN"))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :model 'provider-model
+                             :tokens tokens
+                             :tokens-full '(:input 20 :cached 100 :output 8)))))
+      (setq-local niwa--session session)
+      (niwa-compact-estimation-record-token-baseline fsm)
+      (let* ((event (car (niwa-session-telemetry-pending session)))
+             (latest (plist-get event :provider-context-usage))
+             (cumulative (plist-get event :cumulative-usage)))
+        (should (= 10 (plist-get latest :input-tokens)))
+        (should (= 50 (plist-get latest :cached-tokens)))
+        (should (= 3 (plist-get latest :cache-write-tokens)))
+        (should (= 4 (plist-get latest :output-tokens)))
+        (should (eq 'complete (plist-get latest :usage-status)))
+        (should (= 100 (plist-get cumulative :cached-tokens)))
+        (should-not (plist-get event :dropped-keys))
+        (should-not (string-match-p "DO NOT RETAIN" (prin1-to-string event)))
+        ;; Estimation still uses the original normalized gptel data.
+        (should (equal tokens
+                       (plist-get niwa-compact-estimation--known-token-baseline
+                                  :provider-context-usage))))))
+
+  :doc "prefers latest request tokens over cumulative tokens-full"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :tokens '(:input 10 :output 5)
+                             :tokens-full '(:input 1000 :output 500)))))
+      (niwa-compact-estimation-record-token-baseline fsm)
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :tokens) 15))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline
+                            :cumulative-usage-tokens)
+                 1500))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :input-tokens) 10))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :output-tokens) 5))))
+
+  :doc "missing provider context:
+falls back to the fresh visible prompt and never cumulative tool-loop usage"
+  (with-temp-buffer
+    (insert (make-string 400 ?x))
+    (let* ((gptel-model nil)
+           (niwa-model-context-limit 258000)
+           (chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :tokens-full '(:input 9396000 :output 0)))))
+      (niwa-compact-estimation-record-token-baseline fsm)
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline :tokens) 100))
+      (should (eq (plist-get niwa-compact-estimation--known-token-baseline :source)
+                  'fresh-estimate))
+      (should-not (plist-get niwa-compact-estimation--known-token-baseline
+                             :provider-context-tokens))
+      (should (eq (plist-get niwa-compact-estimation--known-token-baseline
+                             :provider-context-status)
+                  'missing))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline
+                            :cumulative-usage-tokens)
+                 9396000))
+      (should (= (plist-get niwa-compact-estimation--known-token-baseline
+                            :fresh-visible-prompt-estimate)
+                 100))
+      (should (< (niwa-compact-estimation-estimate-tokens)
+                 (niwa-compact-estimation-threshold-tokens)))))
+
+  :doc "invalid provider context:
+zero and over-window provider values use a fresh visible-prompt estimate"
+  (dolist (provider-count '(0 300000))
+    (with-temp-buffer
+      (insert (make-string 400 ?x))
+      (let* ((gptel-model nil)
+             (niwa-model-context-limit 258000)
+             (chat-buffer (current-buffer))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer chat-buffer
+                               :tokens `(:input ,provider-count :output 0)
+                               :tokens-full '(:input 9000000 :output 0)))))
+        (niwa-compact-estimation-record-token-baseline fsm)
+        (should (= (plist-get niwa-compact-estimation--known-token-baseline :tokens) 100))
+        (should (eq (plist-get niwa-compact-estimation--known-token-baseline :source)
+                    'fresh-estimate))
+        (should (eq (plist-get niwa-compact-estimation--known-token-baseline
+                               :provider-context-status)
+                    (if (zerop provider-count) 'zero 'over-window))))))
+
+  :doc "partial provider context:
+missing or zero prompt-side usage cannot become the active baseline"
+  (dolist (case '(((:output 500) missing)
+                  ((:input 0 :output 500) zero)
+                  ((:input "bad" :output 500) missing)))
+    (with-temp-buffer
+      (insert (make-string 400 ?x))
+      (let* ((gptel-model nil)
+             (niwa-model-context-limit 258000)
+             (chat-buffer (current-buffer))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer chat-buffer :tokens (car case)))))
+        (niwa-compact-estimation-record-token-baseline fsm)
+        (should (= 100 (plist-get niwa-compact-estimation--known-token-baseline :tokens)))
+        (should (eq 'fresh-estimate
+                    (plist-get niwa-compact-estimation--known-token-baseline :source)))
+        (should (eq (cadr case)
+                    (plist-get niwa-compact-estimation--known-token-baseline
+                               :provider-context-status))))))
+
+  :doc "loads model metadata at the cold owner boundary"
+  ;; The boundary under test is niwa's own module graph: an owner must
+  ;; reach Models without the umbrella.  It is not an absence of gptel,
+  ;; which this module declares and which a compiled Elisp caller embeds
+  ;; -- `gptel-fsm-info' is a `cl-defstruct' accessor, so compiling
+  ;; inlines its slot access and its type check's
+  ;; `cl-struct-gptel-fsm-tags'.  Starving the subprocess of gptel and
+  ;; stubbing the accessor therefore passed only while the module was
+  ;; loaded as source; the subprocess now inherits this process's
+  ;; `load-path' and drives a real state machine.
+  (let ((root
+         (file-name-directory
+          (locate-library "niwa-compact-estimation")))
+        (paths load-path)
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (should
+       (= 0
+          (call-process
+           emacs nil t nil "--batch" "-Q"
+           "--eval" (prin1-to-string `(setq load-path ',paths))
+           "-L" root
+           "--eval"
+           (prin1-to-string
+            '(progn
+               (require 'cl-lib)
+               (require 'gptel-request)
+               (require 'niwa-compact-estimation)
+               (with-temp-buffer
+                 (niwa-compact-estimation-record-token-baseline
+                  (gptel-make-fsm
+                   :info (list :buffer (current-buffer)
+                               :model 'cold-model
+                               :tokens '(:input 4 :output 1)))))
+               (unless (featurep 'niwa-models)
+                 (error "Estimation did not load Models"))
+               (when (featurep 'niwa)
+                 (error "Estimation loaded the niwa umbrella")))))))
+      (should (string-empty-p (string-trim (buffer-string))))))
+
+  :doc "ignores compaction request token usage"
+  (with-temp-buffer
+    (insert "abcd")
+    (let* ((chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :context '(:niwa-context-summary t)
+                             :tokens-full '(:input 10 :output 7)))))
+      (niwa-compact-estimation-record-token-baseline fsm)
+      (should (null niwa-compact-estimation--known-token-baseline)))))
+
+(niwa-deftest niwa-compact-estimation-model-visible-chars ()
+  ,test
+  (test)
+  :doc "counts only model-visible characters outside file-local variables"
+  (with-temp-buffer
+    (insert "abcdWXYZ")
+    (put-text-property 5 9 'gptel 'ignore)
+    (should (= 4 (niwa-compact-estimation-model-visible-chars))))
+
+  :doc "counts reminder records in their wrapped, newline-joined provider shape"
+  (with-temp-buffer
+    (insert "ab")
+    ;; Adjacent records share one audit property run.
+    (insert (niwa--format-hook-audit-record
+             '(:type injected-reminders
+               :items ((:type fixture :body "keep")
+                       (:type fixture :body "abc")))))
+    (insert (niwa--format-hook-audit-record
+             '(:type injected-reminders :items ((:type fixture :body "z")))))
+    (insert (niwa--format-hook-audit-record
+             '(:type injected-reminders :items nil)))
+    (insert (niwa--format-hook-audit-record
+             (list :type 'provider-tool-batch :messages (make-string 500 ?x))))
+    (should
+     (= (+ 2
+           (length (concat "<system-reminder>\nkeep\n</system-reminder>\n"
+                           "<system-reminder>\nabc\n</system-reminder>"))
+           (length "<system-reminder>\nz\n</system-reminder>"))
+        (niwa-compact-estimation-model-visible-chars)))))
+
+(niwa-deftest niwa-compact-estimation-current-request-id
+  (:doc "returns only a live niwa request identifier")
+  (with-temp-buffer
+    (let ((niwa--current-request
+           (niwa-request--create :id "request-test" :origin "/root")))
+      (should (equal "request-test" (niwa-compact-estimation-current-request-id))))))
+
+(niwa-deftest niwa-compact-estimation-telemetry-inputs
+  (:doc "captures provider counts, thresholds, marker, and size without rescanning")
+  (with-temp-buffer
+    (insert "abcdefgh")
+    (put-text-property 5 9 'gptel 'ignore)
+    (let* ((target-model (make-symbol "model"))
+           (summary-model (make-symbol "summary"))
+           (niwa-model-reserve-tokens 20)
+           (niwa-compact-estimation-token-threshold 0.5)
+           (niwa-compact-estimation--known-token-baseline
+            (list :source 'provider-context
+                  :provider-context-usage '(:input 18 :output 3)
+                  :cumulative-usage '(:input 20 :output 5)
+                  :provider-context-tokens 21
+                  :cumulative-usage-tokens 25
+                  :provider-context-status 'valid
+                  :fresh-visible-prompt-estimate 2
+                  :model 'provider-model
+                  :model-context-window 900
+                  :position (copy-marker 5))))
+      (put target-model :context-window 0.2)
+      (put summary-model :context-window 0.18)
+      (cl-letf (((symbol-function 'niwa-compact-estimation-workload-policy)
+                 (lambda () (list :model summary-model)))
+                ((symbol-function 'niwa-compact-estimation-model-visible-chars)
+                 (lambda () (error "Threshold telemetry rescanned the transcript"))))
+        (let ((facts (niwa-compact-estimation-telemetry-inputs
+                      25 (list :model target-model :kind 'target))))
+          (should (= 21 (plist-get facts :provider-context-tokens)))
+          (should (= 25 (plist-get facts :cumulative-usage-tokens)))
+          (should (equal '(:input-tokens 18 :cached-tokens nil
+                          :cache-write-tokens nil :output-tokens 3 :usage-status partial)
+                         (plist-get facts :provider-context-usage)))
+          (should (equal '(:input-tokens 20 :cached-tokens nil
+                          :cache-write-tokens nil :output-tokens 5 :usage-status partial)
+                         (plist-get facts :cumulative-usage)))
+          (should (equal '(:input 18 :output 3)
+                         (plist-get niwa-compact-estimation--known-token-baseline
+                                    :provider-context-usage)))
+          (should (eq 'valid (plist-get facts :provider-context-status)))
+          (should (eq 'provider-model
+                      (plist-get facts :provider-context-model)))
+          (should (= 900 (plist-get facts :provider-context-window)))
+          (should (eq 'provider-context (plist-get facts :chosen-source)))
+          (should (eq target-model (plist-get facts :target-model)))
+          (should-not (plist-member facts :fresh-visible-prompt-estimate))
+          (should (= 80 (plist-get facts :threshold)))
+          (should (= 90 (plist-get facts :target-threshold)))
+          (should (= 80 (plist-get facts :summary-threshold)))
+          (should (= 200 (plist-get facts :model-context-window)))
+          (should (= 180 (plist-get facts :summary-context-window)))
+          (should (eq 'model-metadata (plist-get facts :model-context-source)))
+          (should (eq 'model-metadata (plist-get facts :summary-context-source)))
+          (should (= 8 (plist-get facts :buffer-chars-total)))
+          (should-not (plist-member facts :buffer-chars-model-visible)))))))
+
+(niwa-deftest niwa-compact-estimation-context-diagnostics ()
+  ,test
+  (test)
+  :doc "exposes fallback provenance and the smaller summarizer trigger in one record"
+  (let* ((gptel-model (make-symbol "target"))
+         (summary-model (make-symbol "unknown-summary"))
+         (gptel-backend nil)
+         (gptel-max-tokens 30000)
+         (gptel--request-params nil)
+         (niwa-model-context-limit nil)
+         (niwa-model-reserve-tokens 20000)
+         (niwa-compact-estimation-token-threshold 0.8))
+    (put gptel-model :context-window 272)
+    (cl-letf (((symbol-function 'niwa-compact-estimation-workload-policy)
+               (lambda () (list :model summary-model))))
+      (let ((facts (niwa-compact-estimation-context-diagnostics)))
+        (should (eq gptel-model (plist-get facts :target-model)))
+        (should (= 272000 (plist-get facts :model-context-window)))
+        (should (eq 'model-metadata (plist-get facts :model-context-source)))
+        (should (= 30000 (plist-get facts :target-reserve-tokens)))
+        (should (= 242000 (plist-get facts :target-usable-tokens)))
+        (should (= 193600 (plist-get facts :target-threshold)))
+        (should (eq summary-model (plist-get facts :summary-model)))
+        (should (= 128000 (plist-get facts :summary-context-window)))
+        (should (eq 'built-in-fallback (plist-get facts :summary-context-source)))
+        (should (= 20000 (plist-get facts :summary-reserve-tokens)))
+        (should (= 108000 (plist-get facts :summary-usable-tokens)))
+        (should (= 86400 (plist-get facts :summary-threshold)))
+        (should (= 0.8 (plist-get facts :threshold-ratio)))
+        (should (= 86400 (plist-get facts :threshold))))
+      (let ((niwa-model-context-limit 1000000))
+        (let ((facts (niwa-compact-estimation-context-diagnostics)))
+          (should (eq 'configured-fallback (plist-get facts :summary-context-source)))
+          (should (= 784000 (plist-get facts :summary-threshold)))
+          (should (= 193600 (plist-get facts :threshold))))))))
+
+(niwa-deftest niwa-compact-estimation-workload-policy ()
+  ,test
+  (test)
+  :doc "resolves the summarization workload with default request settings"
+  (let ((gptel-max-tokens 999)
+        (gptel--request-params '(:temperature 0.5)))
+    (cl-letf (((symbol-function 'niwa-model-resolve-workload)
+               (lambda (workload &rest _)
+                 (should (eq workload 'summarization))
+                 '(:backend summary-backend :model summary-model))))
+      (let ((policy (niwa-compact-estimation-workload-policy)))
+        (should (eq (plist-get policy :backend) 'summary-backend))
+        (should (eq (plist-get policy :model) 'summary-model))
+        (should (plist-member policy :max-tokens))
+        (should-not (plist-get policy :max-tokens))
+        (should (plist-member policy :request-params))
+        (should-not (plist-get policy :request-params))))))
+
+(niwa-deftest niwa-compact-estimation-target-policy ()
+  ,test
+  (test)
+  :doc "captures the realized request settings used for target budgeting"
+  (let ((gptel-backend 'target-backend)
+        (gptel-model 'target-model)
+        (gptel-reasoning-effort 'high)
+        (gptel-max-tokens 300)
+        (gptel--request-params '(:temperature 0.5)))
+    (should
+     (equal
+      (niwa-compact-estimation-target-policy)
+      '(:backend target-backend :model target-model :effort high :max-tokens 300
+        :request-params (:temperature 0.5))))))
+
+(niwa-deftest niwa-compact-estimation-policy-threshold-tokens ()
+  ,test
+  (test)
+  :doc "applies the configured ratio to the policy's usable context"
+  (let ((model (make-symbol "policy-model"))
+        (niwa-compact-estimation-token-threshold 0.5)
+        (niwa-model-reserve-tokens 20))
+    (put model :context-window 0.2)
+    (should
+     (= 90
+        (niwa-compact-estimation-policy-threshold-tokens
+         `(:backend nil :model ,model :max-tokens 10))))))
+
+(niwa-deftest niwa-compact-estimation-admission ()
+  ,test
+  (test)
+  :doc "distinguishes below-threshold, summarizer-only, and target pressure"
+  (let ((niwa-compact-estimation-token-threshold 0.5)
+        (niwa-model-reserve-tokens 0)
+        (summary-policy
+         `(:backend nil :model ,(make-symbol "summary-model") :max-tokens 0))
+        (target-policy
+         `(:backend nil :model ,(make-symbol "target-model") :max-tokens 0)))
+    (put (plist-get target-policy :model) :context-window 0.2)
+    (put (plist-get summary-policy :model) :context-window 0.1)
+    (cl-letf (((symbol-function 'niwa-compact-estimation-workload-policy)
+               (lambda () summary-policy)))
+      (should-not (niwa-compact-estimation-admission 49 target-policy))
+      (should
+       (equal (niwa-compact-estimation-admission 50 target-policy)
+              (list :summary-policy summary-policy
+                    :target-pressure nil)))
+      (should
+       (equal (niwa-compact-estimation-admission 100 target-policy)
+              (list :summary-policy summary-policy
+                    :target-pressure t))))))
+
+(niwa-deftest niwa-compact-estimation-threshold-tokens ()
+  ,test
+  (test)
+  :doc "rejects an integer threshold"
+  (let ((niwa-compact-estimation-token-threshold 150000))
+    (should-error (niwa-compact-estimation-threshold-tokens) :type 'user-error))
+
+  :doc "rejects ratio endpoints and out-of-range values"
+  (dolist (threshold '(0.0 1.0 -0.1 1.1 invalid))
+    (let ((niwa-compact-estimation-token-threshold threshold))
+      (should-error (niwa-compact-estimation-threshold-tokens) :type 'user-error)))
+
+  :doc "float threshold applies to usable context"
+  ;; The configured limit only applies when no model declares a window.
+  (let ((niwa-model-context-limit 200000)
+        (niwa-model-reserve-tokens 20000)
+        (niwa-compact-estimation-token-threshold 0.8)
+        (gptel-model nil)
+        (gptel-max-tokens nil))
+    (should (= (niwa-compact-estimation-threshold-tokens) 144000)))
+
+  :doc "reserve is capped on small context windows"
+  (let ((niwa-model-context-limit 8000)
+        (niwa-model-reserve-tokens 20000)
+        (niwa-compact-estimation-token-threshold 0.8)
+        (gptel-model nil)
+        (gptel-max-tokens nil))
+    (should (= (niwa-compact-estimation-usable-tokens) 4000))
+    (should (= (niwa-compact-estimation-threshold-tokens) 3200))))
+
+(niwa-deftest niwa-compact-estimation-baseline-source
+  (:doc "reports the current baseline source and the fresh-estimate fallback")
+  (with-temp-buffer
+    (should (eq 'fresh-estimate
+                (niwa-compact-estimation-baseline-source)))
+    (setq-local niwa-compact-estimation--known-token-baseline
+                '(:source provider-context))
+    (should (eq 'provider-context
+                (niwa-compact-estimation-baseline-source)))))
+
+(niwa-deftest niwa-compact-estimation-clear-baseline
+  (:doc "clears the current buffer's token baseline")
+  (with-temp-buffer
+    (setq-local niwa-compact-estimation--known-token-baseline
+                '(:source provider-context))
+    (niwa-compact-estimation-clear-baseline)
+    (should-not niwa-compact-estimation--known-token-baseline)))
+
+(provide 'test-niwa-compact-estimation)
+
+;;; test-niwa-compact-estimation.el ends here

@@ -3,7 +3,7 @@
   "bindings": {
     "$ID": "snt-pipeline",
     "$TITLE": "SNT analysis pipeline",
-    "$ORIGIN": "snt-app on mevedel-host"
+    "$ORIGIN": "snt-app on niwa-host"
   },
   "frames": [
     {

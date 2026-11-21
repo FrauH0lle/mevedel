@@ -15,7 +15,7 @@ current workspace root.
 Run the analyzer script:
 
 ```!
-python3 ${MEVEDEL_SKILL_DIR}/../../scripts/analyze-gptel-log.py $ARGUMENTS
+python3 ${NIWA_SKILL_DIR}/../../scripts/analyze-gptel-log.py $ARGUMENTS
 ```
 
 After seeing the trace output, provide a brief interpretation covering:

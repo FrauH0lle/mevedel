@@ -9,16 +9,16 @@
 ;; are untouched.  Keep all selected sessions closed throughout migration.
 ;; Run from the repository root:
 ;; npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
-;;   -f mevedel-migrate-session-main -- SESSION-OR-PROJECT-DIRECTORY
+;;   -f niwa-migrate-session-main -- SESSION-OR-PROJECT-DIRECTORY
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'mevedel-session-codec)
-(require 'mevedel-session-publication)
+(require 'niwa-session-codec)
+(require 'niwa-session-publication)
 
-(defun mevedel-migrate-session--read (file)
+(defun niwa-migrate-session--read (file)
   "Read one literal plist from FILE, refusing circular or trailing data."
   (with-temp-buffer
     (insert-file-contents file)
@@ -52,53 +52,53 @@
       (unless (eobp) (error "Trailing metadata in %s" file))
       value)))
 
-(defun mevedel-migrate-session--write (file value)
+(defun niwa-migrate-session--write (file value)
   "Write literal VALUE to FILE in the private destination copy."
   (let ((coding-system-for-write 'utf-8-unix)
         (print-length nil) (print-level nil) (print-circle t) (print-quoted t))
     (with-temp-file file (prin1 value (current-buffer)) (insert "\n"))))
 
-(defun mevedel-migrate-session--hash (file)
+(defun niwa-migrate-session--hash (file)
   "Return the SHA-256 of FILE's exact bytes."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
     (secure-hash 'sha256 (current-buffer))))
 
-(define-error 'mevedel-migrate-session-unconvertible
+(define-error 'niwa-migrate-session-unconvertible
   "Session has nothing this converter reads")
 
-(defconst mevedel-migrate-session--steps nil
+(defconst niwa-migrate-session--steps nil
   "Ordered (SOURCE TARGET FUNCTION) format steps.
 Each FUNCTION takes one sidecar plist.  Append a step when the format changes.")
 
-(defun mevedel-migrate-session--sidecar (data)
+(defun niwa-migrate-session--sidecar (data)
   "Return DATA migrated step by step to the current runtime format.
 Source DATA is never modified.  Unsupported versions fail rather than
 guessing a path."
-  (unless (or (null mevedel-migrate-session--steps)
-              (equal (cadar (last mevedel-migrate-session--steps))
-                     mevedel-session-codec-format-version))
+  (unless (or (null niwa-migrate-session--steps)
+              (equal (cadar (last niwa-migrate-session--steps))
+                     niwa-session-codec-format-version))
     (error "Migration chain does not target the current session format"))
   (setq data (copy-tree data))
   (let* ((version (plist-get data :version))
-         (steps (member (assoc version mevedel-migrate-session--steps)
-                        mevedel-migrate-session--steps)))
-    (unless (or steps (equal version mevedel-session-codec-format-version))
-      (signal 'mevedel-migrate-session-unconvertible
+         (steps (member (assoc version niwa-migrate-session--steps)
+                        niwa-migrate-session--steps)))
+    (unless (or steps (equal version niwa-session-codec-format-version))
+      (signal 'niwa-migrate-session-unconvertible
               (list (format "unsupported version %s; minimum supported is %s"
-                            version (or (caar mevedel-migrate-session--steps)
-                                        mevedel-session-codec-format-version)))))
+                            version (or (caar niwa-migrate-session--steps)
+                                        niwa-session-codec-format-version)))))
     (dolist (step steps)
       (unless (equal (plist-get data :version) (car step))
         (error "Disconnected migration chain at %s" (car step)))
       (setq data (funcall (nth 2 step) data))
       (setq data (plist-put data :version (cadr step)))))
   (when-let* ((goal (plist-get data :goal)))
-    (mevedel-session-codec--goal-from-plist goal))
-  (mevedel-session-codec-validate-current-sidecar data))
+    (niwa-session-codec--goal-from-plist goal))
+  (niwa-session-codec-validate-current-sidecar data))
 
-(defun mevedel-migrate-session--closed (directory)
+(defun niwa-migrate-session--closed (directory)
   "Require closed DIRECTORY and return its exact lease snapshot.
 A released lease is closed, and so is an active one whose holder stopped
 renewing it: its expiry has passed, as after a crash.  Refuse recovery or
@@ -112,9 +112,9 @@ unsettled mutation rather than claiming to repair it."
   (let* ((lease-dir (file-name-concat directory ".lease"))
          (files (and (file-directory-p lease-dir)
                      (directory-files lease-dir t "\\`[0-9]\\{20\\}\\.el\\'")))
-         (records (mapcar #'mevedel-migrate-session--read (reverse files)))
+         (records (mapcar #'niwa-migrate-session--read (reverse files)))
          (latest (cl-find-if (lambda (row) (not (eq 'aborted (plist-get row :status)))) records)))
-    (unless (cl-every #'mevedel-session-durability--valid-lease-p records)
+    (unless (cl-every #'niwa-session-durability--valid-lease-p records)
       (error "Invalid portable lease record"))
     (when (and (file-directory-p lease-dir)
                (not (and latest
@@ -127,24 +127,24 @@ unsettled mutation rather than claiming to repair it."
     ;; No head is a session closed before it ever published.
     (when-let* ((head (plist-get latest :publication-head)))
       (unless (and (stringp head)
-                   (mevedel-session-publication-valid-head-p head)
+                   (niwa-session-publication-valid-head-p head)
                    (file-regular-p (file-name-concat directory head)))
         (error "Missing or invalid published session head")))
     (mapcar (lambda (file) (cons (file-name-nondirectory file)
-                               (mevedel-migrate-session--hash file))) files)))
+                               (niwa-migrate-session--hash file))) files)))
 
-(defun mevedel-migrate-session--head (lease source)
+(defun niwa-migrate-session--head (lease source)
   "Return SOURCE's published head as a relative path, or nil.
-LEASE is the snapshot `mevedel-migrate-session--closed' returned."
+LEASE is the snapshot `niwa-migrate-session--closed' returned."
   (when lease
     (let ((latest (cl-find-if (lambda (row) (not (eq 'aborted (plist-get row :status))))
                               (mapcar (lambda (entry)
-                                        (mevedel-migrate-session--read
+                                        (niwa-migrate-session--read
                                          (file-name-concat source ".lease" (car entry))))
                                       (reverse lease)))))
       (plist-get latest :publication-head))))
 
-(defun mevedel-migrate-session-copy (source destination)
+(defun niwa-migrate-session-copy (source destination)
   "Copy closed local SOURCE to new DESTINATION and convert its metadata.
 Retain session identity, transcripts, artifacts and every publication head.
 Return the count of distinct converted sidecar files.  Failure removes only
@@ -158,7 +158,7 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
             (file-in-directory-p destination source))
     (error "Destination must be new and outside the source session"))
   (let* ((files (directory-files-recursively source "." t))
-         (lease (mevedel-migrate-session--closed source))
+         (lease (niwa-migrate-session--closed source))
          (sidecars (make-hash-table :test #'equal))
          (hashes (make-hash-table :test #'equal))
          manifests success)
@@ -177,8 +177,8 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
               (when (string-match-p
                      "\\`\\.publications/generation-[[:xdigit:]]\\{20\\}/manifest\\.el\\'" relative)
                 (let* ((path (file-name-concat destination relative))
-                       (manifest (mevedel-session-publication--validate-manifest
-                                  (mevedel-migrate-session--read path) path))
+                       (manifest (niwa-session-publication--validate-manifest
+                                  (niwa-migrate-session--read path) path))
                        (entries (plist-get manifest :artifacts)))
                   ;; Collection may leave an older manifest naming files of a
                   ;; generation it removed.  Nothing can read that manifest;
@@ -189,7 +189,7 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                                        (file-name-concat destination
                                                          (plist-get (cdr entry) :published))))
                                     entries)
-                    (when (equal relative (mevedel-migrate-session--head lease source))
+                    (when (equal relative (niwa-migrate-session--head lease source))
                       (error "The published session head is incomplete"))
                     (delete-file path)
                     (setq entries nil manifest nil))
@@ -198,7 +198,7 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                            (expected (plist-get (cdr entry) :sha256)))
                       (let* ((artifact (file-name-concat destination published))
                              (digest (or (gethash artifact hashes)
-                                         (puthash artifact (mevedel-migrate-session--hash artifact) hashes))))
+                                         (puthash artifact (niwa-migrate-session--hash artifact) hashes))))
                         (unless (equal expected digest)
                           (error "Artifact checksum mismatch: %s" published))
                         (when (equal (car entry) "session.meta.el")
@@ -208,18 +208,18 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
           (let ((sidecar (file-name-concat destination "session.meta.el")))
             (when (file-regular-p sidecar) (puthash sidecar 'fixed sidecars)))
           (when (zerop (hash-table-count sidecars))
-            (signal 'mevedel-migrate-session-unconvertible (list "no session metadata")))
-          (let ((head (when-let* ((relative (mevedel-migrate-session--head lease source)))
+            (signal 'niwa-migrate-session-unconvertible (list "no session metadata")))
+          (let ((head (when-let* ((relative (niwa-migrate-session--head lease source)))
                         (file-name-concat destination relative)))
                 dropped)
             (maphash
              (lambda (file owners)
                (condition-case err
-                   (let ((data (mevedel-migrate-session--sidecar
-                                (mevedel-migrate-session--read file))))
+                   (let ((data (niwa-migrate-session--sidecar
+                                (niwa-migrate-session--read file))))
                      (when (and (eq 'portable (plist-get data :authority-mode)) (not lease))
                        (error "Portable session is missing its released lease"))
-                     (mevedel-migrate-session--write file data))
+                     (niwa-migrate-session--write file data))
                  (error
                   ;; An old retained generation whose sidecar no reader
                   ;; accepts, or a portable session's stale fixed cache, is
@@ -243,15 +243,15 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                 (when (gethash file sidecars)
                   (setf (plist-get (cdr entry) :sha256)
                         (or (gethash file hashes)
-                            (puthash file (mevedel-migrate-session--hash file) hashes))))))
-            (mevedel-migrate-session--write (car row) (cdr row)))
-          (unless (equal lease (mevedel-migrate-session--closed source))
+                            (puthash file (niwa-migrate-session--hash file) hashes))))))
+            (niwa-migrate-session--write (car row) (cdr row)))
+          (unless (equal lease (niwa-migrate-session--closed source))
             (error "Source lease changed during migration; keep it closed and retry"))
           (setq success t)
           (hash-table-count sidecars))
       (unless success (delete-directory destination t)))))
 
-(defun mevedel-migrate-session--snapshot (directory)
+(defun niwa-migrate-session--snapshot (directory)
   "Return a sorted content and metadata fingerprint of safe DIRECTORY.
 Refuse links and special files before reading or copying their contents."
   (let (snapshot)
@@ -265,13 +265,13 @@ Refuse links and special files before reading or copying their contents."
                     (file-attribute-modes attributes)
                     (file-attribute-modification-time attributes)
                     (unless (file-directory-p file)
-                      (mevedel-migrate-session--hash file)))
+                      (niwa-migrate-session--hash file)))
               snapshot)))
     (sort snapshot (lambda (a b) (string< (car a) (car b))))))
 
-(defun mevedel-migrate-session--directories (directory)
+(defun niwa-migrate-session--directories (directory)
   "Resolve local DIRECTORY to a list of session directories.
-Accept one session, a project root, or its `.mevedel/sessions' container."
+Accept one session, a project root, or its `.niwa/sessions' container."
   (when (file-remote-p directory)
     (error "Migration requires local directories"))
   (setq directory (directory-file-name (expand-file-name directory)))
@@ -288,10 +288,10 @@ Accept one session, a project root, or its `.mevedel/sessions' container."
         (file-directory-p (file-name-concat directory ".lease"))
         (file-directory-p (file-name-concat directory ".publications")))
     (list directory))
-   ((file-directory-p (file-name-concat directory ".mevedel"))
-    (when (file-symlink-p (file-name-concat directory ".mevedel"))
+   ((file-directory-p (file-name-concat directory ".niwa"))
+    (when (file-symlink-p (file-name-concat directory ".niwa"))
       (error "Project state directory is a symbolic link"))
-    (let ((sessions (file-name-concat directory ".mevedel" "sessions")))
+    (let ((sessions (file-name-concat directory ".niwa" "sessions")))
       (when (file-symlink-p sessions)
         (error "Sessions directory is a symbolic link: %s" sessions))
       (when (file-directory-p sessions)
@@ -299,25 +299,25 @@ Accept one session, a project root, or its `.mevedel/sessions' container."
                           (directory-files sessions t "\\`[^.]")))))
    ((and (equal (file-name-nondirectory directory) "sessions")
          (equal (file-name-nondirectory
-                 (directory-file-name (file-name-directory directory))) ".mevedel"))
+                 (directory-file-name (file-name-directory directory))) ".niwa"))
     (cl-remove-if-not #'file-directory-p
                       (directory-files directory t "\\`[^.]")))
    (t (error "Expected a session directory or project directory: %s" directory))))
 
-(defun mevedel-migrate-session--authoritative-data (directory lease)
+(defun niwa-migrate-session--authoritative-data (directory lease)
   "Read DIRECTORY's authoritative sidecar using captured LEASE.
 Only a portable session released without ever publishing returns nil."
   (let ((sidecar
          (if (file-directory-p (file-name-concat directory ".lease"))
-             (when-let* ((head (mevedel-migrate-session--head lease directory)))
-               (or (plist-get (mevedel-session-publication-read directory head) :sidecar)
+             (when-let* ((head (niwa-migrate-session--head lease directory)))
+               (or (plist-get (niwa-session-publication-read directory head) :sidecar)
                    (error "Missing published session metadata")))
            (file-name-concat directory "session.meta.el"))))
     (when sidecar
-      (or (mevedel-migrate-session--read sidecar)
+      (or (niwa-migrate-session--read sidecar)
           (error "Empty authoritative session metadata: %s" sidecar)))))
 
-(defun mevedel-migrate-session--install (source staged)
+(defun niwa-migrate-session--install (source staged)
   "Replace SOURCE with validated STAGED and return the original's backup path.
 An ordinary failed install restores SOURCE.  Never remove an original backup,
 even when rollback itself fails."
@@ -343,44 +343,44 @@ even when rollback itself fails."
       (unless (file-exists-p backup)
         (delete-directory container)))))
 
-(defun mevedel-migrate-session--one (source)
+(defun niwa-migrate-session--one (source)
   "Migrate one closed SOURCE and return its status plist.
 The caller owns serialization and reports ordinary failures per session."
-  (let* ((before (mevedel-migrate-session--snapshot source))
-         (lease (mevedel-migrate-session--closed source))
-         (data (mevedel-migrate-session--authoritative-data source lease)))
+  (let* ((before (niwa-migrate-session--snapshot source))
+         (lease (niwa-migrate-session--closed source))
+         (data (niwa-migrate-session--authoritative-data source lease)))
     (if (null data)
         (list :status 'empty)
-      (mevedel-migrate-session--sidecar data)
+      (niwa-migrate-session--sidecar data)
       (let* ((container (make-temp-file
                          (file-name-concat (file-name-directory source) ".migration-stage-") t))
              (staged (file-name-concat container "session")))
         (unwind-protect
             (progn
-              (mevedel-migrate-session-copy source staged)
-              (unless (and (equal before (mevedel-migrate-session--snapshot source))
-                           (equal lease (mevedel-migrate-session--closed source)))
+              (niwa-migrate-session-copy source staged)
+              (unless (and (equal before (niwa-migrate-session--snapshot source))
+                           (equal lease (niwa-migrate-session--closed source)))
                 (error "Source changed during migration; keep it closed and retry"))
-              (if (equal (plist-get data :version) mevedel-session-codec-format-version)
+              (if (equal (plist-get data :version) niwa-session-codec-format-version)
                   (list :status 'current)
                 (list :status 'migrated
-                      :backup (mevedel-migrate-session--install source staged))))
+                      :backup (niwa-migrate-session--install source staged))))
           (when (file-directory-p container)
             (delete-directory container t)))))))
 
-(defun mevedel-migrate-sessions (directory)
+(defun niwa-migrate-sessions (directory)
   "Migrate supported sessions under local DIRECTORY to the current format.
-DIRECTORY is a session, project, or `.mevedel/sessions' directory.  Return
+DIRECTORY is a session, project, or `.niwa/sessions' directory.  Return
 rows (NAME :status STATUS :backup PATH :reason TEXT), where
 STATUS is migrated, current, empty, or failed.  Failed sessions stay in place;
 independent sessions continue.  Unsafe ownership aborts before any writes."
-  (let ((directories (mevedel-migrate-session--directories directory)))
+  (let ((directories (niwa-migrate-session--directories directory)))
     (when directories
       ;; Refuse unsafe ownership in any selected session before writing.
       (dolist (source directories)
         (when (file-symlink-p source)
           (error "Session directory is a symbolic link: %s" source))
-        (mevedel-migrate-session--closed source))
+        (niwa-migrate-session--closed source))
       (let ((lock (file-name-concat (file-name-directory (car directories)) ".migration-lock"))
             report)
         (condition-case nil
@@ -394,22 +394,22 @@ independent sessions continue.  Unsafe ownership aborts before any writes."
                 (let ((name (file-name-nondirectory source)))
                   (push (cons name
                               (condition-case err
-                                  (mevedel-migrate-session--one source)
+                                  (niwa-migrate-session--one source)
                                 (error (list :status 'failed :reason (error-message-string err)))))
                         report)))
               (nreverse report))
           (delete-directory lock))))))
 
-(defun mevedel-migrate-session-main ()
+(defun niwa-migrate-session-main ()
   "Migrate one DIRECTORY supplied through the batch command line."
   (let ((args command-line-args-left)
-        (usage "Usage: mevedel-migrate-session-main -- DIRECTORY\nDIRECTORY is a closed session, project, or .mevedel/sessions directory.\n"))
+        (usage "Usage: niwa-migrate-session-main -- DIRECTORY\nDIRECTORY is a closed session, project, or .niwa/sessions directory.\n"))
     (setq command-line-args-left nil)
     (when (equal (car args) "--") (setq args (cdr args)))
     (if (equal args '("--help"))
         (princ usage)
       (unless (= (length args) 1) (error "%s" (string-trim-right usage)))
-      (let* ((report (mevedel-migrate-sessions (car args)))
+      (let* ((report (niwa-migrate-sessions (car args)))
              (failed (cl-count-if (lambda (row) (eq (plist-get (cdr row) :status) 'failed))
                                   report)))
         (dolist (row report)
@@ -421,9 +421,9 @@ independent sessions continue.  Unsafe ownership aborts before any writes."
                              ('failed (format " (%s)" (plist-get result :reason)))
                              (_ ""))))))
         (princ (format "%d sessions checked; %d failed; target %s.\n"
-                       (length report) failed mevedel-session-codec-format-version))
+                       (length report) failed niwa-session-codec-format-version))
         (when (> failed 0)
           (error "%d sessions failed migration checks; see above" failed))))))
 
-(provide 'mevedel-migrate-session)
+(provide 'niwa-migrate-session)
 ;;; migrate-sessions.el ends here

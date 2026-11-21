@@ -9,12 +9,12 @@ Compaction, Rewind, and Fork each preserve different parts of that state.
 
 An explicit note send creates an independent session, not a fork of the active
 chat. A batch of unsent notes shares one session. The workspace instruction
-store links the conversation through each note's `mevedel-note-session-id`; the normal session
+store links the conversation through each note's `niwa-note-session-id`; the normal session
 transcript and file-change history own the conversation. Reopening a sent note
 resumes that session. Closing its child frame or terminal side window leaves
 the session and composer draft alive.
 
-The base preset defaults to `mevedel-implement` and can be changed normally.
+The base preset defaults to `niwa-implement` and can be changed normally.
 The note's **Settings** transient selects that preset, model/effort through the
 existing chat selector, and permission mode. Before send these choices persist
 on the workspace note; after send they update its live session. A durable note
@@ -82,7 +82,7 @@ These changes settle through the
 workspace store's durable Rewind intent, including for unvisited and recently
 closed notes; restoring a closed note then restores its unsent state.
 
-`mevedel-note-revert-change` reverses one selected applied turn using these actual
+`niwa-note-revert-change` reverses one selected applied turn using these actual
 before/after pairs and the shared refuse-if-changed engine. It checks every path
 before the ordinary patch transaction writes anything. Disjoint later edits
 survive; overlaps report current file/line ranges and leave all files unchanged.
@@ -154,7 +154,7 @@ Rewind neither copy nor roll them back. See
 operation retries, and native exports.
 
 Notes likewise live in the workspace's instruction store,
-`<workspace>/.mevedel/instructions.el`
+`<workspace>/.niwa/instructions.el`
 ([ADR 0130](adr/0130-keep-instructions-in-a-workspace-store.md)). A session
 writes no instruction snapshots; the `instructions/` files of sessions saved by
 older versions are ignored.
@@ -175,7 +175,7 @@ compact-start context to its already-pending request.
 A failed fresh initialization retains neither the named data buffer nor its
 companion view. Buffer-local cleanup hooks unwind any lifecycle state installed
 before the failure, and retrying the same session name starts from a new buffer.
-`mevedel-chat-discard-buffers` owns this cleanup for both fresh initialization
+`niwa-chat-discard-buffers` owns this cleanup for both fresh initialization
 and failed browser-requested session creation. It attempts every cleanup hook
 despite individual errors, then forces remaining buffers closed without queries.
 
@@ -240,7 +240,7 @@ error, or publication failure never falls back, and nothing
 falls back to an identical provider. The fallback changes neither the session's
 provider nor its preset.
 
-`M-x mevedel-retry-session-naming` repeats a title request from a chat or view
+`M-x niwa-retry-session-naming` repeats a title request from a chat or view
 buffer, using the recorded input. When no input was recorded it asks for a
 description; a prefix argument always asks. It never substitutes the session
 picker's first-message preview or conversation history. Retry replaces a title
@@ -290,7 +290,7 @@ collaboration readers see only "Automatic session naming failed". A successful
 title, manual rename, or Save As name clears the notice.
 Transport and publication scheduling defer metadata work until it can run safely.
 
-`mevedel-rename-session` accepts readable Unicode names and normalizes whitespace.
+`niwa-rename-session` accepts readable Unicode names and normalizes whitespace.
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
@@ -334,10 +334,10 @@ keep the session's current wake-ups: a restored head brings back neither a
 fired nor a cancelled one.
 
 Wake-ups also fire for sessions that are not open. An Emacs-wide index under
-`mevedel-user-dir` (`wake-ups/`, one file per session naming its directory)
+`niwa-user-dir` (`wake-ups/`, one file per session naming its directory)
 lists every saved session holding a pending wake-up; it is a cache of the
 sidecars. Closing such a session keeps its wake-ups scheduled. After startup,
-`mevedel-install` runs `mevedel-schedule-restore` once Emacs is first idle;
+`niwa-install` runs `niwa-schedule-restore` once Emacs is first idle;
 it reads each indexed session's committed sidecar. Only an entry proven stale is removed: a malformed
 entry file, a session directory missing below an ancestor this Emacs can
 search, or a readable sidecar holding no pending wake-up. An entry file or
@@ -357,10 +357,10 @@ schedule and the run's scheduled local time (`Triage 2026-11-23 07:00`), saved
 before its first message is submitted and never displayed; when an open
 session already has that name, as for a same-named schedule due at the same
 time, a ` (2)`-style suffix keeps the run in a new session. Automatic cleanup
-treats it like any other session. A second index under `mevedel-user-dir`
+treats it like any other session. A second index under `niwa-user-dir`
 (`workspace-schedules/`, one file per workspace naming its root) lists the
 workspaces holding an active workspace schedule, kept apart from `wake-ups/`
-because that restore drops entries it cannot read. `mevedel-schedule-restore`
+because that restore drops entries it cannot read. `niwa-schedule-restore`
 also reads it and arms the same timer, by the same proven-stale rule: an entry
 goes only when its workspace is provably gone, or when its readable store holds
 no active schedule on a re-read made after the entry is deleted; an
@@ -392,26 +392,26 @@ use the persistence contracts described in their sections.
 
 ## Session persistence
 
-Persistence is split by ownership. `mevedel-session-codec.el` owns the closed
-sidecar schema and validation; `mevedel-session-checkpoint.el` owns the committed
+Persistence is split by ownership. `niwa-session-codec.el` owns the closed
+sidecar schema and validation; `niwa-session-checkpoint.el` owns the committed
 root projection, per-conversation mailbox consumption, and deferred ToolCall
-retirement. `mevedel-session-artifacts.el` owns paths,
-artifacts, snapshots, and segment writes; `mevedel-session-rewind.el` owns
-restore plans and the Rewind transaction; and `mevedel-session-fork.el` owns
-Fork/Worktree projection and publication. `mevedel-session-naming.el` owns
-display names and background title requests. `mevedel-session-collection.el`
+retirement. `niwa-session-artifacts.el` owns paths,
+artifacts, snapshots, and segment writes; `niwa-session-rewind.el` owns
+restore plans and the Rewind transaction; and `niwa-session-fork.el` owns
+Fork/Worktree projection and publication. `niwa-session-naming.el` owns
+display names and background title requests. `niwa-session-collection.el`
 owns idle publication scans and their session lifetime.
-`mevedel-session-persistence.el` remains the lifecycle, resume, listing,
+`niwa-session-persistence.el` remains the lifecycle, resume, listing,
 locking, and cleanup facade used by callers.
 
 Sessions auto-save lazily and at turn settlement under
-`<workspace-root>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`.
+`<workspace-root>/.niwa/sessions/<timestamp>-<12-hex-suffix>/`.
 Ordinary model turns and awaited fork-skill turns share one
 successful-turn transaction.  It advances the turn, records the token
 baseline, saves before request teardown, runs `Stop`, ends request-local
 policy scope and the request, and schedules queued follow-up delivery.
 Error and abort settlement also save before request teardown, preserving partial
-responses and request-local file checkpoints. `mevedel-abort` additionally saves
+responses and request-local file checkpoints. `niwa-abort` additionally saves
 from cleanup that runs even if cancellation signals an error or quit.
 Deferred root-turn settlement on a materialized local session uses the same
 publication queue as mid-turn checkpoints. It keeps admission held until
@@ -437,7 +437,7 @@ buffers through their respective persistence writers. It follows Emacs's normal
 auto-save scheduling, queues one coalesced opportunity per buffer, and allows
 input between saves. Emacs auto-saves only after keyboard input, so while any
 root or agent request is in flight a repeating timer runs the same checkpoint
-every `mevedel-session-checkpoint-interval` seconds (default 30); request
+every `niwa-session-checkpoint-interval` seconds (default 30); request
 admission starts it, and it stops on the first tick that finds no request in
 flight. Unattended Goal and agent turns therefore checkpoint mid-turn too; `nil`
 leaves mid-turn checkpoints to Emacs auto-save alone. Each opportunity waits for transport availability and
@@ -454,7 +454,7 @@ These checkpoints preserve unfinished text without marking a turn completed.
 The 30-second timer is not a minimum interval between all saves: native Emacs
 auto-save adds opportunities according to its own input/idle settings. Retained
 agents also debounce saves after tool-result cycles by
-`mevedel-agent-conversation-save-debounce` (default 2 seconds of idleness),
+`niwa-agent-conversation-save-debounce` (default 2 seconds of idleness),
 cancelling an earlier pending timer. These sources share modified-state
 rechecks, and the warm-local checkpoint path permits at most one accepted job
 per buffer; there is no fixed global maximum checkpoint frequency. The timer
@@ -472,7 +472,7 @@ These are disposable computation caches, not durable state or lease authority.
 Generated transcript storage disables font-lock and JIT fontification: the
 rendered view owns normal presentation, and JIT's silent `fontified` writes
 would invalidate otherwise valid change proofs after each edit. Raw transcript
-inspection (`mevedel-view-toggle-transcript` or switching buffers) and the
+inspection (`niwa-view-toggle-transcript` or switching buffers) and the
 temporary data-buffer display behind `gptel-menu` remain unfontified. Enabling
 gptel on storage also unregisters its Org JIT annotator and disables JIT again,
 because that registration otherwise turns JIT back on during restore/activation.
@@ -559,8 +559,8 @@ successful checkpoint. Unavailable or unwritable storage can still prevent savin
 Layout:
 
 ```
-.mevedel/workspace-id                 ; project-owned portable workspace identity
-.mevedel/sessions/2026-04-23T14-30-a9f23d74c019/
+.niwa/workspace-id                 ; project-owned portable workspace identity
+.niwa/sessions/2026-04-23T14-30-a9f23d74c019/
   session.meta.el                    ; non-authoritative current sidecar cache
   .lease/                            ; project-session portable lease generations
     00000000000000000001.el         ; current renewable ownership record
@@ -650,7 +650,7 @@ origin (`:worktree-source-root`, `:worktree-directory`, `:worktree-branch`, and
 `:worktree-base-commit`), and `:agent-transcripts` presentation metadata and
 the explicit `:agent-registry` containing retained paths, frozen
 configurations, activity, mailboxes, and conversation locations. It records
-only the selected `:preset-name`; resume rebuilds mevedel variables from that
+only the selected `:preset-name`; resume rebuilds niwa variables from that
 currently registered trusted preset, so sidecar data cannot name or populate
 buffer locals. It also records the session's baseline `:model-provider` and
 explicit `:reasoning-effort`, independently of implementation overrides, and
@@ -658,7 +658,7 @@ the durable ToolCall audit checkpoint. The checkpoint contains the ToolCall call
 never an interpreter continuation. A Session Fork also copies the source
 session's permission mode, sandbox mode, session permission rules, and resource
 grants at the fork point. Parent and child then diverge independently.
-Other gptel buffer-local settings are request-time state only; mevedel does not
+Other gptel buffer-local settings are request-time state only; niwa does not
 persist them as Org properties. An Agent `summary` selection is persisted only
 in the child transcript as a labelled `<task-background>` block before the
 authoritative Agent Task. The parent sidecar and tool result retain only
@@ -675,9 +675,9 @@ Every Claude launch checks the ACP client, Node.js, Python, CLI and adapter
 versions and the subscription login while the adapter starts; the connection is
 admitted, and its prompt sent, only after both succeed (overlapping them took a
 warm launch from about 500 to 380 ms);
-`M-x mevedel-claude-code-setup` runs the same check, plus the packaged MCP
+`M-x niwa-claude-code-setup` runs the same check, plus the packaged MCP
 bridge, without a model request. Installation, maintenance and user steps are
-in the [README](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions). Status commands run
+in the [README](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions). Status commands run
 asynchronously, each with a ten-second timeout, and are cancelled with their
 owning request. Successful version checks are reused while the resolved
 executable and its enclosing package metadata stay unchanged. Every launch
@@ -704,7 +704,7 @@ The Claude Code provider routes root submissions, including note conversations,
 through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
 engine, native conversation ID, local installation directory, machine name and
-last known state. The installed Claude agent retains model history; mevedel
+last known state. The installed Claude agent retains model history; niwa
 retains the canonical transcript and tool effects. No credentials or process
 handles are stored in the sidecar.
 A prompt the Claude CLI refuses because another process holds its credential
@@ -725,7 +725,7 @@ Startup applies the selected level through `session/set_config_option` and
 waits for acknowledgement before prompt dispatch. The adapter reads the
 user's Claude settings for its initial permission mode regardless of the
 isolated setting sources; startup resets any other reported mode to `default`
-the same way first, since mevedel's own pipeline authorizes every tool call. Unsupported effort falls back to Claude's native `default`,
+the same way first, since niwa's own pipeline authorizes every tool call. Unsupported effort falls back to Claude's native `default`,
 with a visible notice and a reset of the still-matching session selection.
 Missing models, an adapter selecting a different model, or failure to apply
 the selected effort fail visibly before the prompt.
@@ -782,7 +782,7 @@ inspected or undone.
 Editing earlier response or prompt text in a raw root or retained child
 transcript marks its native history as `diverged`. This state survives saving and
 reopening; sending another Claude turn refuses before prompt dispatch and names
-`mevedel-claude-code-recover-history` as the next action. Explicit recovery
+`niwa-claude-code-recover-history` as the next action. Explicit recovery
 detaches the native history and continues from the edited, labelled excerpt.
 Excerpt recovery includes the effective compaction summary once, read from its
 authoritative root or child bounds. Editing summary text cannot hide it behind
@@ -815,7 +815,7 @@ entries, including former directive turns in old sessions.
 An installation/machine mismatch or missing native history prevents
 continuation while leaving the transcript readable.
 
-`M-x mevedel-claude-code-recover-history` explicitly detaches an unavailable
+`M-x niwa-claude-code-recover-history` explicitly detaches an unavailable
 root or retained-child native reference. It requires mutation authority, a
 writable session, no active root or child turns, and no active Goal. It
 persists the detachment before returning; a failed publication restores the
@@ -907,15 +907,15 @@ automatically granting them. Direct acquisition of an unheld or expired lease
 preserves native identities just as ordinary resume does. The next send checks
 the native installation and history, so recovery after an Emacs crash does not
 require copying or discarding native history. Read-only following remains available.
-For adapter crashes, diagnostic logs default to `~/.mevedel/claude-agent-logs`
-on the Emacs host, controlled by `mevedel-claude-code-agent-log-directory`;
+For adapter crashes, diagnostic logs default to `~/.niwa/claude-agent-logs`
+on the Emacs host, controlled by `niwa-claude-code-agent-log-directory`;
 an inherited `CLAUDE_AGENT_LOGS` value takes precedence. See
-[Claude subscription setup](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions) for configuration.
+[Claude subscription setup](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions) for configuration.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
-provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.
+provider, including direct `gptel-menu`, prefixed send and niwa's bridge menu.
 It refuses before opening the transient or changing bridge return state, and
-points to mevedel's model and tools menus. Model and reported effort choices
+points to niwa's model and tools menus. Model and reported effort choices
 remain supported there. Temperature and output-limit controls in gptel's HTTP
 menu do not configure Claude's native loop. Sending from a busy Claude composer
 queues steering for the running turn, as on HTTP providers; explicit queued
@@ -1068,7 +1068,7 @@ no resource address changes a session's target. See
 [`address-to-resource.md`](address-to-resource.md#work).
 
 The workspace identity is one opaque 64-character lowercase hexadecimal value
-stored in `.mevedel/workspace-id` when the first session is materialized.  The
+stored in `.niwa/workspace-id` when the first session is materialized.  The
 sidecar's nested `:workspace` record stores that `:workspace-id` together with
 `:target-native-root`; the top-level and per-agent `:working-directory` fields
 are target-native as well. None stores a client-specific TRAMP prefix or the
@@ -1096,7 +1096,7 @@ grants.  A replacement probe stages the observation without changing that
 durable baseline.  The fence then runs as one transaction: it first revokes
 exact session grants, then commits a sidecar marker containing
 the new incarnation and no exact session grants; only that successful commit
-acknowledges the replacement. The workspace store in `.mevedel/permissions.el`
+acknowledges the replacement. The workspace store in `.niwa/permissions.el`
 is outside this contract: it is deliberate configuration shared through
 version control between machines, so a reboot or a different host leaves it
 untouched, and a grant there that does not apply on the current target
@@ -1108,7 +1108,7 @@ observed later.  Publication failure leaves admission blocked and retryable.
 Admission observes the fingerprint with one target command rather than a full
 readiness probe.  Environment, capabilities, and sandbox facts are fixed for
 the life of a connection, so they are probed when the session opens, when the
-connection is replaced, and on `mevedel-retry-target-readiness`.  A failed
+connection is replaced, and on `niwa-retry-target-readiness`.  A failed
 observation falls back to the full probe, which settles the blocked readiness
 that admission reports.
 
@@ -1135,7 +1135,7 @@ unreachable, or ambiguous keeps it. If the transport is already active, the
 request stays blocked rather than nesting a target probe; the next mutation
 attempt retries the proof. The durable latch restored across a restart carries
 no process identity and still needs
-`mevedel-retry-target-readiness`, which every refusal names.
+`niwa-retry-target-readiness`, which every refusal names.
 
 The unsettled-mutation latch is
 [`ADR 0098`](adr/0098-store-unsettled-mutation-in-the-session-lease.md); the
@@ -1214,7 +1214,7 @@ short lines. Fields whose raw byte length already exceeds the individual bound
 select a stdin carrier before ASCII classification or shell quoting; quoting
 cannot make them fit. Larger requests or non-ASCII fields travel as UTF-8 bytes on
 stdin. On targets that support direct-async spawns (single-hop ssh and scp, with
-`mevedel-transport-remote-direct-async` enabled), a private channel receives the
+`niwa-transport-remote-direct-async` enabled), a private channel receives the
 script and then the request, costing no command on the shared connection.
 Elsewhere, an input file carries the request, and TRAMP copies it to the target
 at about twenty commands. The carrier changes without splitting the program. See [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md)
@@ -1321,9 +1321,9 @@ lease format, election protocol or target-clock authority.
 ### Portable project durability publication
 
 Portable project session state remains authoritative under the target
-workspace's `.mevedel/` directory.  Before the first target-side state write in a live
-Emacs client, mevedel discloses the exact state directory, the stored data
-categories, and that mevedel does not encrypt them.  Acceptance is remembered
+workspace's `.niwa/` directory.  Before the first target-side state write in a live
+Emacs client, niwa discloses the exact state directory, the stored data
+categories, and that niwa does not encrypt them.  Acceptance is remembered
 once per execution target for that Emacs process; another client or restart
 discloses again.
 
@@ -1355,7 +1355,7 @@ captured coding system and original line endings.
 An omitted artifact keeps its existing
 manifest entry, so the logical snapshot is unchanged while whole per-artifact
 ownership proofs are avoided.  The commit marker always publishes, because it is
-the transaction's commit point rather than a payload.  `mevedel-save-session`
+the transaction's commit point rather than a payload.  `niwa-save-session`
 publishes regardless, for a user who wants a snapshot rather than a record of a
 change.
 
@@ -1436,8 +1436,8 @@ are staged before the live session or buffer advances, so a failed follower
 refresh remains retryable. View-owned drain predicates survive committed-state
 adoption. Transfer state is transient session state and is not serialized in
 the sidecar. A view polls that state every
-`mevedel-view-control-transfer-poll-seconds`, or every
-`mevedel-view-control-transfer-remote-poll-seconds` when the session lives on a
+`niwa-view-control-transfer-poll-seconds`, or every
+`niwa-view-control-transfer-remote-poll-seconds` when the session lives on a
 target; each poll reads the lease head, the target clock, and the mailbox, so
 the interval trades handoff latency against time on the one target connection
 the user's own work also needs. A local owner with no transfer in flight
@@ -1469,7 +1469,7 @@ binding after its authority checks return, including a manual release without
 transfer state.
 
 While a transfer is in flight — a request outstanding on either side — both
-sides poll at `mevedel-view-control-transfer-active-poll-seconds` instead.
+sides poll at `niwa-view-control-transfer-active-poll-seconds` instead.
 The idle cadence is chosen for a connection nobody is waiting on, and a
 handoff composes three separate waits: the owner noticing the request, the
 grant deadline, and the requester noticing the release fence. Paying the idle
@@ -1478,7 +1478,7 @@ return to the idle cadence as soon as the transfer settles, so the timer is
 re-armed per tick rather than fixed when the view is set up.
 
 An unanswered request is granted by the owner's own poll once
-`mevedel-session-transfer-prompt-timeout` passes, so control can be taken
+`niwa-session-transfer-prompt-timeout` passes, so control can be taken
 from a machine nobody is sitting at. That window runs from the moment the
 owner could first *see* the request, not from when the requester wrote it: a
 poll interval can be longer than the timeout, and measuring from the
@@ -1492,11 +1492,11 @@ against a busy owner sits in `quiescing` until the work it is waiting on
 finishes. Only the owner can say what that work is, so the owner's surface
 names the blocker and the requester's says just that it is waiting.
 
-`mevedel-take-control`, also bound to the read-only interaction's `r` key,
+`niwa-take-control`, also bound to the read-only interaction's `r` key,
 routes
 on lease state: an unheld or expired lease is acquired directly, because
 there is no owner to ask and the lease layer's own confirmation is the whole
-negotiation; a held one is requested. `mevedel-release-control` is the
+negotiation; a held one is requested. `niwa-release-control` is the
 reverse, saving and publishing before the lease goes and leaving the buffer
 read-only and following.
 
@@ -1506,7 +1506,7 @@ the ordinary expired `active` and `publishing` takeover confirmations are
 unchanged. Heartbeats renew or reclaim only their own client's lease.
 
 The read-only interaction's `b` key, including while a request is waiting,
-offers **take over** through `mevedel-view-control-transfer-take-over`. It can
+offers **take over** through `niwa-view-control-transfer-take-over`. It can
 replace a live, unexpired holder that is frozen or not answering. The full
 yes/no confirmation names the holder's host, buffer, last renewal and status,
 and warns that its unpublished work will not be kept. Displayed host and buffer
@@ -1565,9 +1565,9 @@ handed control away is a non-owner like any other and can ask for it back.
 
 A buffer whose session is being written somewhere else — a joined client, or
 a host that has handed control away — advances through the owner's committed
-publications while `mevedel-session-follow-published` is non-nil, which is
+publications while `niwa-session-follow-published` is non-nil, which is
 the default and is read per buffer so one session can opt out through
-`mevedel-toggle-follow`. `mevedel-refresh-session` performs the same read on
+`niwa-toggle-follow`. `niwa-refresh-session` performs the same read on
 demand.
 
 Updates are per publication, which means whole turns rather than streaming
@@ -1593,8 +1593,8 @@ merely fail. TRAMP refuses the reentrant call, or the nested command consumes
 the running command's pending output and returns an answer belonging to
 something else — an absent lock reads as present, and durable state derived
 from that is wrong. Every caller reachable from a timer, a process filter, or
-redisplay therefore asks `mevedel-transport-busy-p` first and defers through
-`mevedel-transport-run-when-idle`.
+redisplay therefore asks `niwa-transport-busy-p` first and defers through
+`niwa-transport-run-when-idle`.
 
 That predicate combines two signals with complementary blind spots. Advice on
 `tramp-file-name-handler` maintains a dynamic depth counter spanning the whole
@@ -1611,15 +1611,15 @@ counter exists to see. TRAMP has no global in-operation flag, so a plain
 variable check silently never fires.
 
 Neither signal sees a remote process on a separate connection, so the predicate
-is necessary rather than sufficient. `mevedel-session-control-fs` therefore also
-refuses outright, with `mevedel-session-control-fs-busy`, any control operation
+is necessary rather than sufficient. `niwa-session-control-fs` therefore also
+refuses outright, with `niwa-session-control-fs-busy`, any control operation
 issued while the transport is busy: a visible failure is recoverable, a
 fabricated answer is not.
 
 Transport integration follows both package and TRAMP lifecycle. Unloading TRAMP
 cancels deferred work and detaches the handler advice; reloading TRAMP restores
-it while mevedel remains active. `mevedel-uninstall` cancels the same work and
-keeps later TRAMP reloads detached until `mevedel-install` runs again; deferred
+it while niwa remains active. `niwa-uninstall` cancels the same work and
+keeps later TRAMP reloads detached until `niwa-install` runs again; deferred
 producer callbacks arriving in that interval are dropped.
 
 The predicate only governs this package. It cannot stop the reverse case, which
@@ -1629,7 +1629,7 @@ in flight, so that timer sends its own command on the same connection and
 consumes the reply this session was waiting for — our lease records arrive at
 its parser, and the record we read belongs to it. Control operations, and the
 whole save transaction around them, therefore run inside
-`mevedel-transport-with-exclusive-connection`, which suspends timers for the
+`niwa-transport-with-exclusive-connection`, which suspends timers for the
 duration, exactly as TRAMP does around its own critical sections. A timer the
 body arms is re-armed on exit rather than lost, and a `with-timeout` opened
 inside it still fires, because the bound lists are the ones Emacs consults
@@ -1640,22 +1640,22 @@ incremental cleanup continues without requiring a new user command.
 Suspension stops timers, not process sentinels. `accept-process-output` with
 JUST-THIS-ONE suppresses other processes' output but still dispatches their
 status changes. A package performing remote I/O from a sentinel can therefore
-nest inside a mevedel command and receive TRAMP's reentrancy refusal. The remote
+nest inside a niwa command and receive TRAMP's reentrancy refusal. The remote
 control-transfer poll limits how often a command is in flight. See
 [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md#decision-history)
 for the failure that motivated this boundary.
 
 For packages such as projectile that advise temporary-file deletion with remote
 project discovery, the following configuration suppresses that discovery while
-TRAMP is already active. `mevedel-transport--depth` is non-zero while a TRAMP
+TRAMP is already active. `niwa-transport--depth` is non-zero while a TRAMP
 operation is on the stack:
 
 ```elisp
 (with-eval-after-load 'projectile
   (define-advice delete-file-projectile-remove-from-cache
       (:around (fn filename &optional trash) skip-inside-remote-operation)
-    (if (and (bound-and-true-p mevedel-transport--depth)
-             (> mevedel-transport--depth 0))
+    (if (and (bound-and-true-p niwa-transport--depth)
+             (> niwa-transport--depth 0))
         nil
       (funcall fn filename trash))))
 ```
@@ -1683,7 +1683,7 @@ and a new request cannot overtake either. Transport cancellation and source-buff
 death retire the continuation and release its hold. Individual publication
 transactions and checkpoint operations remain synchronous.
 
-Without a prefix, `M-x mevedel` lists persisted workspace sessions before
+Without a prefix, `M-x niwa` lists persisted workspace sessions before
 creating a buffer, after sweeping expired sessions and locks left behind by
 dead Emacsen. Each candidate carries the action its authority produces,
 alongside `Start new session`:
@@ -1739,9 +1739,9 @@ replacement. Cancel and declining confirmation do not mutate session storage.
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces
 `Publication pending` in session status, and blocks request and mutation
-admission until `mevedel-session-publication-retry` succeeds or the
+admission until `niwa-session-publication-retry` succeeds or the
 user explicitly runs
-`mevedel-session-publication-abandon`.  Once the compare-and-set
+`niwa-session-publication-abandon`.  Once the compare-and-set
 succeeds, the transaction is durable even if the final `publishing` to
 `active` lease normalization fails: the client fails closed with visible lease
 loss, consumes the transaction sources, and does not create recovery or
@@ -1843,8 +1843,8 @@ before starting the successor. Each target phase is a pinned control program lau
 waiting; its result is stored by the sentinel and the next phase is scheduled
 from a timer through the idle transport, never from the sentinel. The
 job keeps one durability transaction context
-(`mevedel-session-durability-fresh-context`), entered only while that job
-advances (`mevedel-session-durability-call-in-context`). Its clock,
+(`niwa-session-durability-fresh-context`), entered only while that job
+advances (`niwa-session-durability-call-in-context`). Its clock,
 asserted-directory and recovery cells are the job's own, never joined to a
 surrounding transaction, so the bounded clock freshness check applies across
 event-loop turns instead of becoming an authority cache; the job's own bounded
@@ -1853,7 +1853,7 @@ The context carries no commit riders: a phase advanced from a timer inside
 another publisher's rider binding commits only riders it binds itself, never
 that publisher's pending writes.
 The acknowledgement runs outside every transaction
-(`mevedel-session-durability-call-outside-transaction`), with no inherited
+(`niwa-session-durability-call-outside-transaction`), with no inherited
 cells, riders, final commit or process owner.
 
 Local control-program jobs retain their staged payload files until their
@@ -2006,8 +2006,8 @@ and acknowledge success; the prior head means roll back as above; any other
 head, or one that cannot be read, retains the job as unresolved, records the
 frozen batches as pending publication and keeps the mail identities unchanged,
 because a successor head may already contain them and rolling back could
-acknowledge the same execution twice. `mevedel-session-publication-retry`
-repeats the reconciliation and `mevedel-session-publication-abandon` ends the
+acknowledge the same execution twice. `niwa-session-publication-retry`
+repeats the reconciliation and `niwa-session-publication-abandon` ends the
 job as failed. Both are refused while the job is still running.
 
 While a job is accepted its session's mutation gate is held. Work that would
@@ -2077,7 +2077,7 @@ naming an active operation, when a nested transport frame is in flight, a
 preparation is running on the stack, or a synchronous publication on this
 stack owns the gate: waiting there could not let the work advance. Otherwise
 it pumps events in 10 ms steps and signals after 30 seconds
-(`mevedel-session-publication--barrier-seconds`). That limit is checked between
+(`niwa-session-publication--barrier-seconds`). That limit is checked between
 pumps, so it is not a hard bound on a single blocking operation inside one.
 
 A preparation therefore never runs arbitrary callbacks under its token.
@@ -2092,7 +2092,7 @@ flight (no job, running preparation, active publication or transport
 operation); queued preparations do not hold it back, since a callback's own
 mutation queues behind them. Two triggers flush it: each time the gate opens
 between queued preparations, before the next one starts
-(`mevedel-session-publication-gate-open-functions`), and a timer that starts
+(`niwa-session-publication-gate-open-functions`), and a timer that starts
 at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
 while the root buffer is live and the session is not stopping. The gate-open
 turn exists because sustained producers keep the queue non-empty: ten
@@ -2100,7 +2100,7 @@ monitors each emitting one line every two seconds kept publication busy for
 99% of samples, and the timer alone offered no root wake in 40 seconds. A
 waiter
 callback can resume tool code and gated operations, so it runs with no token
-and outside every transaction (`mevedel-session-durability-call-outside-transaction`),
+and outside every transaction (`niwa-session-durability-call-outside-transaction`),
 and defers or drains like any other
 caller. A failing notification warns and does not stop the rest. Temporary
 stopping during a close query retains actual suppressed offers without a
@@ -2227,7 +2227,7 @@ Collection follows references rather than age: manifests can retain unchanged
 bytes in older generations. It reads every published sidecar, using cached
 immutable generation/sidecar facts, and retains the current head, settled-turn
 representatives, journal capture pins, the newest
-`mevedel-session-publication-keep-recent-generations` (default 3), and their
+`niwa-session-publication-keep-recent-generations` (default 3), and their
 referenced artifact files. Referencing one file in an older generation does not
 retain its obsolete manifest, sidecar, or unrelated files. Artifact-only
 directories remain eligible for later collection when their last reference
@@ -2260,7 +2260,7 @@ as one batch.  A mid-batch failure therefore leaves one retryable recovery and
 blocks later mutation.  Transcript allocation may shallowly create the session
 directory before the first root turn settles, but the first acknowledged agent
 registry or mailbox mutation forces a full non-fork-point root snapshot.  The
-sidecar therefore exists before mevedel reports the child publication or wakes
+sidecar therefore exists before niwa reports the child publication or wakes
 a mailbox consumer; the root turn's later DONE publication still establishes
 its first stable fork point.
 
@@ -2304,8 +2304,8 @@ writes coherent while the live conversation advances.
 Observational agent persists are not acknowledged mutations.  Activity
 transitions (blocked/waiting flavors and their release) and explicit mailbox
 discards debounce into one sidecar-only registry save
-(`mevedel-session-persistence-save-agent-state-soon`, landing as
-`mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
+(`niwa-session-persistence-save-agent-state-soon`, landing as
+`niwa-session-artifacts-save-agent-registry`): the sidecar carries the
 agent registry the persist is about, and the transcript segment is committed
 at settlement, so the observational path never saves the segment or scans
 snapshots. A portable session publishes the
@@ -2355,7 +2355,7 @@ artifact paths stay fixed. A failure before commit restores the in-memory name;
 a failure after commit retains the committed name and reports the failure.
 
 Save As captures the parent's current committed publication
-through the `mevedel-session-save-as.el` transaction while holding its lease.
+through the `niwa-session-save-as.el` transaction while holding its lease.
 That module materializes only the manifest's logical artifacts in hidden child
 staging, acquires a fresh child lease before writing them, commits one complete
 replacement publication, and moves the staged child into discoverability
@@ -2398,7 +2398,7 @@ interrupt hold. A genuine failure's review entries are not implicitly rebound.
 The pause banner shows only while entries remain.
 
 A saved model selection that no longer resolves uses
-`mevedel-model-fallback-provider`, or the host default when that option is nil,
+`niwa-model-fallback-provider`, or the host default when that option is nil,
 with a notice; without either, history stays readable while requests wait for a
 model choice.
 
@@ -2418,7 +2418,7 @@ mutation authority and uses the coalesced sidecar save; it does not erase the
 retained terminal result or transcript. Blocking issues cannot be dismissed.
 Only a structured
 model-not-found signal (provider code or HTTP 404) moves a session to
-`mevedel-model-fallback-provider` or the host default, with a visible notice.
+`niwa-model-fallback-provider` or the host default, with a visible notice.
 
 Standalone Plan metadata and its implementation retry record live in the
 sidecar; draft and accepted artifacts live under `local/plans/`. The retry
@@ -2434,7 +2434,7 @@ on one request; retry reuses that selection. Goal construction persists them on
 the Goal before clearing source recovery. Both Here and Worktree leave ordinary
 session policy untouched; a Worktree fork copies the planning session's
 defaults and preset. The accepted
-budget sets the Goal slot only, never `mevedel-goal-token-budget`. There is no
+budget sets the Goal slot only, never `niwa-goal-token-budget`. There is no
 baseline snapshot/restore scheme, so concurrent user setting changes survive
 settlement. Effective views, logs, and reminders do not become saved defaults.
 
@@ -2453,7 +2453,7 @@ accepted-plan reference and implementation policy, and timestamps. The required
 `:implementation-policy` value is either `nil` or exactly
 `(:model-provider STRING :reasoning-effort SYMBOL-or-nil :permission-mode MODE)`;
 the provider label is `BACKEND:MODEL` and MODE is `ask`, `edits`, or `full-auto`.
-`mevedel-implementation-policy.el` owns validation, exact model resolution, and
+`niwa-implementation-policy.el` owns validation, exact model resolution, and
 current root-policy selection. Active ordinary root Goal turns and resume use
 that record; new ordinary chat with an inactive Goal uses the baseline.
 Already-admitted turns retain their snapshot through settlement. Child
@@ -2493,7 +2493,7 @@ current working directory changes. The picker labels the original path as
 missing or the session as retargeted.
 
 A live session whose local working directory disappears, such as a worktree
-removed with `git worktree remove` outside mevedel, moves to its workspace root
+removed with `git worktree remove` outside niwa, moves to its workspace root
 at the next durable mutation (save, publication, turn start, or execution arm)
 or publication retry. Every live buffer whose `default-directory` still names
 the missing directory moves with it, and one warning names both paths.
@@ -2501,7 +2501,7 @@ Otherwise processes started from those buffers fail, leaving publication
 pending with no way to retry it. Remote directories are not probed on this
 path; they rely on the resume-time prompt above.
 
-The prompt-index is rebuilt from `mevedel-transcript-segments`
+The prompt-index is rebuilt from `niwa-transcript-segments`
 over the live segment. Only shared `user` spans whose real prompt text
 starts outside gptel-owned org tool/reasoning/summary scaffolding become
 rewind entries, so property drawers, compaction summaries, tool glue, and
@@ -2531,8 +2531,8 @@ Tool IDs are established before persistence by the
 It renders each completed call from its own authoritative request record;
 normalization and restoration preserve those IDs. No scan of result text guesses an original ID.
 
-After mevedel restores persisted bounds, session restoration calls
-`mevedel-transcript-normalize-properties`. The transcript module reapplies
+After niwa restores persisted bounds, session restoration calls
+`niwa-transcript-normalize-properties`. The transcript module reapplies
 properties from its canonical structural ranges; persistence does not parse
 transcript control forms itself.
 
@@ -2559,7 +2559,7 @@ Other targets, and the flush at Emacs exit, run the program synchronously. A
 nested flush for another session proves that session's lease independently. A
 crash may tear the final line.
 
-For mevedel chat buffers, save-time advice around `gptel--save-state`
+For niwa chat buffers, save-time advice around `gptel--save-state`
 strips every gptel request-config Org property (`GPTEL_BACKEND`,
 `GPTEL_MODEL`, `GPTEL_PRESET`, `GPTEL_SYSTEM`, effort, tools, and the
 rest), keeping only `GPTEL_BOUNDS`. The sidecar is the sole durable
@@ -2573,7 +2573,7 @@ cleanup: stripping configuration must not turn a clean read-only follower into
 a locally edited buffer that cannot follow or request control. Existing local
 edits remain modified, and later setup hooks do not share this exemption. Restored
 sessions rebuild model, effort, and preset from the sidecar
-(`mevedel-model-apply-session-policy`, `mevedel-preset-restore-session`).
+(`niwa-model-apply-session-policy`, `niwa-preset-restore-session`).
 
 ### Resume contract
 
@@ -2634,7 +2634,7 @@ target-side hash when nothing changed. Activation skips a remote root without
 a live connection.
 
 The store is written through the pinned control-file programs under
-`.mevedel/leases/instructions/`, each write naming the hash it was based on:
+`.niwa/leases/instructions/`, each write naming the hash it was based on:
 
 - a creation is written at once;
 - other changes are written after the command, at each session save, and at
@@ -2643,7 +2643,7 @@ The store is written through the pinned control-file programs under
   instruction another client changed, keeping its request text on the kill
   ring.
 
-A first note in a recognized project creates `.mevedel/` and its store. Outside
+A first note in a recognized project creates `.niwa/` and its store. Outside
 a project, automatic persistence requires existing workspace state; otherwise
 notes stay in memory with a notice. Imports do not create workspace state in
 arbitrary directories. While a minibuffer is active, writes wait until the
@@ -2654,8 +2654,8 @@ unreadable-store warning is shown only once while the failure lasts.
 
 ### Explicit session migration
 
-The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-sessions.el)
-accepts a session directory, a project root, or its `.mevedel/sessions`
+The standalone [migration script](https://github.com/FrauH0lle/niwa/blob/master/scripts/migrate-sessions.el)
+accepts a session directory, a project root, or its `.niwa/sessions`
 directory. The migration chain is empty: the command checks closed sessions,
 accepts `v0.6.0` without rewriting or backing up the originals, and rejects
 other versions. It does not import per-session artifacts. Close every selected
@@ -2664,11 +2664,11 @@ session and keep it closed throughout the check. From the repository root:
 ```bash
 # Check every session in a project:
 npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
-  -f mevedel-migrate-session-main -- /path/to/project
+  -f niwa-migrate-session-main -- /path/to/project
 
 # Or check one session:
 npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
-  -f mevedel-migrate-session-main -- /path/to/project/.mevedel/sessions/SESSION-ID
+  -f niwa-migrate-session-main -- /path/to/project/.niwa/sessions/SESSION-ID
 ```
 
 `--help` prints usage. The command reports each session's outcome and exits
@@ -2697,7 +2697,7 @@ records and manifest failures are not retried; lease, path and sidecar validatio
 still apply to the refreshed observation.
 
 Only a sidecar whose format is exactly the current
-`mevedel-session-codec-format-version` and whose complete current shape
+`niwa-session-codec-format-version` and whose complete current shape
 validates is resumable. The session chooser keeps surviving directories
 with missing, unreadable, unsupported, or obsolete sidecars visible as
 `Inspect` rows instead of silently omitting them. Each row reports the rejection
@@ -2710,7 +2710,7 @@ directly signals an error; no minimal session is synthesized from its name.
 Selecting `Inspect` branches before resume authority calculation. It never
 deserializes or hydrates the sidecar, acquires a lock or lease, repairs or
 migrates state, materializes a publication, or initializes a session, request,
-composer, gptel mode, or Mevedel view. It opens an unbacked, unmodified,
+composer, gptel mode, or Niwa view. It opens an unbacked, unmodified,
 read-only bare Org buffer with saving, autosave, backups, and lockfiles disabled.
 Persisted presets and `GPTEL_BOUNDS` are not restored.
 
@@ -2727,10 +2727,10 @@ transcript bytes can be resolved for it.
 
 ### Archived segment inspection
 
-`mevedel-view-segments.el` owns the ephemeral inspection buffer and switching
-state; `mevedel-session-artifacts.el` remains the sole owner of segment
+`niwa-view-segments.el` owns the ephemeral inspection buffer and switching
+state; `niwa-session-artifacts.el` remains the sole owner of segment
 descriptors and bytes. Source-backed expand/collapse state within either
-projection remains owned by `mevedel-view-disclosure.el`.
+projection remains owned by `niwa-view-disclosure.el`.
 
 The session cockpit's Navigate submenu projects persisted segments in the
 existing view: `[` shows the previous segment, `]` shows the next, and `g`
@@ -2740,7 +2740,7 @@ including each segment's latest prompt preview and `readable`, `missing`, or
 `unreadable` status. Adjacent navigation reports the exact broken path instead
 of skipping it; the picker lets the user bypass that segment.
 In a session that `/clear` divided, each row also names its chat, and `c`
-(`M-x mevedel-view-go-to-chat`) chooses a chat directly: an earlier chat opens
+(`M-x niwa-view-go-to-chat`) chooses a chat directly: an earlier chat opens
 at its last segment, the current chat returns to the live segment. The live
 view shows the earlier chats, newest first, on one line below its header;
 `RET` or a click on it opens the chat picker. The line is header chrome, so
@@ -2783,9 +2783,9 @@ no-op Rewind remain on the archived projection.
 ### Rewind
 
 Rewind removes everything after a boundary, and each entry point places that
-boundary on the side that matches what it names. `mevedel-view-rewind-at-point`,
+boundary on the side that matches what it names. `niwa-view-rewind-at-point`,
 also available as `R` in the session cockpit, names the assistant response at
-point: that turn is the last one **kept**. `mevedel-rewind` picks one of the
+point: that turn is the last one **kept**. `niwa-rewind` picks one of the
 user's own prompts across all segments and returns to just **before** it, so
 the prompt and its answer are discarded and it can be asked again -- which is
 the reason to select a prompt at all.
@@ -2857,7 +2857,7 @@ checkpoint. The impact marks coverage as complete or lists known gaps, including
 turns that ran Bash, Eval, Agent or SendMessage. These effects appear once per
 tool, with the number of discarded turns; file capture gaps remain separate.
 Gaps do not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
-session's superseded head stays published, so `mevedel-redo` can restore its
+session's superseded head stays published, so `niwa-redo` can restore its
 conversation as described below. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
@@ -2915,7 +2915,7 @@ clear them with `C-c C-q` before a destructive transcript operation.
 
 ### Redo
 
-`mevedel-redo`, also available as `D` in the session cockpit beside
+`niwa-redo`, also available as `D` in the session cockpit beside
 Rewind's `R`, restores a portable session's conversation to one of its
 superseded published heads.  The cockpit entry is inapt for a file
 session, which publishes no immutable heads and therefore has nothing to
@@ -2924,13 +2924,13 @@ Rewind moved away from is still on disk as a complete, hash-verified
 generation; redo is an exposure of that state rather than a new mechanism.
 
 The picker lists turn states, not generations. A generation is written on every
-committed save, so `mevedel-session-rewind-published-heads` groups them by the
+committed save, so `niwa-session-rewind-published-heads` groups them by the
 turn count and fork point their published sidecar records, offers the newest
 generation of each state, drops the state the session is already in, and drops
 heads captured mid-turn -- a head whose latest prompt is one turn ahead of its
 turn count restores a half-arrived response, which is a recovery state rather
 than a choice. Rows are labelled with segment, turn, and that turn's prompt
-through `mevedel-session-rewind--prompt-label`, the same label the Rewind
+through `niwa-session-rewind--prompt-label`, the same label the Rewind
 picker uses, so undo and redo read as one vocabulary over turns.
 
 Restoring republishes the chosen generation as a **new** committed head under
@@ -3022,7 +3022,7 @@ An owner-link browser guest can also create a Conversation Fork from a settled
 assistant response; see [browser collaboration](collaboration.md). It publishes
 the child without a first prompt and opens a room for it.
 
-`mevedel-session-fork-create` owns admission, staging, publication, and cleanup
+`niwa-session-fork-create` owns admission, staging, publication, and cleanup
 for both fork types. Worktree creation and restoration are conditional steps
 inside that transaction, with failures retaining the created Git artifacts and
 reporting their cleanup command.
@@ -3121,7 +3121,7 @@ blocks that already carry a tool `gptel` property or overlapping non-empty
 ### Input history
 
 The view input ring is persisted at
-`<workspace-root>/.mevedel/input-history.el` when the session is
+`<workspace-root>/.niwa/input-history.el` when the session is
 writable. Missing files are normal. Corrupt
 files are warned about once, renamed aside, and replaced with an empty
 in-memory ring. Accepting same-turn steering or a queued follow-up records its
@@ -3129,16 +3129,16 @@ text in this ring immediately, independently of the transient queue state.
 
 ### Generated state excludes
 
-When mevedel writes generated workspace state, it best-effort appends
+When niwa writes generated workspace state, it best-effort appends
 exact entries to `.git/info/exclude` instead of ignoring the whole
-`.mevedel/` tree. In a linked worktree, Git resolves that file to the
+`.niwa/` tree. In a linked worktree, Git resolves that file to the
 repository's common exclude file. The generated entries are:
 
-- `/.mevedel/sessions/`
-- `/.mevedel/tool-results/`
-- `/.mevedel/input-history.el`
-- `/.mevedel/leases/`
-- `/.mevedel/state/`
+- `/.niwa/sessions/`
+- `/.niwa/tool-results/`
+- `/.niwa/input-history.el`
+- `/.niwa/leases/`
+- `/.niwa/state/`
 
 ### Locking
 
@@ -3214,7 +3214,7 @@ still-live publishing generation back to active before reserving a new window.
 
 Workspace journal expiry runs before session-cleanup eligibility checks, so
 disabling session expiry or using a TRAMP workspace does not disable it.
-`mevedel-journal-max-age-days` independently defaults to 14 days of ordinary
+`niwa-journal-max-age-days` independently defaults to 14 days of ordinary
 recall from immutable entry creation (nil disables recall age filtering). Expired entries
 are hidden from ordinary recall even when their bytes must remain. A cleanup
 opportunity throttled to once an hour, offered by completed root turns and, on
@@ -3241,7 +3241,7 @@ unchanged source and publishes the pin; explicit checkpoints remain synchronous.
 A checkpoint containing all of an
 unsealed predecessor's turns replaces that predecessor's pin only after its
 own pin and ready marker are durable. Compaction success, `/clear`, a quiet
-period of `mevedel-journal-seal-idle-minutes` after the last completed root turn,
+period of `niwa-journal-seal-idle-minutes` after the last completed root turn,
 root-buffer close, and Emacs exit seal completed checkpoints. Turn completion,
 idle sealing, successful root compaction, session close, session opening, and
 the idle maintenance timer queue background processing; Emacs exit cancels
@@ -3258,9 +3258,9 @@ recovery. Expired ordinary portable owners are fenced through generation electio
 the committed session head is preserved. Recovery completes interrupted superseded
 pin release only after checking the successor's retained turn coverage.
 
-`mevedel-session-max-age-days` (default 30) deletes expired sessions,
+`niwa-session-max-age-days` (default 30) deletes expired sessions,
 including sessions whose sidecars are obsolete, unreadable, or missing. The
-`mevedel` session chooser sweeps synchronously before listing. Opening a session
+`niwa` session chooser sweeps synchronously before listing. Opening a session
 and ending a root turn offer the workspace a sweep that runs after the current
 command, once its transport is idle and no input is pending, so a long-running
 Emacs keeps expiring sessions. Exit cleanup scans every workspace registered
@@ -3269,7 +3269,7 @@ batch Emacs never sweeps at exit or from session activity: scripts and test
 subprocesses register workspaces incidentally, typically their working
 directory.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
-directory modification time. The `mevedel-session-keep-recent-count`
+directory modification time. The `niwa-session-keep-recent-count`
 (default 3) most-recently-updated sessions are exempt regardless of age:
 the chooser sweeps before any lock is taken, so without this floor a
 long absence would delete the very session the user came back to resume.
@@ -3281,7 +3281,7 @@ scratch directory with the rest of the session. `nil` disables cleanup.
 
 Project and file-workspace cleanup skips a
 session open in this Emacs and otherwise deletes through
-`mevedel-session-durability-delete-abandoned`: the lease head must be absent in
+`niwa-session-durability-delete-abandoned`: the lease head must be absent in
 an existing `.lease` directory,
 released without a control-transfer reservation, or an expired active or
 claiming record without unsettled mutation, and its last renewal must also be
@@ -3315,16 +3315,16 @@ nor the exit retention pass drains it synchronously.
 
 ## System sleep
 
-When `mevedel-sleep-inhibit` is enabled (it is off by default),
-`mevedel-sleep.el` holds one operating-system sleep inhibitor while this
+When `niwa-sleep-inhibit` is enabled (it is off by default),
+`niwa-sleep.el` holds one operating-system sleep inhibitor while this
 Emacs has work that sleep would interrupt. The work that counts is:
 
-- a root or agent turn that is running or settling (`mevedel-busy-p`),
+- a root or agent turn that is running or settling (`niwa-busy-p`),
   including one waiting on a permission prompt (indefinitely, unless
-  `mevedel-permission-queue-timeout` expires the unanswered queue; see
+  `niwa-permission-queue-timeout` expires the unanswered queue; see
   [permissions](permissions.md#absence-timeout));
 - a live managed command other than Monitor, including a yielded Bash command
-  that outlives its turn (`mevedel-execution-working-p`);
+  that outlives its turn (`niwa-execution-working-p`);
 - an open collaboration share or lobby within its idle allowance (see
   [collaboration](collaboration.md)).
 
@@ -3344,7 +3344,7 @@ These requests only matter while nothing is held. While any reason holds, a
 30-second poll re-evaluates them, refreshes the announced reasons and releases
 the inhibitor once none remains. Turn and execution teardown therefore need no
 release path of their own, and a short command does not replace the inhibitor.
-When the reasons change, mevedel acquires a replacement before releasing the
+When the reasons change, niwa acquires a replacement before releasing the
 old inhibitor. The poll stops once no reason remains. A reason source that
 signals an error counts as no reason and warns once, so it cannot hold the
 lock indefinitely.
@@ -3352,36 +3352,36 @@ lock indefinitely.
 The inhibitor is a child process (`systemd-inhibit ... cat` by default). Its
 standard input is a pipe from Emacs, so the lock also goes away when Emacs
 exits or is killed. If the inhibitor cannot start or exits unexpectedly, for
-example when polkit refuses it, mevedel warns once. It retries only after all
+example when polkit refuses it, niwa warns once. It retries only after all
 reasons have cleared and work begins again. Remote execution targets are not
 inhibited: the local turn already keeps this machine awake, and the default
 polkit policy does not let an SSH session block sleep. Toggling
-`mevedel-sleep-inhibit` through Customize applies at once: disabling it
+`niwa-sleep-inhibit` through Customize applies at once: disabling it
 releases a held inhibitor, and enabling it evaluates the current work. A plain
 `setq` takes effect at the next evaluation. On platforms without systemd, set
-`mevedel-sleep-inhibit-command` to another command.
+`niwa-sleep-inhibit-command` to another command.
 
 ## Defcustoms
 
-Defined in `mevedel-session-persistence.el` unless another module is named:
+Defined in `niwa-session-persistence.el` unless another module is named:
 
-- `mevedel-sessions-directory` (default `.mevedel/sessions/`)
-- `mevedel-session-max-age-days` (default 30)
-- `mevedel-session-keep-recent-count` (default 3)
-- `mevedel-file-history-max-snapshot-bytes` (default 1 MiB)
-- `mevedel-session-lease-seconds` (in `mevedel-session-durability.el`,
+- `niwa-sessions-directory` (default `.niwa/sessions/`)
+- `niwa-session-max-age-days` (default 30)
+- `niwa-session-keep-recent-count` (default 3)
+- `niwa-file-history-max-snapshot-bytes` (default 1 MiB)
+- `niwa-session-lease-seconds` (in `niwa-session-durability.el`,
   default 90; renewal runs from a timer that cannot fire inside blocking
   target I/O, so the owner reclaims its own expired lease)
-- `mevedel-session-lease-renewal-seconds` (in
-  `mevedel-session-durability.el`, default 30)
-- `mevedel-session-follow-published` (in
-  `mevedel-session-control-transfer.el`, default t)
-- `mevedel-view-control-transfer-active-poll-seconds` (in
-  `mevedel-view-control-transfer.el`, default 2)
-- `mevedel-session-publication-lease-seconds` (in
-  `mevedel-session-durability.el`, default 3600)
-- `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
+- `niwa-session-lease-renewal-seconds` (in
+  `niwa-session-durability.el`, default 30)
+- `niwa-session-follow-published` (in
+  `niwa-session-control-transfer.el`, default t)
+- `niwa-view-control-transfer-active-poll-seconds` (in
+  `niwa-view-control-transfer.el`, default 2)
+- `niwa-session-publication-lease-seconds` (in
+  `niwa-session-durability.el`, default 3600)
+- `niwa-view-input-history-size` (in `niwa-view-history.el`,
   default 500)
-- `mevedel-sleep-inhibit` (in `mevedel-sleep.el`, default nil)
-- `mevedel-sleep-inhibit-command` (in `mevedel-sleep.el`, default
-  `systemd-inhibit --what=sleep --who=mevedel --why=%s --mode=block cat`)
+- `niwa-sleep-inhibit` (in `niwa-sleep.el`, default nil)
+- `niwa-sleep-inhibit-command` (in `niwa-sleep.el`, default
+  `systemd-inhibit --what=sleep --who=niwa --why=%s --mode=block cat`)

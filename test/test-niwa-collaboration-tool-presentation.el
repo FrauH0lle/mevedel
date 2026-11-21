@@ -1,0 +1,918 @@
+;;; test-niwa-collaboration-tool-presentation.el --- Tool display tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Exercise browser tool presentation through canonical collaboration records.
+
+;;; Code:
+
+(require 'json)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-collaboration-projection)
+(require 'niwa-execution-transcript)
+(require 'niwa-skills-invoke)
+(require 'niwa-session-artifacts)
+(require 'niwa-tool-exec)
+(require 'niwa-tool-ptc)
+(require 'niwa-transcript-restore)
+
+(niwa-deftest niwa-collaboration-tool-presentation
+  ()
+  ,test
+  (test)
+  :doc "direct Skill displays its prepared body without changing envelope identity"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+    (niwa-tool-register
+     (niwa-tool--create :name "Skill" :category "niwa"
+                          :renderer #'niwa-skills--render-skill-tool))
+    (let* ((parsed '(:name "ToolCall" :tool-use-id "call-1"
+                     :args (:expression "(Skill :name \"artifact-dashboard\")")
+                     :result "<system-reminder>Dependency</system-reminder>\n# Dashboard"
+                     :render-data
+                     (:kind ptc :direct-tool "Skill" :outcome completed
+                      :calls ((:id "call-1/1" :tool "Skill" :status success
+                               :args (:name "artifact-dashboard")
+                               :render-data (:kind skill-invocation
+                                             :prompt "# Dashboard"
+                                             :attachments ("artifact")))))))
+           (original (copy-tree parsed))
+           (record (niwa-collaboration--tool-record parsed "fixture"))
+           (display (plist-get record :presentation)))
+      (should (equal "ToolCall" (plist-get record :name)))
+      (should (equal "tool-call-1" (plist-get record :id)))
+      (should (equal "Skill" (plist-get display :name)))
+      (should (equal "artifact-dashboard" (plist-get display :detail)))
+      (should (equal "# Dashboard" (plist-get display :body)))
+      (should (equal "markdown" (plist-get display :format)))
+      (should (equal original parsed))))
+
+  :doc "dependency bodies and composed children survive the JSON allowlist"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+    (niwa-tool-register
+     (niwa-tool--create :name "Skill" :category "niwa"
+                          :renderer #'niwa-skills--render-skill-tool))
+    (niwa-tool-register
+     (niwa-tool--create :name "ToolCall" :category "niwa"
+                          :renderer #'niwa-tool-ptc--render))
+    (let* ((record (niwa-collaboration--tool-record
+                    '(:name "Skill" :args (:name "dashboard") :result "Model guidance"
+                      :render-data (:kind skill-invocation :prompt "# Dashboard"
+                                    :attachments ("base" "missing")
+                                    :attachment-bodies (("base" . "# Base\nDelivered body"))))
+                    "fixture"))
+           (wire (json-encode
+                  (niwa-collaboration--json-record record)))
+           (display (plist-get record :presentation))
+           (dependencies (plist-get display :attachments)))
+      (should (string-search "presentation" wire))
+      (should (= 2 (length dependencies)))
+      (should (equal "# Base\nDelivered body" (plist-get (aref dependencies 0) :body)))
+      (should (string-search "unavailable" (plist-get (aref dependencies 1) :body))))
+    (let* ((record (niwa-collaboration--tool-record
+                    '(:name "ToolCall" :result "done"
+                      :render-data (:kind ptc :outcome completed
+                                    :calls ((:id "env/1" :tool "Read" :args (:file_path "a.el")
+                                             :status success :batch 0 :result "A")
+                                            (:id "env/2" :tool "Read" :args (:file_path "b.el")
+                                             :status error :batch 0 :result "Error: missing"))))
+                    "fixture"))
+           (display (plist-get record :presentation))
+           (children (plist-get display :children)))
+      (should (equal "ToolCall" (plist-get display :name)))
+      (should (= 2 (length children)))
+      (should (equal "a.el" (plist-get (aref children 0) :detail)))
+      (should (equal "0" (plist-get (aref children 0) :batch)))
+      (should (equal "failed" (plist-get (aref children 1) :status)))
+      (should (eq t (plist-get (aref children 1) :collapsed)))))
+
+  :doc "budgets the whole display and falls back for malformed metadata"
+  (let* ((niwa-collaboration--max-tool-result-bytes 2048)
+         (parsed (list :name "Read" :args '(:file_path "a.el")
+                       :result (make-string 10000 ?x)))
+         (display (niwa-collaboration-tool-presentation parsed)))
+    (should (plist-get display :truncated))
+    (should (< (length (plist-get display :body)) 2048))
+    (should (< (string-bytes (json-encode display)) 4096))
+    (niwa-test--with-captured-diagnostics nil
+      (should-not (niwa-collaboration-tool-presentation
+                   '(:name "Skill" :result "Visible fallback"
+                     :render-data (:attachments malformed))))))
+
+  :doc "structural budget marks omitted live children as truncated"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+        (niwa-collaboration--max-tool-result-bytes 1400))
+    (niwa-tool-register
+     (niwa-tool--create :name "ToolCall" :category "niwa"
+                          :renderer #'niwa-tool-ptc--render))
+    (let* ((calls (cl-loop for index below 10 collect
+                          (list :id (format "env/%d" index) :tool "Probe"
+                                :status 'running :result "")))
+           (display (niwa-collaboration-tool-presentation
+                     (list :name "ToolCall" :result "" :render-data
+                           (list :kind 'ptc :live-p t :status 'running
+                                 :completed-count 0 :calls calls)))))
+      (should (> (length (plist-get display :children)) 0))
+      (should (< (length (plist-get display :children)) (length calls)))
+      (should (plist-get display :truncated))))
+
+  :doc "envelope failure remains ToolCall and child denial is truthful"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+    (niwa-tool-register
+     (niwa-tool--create :name "ToolCall" :category "niwa"
+                          :renderer #'niwa-tool-ptc--render))
+    (let* ((data '(:kind ptc :direct-tool "Read" :outcome script-error :status error
+                   :calls ((:id "env/1" :tool "Read" :status success :result "child OK"))))
+           (display (niwa-collaboration-tool-presentation
+                     (list :name "ToolCall" :result "Error: envelope failed" :render-data data))))
+      (should (equal "ToolCall" (plist-get display :name)))
+      (should (equal "failed" (plist-get display :status)))
+      (should (string-search "envelope failed" (plist-get display :body))))
+    (let ((display (niwa-collaboration-tool-presentation
+                    '(:name "ToolCall" :result "Permission denied"
+                      :render-data (:kind ptc :outcome tool-error
+                                    :calls ((:id "env/1" :tool "Read" :status denied
+                                             :result "Permission denied")))))))
+      (should (equal "denied"
+                     (plist-get (aref (plist-get display :children) 0) :status)))))
+
+  :doc "real wrapped patch retains artifact cards and pending execution identity"
+  (let* ((root (make-temp-file "niwa-present-artifact-" t))
+         (path (file-name-concat root ".niwa" "artifacts" "example.html")))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local niwa--session
+                      (niwa-session--create
+                       :name "fixture" :save-path root
+                       :workspace (niwa-workspace--create :type 'project :id "w" :root root)))
+          (make-directory (file-name-directory path) t)
+          (write-region "<h1>Fixture</h1>" nil path nil 'silent)
+          (insert (propertize
+                   "(:name \"ToolCall\" :args (:expression \"(ApplyPatch :patch ...)\"))\nApplied patch"
+                   'gptel '(tool . "wrapped-patch")))
+          (insert (niwa-tool-render-data-format
+                   `(:kind ptc :outcome completed :direct-tool "ApplyPatch"
+                     :calls ((:id "wrapped-patch/1" :tool "ApplyPatch" :status success
+                              :args (:patch "patch")
+                              :render-data (:kind patch :files ((:kind add :added 1 :deleted 0 :diff "" :path ,path))))))
+                   "wrapped-patch"))
+          (put-text-property (point-min) (point-max)
+                             'gptel '(tool . "wrapped-patch"))
+          (let* ((room (list :data-buffer (current-buffer)
+                             :pending-tools
+                             (list (list :id "pending-id" :kind "tool" :name "ToolCall"
+                                         :status "running" :pending t
+                                         :baseline-tool-count 0 :baseline-record-count 0))))
+                 (records (niwa-collaboration--project-records room)))
+            (should (= 1 (length records)))
+            (should (equal "pending-id" (plist-get (car records) :id)))
+            (should (equal "example.html" (plist-get (car records) :artifact)))
+            (should-not (plist-get room :pending-tools))))
+      (niwa-collaboration--artifact-stat-invalidate)
+      (delete-directory root t))))
+
+(niwa-deftest niwa-collaboration--routine-poll-p
+  () ,test (test)
+  :doc "hide routine polls, including ones delivering output and terminal failure"
+  (should (niwa-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1" :chars "")
+           '(:state completed :outcome failure :status success) 'success))
+  (should (niwa-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1" :chars "")
+           '(:state completed :outcome failure :status error
+             :control-succeeded-p t) 'error))
+  (should (niwa-collaboration--routine-poll-p
+           "WriteStdin" '(:execution_id "exec-1")
+           '(:state running :observation-output-p t) nil))
+  :doc "do not hide input, denied operations, or a failed control operation"
+  (should-not (niwa-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "hello") nil nil))
+  (should-not (niwa-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "") '(:status denied) nil))
+  (should-not (niwa-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "")
+               '(:status success :control-succeeded-p nil) 'success))
+  (should-not (niwa-collaboration--routine-poll-p
+               "WriteStdin" '(:chars "") nil 'error)))
+
+(niwa-deftest niwa-collaboration--tool-record-execution
+  () ,test (test)
+  :doc "Bash whole output and terminal status replace stale initial result"
+  (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "Bash" :category "niwa"
+                                  :renderer #'niwa-tool-exec--render-bash)))
+         (record (niwa-collaboration--tool-record
+                  '(:name "Bash" :args (:command "echo hello")
+                    :result "initial output"
+                    :render-data (:kind execution :state completed
+                                  :outcome failure :status error
+                                  :execution-output "initial output\nfinal output"))
+                  "tool")))
+    (should (equal "failed" (plist-get record :status)))
+    (should (equal "initial output\nfinal output" (plist-get record :result)))
+    (should (equal "$ echo hello\n\ninitial output\nfinal output\n\nDetails: failure"
+                   (plist-get (plist-get record :presentation) :body))))
+  :doc "routine poll disappears; errors and real input remain inspectable"
+  (should-not (niwa-collaboration--tool-record
+               '(:name "WriteStdin" :args (:execution_id "exec-1")
+                 :result "new output"
+                 :render-data (:execution-control poll :status error
+                               :control-succeeded-p t
+                               :state completed :outcome failure)) "poll"))
+  (should (equal "failed"
+                 (plist-get (niwa-collaboration--tool-record
+                             '(:name "WriteStdin" :args (:chars "")
+                               :result "Error: invalid handle"
+                               :render-data (:status error)) "control")
+                            :status)))
+  :doc "accepted input retains a completed guest status despite failed Bash exit"
+  (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "WriteStdin" :category "niwa"
+                                  :renderer #'niwa-tool-exec--render-bash)))
+         (record
+          (niwa-collaboration--tool-record
+           '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "answer\n")
+             :result "failed command"
+             :render-data (:execution-control input :control-succeeded-p t
+                           :status error :state completed :termination exited
+                           :outcome failure :exit-code 2 :execution-id "exec-1"))
+           "input")))
+    (should (equal "completed" (plist-get record :status)))
+    (should (equal "completed"
+                   (plist-get (plist-get record :presentation) :status)))
+    (should (equal "WriteStdin: sent input"
+                   (plist-get (plist-get record :presentation) :header))))
+  (should (niwa-collaboration--tool-record
+           '(:name "WriteStdin" :args (:chars "hi") :result "sent") "input")))
+
+(niwa-deftest niwa-collaboration-tool-presentation-sandbox
+  () ,test (test)
+  :doc "guest Bash header discloses the actual sandbox without changing output"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+        (summary '(:attempt-count 1 :started-count 1 :sandbox off
+                   :filesystem unrestricted :network unrestricted
+                   :private-credential "must-not-travel")))
+    (niwa-tool-register
+     (niwa-tool--create :name "Bash" :category "niwa"
+                          :renderer #'niwa-tool-exec--render-bash))
+    (niwa-tool-register
+     (niwa-tool--create :name "ToolCall" :category "niwa"
+                          :renderer #'niwa-tool-ptc--render))
+    (let* ((direct (niwa-collaboration--tool-record
+                    (list :name "Bash" :args '(:command "echo hello")
+                          :result "initial output"
+                          :render-data
+                          (list :state 'completed :status 'success :outcome 'success
+                                :execution-output "hello\n"
+                                :sandbox-summary summary)) "direct"))
+           (presentation (plist-get direct :presentation))
+           (wire (json-encode (niwa-collaboration--json-record direct))))
+      (should (string-match-p "Sandbox:.*sandbox disabled"
+                              (plist-get presentation :header)))
+      (should (equal "hello\n" (plist-get direct :result)))
+      (should (equal "$ echo hello\n\nhello\n\n\nDetails: success"
+                     (plist-get presentation :body)))
+      (should-not (string-match-p "must-not-travel" wire)))
+    (let* ((direct-call
+            (niwa-collaboration--tool-record
+             (list :name "ToolCall" :result "model-facing value"
+                   :render-data
+                   (list :kind 'ptc :direct-tool "Bash" :outcome 'completed
+                         :calls (list (list :id "outer/1" :tool "Bash" :status 'success
+                                            :args '(:command "echo child")
+                                            :render-data
+                                            (list :state 'completed :status 'success
+                                                  :outcome 'success
+                                                  :execution-output "child\n"
+                                                  :sandbox-summary summary)))))
+             "direct-call"))
+           (header (plist-get (plist-get direct-call :presentation) :header)))
+      (should (equal "Bash" (plist-get (plist-get direct-call :presentation) :name)))
+      (should (string-match-p "Sandbox:.*sandbox disabled" header))
+      (should (equal "model-facing value" (plist-get direct-call :result))))
+    (let* ((nested (niwa-collaboration--tool-record
+                    (list :name "ToolCall" :result "script value"
+                          :render-data
+                          (list :kind 'ptc :outcome 'completed
+                                :calls (list (list :id "outer/1" :tool "Bash"
+                                                   :args '(:command "echo child")
+                                                   :status 'success :result "child\n"
+                                                   :render-data
+                                                   (list :state 'completed :status 'success
+                                                         :outcome 'success
+                                                         :execution-output "child\n"
+                                                         :sandbox-summary summary)))))
+                    "nested"))
+           (child (aref (plist-get (plist-get nested :presentation) :children) 0)))
+      (should (string-match-p "Sandbox:.*sandbox disabled"
+                              (plist-get child :header)))
+      (should (equal "script value" (plist-get nested :result)))))
+  :doc "default strict sandbox needs no additional guest disclosure"
+  (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+    (niwa-tool-register
+     (niwa-tool--create :name "Bash" :category "niwa"
+                          :renderer #'niwa-tool-exec--render-bash))
+    (let ((presentation
+           (niwa-collaboration-tool-presentation
+            '(:name "Bash" :args (:command "true") :result ""
+              :render-data (:state completed :status success :outcome success
+                            :sandbox-summary
+                            (:attempt-count 1 :started-count 1 :sandbox bubblewrap
+                             :filesystem workspace-write :network isolated))))))
+      (should-not (string-match-p "Sandbox:" (plist-get presentation :header))))))
+
+(niwa-deftest niwa-collaboration--tool-segment-records-pending-terminal
+  (:doc "completion before original row insertion uses durable pending terminal facts")
+  (with-temp-buffer
+    (insert "tool")
+    (cl-letf (((symbol-function 'niwa-view--tool-call-parse)
+               (lambda (&rest _)
+                 '(:name "Bash" :tool-use-id "bash-1"
+                   :args (:command "exit 1") :result "yielded"
+                   :render-data (:state running :status success))))
+              ((symbol-function 'niwa-execution-transcript-pending-render-data)
+               (lambda (_buffer id)
+                 (should (equal "bash-1" id))
+                 '(:state completed :outcome failure :status error
+                   :execution-output "failed after yield"))))
+      (let ((record (car (niwa-collaboration--tool-segment-records
+                          (current-buffer) '(tool 1 5)))))
+        (should (equal "tool-bash-1" (plist-get record :id)))
+        (should (equal "failed" (plist-get record :status)))
+        (should (equal "failed after yield" (plist-get record :result)))))))
+
+(niwa-deftest niwa-collaboration-tool-presentation-poll
+  () ,test (test)
+  :doc "nested successful polls vanish without altering raw returned value"
+  (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "ToolCall" :category "niwa"
+                                  :renderer #'niwa-tool-ptc--render)))
+         (_bash (niwa-tool-register
+                 (niwa-tool--create :name "Bash" :category "niwa"
+                                      :renderer #'niwa-tool-exec--render-bash)))
+         (parsed '(:name "ToolCall" :result "raw model value"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "c/1" :tool "Bash" :args (:command "echo hi")
+                             :status success :result "first"
+                             :render-data (:execution-id "exec-1" :state completed
+                                           :outcome failure :status error
+                                           :execution-output "first\nlast"))
+                            (:id "c/2" :tool "WriteStdin"
+                             :args (:execution_id "exec-1" :chars "")
+                             :status error :result "last"
+                             :render-data (:execution-control poll :status error
+                                           :control-succeeded-p t))
+                            (:id "c/3" :tool "WriteStdin"
+                             :args (:execution_id "missing" :chars "")
+                             :status error :result "Error: invalid handle")))))
+         (record (niwa-collaboration--tool-record parsed "raw"))
+         (children (plist-get (plist-get record :presentation) :children)))
+    (should (equal "raw model value" (plist-get record :result)))
+    (should (= 2 (length children)))
+    (should (equal "$ echo hi\n\nfirst\nlast\n\nDetails: failure · exec-1"
+                   (plist-get (aref children 0) :body)))
+    (should (equal "failed" (plist-get (aref children 0) :status)))
+    (should (equal "failed" (plist-get (aref children 1) :status)))
+    (should (equal "ToolCall" (plist-get record :name))))
+  :doc "deeper direct polls vanish but failed controls remain inspectable"
+  (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "ToolCall" :category "niwa"
+                                  :renderer #'niwa-tool-ptc--render)))
+         (parsed '(:name "ToolCall" :result "unaltered provider result"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "outer/1" :tool "ToolCall" :status success
+                             :result "polled output"
+                             :render-data
+                             (:kind ptc :outcome completed :direct-tool "WriteStdin"
+                              :calls ((:id "outer/1/1" :tool "WriteStdin"
+                                       :args (:execution_id "exec-1" :chars "")
+                                       :status success :result "polled output"
+                                       :render-data (:control-succeeded-p t
+                                                     :state completed :outcome failure
+                                                     :status error)))))
+                            (:id "outer/2" :tool "ToolCall" :status error
+                             :result "Error: invalid handle"
+                             :render-data
+                             (:kind ptc :outcome tool-error :direct-tool "WriteStdin"
+                              :calls ((:id "outer/2/1" :tool "WriteStdin"
+                                       :args (:execution_id "missing" :chars "")
+                                       :status error :result "Error: invalid handle"
+                                       :render-data (:status error)))))))))
+         (original (copy-tree parsed))
+         (record (niwa-collaboration--tool-record parsed "raw"))
+         (children (plist-get (plist-get record :presentation) :children)))
+    (should (equal "unaltered provider result" (plist-get record :result)))
+    (should (= 1 (length children)))
+    (should (equal "failed" (plist-get (aref children 0) :status)))
+    (should (string-match-p "invalid handle" (plist-get (aref children 0) :body)))
+    (should (equal original parsed))))
+
+(niwa-deftest niwa-collaboration--direct-tool-poll
+  () ,test (test)
+  :doc "single direct ToolCall poll disappears from guest projection without mutating model result"
+  (let* ((parsed '(:name "ToolCall" :result "raw model value"
+                   :render-data
+                   (:kind ptc :direct-tool "WriteStdin" :outcome completed
+                    :calls ((:id "c/1" :tool "WriteStdin" :status success
+                             :args (:execution_id "exec-1" :chars "")
+                             :result "polled output")))))
+         (original (copy-tree parsed)))
+    (should-not (niwa-collaboration--tool-record parsed "tool"))
+    (should (equal original parsed)))
+  :doc "direct failed control operation remains visible with its error facts"
+  (let ((parsed '(:name "ToolCall" :result "Error: invalid handle"
+                  :render-data
+                  (:kind ptc :direct-tool "WriteStdin" :outcome tool-error
+                   :calls ((:tool "WriteStdin" :status success
+                            :args (:execution_id "missing" :chars "")
+                            :render-data (:status error)
+                            :result "Error: invalid handle"))))))
+    (should (niwa-collaboration--tool-record parsed "control"))))
+
+(niwa-deftest niwa-collaboration--direct-facts
+  (:doc "terminal Bash facts override the copied child success of a direct ToolCall")
+  (let* ((facts '(:state completed :status error :outcome failure
+                  :execution-output "final output"))
+         (data (list :calls (list (list :tool "Bash" :status 'success
+                                  :render-data facts))))
+         (direct '(:tool "Bash" :status success
+                   :render-data (:state completed :status success))))
+    (should (equal facts
+                   (niwa-collaboration--direct-facts data direct)))))
+
+(niwa-deftest niwa-collaboration--live-bash-data
+  () ,test (test)
+  :doc "running execution tail belongs to original Bash projection, not poll row"
+  (let* ((niwa--session 'fixture)
+         (niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "Bash" :category "niwa"
+                                  :renderer #'niwa-tool-exec--render-bash)))
+         (parsed '(:name "Bash" :result "yielded"
+                   :args (:command "sleep 10")
+                   :render-data (:execution-id "exec-1" :state running
+                                 :permission-approvals
+                                 ((:source reviewer :outcome allow-once :reason "Retained approval"))
+                                 :status success :execution-output "stale output")))
+         (original (copy-tree parsed)))
+    (cl-letf (((symbol-function 'niwa-execution-list-user)
+               (lambda (_) '((:execution-id "exec-1" :state running
+                            :output-tail "fresh poll output")))))
+      (let ((live (niwa-collaboration--live-bash-data parsed)))
+        (should (equal "fresh poll output"
+                       (niwa-collaboration--execution-output
+                        (plist-get live :render-data))))
+        (should (eq 'running (plist-get (plist-get live :render-data) :status)))
+        (should (= 1 (cl-count :status (plist-get live :render-data))))
+        (let ((record (niwa-collaboration--tool-record live "tool")))
+          (should (equal "running" (plist-get record :status)))
+          (should (equal "Retained approval"
+                         (plist-get (plist-get record :presentation) :approval)))
+          (should (equal "fresh poll output" (plist-get record :result)))
+          (should (equal "$ sleep 10\n\nfresh poll output\n\nDetails: running · exec-1"
+                         (plist-get (plist-get record :presentation) :body))))
+        (should (equal "yielded" (plist-get live :result)))
+        (should (equal original parsed)))))
+  :doc "a bounded running tail discloses cumulative loss in direct and nested guest rows"
+  (let* ((niwa--session 'fixture)
+         (niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_bash (niwa-tool-register
+                 (niwa-tool--create :name "Bash" :category "niwa"
+                                      :renderer #'niwa-tool-exec--render-bash)))
+         (_tool-call (niwa-tool-register
+                      (niwa-tool--create :name "ToolCall" :category "niwa"
+                                           :renderer #'niwa-tool-ptc--render)))
+         (direct '(:name "Bash" :result "old output"
+                   :args (:command "produce-output")
+                   :render-data (:execution-id "exec-1" :state running
+                                 :omitted-output-bytes 0)))
+         (nested '(:name "ToolCall" :result "model reply"
+                   :render-data
+                   (:kind ptc :outcome completed
+                    :calls ((:id "outer/1" :tool "Bash" :status success
+                             :args (:command "produce-output") :result "old output"
+                             :render-data (:execution-id "exec-1" :state running
+                                           :omitted-output-bytes 0)))))))
+    (cl-letf (((symbol-function 'niwa-execution-list-user)
+               (lambda (_)
+                 '((:execution-id "exec-1" :state running
+                    :output-tail "recent output" :output-preview-truncated-p t
+                    :permission-approvals
+                    ((:source reviewer :outcome allow-once :reason "Original execution")))))))
+      (dolist (row (list (niwa-collaboration-tool-presentation direct)
+                         (niwa-collaboration-tool-presentation
+                          (plist-put (copy-sequence nested) :render-data
+                                     (plist-put (copy-sequence (plist-get nested :render-data))
+                                                :direct-tool "Bash")))
+                         (aref (plist-get
+                                (niwa-collaboration-tool-presentation nested)
+                                :children) 0)))
+        (should (equal "running" (plist-get row :status)))
+        (should (equal "Original execution" (plist-get row :approval)))
+        (should (string-match-p "output truncated" (plist-get row :header)))
+        (should (string-search "recent output" (plist-get row :body)))
+        (should-not (string-search "old output" (plist-get row :body))))))
+  :doc "owner accumulator to guest projection marks a running bounded tail"
+  (let* ((niwa--session 'fixture)
+         (niwa-execution-inline-output-limit 2000)
+         (niwa-tool--registry (copy-hash-table niwa-tool--registry))
+         (_ (niwa-tool-register
+             (niwa-tool--create :name "Bash" :category "niwa"
+                                  :renderer #'niwa-tool-exec--render-bash)))
+         (record (niwa-execution--record-create
+                  :execution-id "exec-1"
+                  :origin (niwa-execution--origin-create :owner "/root"))))
+    (niwa-execution--retain-output record (make-string 6013 ?x))
+    (cl-letf (((symbol-function 'niwa-execution--facts)
+               (lambda (_) '(:state running :omitted-output-bytes 0)))
+              ((symbol-function 'niwa-execution-list-user)
+               (lambda (_) (list (niwa-execution--user-snapshot record)))))
+      (let* ((parsed
+              (niwa-collaboration--live-bash-data
+               '(:name "Bash" :result "yielded" :args (:command "produce-output")
+                 :render-data (:execution-id "exec-1" :state running))))
+             (projected (niwa-collaboration--tool-record parsed "tool"))
+             (presentation (plist-get projected :presentation)))
+        (should (equal "running" (plist-get presentation :status)))
+        (should (string-match-p "output truncated"
+                                (plist-get presentation :header)))
+        (should (equal (make-string 2000 ?x) (plist-get projected :result)))))))
+
+(niwa-deftest niwa-collaboration--suppressed-tool-landed-p
+  (:doc "settled direct poll clears only its matching pending ToolCall, not a later identical one")
+  (with-temp-buffer
+    (insert (make-string 40 ?x))
+    (let* ((buffer (current-buffer))
+           (parsed '(:name "ToolCall" :args (:expression "(WriteStdin :execution_id \"e\")")
+                     :result "raw"
+                     :render-data
+                     (:kind ptc :direct-tool "WriteStdin" :outcome completed
+                      :calls ((:tool "WriteStdin" :status success
+                               :args (:execution_id "e" :chars "")
+                               :result "observed")))))
+           (key (niwa-collaboration--tool-call-key parsed)))
+      (cl-letf (((symbol-function 'niwa-transcript-segments)
+                 (lambda (&rest _) '((tool 3 8))))
+                ((symbol-function 'niwa-view--tool-call-parse)
+                 (lambda (&rest _) parsed)))
+        (should (niwa-collaboration--suppressed-tool-landed-p
+                 buffer (list :call-key key :baseline-buffer-end 3)))
+        (should-not (niwa-collaboration--suppressed-tool-landed-p
+                     buffer (list :call-key key :baseline-buffer-end 9)))
+        (should-not (niwa-collaboration--suppressed-tool-landed-p
+                     buffer (list :call-key "other" :baseline-buffer-end 3)))))))
+
+(niwa-deftest niwa-collaboration--reconcile-ptc-children
+  () ,test (test)
+  :doc "nested Bash terminal facts after a poll replace stale child display, not outer model result"
+  (with-temp-buffer
+    (insert "tool")
+    (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+           (_ (niwa-tool-register
+               (niwa-tool--create :name "ToolCall" :category "niwa"
+                                    :renderer #'niwa-tool-ptc--render)))
+           (_bash (niwa-tool-register
+                   (niwa-tool--create :name "Bash" :category "niwa"
+                                        :renderer #'niwa-tool-exec--render-bash)))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :args (:expression "(progn (Bash ...) (WriteStdin ...))")
+                     :result "raw model value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "exit 1") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running))
+                              (:id "outer/2" :tool "WriteStdin" :status error
+                               :args (:execution_id "exec-1" :chars "")
+                               :render-data (:control-succeeded-p t :status error)
+                               :result "poll output")))))
+           (original (copy-tree parsed)))
+      (cl-letf (((symbol-function 'niwa-view--tool-call-parse)
+                 (lambda (&rest _) parsed))
+                ((symbol-function 'niwa-execution-transcript-pending-render-data)
+                 (lambda (_buffer id)
+                   (when (equal id "outer/1")
+                     '(:execution-id "exec-1" :state completed :status error
+                       :outcome failure :execution-output "initial\nfinal")))))
+        (let* ((record (car (niwa-collaboration--tool-segment-records
+                             (current-buffer) '(tool 1 5))))
+               (children (plist-get (plist-get record :presentation) :children)))
+          (should (equal "raw model value" (plist-get record :result)))
+          (should (= 1 (length children)))
+          (should (equal "Bash" (plist-get (aref children 0) :name)))
+          (should (equal "failed" (plist-get (aref children 0) :status)))
+          (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exec-1"
+                         (plist-get (aref children 0) :body)))
+          (should (equal original parsed))))))
+  :doc "direct Bash also projects pending terminal output and status without rewriting returned value"
+  (with-temp-buffer
+    (insert "tool")
+    (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+           (_ (niwa-tool-register
+               (niwa-tool--create :name "ToolCall" :category "niwa"
+                                    :renderer #'niwa-tool-ptc--render)))
+           (_bash (niwa-tool-register
+                   (niwa-tool--create :name "Bash" :category "niwa"
+                                        :renderer #'niwa-tool-exec--render-bash)))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :args (:expression "(Bash :command \"exit 1\")")
+                     :result "raw returned value"
+                     :render-data
+                     (:kind ptc :direct-tool "Bash" :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "exit 1") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running))))))
+           (original (copy-tree parsed)))
+      (cl-letf (((symbol-function 'niwa-view--tool-call-parse)
+                 (lambda (&rest _) parsed))
+                ((symbol-function 'niwa-execution-transcript-pending-render-data)
+                 (lambda (_buffer id)
+                   (when (equal id "outer/1")
+                     '(:execution-id "exec-1" :state completed :status error
+                       :outcome failure :execution-output "initial\nfinal")))))
+        (let* ((record (car (niwa-collaboration--tool-segment-records
+                             (current-buffer) '(tool 1 5))))
+               (presentation (plist-get record :presentation)))
+          (should (equal "raw returned value" (plist-get record :result)))
+          (should (equal "Bash" (plist-get presentation :name)))
+          (should (equal "failed" (plist-get presentation :status)))
+          (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exec-1"
+                         (plist-get presentation :body)))
+          (should (equal original parsed))))))
+  :doc "Bash terminal evidence survives another ToolCall layer"
+  (with-temp-buffer
+    (let* ((data (current-buffer))
+           (niwa-tool--registry (copy-hash-table niwa-tool--registry))
+           (parsed '(:name "ToolCall" :tool-use-id "outer"
+                     :result "original returned value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "ToolCall" :status success
+                               :result "old output"
+                               :render-data
+                               (:kind ptc :outcome completed :direct-tool "Bash"
+                                :calls ((:id "outer/1/1" :tool "Bash"
+                                         :status success :args (:command "exit 2")
+                                         :result "old output"
+                                         :render-data (:state running)))))))))
+           (original (copy-tree parsed)))
+      (niwa-tool-register
+       (niwa-tool--create :name "ToolCall" :category "niwa"
+                             :renderer #'niwa-tool-ptc--render))
+      (niwa-tool-register
+       (niwa-tool--create :name "Bash" :category "niwa"
+                             :renderer #'niwa-tool-exec--render-bash))
+      (niwa-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer data :tool-use-id "outer/1/1"
+             :owner "/root" :whole-output "FINAL FAILURE"
+             :facts '(:execution-id "exec-deep" :command "exit 2"
+                      :state completed :outcome failure :exit-code 2)))
+      (let* ((projection (niwa-collaboration-tool-presentation
+                          (niwa-collaboration--reconcile-ptc-children
+                           data parsed)))
+             (child (aref (plist-get projection :children) 0)))
+        (should (equal "Bash" (plist-get child :name)))
+        (should (equal "failed" (plist-get child :status)))
+        (should (string-match-p "FINAL FAILURE" (plist-get child :body)))
+        (should-not (string-match-p "old output" (plist-get child :body)))
+        (should (equal original parsed)))))
+  :doc "unmatched terminal identities do not rewrite other nested executions"
+  (let* ((parsed '(:name "ToolCall" :render-data
+                   (:kind ptc :calls ((:id "outer/1" :tool "Bash" :status success
+                                      :render-data (:execution-id "exec-1"))))))
+         (original (copy-tree parsed)))
+    (cl-letf (((symbol-function 'niwa-execution-transcript-pending-render-data)
+               (lambda (_buffer _id) nil)))
+      (should (eq parsed (niwa-collaboration--reconcile-ptc-children
+                          (current-buffer) parsed)))
+      (should (equal original parsed))))
+  :doc "nested terminal output and failure survive closing and reopening the transcript"
+  (let* ((path (make-temp-file "niwa-guest-ptc-reload-"))
+         (session (niwa-session--create :authority-mode 'portable
+                                           :name "guest-ptc-reload"))
+         (buffer (find-file-noselect path))
+         (niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+    (unwind-protect
+        (progn
+          (niwa-tool-register
+           (niwa-tool--create :name "ToolCall" :category "niwa"
+                                :renderer #'niwa-tool-ptc--render))
+          (niwa-tool-register
+           (niwa-tool--create :name "Bash" :category "niwa"
+                                :renderer #'niwa-tool-exec--render-bash))
+          (with-current-buffer buffer
+            (delay-mode-hooks (org-mode))
+            (niwa-transcript-enable-gptel-mode)
+            (setq-local niwa--session session)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (let ((start (point)))
+              (insert "(:name \"ToolCall\" :args (:expression \"(Bash :command \\\"exit 1\\\")\"))\nraw model value")
+              (put-text-property start (point) 'gptel '(tool . "outer")))
+            (insert (niwa-tool-render-data-format
+                     '(:kind ptc :outcome completed
+                       :calls ((:id "outer/1" :tool "Bash" :status success
+                                :args (:command "exit 1") :result "initial"
+                                :render-data (:execution-id "exec-1" :state running))))
+                     "outer"))
+            (insert "\n")
+            (niwa-session-artifacts-stabilize-gptel-bounds)
+            (should (org-entry-get (point-min) "GPTEL_BOUNDS"))
+            (write-region (point-min) (point-max) path nil 'silent)
+            (set-buffer-modified-p nil)
+            (set-visited-file-modtime)
+            (niwa-execution-transcript-handle-event
+             (list :type 'terminal :data-buffer buffer :tool-use-id "outer/1"
+                   :owner "/root" :whole-output "initial\nfinal"
+                   :facts '(:execution-id "exec-1" :command "exit 1"
+                            :state completed :outcome failure :exit-code 1))))
+          ;; The settled row reaches disk with the transcript's checkpoint.
+          (with-current-buffer buffer
+            (should (buffer-modified-p))
+            (niwa-session-persistence-write-current-buffer-atomically path)
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (setq buffer nil)
+          (with-temp-buffer
+            (insert-file-contents path)
+            (delay-mode-hooks (org-mode))
+            (niwa-transcript-restore-properties)
+            (should-not niwa-execution-transcript--pending-terminals)
+            (goto-char (point-min))
+            (should (search-forward "(:name \"ToolCall\"" nil t))
+            (let ((tool-start (match-beginning 0)))
+              (should (search-forward niwa-tool-render-data-close nil t))
+              (let* ((tool-end (point))
+                     (parsed (niwa-view--tool-call-parse
+                              (current-buffer) tool-start tool-end))
+                     (record (car (niwa-collaboration--tool-segment-records
+                                   (current-buffer) (list 'tool tool-start tool-end))))
+                     (child (aref (plist-get (plist-get record :presentation) :children)
+                                  0)))
+                (should (plist-get parsed :render-data))
+                (should (equal "raw model value" (plist-get record :result)))
+                (should (equal "failed" (plist-get child :status)))
+                (should (equal "$ exit 1\n\ninitial\nfinal\n\nDetails: failure · exit 1 · exec-1"
+                               (plist-get child :body)))))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file path))))
+
+(niwa-deftest niwa-collaboration--canonical-records-archived-bash
+  (:doc "current guest transcript keeps only an output-free completion breadcrumb")
+  (with-temp-buffer
+    (delay-mode-hooks (org-mode))
+    (let ((niwa-tool--registry (copy-hash-table niwa-tool--registry)))
+      (niwa-tool-register
+       (niwa-tool--create :name "Bash" :category "niwa"
+                            :renderer #'niwa-tool-exec--render-bash))
+      (let ((start (point)))
+        (insert "(:name \"Bash\" :args (:command \"exit 1\"))\n\ninitial output")
+        (insert (niwa-tool-render-data-format
+                 '(:execution-id "exec-archived" :command "exit 1"
+                   :state running :status success :live-execution-p t)
+                 "bash-archived"))
+        (put-text-property start (point) 'gptel '(tool . "bash-archived")))
+      (let ((plan (niwa-execution-transcript-prepare-archive
+                   (current-buffer) '("bash-archived"))))
+        (should (equal "bash-archived" (caar (plist-get plan :live))))
+        (erase-buffer)
+        (insert (niwa-execution-transcript-archive-text plan))
+        (niwa-execution-transcript-commit-archive (current-buffer) plan))
+      (niwa-execution-transcript-handle-event
+       (list :type 'terminal :data-buffer (current-buffer)
+             :tool-use-id "bash-archived" :owner "/root"
+             :whole-output "initial output\nfinal output"
+             :facts '(:execution-id "exec-archived" :command "exit 1"
+                      :state completed :outcome failure :exit-code 1)))
+      (let ((start (point-max)))
+        (goto-char start)
+        (insert "\n(:name \"WriteStdin\" :args (:execution_id \"exec-archived\" :chars \"\"))\n\nfinal output")
+        (put-text-property (1+ start) (point) 'gptel '(tool . "poll-1")))
+      (should (= 1 (length (niwa-transcript-audit-records
+                            (buffer-string) 'execution-completion))))
+      (let* ((records (niwa-collaboration--canonical-records (current-buffer)))
+             (record (car records))
+             (wire (json-encode (niwa-collaboration--json-record record))))
+        (should (= 1 (length records)))
+        (should (equal "execution" (plist-get record :kind)))
+        (should (equal "failed" (plist-get record :status)))
+        (should-not (string-match-p "initial output\\|final output" wire))))))
+
+(niwa-deftest niwa-collaboration--canonical-records-present-bash
+  (:doc "existing Bash row and nested child completions do not become duplicate cards")
+  (with-temp-buffer
+    (delay-mode-hooks (org-mode))
+    (let ((start (point)))
+      (insert "(:name \"Bash\" :args (:command \"true\"))\n\noriginal result")
+      (insert (niwa-tool-render-data-format
+               '(:execution-id "exec-present" :state running) "bash-present"))
+      (put-text-property start (point) 'gptel '(tool . "bash-present")))
+    (insert (niwa--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "bash-present"
+                     :render-data (:execution-id "exec-present" :command "true"
+                                   :state completed :status success
+                                   :outcome success :execution-output "whole output")))
+            (niwa--format-hook-audit-record
+             '(:type execution-completion :tool-use-id "outer/1"
+                     :render-data (:execution-id "exec-child" :command "true"
+                                   :state completed :status success
+                                   :outcome success :execution-output "child output"))))
+    (let ((records (niwa-collaboration--canonical-records (current-buffer))))
+      (should (= 1 (length records)))
+      (should (equal "tool-bash-present" (plist-get (car records) :id)))
+      (should (equal "whole output" (plist-get (car records) :result))))))
+
+(niwa-deftest niwa-collaboration-forwarded-execution-signaled ()
+  ,test
+  (test)
+  :doc "unsolicited signal is a failed execution, not a requested stop"
+  (let ((record (niwa-collaboration--forwarded-execution-record
+                 '(:owner "/root/child" :execution-id "exec-signaled"
+                   :command "sleep 10"
+                   :facts (:termination signaled :exit-code 13
+                           :outcome failure)))))
+    (should (equal "failed" (plist-get record :status)))
+    (should-not (plist-get (plist-get record :execution) :exitCode)))
+  :doc "requested INT is a cancellation without a fictitious exit code"
+  (let ((record (niwa-collaboration--forwarded-execution-record
+                 '(:owner "/root/child" :execution-id "exec-interrupted"
+                   :command "sleep 10"
+                   :facts (:termination interrupted :exit-code 2
+                           :outcome failure)))))
+    (should (equal "cancelled" (plist-get record :status)))
+    (should-not (plist-get (plist-get record :execution) :exitCode))))
+
+(niwa-deftest niwa-collaboration--missing-bash-data
+  (:doc "only running archived work with missing later evidence becomes unknown")
+  (let* ((completions (make-hash-table :test #'equal))
+         (running '(:execution-id "exec-1" :state running :status success)))
+    (should (eq running (niwa-collaboration--missing-bash-data
+                         running completions)))
+    (puthash :gap t completions)
+    (let ((unknown (niwa-collaboration--missing-bash-data
+                    running completions)))
+      (should (eq 'unknown (plist-get unknown :state)))
+      (should (eq 'warning (plist-get unknown :status)))
+      (should (eq 'running (plist-get running :state))))
+    (should (eq 'completed
+                (plist-get (niwa-collaboration--missing-bash-data
+                            '(:state completed :status success) completions)
+                           :state)))))
+
+(niwa-deftest niwa-collaboration--reconcile-ptc-children-missing
+  (:doc "nested and direct Bash show warning without changing the raw result")
+  (with-temp-buffer
+    (let* ((niwa-tool--registry (copy-hash-table niwa-tool--registry))
+           (completions (make-hash-table :test #'equal))
+           (parsed '(:name "ToolCall" :result "raw model value"
+                     :render-data
+                     (:kind ptc :outcome completed
+                      :calls ((:id "outer/1" :tool "Bash" :status success
+                               :args (:command "echo hi") :result "initial"
+                               :render-data (:execution-id "exec-1" :state running
+                                             :status success)))))))
+      (puthash :gap t completions)
+      (niwa-tool-register
+       (niwa-tool--create :name "ToolCall" :category "niwa"
+                             :renderer #'niwa-tool-ptc--render))
+      (niwa-tool-register
+       (niwa-tool--create :name "Bash" :category "niwa"
+                             :renderer #'niwa-tool-exec--render-bash))
+      (dolist (direct '(nil "Bash"))
+        (let* ((raw (copy-tree parsed))
+               (_ (when direct
+                    (setf (plist-get (plist-get raw :render-data) :direct-tool)
+                          direct)))
+               (projected (niwa-collaboration--reconcile-ptc-children
+                           (current-buffer) raw nil completions))
+               (record (niwa-collaboration--tool-record projected "original"))
+               (display (niwa-collaboration-tool-presentation projected))
+               (bash (if direct display
+                       (aref (plist-get display :children) 0))))
+          (should (equal "raw model value" (plist-get projected :result)))
+          (should (equal "raw model value" (plist-get record :result)))
+          (should (equal "warning" (plist-get bash :status)))
+          (when direct (should (equal "warning" (plist-get record :status))))
+          (should (string-match-p "completion unavailable"
+                                  (plist-get bash :header)))
+          (should (string-match-p "initial" (plist-get bash :body)))
+          (should (equal "running"
+                         (symbol-name (plist-get
+                                       (plist-get (car (plist-get
+                                                        (plist-get raw :render-data)
+                                                        :calls)) :render-data)
+                                       :state)))))))))
+
+(provide 'test-niwa-collaboration-tool-presentation)
+;;; test-niwa-collaboration-tool-presentation.el ends here

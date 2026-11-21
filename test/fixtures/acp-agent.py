@@ -96,7 +96,7 @@ session_info = {}
 config_behavior = None
 applied = {}
 inspection = None
-history_root = os.getenv("MEVEDEL_ACP_TEST_HISTORY")
+history_root = os.getenv("NIWA_ACP_TEST_HISTORY")
 
 
 def wait_gate(name):
@@ -120,10 +120,10 @@ for line in sys.stdin:
     try:
         method = message.get("method")
         params = message.get("params", {})
-        if trace := os.getenv("MEVEDEL_ACP_TEST_TRACE"):
+        if trace := os.getenv("NIWA_ACP_TEST_TRACE"):
             with open(trace, "a", encoding="utf-8") as log:
                 log.write(json.dumps(message) + "\n")
-        auth_failure = os.getenv("MEVEDEL_ACP_TEST_AUTH_FAILURE")
+        auth_failure = os.getenv("NIWA_ACP_TEST_AUTH_FAILURE")
         if method == auth_failure:
             print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                               "error": {"code": -32000, "message": "Fixture auth required"}}), flush=True)
@@ -133,18 +133,18 @@ for line in sys.stdin:
             capabilities = {"resume": {}}
             if history_root:
                 capabilities.update({"fork": {}, "delete": {}})
-                capabilities.pop(os.getenv("MEVEDEL_ACP_TEST_MISSING_CAP"), None)
+                capabilities.pop(os.getenv("NIWA_ACP_TEST_MISSING_CAP"), None)
             reply(request_id, {"protocolVersion": 1, "agentInfo": {"name": "fixture-agent"},
                 "authMethods": [{"id": "sso", "name": "Browser sign-in"}, {"id": "backup"}],
                 "agentCapabilities": {
-                "loadSession": True, "promptCapabilities": {"image": not os.getenv("MEVEDEL_ACP_TEST_NO_IMAGES")},
+                "loadSession": True, "promptCapabilities": {"image": not os.getenv("NIWA_ACP_TEST_NO_IMAGES")},
                 "sessionCapabilities": capabilities}})
         elif method == "session/fork":
             source = Path(history_root, params["sessionId"] + ".json")
-            fork_id = os.getenv("MEVEDEL_ACP_TEST_FORK_ID", "fixture-fork")
+            fork_id = os.getenv("NIWA_ACP_TEST_FORK_ID", "fixture-fork")
             if fork_id and fork_id != params["sessionId"]:
                 Path(history_root, fork_id + ".json").write_bytes(source.read_bytes())
-            wait_gate("MEVEDEL_ACP_TEST_FORK_GATE")
+            wait_gate("NIWA_ACP_TEST_FORK_GATE")
             reply(request_id, {"sessionId": fork_id})
         elif method == "session/delete":
             if Path(history_root, "delete-fails").exists():
@@ -556,7 +556,7 @@ for line in sys.stdin:
                 reply(request_id, prompt_response)
                 reply(request_id, prompt_response)
         elif method == "session/cancel" and pending is not None:
-            wait_gate("MEVEDEL_ACP_TEST_CANCEL_GATE")
+            wait_gate("NIWA_ACP_TEST_CANCEL_GATE")
             reply(pending, cancel_response)
             pending = None
     except Exception:

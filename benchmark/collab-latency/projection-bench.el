@@ -15,8 +15,8 @@
 
 ;;; Code:
 
-(require 'mevedel-collaboration-projection)
-(require 'mevedel-transcript)
+(require 'niwa-collaboration-projection)
+(require 'niwa-transcript)
 
 (defun projection-bench--turn (index)
   "Insert synthetic turn INDEX at point."
@@ -48,23 +48,23 @@
 
 (dolist (turns '(10 50 100 200 400))
   (with-temp-buffer
-    (mevedel--transcript-org-mode)
+    (niwa--transcript-org-mode)
     (dotimes (index turns) (projection-bench--turn index))
-    (let* ((cache (mevedel-collaboration--projection-cache-create))
-           (old (mevedel-collaboration--canonical-records
+    (let* ((cache (niwa-collaboration--projection-cache-create))
+           (old (niwa-collaboration--canonical-records
                  (current-buffer) nil nil cache))
            (_ (projection-bench--stream))
            (full (projection-bench--time
-                  (lambda () (mevedel-collaboration--canonical-records (current-buffer)))))
+                  (lambda () (niwa-collaboration--canonical-records (current-buffer)))))
            (retained (projection-bench--time
                       (lambda ()
                         (projection-bench--stream)
-                        (mevedel-collaboration--canonical-records
+                        (niwa-collaboration--canonical-records
                          (current-buffer) nil nil cache))))
-           (new (mevedel-collaboration--canonical-records (current-buffer)))
+           (new (niwa-collaboration--canonical-records (current-buffer)))
            (diff (projection-bench--time
                   (lambda ()
-                    (let ((reused (mevedel-collaboration--reuse-record-ids old new))
+                    (let ((reused (niwa-collaboration--reuse-record-ids old new))
                           (by-id (make-hash-table :test #'equal))
                           (changed 0))
                       (dolist (record old) (puthash (plist-get record :id) record by-id))
@@ -72,7 +72,7 @@
                         (unless (equal (gethash (plist-get record :id) by-id) record)
                           (setq changed (1+ changed))))
                       changed)))))
-      (unless (equal new (mevedel-collaboration--canonical-records
+      (unless (equal new (niwa-collaboration--canonical-records
                           (current-buffer) nil nil cache))
         (error "Retained projection differs from a full projection"))
       (princ (format "turns=%4d chars=%8d records=%5d full=%7.1fms retained=%6.1fms diff=%5.1fms\n"

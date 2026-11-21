@@ -57,8 +57,8 @@ into it. The program names that file relative to the pinned parent, with one
 `../` per missing level, so it resolves through the opened directory's real
 ancestors: a parent pathname swapped after the proof cannot redirect it.
 Staged files a stopped program did not consume are removed afterwards.
-A hard kill can leave local `.mevedel-control-fs-staged-` payloads or inline
-`.mevedel-control-fs-` scratch files, each with its six-alphanumeric suffix.
+A hard kill can leave local `.niwa-control-fs-staged-` payloads or inline
+`.niwa-control-fs-` scratch files, each with its six-alphanumeric suffix.
 Lease validation recognizes only those reserved families as non-authority,
 without hiding them from listing proofs or removing them during election.
 Remote targets keep the base64 carriers. Diagnostic bytes are encoded through a separate pipe and returned
@@ -96,7 +96,7 @@ whose earlier deletion failed; a hard process kill cannot run that hook.
 Remote targets use the pipe
 carrier only where direct-async qualifies and otherwise run synchronously;
 while `--async-wait` is bound the program also runs synchronously, and
-`mevedel-session-control-fs-wait-async` waits for programs already running
+`niwa-session-control-fs-wait-async` waits for programs already running
 (exit and buffer close call it before releasing a lease).
 
 The process sentinel only decodes and stores the outcome. The callback is
@@ -201,7 +201,7 @@ protocol, extraction directory, or generic resolver cache is needed.
 - **Re-measurement points at caller program counts, not startup (2026-11-07).**
   Exploratory probes, not matched measurements: local target, interpreted
   Lisp, concurrent load present. One run of
-  `test/test-mevedel-memory-pass-notes.el` (29 tests) spent 49.7 of 53.2
+  `test/test-niwa-memory-pass-notes.el` (29 tests) spent 49.7 of 53.2
   seconds in 9,005 programs carrying 16,142 operations. 5,821 programs
   carried one operation, and no caller pair accounted for more than 12% of
   program time. The largest was the ownership proof before each memory-store

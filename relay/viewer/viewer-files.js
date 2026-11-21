@@ -90,7 +90,7 @@
     const status = document.getElementById('files-status');
     const uploadButton = document.getElementById('files-upload');
     const picker = document.getElementById('files-input');
-    const formatBytes = bytes => window.mevedelTranscriptRenderer.formatBytes(bytes);
+    const formatBytes = bytes => window.niwaTranscriptRenderer.formatBytes(bytes);
 
     let dir = '';
     let latest = 0;
@@ -145,7 +145,7 @@
       }
       name.append(el('span', 'files-icon', '·'), el('span', '', entry.name));
       name.setAttribute('aria-label', `View ${entry.name}`);
-      window.mevedelNav.link(name, href({file: path}), () => openFile(path));
+      window.niwaNav.link(name, href({file: path}), () => openFile(path));
       item.append(name);
       if (typeof entry.size === 'number') item.append(el('span', 'lobby-meta', formatBytes(entry.size)));
       const download = el('button', 'btn quiet', 'Download');
@@ -247,7 +247,7 @@
     });
     // Include the Upload button and the space around an empty tree. Other
     // lobby tabs must not intercept drags or upload into a hidden folder.
-    window.mevedelAttachments.bind({add: files => uploadAll(files)}, {
+    window.niwaAttachments.bind({add: files => uploadAll(files)}, {
       target: lobby, enabled: visible,
     });
     // Missing the lobby must not navigate away from the room to a local file.
@@ -263,5 +263,5 @@
     return Object.freeze({show: () => load(), refresh: () => load(), listed, removed, changed});
   }
 
-  window.mevedelFilesView = Object.freeze({create, uploader, base64, CHUNK_BYTES});
+  window.niwaFilesView = Object.freeze({create, uploader, base64, CHUNK_BYTES});
 })();

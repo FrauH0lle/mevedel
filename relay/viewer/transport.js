@@ -1,4 +1,4 @@
-/* transport.js -- Sealed WebSocket transport for the mevedel viewer */
+/* transport.js -- Sealed WebSocket transport for the niwa viewer */
 'use strict';
 
 (() => {
@@ -198,7 +198,7 @@
             }
           }
           // Observability hook for the deterministic protocol test.
-          window.mevedelViewerApplied = (window.mevedelViewerApplied || 0) + 1;
+          window.niwaViewerApplied = (window.niwaViewerApplied || 0) + 1;
         }).catch(() => {}).finally(()=>{queuedBytes-=event.data.byteLength;queuedFrames--;});
       });
       nextSocket.addEventListener('close', event => {
@@ -238,7 +238,7 @@
     return Object.freeze({connect, end, send});
   }
 
-  window.mevedelViewerTransport = Object.freeze({
+  window.niwaViewerTransport = Object.freeze({
     base64urlDecode, base64urlEncode, create, importKey, parseFragment,
   });
 })();

@@ -45,7 +45,7 @@ export class DiscussionPanel {
     this.selection = null;
     this.current = 'discussions';
     const terms = anchorTerms();
-    this.sidebar = window.mevedelDiscussionSidebar.create({
+    this.sidebar = window.niwaDiscussionSidebar.create({
       root: $('discussion-sidebar'), noun: noun(),
       canWrite: () => !this.state().readOnly,
       visible: () => !$('assistant').hidden && this.current === 'discussions',
@@ -78,10 +78,10 @@ export class DiscussionPanel {
     if (restored && !validDrafts) this.notice('The saved discussion draft has an unsupported format. Document recovery is unaffected.');
     // Files ride with a post; a changed set is a new message.
     const composer = this.sidebar.composer();
-    this.files = window.mevedelAttachments.create({list:composer.files,
+    this.files = window.niwaAttachments.create({list:composer.files,
       notice:message => this.notice(message, true),
       onchange:() => { this.drafts.start.opId = crypto.randomUUID(); this.changed(); }});
-    window.mevedelAttachments.bind(this.files, {target:composer.form, input:composer.input,
+    window.niwaAttachments.bind(this.files, {target:composer.form, input:composer.input,
       button:composer.attach, picker:composer.picker});
     $('ask-toggle').onclick = () => {
       if (!$('assistant').hidden && this.current === 'discussions') this.toggle(false);

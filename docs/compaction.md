@@ -1,19 +1,19 @@
 # Conversation Compaction
 
 Compaction reduces model-visible history while keeping the persisted
-conversation recoverable. `mevedel-compact.el` is the public command and
-gptel gate. Token admission lives in `mevedel-compact-estimation.el`,
+conversation recoverable. `niwa-compact.el` is the public command and
+gptel gate. Token admission lives in `niwa-compact-estimation.el`,
 transcript projection and tool-safe truncation in
-`mevedel-compact-evidence.el`, target application in
-`mevedel-compact-target.el`, and asynchronous settlement in
-`mevedel-compact-run.el`. Persisted segment rotation is handled by
-`mevedel-session-artifacts.el`. Model generation is delegated to the
-stateless `mevedel-context-summary.el` generator.
+`niwa-compact-evidence.el`, target application in
+`niwa-compact-target.el`, and asynchronous settlement in
+`niwa-compact-run.el`. Persisted segment rotation is handled by
+`niwa-session-artifacts.el`. Model generation is delegated to the
+stateless `niwa-context-summary.el` generator.
 
 ## Native Claude compaction
 
 Claude owns compaction of its external history. Root and retained-child ACP
-connections advertise session compaction support; `mevedel-acp-compaction.el`
+connections advertise session compaction support; `niwa-acp-compaction.el`
 consumes its lifecycle and retained-summary events. It does not request another
 summary from a model. A completed root compaction publishes a successor segment
 with Claude's summary through the ordinary segment transaction. A retained
@@ -70,7 +70,7 @@ handling contract below.
 
 ## User model
 
-`mevedel-compact` manually compacts the current chat. Automatic
+`niwa-compact` manually compacts the current chat. Automatic
 compaction is enabled by default for persisted sessions and runs when
 the estimated context crosses the configured threshold. There are two
 automatic gates:
@@ -79,7 +79,7 @@ automatic gates:
 - the continuation WAIT gate before tool-result follow-up requests.
 
 Click **compact on/off** in the chat's top status strip to toggle these
-automatic gates for the open session. This overrides `mevedel-compact-auto`
+automatic gates for the open session. This overrides `niwa-compact-auto`
 locally, not its global default or another chat's setting. Closing and reopening
 the session restores the configured default. Re-enabling also clears the
 repeated-failure latch. The toggle neither runs a compaction immediately nor
@@ -111,7 +111,7 @@ Each summary request retry is a new compaction attempt and reruns
 `PreCompact`; hook context from one failed attempt is not reused by the next.
 
 After a successful root summary whose target opts into a new context epoch is
-applied, mevedel runs `PostCompact` and then begins a
+applied, niwa runs `PostCompact` and then begins a
 `SessionStart(compact)` context epoch. Manual compaction leaves
 the resulting context for the next accepted input. Automatic compaction adds
 it to the already-pending request and resumes that same request without
@@ -124,7 +124,7 @@ The workflow's proposal format and tool limits therefore remain explicit even
 when the summary omits the reminder delivered earlier in the turn.
 
 The first-compaction accuracy notice is controlled by
-`mevedel-compact-run-warn-on-completion`, enabled by default. It is emitted
+`niwa-compact-run-warn-on-completion`, enabled by default. It is emitted
 as a plain `message`, not a `display-warning`.
 
 ## Trigger predicate
@@ -133,17 +133,17 @@ The effective context window comes from:
 
 1. The active model's `:context-window` property, converted from
    thousands of tokens to raw tokens.
-2. `mevedel-model-context-limit` when model metadata is absent.
+2. `niwa-model-context-limit` when model metadata is absent.
 3. A 128000 token fallback.
 
 For one-place diagnosis in the chat data buffer, evaluate
-`(mevedel-compact-estimation-context-diagnostics)`. It returns both the target
+`(niwa-compact-estimation-context-diagnostics)`. It returns both the target
 and summarization models' effective windows, provenance, actual reserves,
 usable tokens, individual thresholds, configured ratio, and winning threshold.
 The same fields appear in each `compaction-threshold-evaluated` telemetry
 event, even below the trigger. `model-metadata` means a local gptel declaration
 (`:context-window` in thousands of tokens), not independent provider confirmation;
-`configured-fallback` means `mevedel-model-context-limit`, and
+`configured-fallback` means `niwa-model-context-limit`, and
 `built-in-fallback` means the unverified conservative 128000-token default.
 An unknown model therefore cannot silently look like a verified 128k model in
 diagnostics. Check the provider's current model documentation and the loaded
@@ -154,7 +154,7 @@ figures describe local admission and summary preflight, not its native trigger.
 Usable context is:
 
 ```
-reserve = min(max(mevedel-model-reserve-tokens,
+reserve = min(max(niwa-model-reserve-tokens,
                   effective max output tokens),
               context-window / 2)
 usable = context-window - reserve
@@ -163,7 +163,7 @@ usable = context-window - reserve
 The reserve cap keeps small-context models from collapsing the default
 fractional threshold to a near-zero value.
 
-`mevedel-compact-estimation-token-threshold` is a float strictly between `0.0` and
+`niwa-compact-estimation-token-threshold` is a float strictly between `0.0` and
 `1.0`, default `0.80`.  Integer thresholds and invalid ratios are rejected.
 
 Automatic admission resolves both the realized target model and the
@@ -190,19 +190,19 @@ The target model's threshold still wins if it is smaller: a 272000-token
 target compacts at 201600 tokens. With extended context disabled, the Claude
 summary threshold is 144000 tokens.
 
-`mevedel--compact-should-compact-p` also checks eligibility:
+`niwa--compact-should-compact-p` also checks eligibility:
 
-- `mevedel-compact-auto` must be non-nil.
+- `niwa-compact-auto` must be non-nil.
 - auto-compaction must not be disabled by repeated failures.
 - no compaction request may already be in flight.
 - the session must be writable, persisted, and on the active segment.
 
-If the threshold is crossed but the session is not eligible, mevedel
+If the threshold is crossed but the session is not eligible, niwa
 warns once and lets the request proceed normally.
 
 ## Token estimate
 
-Before a request is sent, mevedel still needs a local estimate. It uses
+Before a request is sent, niwa still needs a local estimate. It uses
 a chars/4 scan when no API baseline is available, ignoring
 regions marked `gptel 'ignore` and excluding file-local variables. Complete
 retained reminder bodies count as model-visible content; their encoded records
@@ -247,7 +247,7 @@ usage to trigger compaction.
 Realized request estimates are media-aware. Inline image payloads in
 OpenAI data URLs, Anthropic base64 image blocks, and Bedrock image byte
 blocks are not counted as raw base64 text. They are replaced with the
-local `mevedel-compact-estimation-image-token-estimate` heuristic. This estimate
+local `niwa-compact-estimation-image-token-estimate` heuristic. This estimate
 only decides whether to compact before a continuation request; the next
 provider-reported usage baseline remains authoritative.
 
@@ -327,7 +327,7 @@ another persisted state field. Native child compaction uses the same local
 transcript preservation; Claude still owns its external history and summary.
 Only older agent-owned history is summarized; parent goal state, session-wide
 skill history, and touched-file reminders are excluded.  Before rewriting,
-mevedel synchronously saves the full live transcript and copies it to the next
+niwa synchronously saves the full live transcript and copies it to the next
 unused sibling such as `explorer.compact-0001.chat.org`.  It then rewrites the
 same canonical `.chat.org` file as task plus anchored summary plus configured
 recent tail, rebuilds the pending request from that live buffer, and resumes it
@@ -390,15 +390,15 @@ archives.
 
 Context-summary requests disable tools, inherit the current session's streaming
 choice, accept both streamed and one-shot provider delivery, and use the
-`summarization` workload policy from the session's `mevedel-model-workloads`.
+`summarization` workload policy from the session's `niwa-model-workloads`.
 Failures retry up to three attempts with exponential backoff. Every retry
 reacquires current `PreCompact` policy before sending the otherwise identical
 summary request. After three failed compaction runs (each with up to three
 summary-request attempts),
-`mevedel--compact-auto-disabled` prevents further automatic attempts in
+`niwa--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 
-After `PreCompact`, mevedel preflights the tool-capped summary body and the
+After `PreCompact`, niwa preflights the tool-capped summary body and the
 complete system prompt, including hook additions, against the summarizer's
 usable context.  A locally oversized request fails without gptel dispatch or
 retry.  Ordinary gptel request failures still retry the identical request up
@@ -417,7 +417,7 @@ is reached entirely by the protected tail, it sends the original request only
 while the target model remains below its own threshold.  At target pressure it
 blocks the pending request.
 
-If automatic compaction fails, mevedel warns with
+If automatic compaction fails, niwa warns with
 `Auto-compaction failed; request not sent: ...`. For continuation WAIT
 cycles, the overflowing follow-up request is not sent after a failed
 compaction.
@@ -529,8 +529,8 @@ Compaction summarizes only the old body and preserves a recent tail
 verbatim. The tail starts at the newest complete turn boundary that fits
 both constraints:
 
-- target turn count: `mevedel-compact-evidence-tail-turns`, default 2.
-- budget: `mevedel-compact-evidence-tail-budget` of usable context, default
+- target turn count: `niwa-compact-evidence-tail-turns`, default 2.
+- budget: `niwa-compact-evidence-tail-budget` of usable context, default
   0.25.
 
 The budget is a hard maximum, so preserved turns are dropped until the tail
@@ -541,7 +541,7 @@ empty history region and fail the request with "No compactable history
 remains at target pressure".
 
 Response boundaries and preserved-tail turn starts are derived from
-`mevedel-transcript-segments`. A turn start is the first real
+`niwa-transcript-segments`. A turn start is the first real
 user prompt line after an assistant response, excluding gptel-owned
 tool/reasoning/summary scaffolding, so clipped or restored org markers do
 not create fake preserved turns.
@@ -558,8 +558,8 @@ structurally safe under character caps: persisted `#+begin_tool` /
 `#+end_tool` markers stay balanced, large string arguments are shortened as
 readable Lisp data, and visible result bodies are truncated by character caps:
 
-- `mevedel-compact-evidence-tail-tool-output-max`
-- `mevedel-compact-evidence-body-tool-output-max`
+- `niwa-compact-evidence-tail-tool-output-max`
+- `niwa-compact-evidence-body-tool-output-max`
 
 The current unsent prompt is kept outside the summarized body. For
 auto-compaction it is reattached after the new summary and preserved
@@ -580,7 +580,7 @@ Persisted sessions use split-on-compact:
 
 1. Capture the current segment without the unsent pending prompt. File-workspace
    sessions save that predecessor before replacing the live buffer.
-2. Advance `mevedel-session-current-segment` and build the successor in a temporary
+2. Advance `niwa-session-current-segment` and build the successor in a temporary
    buffer.
 3. Publish according to the session's authority profile. Portable project sessions
    commit the finalized predecessor, successor, instruction artifacts, and sidecar
@@ -602,7 +602,7 @@ session retains pending steering, queued follow-ups, FIFO order, delivery
 pause, and failure pause unchanged; the session sidecar persists them as usual.
 
 Old segment files remain on disk and stay available through
-`mevedel-rewind`. The live view skips the leading summary block when
+`niwa-rewind`. The live view skips the leading summary block when
 rendering the visible transcript and shows a collapsed
 `--- conversation compacted --- ▸` row (`▾` while open) in its place, while the summary remains
 model-visible for future requests. Expanding the row shows what the model
@@ -641,7 +641,7 @@ original Bash row when that row survives in the preserved tail. If rotation
 explicitly archives a completed row, the new segment receives a hidden durable
 `execution-completion` audit record. A running row is replaced before segment
 publication by a durable `execution-archive` record containing its structured
-render data. `mevedel-execution-transcript.el` owns this protocol for both
+render data. `niwa-execution-transcript.el` owns this protocol for both
 compaction and live terminal settlement; settlement atomically changes it to
 `execution-completion`, while resume changes a stale archive to `lost`. The
 captured owner mailbox continues to provide the model-visible notification.
@@ -667,7 +667,7 @@ text in that buffer is not included in the persisted replacement.
 Persisted summary blocks include a short model-facing handoff prefix
 before the anchored Markdown summary. The prefix tells the resumed model
 to build on the prior work and avoid duplicating it. When a later
-compaction uses the leading summary as `<previous-summary>`, mevedel
+compaction uses the leading summary as `<previous-summary>`, niwa
 strips that prefix so the summarizer receives only the anchored summary
 content.
 
@@ -678,20 +678,20 @@ regexp matcher or become the segment's summary.
 
 ## Defcustoms
 
-Model context budgeting lives in `mevedel-models.el`, because every
+Model context budgeting lives in `niwa-models.el`, because every
 model-facing workload shares it:
 
-- `mevedel-model-context-limit` (default `nil`, fallback for missing model metadata)
-- `mevedel-model-reserve-tokens` (default `20000`)
+- `niwa-model-context-limit` (default `nil`, fallback for missing model metadata)
+- `niwa-model-reserve-tokens` (default `20000`)
 
 Compaction-specific settings follow their owners:
 
-- facade: `mevedel-compact-auto` (default `t`)
-- estimation: `mevedel-compact-estimation-token-threshold` (default `0.80`)
-- estimation: `mevedel-compact-estimation-image-token-estimate` (default `1844`)
-- evidence: `mevedel-compact-evidence-tail-turns` (default `2`)
-- evidence: `mevedel-compact-evidence-tail-budget` (default `0.25`)
-- evidence: `mevedel-compact-evidence-tail-tool-output-max` (default `4000`)
-- evidence: `mevedel-compact-evidence-body-tool-output-max` (default `8000`)
-- target: `mevedel-compact-target-file-reference-reminder-limit` (default `20`)
-- run: `mevedel-compact-run-warn-on-completion` (default `t`)
+- facade: `niwa-compact-auto` (default `t`)
+- estimation: `niwa-compact-estimation-token-threshold` (default `0.80`)
+- estimation: `niwa-compact-estimation-image-token-estimate` (default `1844`)
+- evidence: `niwa-compact-evidence-tail-turns` (default `2`)
+- evidence: `niwa-compact-evidence-tail-budget` (default `0.25`)
+- evidence: `niwa-compact-evidence-tail-tool-output-max` (default `4000`)
+- evidence: `niwa-compact-evidence-body-tool-output-max` (default `8000`)
+- target: `niwa-compact-target-file-reference-reminder-limit` (default `20`)
+- run: `niwa-compact-run-warn-on-completion` (default `t`)

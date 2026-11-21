@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Mevedel renders compact agent activity rows from canonical tool and lifecycle
+Niwa renders compact agent activity rows from canonical tool and lifecycle
 events: `Started PATH`, `SendMessage: PATH`,
 `InterruptAgent: PATH`, and `Waiting for agents`. SendMessage render-data names
 its disposition: `message queued`, `started`, or `waiting for a slot`.

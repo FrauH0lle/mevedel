@@ -35,7 +35,7 @@ the sidebar's toggle; it never switches the view. The HTML artifact panel and
 the whiteboard and document editor differ only in how a part is picked and in
 what each target offers, such as file attachments on the whole item.
 
-**One owner in Emacs.** `mevedel-collaboration-discussions` performs every
+**One owner in Emacs.** `niwa-collaboration-discussions` performs every
 guest action -- `list`, `post`, `reply`, `resolve`, `ask` -- for every item
 kind, routes messages to the answering session, queues them with
 model-invisible attribution naming the discussion and the message, and
@@ -67,9 +67,9 @@ tabs with separate drafts, and two ways for an answer to appear; the HTML
 artifact panel had a third variant. All three carried a target, reached the
 same queue and the same item conversation, and differed in where the result
 was shown. Behind them were three code paths: editor questions
-(`mevedel-collaboration-editing--ask` with its own idempotency lookup and
+(`niwa-collaboration-editing--ask` with its own idempotency lookup and
 selection wording), host-side comment actions with their own anchors and
-limits, and `mevedel-collaboration-artifact-comments` with its own JSON
+limits, and `niwa-collaboration-artifact-comments` with its own JSON
 store. A participant had to choose a pathway before writing and could not
 turn a question into a discussion afterwards.
 

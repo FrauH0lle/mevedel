@@ -5,7 +5,7 @@ import path from 'node:path';
 
 /* An environment whose per-user config directory is a fresh temp dir. */
 export function tempEnv(t) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'mevedel-remote-artifact-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'niwa-remote-artifact-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return { XDG_CONFIG_HOME: dir, HOME: dir, USER: 'tester' };
 }

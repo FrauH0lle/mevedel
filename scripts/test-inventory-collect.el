@@ -9,7 +9,7 @@
 (require 'cl-lib)
 (require 'json)
 
-(defun mevedel-test-inventory--collect (text)
+(defun niwa-test-inventory--collect (text)
   "Return literal test names, imports, strings and fixture paths from TEXT."
   (let ((file-name-handler-alist nil)
         tests imports provides strings paths globals)
@@ -74,7 +74,7 @@
                 ('ert-deftest
                  (when (symbolp (cadr form))
                    (push `((name . ,(symbol-name (cadr form))) (line . ,line)) tests)))
-                ('mevedel-deftest
+                ('niwa-deftest
                  (let* ((template (cdddr form))
                         (variables (cadr template))
                         (values (cddr template))
@@ -124,7 +124,7 @@
     (insert (json-encode
              (mapcar (lambda (source)
                        (cons (alist-get 'name source)
-                             (mevedel-test-inventory--collect (alist-get 'text source))))
+                             (niwa-test-inventory--collect (alist-get 'text source))))
                      sources))))
   (setq command-line-args-left nil))
 

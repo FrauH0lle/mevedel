@@ -1,0 +1,401 @@
+;;; test-niwa-view-table-deferred.el --- Visible idle tables -*- lexical-binding: t -*-
+;;; Commentary:
+;; Exercise the normal view decoration and mutation entry points.
+;;; Code:
+(require 'helpers (file-name-concat (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'niwa-view)
+;; Bare `niwa-view-mode' buffers skip view setup, which loads these.
+(require 'niwa-view-composer)
+(require 'niwa-view-markdown)
+(require 'niwa-view-render)
+(require 'niwa-view-stream)
+
+(niwa-deftest niwa-view--realign-markdown/composer ()
+                 ,test
+                 (test)
+                 :doc "idle formatting preserves the actual composer, source, selection and canonical copying"
+                 (save-window-excursion
+                   (niwa-view-test--with-buffers
+                    (let ((source "| First | Second |\n|---|---|\n| target | other words here |\n"))
+                      (niwa-view-test--insert-data data-buf source 'response)
+                      (with-current-buffer view-buf
+                        (set-window-buffer (selected-window) view-buf)
+                        (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
+                        (niwa-view--full-rerender)
+                        (goto-char (point-min))
+                        (search-forward "target")
+                        (set-mark (point))
+                        (backward-char 6)
+                        (setq mark-active t deactivate-mark nil)
+                        (let ((data-text (with-current-buffer data-buf (buffer-string))))
+                          (niwa-view--realign-markdown)
+                          (should mark-active)
+                          (should (equal "target" (buffer-substring-no-properties (region-beginning) (region-end))))
+                          (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text)))
+                          (should (equal-including-properties data-text (with-current-buffer data-buf (buffer-string))))
+                          (let ((beg (previous-single-property-change (1+ (point)) 'niwa-view-table-source nil (point-min)))
+                                (end (next-single-property-change (point) 'niwa-view-table-source nil (point-max))))
+                            (should (equal (string-trim-right source)
+                                           (substring-no-properties (niwa-view--buffer-substring-filter beg end))))))))))
+                 :doc "a table that shrinks when formatted keeps the composer at its pixel Y"
+                 (save-window-excursion
+                   (niwa-view-test--with-buffers
+                    (let ((window (selected-window)))
+                      (dotimes (i 40)
+                        (niwa-view-test--insert-data
+                         data-buf (format "Paragraph %d of the earlier answer.\n\n" i) 'response))
+                      ;; Padded rows wrap while raw and fit once formatted.
+                      (niwa-view-test--insert-data
+                       data-buf
+                       (concat (format "| %-60s | %-60s |\n" "Name" "Value")
+                               (format "|%s|%s|\n" (make-string 62 ?-) (make-string 62 ?-))
+                               (mapconcat (lambda (i) (format "| %-60s | %-60s |\n"
+                                                              (format "row %d" i) "x"))
+                                          (number-sequence 1 6) "")
+                               "\nAfter the table.\n")
+                       'response)
+                      (with-current-buffer view-buf
+                        (set-window-buffer window view-buf)
+                        (niwa-view--full-rerender)
+                        (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
+                        (goto-char (point-min))
+                        (search-forward "| Name")
+                        (beginning-of-line)
+                        (set-window-start window (point) t)
+                        (let* ((composer (niwa-view-composer-display window))
+                               (caret (+ (niwa-view-composer-draft-start) 4)))
+                          (set-window-point composer caret)
+                          (with-selected-window composer
+                            (redisplay t)
+                            (with-current-buffer view-buf
+                              (let ((y (niwa-view-test--composer-screen-y window))
+                                    (edges (window-pixel-edges composer))
+                                    (start (window-start composer))
+                                    (lines (count-lines (point-min) (point-max))))
+                                (should y)
+                                (niwa-view--realign-markdown view-buf window)
+                                (redisplay t)
+                                (should (string-search "│" (buffer-string)))
+                                (should (= lines (count-lines (point-min) (point-max))))
+                                (should (eq (selected-window) composer))
+                                (should (equal edges (window-pixel-edges composer)))
+                                (should (= start (window-start composer)))
+                                (should (= y (niwa-view-test--composer-screen-y window)))
+                                (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text)))
+                                (should (= caret (window-point composer)))
+                                (should (= 4 (niwa-view-test--composer-point-offset))))))))))))
+
+(niwa-deftest niwa-view-table-decorate/layout-cache ()
+  ,test
+  (test)
+  :doc "a redraw keeps a laid-out table rendered; a new table still waits for idle"
+  (save-window-excursion
+    (niwa-view-test--with-buffers
+      (let ((draft "> draft\nsecond line"))
+        (niwa-view-test--insert-data
+         data-buf "| First | Second |\n|---|---|\n| target | other |\n" 'response)
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (unwind-protect
+              (progn
+                (niwa-view-test--insert-composer-draft draft 4)
+                (niwa-view--full-rerender)
+                (should (string-search "| First | Second |" (buffer-string)))
+                (niwa-view--realign-markdown)
+                (should (string-search "│ target │" (buffer-string)))
+                ;; Redraws reinsert raw source; the table stays rendered.
+                (niwa-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should-not (string-search "| First | Second |" (buffer-string)))
+                (should (equal draft (niwa-view-composer-draft-text)))
+                (should (= 4 (niwa-view-test--composer-point-offset)))
+                ;; A table never laid out keeps the deferred first layout.
+                (niwa-view-test--insert-data
+                 data-buf "\n| Other | Table |\n|---|---|\n| a | b |\n" 'response)
+                (niwa-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should (string-search "| Other | Table |" (buffer-string)))
+                (should (equal draft (niwa-view-composer-draft-text))))
+            (niwa-view--cancel-realign-timer)))))))
+
+(niwa-deftest niwa-view-table-decorate/layout-cache-duplicate-face ()
+  ,test
+  (test)
+  :doc "a face duplicating font-lock-face does not split the layout cache"
+  ;; Streamed and redrawn copies of one table differ only in such a face.
+  ;; A miss reinserts the table raw and moves a window reading inside it.
+  (niwa-test--with-displayed-buffer
+    (niwa-view-mode)
+    (niwa-view-render-initialize)
+    (let ((inhibit-read-only t)
+          (source "| A | B |\n|---|---|\n| target | value |\n")
+          (faces '(markdown-ts-table-header markdown-ts-table)))
+      (unwind-protect
+          (progn
+            (insert (propertize source 'font-lock-face faces 'face faces))
+            (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+            (set-window-start (selected-window) (point-min))
+            (niwa-view--realign-markdown)
+            (should (string-search "│ target" (buffer-string)))
+            (erase-buffer)
+            (insert (propertize source 'font-lock-face faces))
+            (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+            (should (string-search "│ target" (buffer-string))))
+        (niwa-view--cancel-realign-timer)))))
+
+(niwa-deftest niwa-view-table-rerender/deferred ()
+                 ,test
+                 (test)
+                 :doc "opens raw, formats one visible table, and discovers off-screen work on scroll"
+                 (niwa-test--with-displayed-buffer
+                  (niwa-view-mode)
+                  (niwa-view-render-initialize)
+                  (let ((inhibit-read-only t)
+                        (source "| A | B |\n|---|---|\n| target | value |\n")
+                        (draft "> draft\nsecond line\n"))
+                    (unwind-protect
+                        (progn
+                          (insert source "\n" source (make-string 200 ?\n) source draft)
+                          (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+                          (should-not (string-search "│" (buffer-string)))
+                          (should (get-text-property (point-min) 'niwa-view-table-source))
+                          (goto-char (point-min))
+                          (search-forward "target")
+                          (set-mark (point))
+                          (backward-char 6)
+                          (setq mark-active t deactivate-mark nil buffer-undo-list nil)
+                          (set-buffer-modified-p nil)
+                          (set-window-start (selected-window) (point-min))
+                          (niwa-view--realign-markdown)
+                          (should (looking-at-p "target"))
+                          (should mark-active)
+                          (should (equal "target" (buffer-substring (point) (mark))))
+                          (should-not (buffer-modified-p))
+                          (should-not buffer-undo-list)
+                          (should (timerp niwa-view--realign-timer))
+                          (should (= 2 (how-many "^| A |" (point-min) (point-max))))
+                          (niwa-view--realign-markdown)
+                          (should (= 1 (how-many "^| A |" (point-min) (point-max))))
+                          (niwa-view--realign-markdown)
+                          (should (= 1 (how-many "^| A |" (point-min) (point-max))))
+                          (goto-char (point-max))
+                          (search-backward "| A |")
+                          (set-window-start (selected-window) (point))
+                          (niwa-view--realign-markdown)
+                          (should (= 0 (how-many "^| A |" (point-min) (point-max))))
+                          (should (string-suffix-p draft (buffer-string))))
+                      (niwa-view--cancel-realign-timer))))
+
+                 :doc "queued formatting resolves shifted table positions after the active writer"
+                 (niwa-test--with-displayed-buffer
+                  (niwa-view-mode)
+                  (niwa-view-render-initialize)
+                  (let ((inhibit-read-only t))
+                    (unwind-protect
+                        (progn
+                          (insert "| A | B |\n|---|---|\n| target | value |\n")
+                          (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+                          (goto-char (point-min))
+                          (set-window-start (selected-window) (point-min))
+                          (niwa-view-render-mutate
+                           'test
+                           (lambda ()
+                             (niwa-view--realign-markdown)
+                             (should-not (string-search "│" (buffer-string)))
+                             (insert "prefix\n")))
+                          (should (string-prefix-p "prefix\n│" (buffer-string))))
+                      (niwa-view--cancel-realign-timer))))
+
+                 :doc "hidden tables wait for unfolding while the next visible table renders"
+  (dolist (kind '(overlay property))
+    (niwa-test--with-displayed-buffer
+      (niwa-view-mode)
+      (niwa-view-render-initialize)
+      (let ((inhibit-read-only t)
+            (source "| A | B |\n|---|---|\n| target | value |\n")
+            hidden)
+        (unwind-protect
+            (progn
+              (insert source "\n" source)
+              (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+              (if (eq kind 'overlay)
+                  (progn
+                    (setq hidden (make-overlay (point-min) (1+ (length source))))
+                    (overlay-put hidden 'invisible t))
+                (put-text-property (point-min) (1+ (length source)) 'invisible t))
+              (goto-char (1+ (length source)))
+              (set-window-start (selected-window) (point-min))
+              (niwa-view--realign-markdown)
+              (should (eq (char-after (point-min)) ?|))
+              (should (invisible-p (point-min)))
+              (should (string-search "│" (buffer-string)))
+              (if hidden (delete-overlay hidden)
+                (remove-text-properties (point-min) (1+ (length source)) '(invisible nil)))
+              (niwa-view--realign-markdown)
+              (should (eq (char-after (point-min)) ?│)))
+          (when hidden (delete-overlay hidden))
+          (niwa-view--cancel-realign-timer)))))
+
+  :doc "partly folded tables still render their visible rows and preserve the fold"
+  (niwa-test--with-displayed-buffer
+    (niwa-view-mode)
+    (niwa-view-render-initialize)
+    (let ((inhibit-read-only t) hidden)
+      (unwind-protect
+          (progn
+            (insert "| A | B |\n|---|---|\n| target | value |\n")
+            (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (forward-line 1)
+            (setq hidden (make-overlay (point-min) (point)))
+            (overlay-put hidden 'invisible t)
+            (set-window-start (selected-window) (point-min))
+            (niwa-view--realign-markdown)
+            (should (eq (char-after (point-min)) ?│))
+            (should (invisible-p (point-min)))
+            (goto-char (point-min))
+            (search-forward "target")
+            (should-not (invisible-p (1- (point)))))
+        (when hidden (delete-overlay hidden))
+        (niwa-view--cancel-realign-timer))))
+
+  :doc "pending input postpones formatting without losing the scheduled work"
+                 (niwa-test--with-displayed-buffer
+                  (niwa-view-mode)
+                  (niwa-view-render-initialize)
+                  (let ((inhibit-read-only t))
+                    (unwind-protect
+                        (progn
+                          (insert "| A | B |\n|---|---|\n| target | value |\n")
+                          (niwa-view--decorate-markdown-in-range (point-min) (point-max))
+                          (cl-letf (((symbol-function 'input-pending-p) (lambda () t)))
+                            (niwa-view--realign-markdown))
+                          (should-not (string-search "│" (buffer-string)))
+                          (should (timerp niwa-view--realign-timer)))
+                      (niwa-view--cancel-realign-timer)))))
+
+(niwa-deftest niwa-view-table-rerender/streaming ()
+  ,test
+  (test)
+  :doc "idle passes leave an unfinished response raw, then format after settlement"
+  (save-window-excursion
+    (niwa-view-test--with-buffers
+      (let ((draft "> draft\nsecond line") response-start)
+        (niwa-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (niwa-view-stream-begin-turn
+           niwa-view--status-marker response-start)
+          (niwa-view-test--insert-composer-draft draft 3))
+        (niwa-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| alpha |" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                (niwa-view-render-live-update data-buf)
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should (get-text-property
+                         (match-beginning 0) 'niwa-view-table-streaming))
+                (niwa-view--realign-markdown)
+                (should-not (string-search "│" (buffer-string)))
+                (niwa-view--full-rerender)
+                (niwa-view--realign-markdown)
+                (should (string-search "| A | B |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (niwa-view-test--insert-data data-buf " beta |\n" 'response)
+                (niwa-view-render-live-update data-buf)
+                (niwa-view--realign-markdown)
+                (should (string-search "| alpha | beta |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (niwa-view-render-settle
+                 data-buf response-start
+                 (with-current-buffer data-buf (point-max)))
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should-not (get-text-property
+                             (match-beginning 0) 'niwa-view-table-streaming))
+                (niwa-view--realign-markdown)
+                (should (string-search "│ alpha │ beta │" (buffer-string)))
+                (should (equal draft (niwa-view-composer-draft-text))))
+            (niwa-view--cancel-realign-timer))))))
+
+  :doc "a table closed by later streamed text formats once and stays rendered"
+  (save-window-excursion
+    (niwa-view-test--with-buffers
+      (let ((draft "> draft\nsecond line") response-start)
+        (niwa-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (niwa-view-stream-begin-turn
+           niwa-view--status-marker response-start)
+          (niwa-view-test--insert-composer-draft draft 3))
+        (niwa-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| alpha | beta |\n| gam" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                ;; A partial row may still extend the table.
+                (niwa-view-render-live-update data-buf)
+                (niwa-view--realign-markdown)
+                (should (string-search "| A | B |" (buffer-string)))
+                (should-not (string-search "│" (buffer-string)))
+                (niwa-view-test--insert-data
+                 data-buf "ma | delta |\n\nAfter the" 'response)
+                (niwa-view-render-live-update data-buf)
+                (goto-char (point-min))
+                (search-forward "| A | B |")
+                (should-not (get-text-property
+                             (match-beginning 0) 'niwa-view-table-streaming))
+                (niwa-view--realign-markdown)
+                (should (string-search "│ gamma │ delta │" (buffer-string)))
+                ;; Later chunks reapply the layout during their write.
+                (dolist (chunk '(" table" " and more.\n\nAnother" " end.\n| Next |"))
+                  (niwa-view-test--insert-data data-buf chunk 'response)
+                  (niwa-view-render-live-update data-buf)
+                  (should (string-search "│ gamma │ delta │" (buffer-string)))
+                  (should-not (string-search "| A | B |" (buffer-string))))
+                ;; The trailing one-row run is not a table yet.
+                (should (string-search "| Next |" (buffer-string)))
+                (should (equal draft (niwa-view-composer-draft-text)))
+                (niwa-view-render-settle
+                 data-buf response-start
+                 (with-current-buffer data-buf (point-max)))
+                (should (string-search "│ gamma │ delta │" (buffer-string)))
+                (should (equal draft (niwa-view-composer-draft-text))))
+            (niwa-view--cancel-realign-timer))))))
+
+  :doc "a table in the live paragraph stays raw until the paragraph closes"
+  (save-window-excursion
+    (niwa-view-test--with-buffers
+      (let (response-start)
+        (niwa-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq response-start (copy-marker (point-max))))
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (niwa-view-stream-begin-turn
+           niwa-view--status-marker response-start))
+        (niwa-view-test--insert-data
+         data-buf "| A | B |\n|---|---|\n| x | y |\nNo" 'response)
+        (with-current-buffer view-buf
+          (unwind-protect
+              (progn
+                (niwa-view-render-live-update data-buf)
+                (niwa-view--realign-markdown)
+                ;; Each chunk redraws the live paragraph from raw source, so
+                ;; formatting it would repeat the layout on every update.
+                (should-not (string-search "│" (buffer-string)))
+                (niwa-view-test--insert-data data-buf "te follows.\n\nMore" 'response)
+                (niwa-view-render-live-update data-buf)
+                (niwa-view--realign-markdown)
+                (should (string-search "│ x │ y │" (buffer-string)))
+                (should (string-search "Note follows." (buffer-string))))
+            (niwa-view--cancel-realign-timer)))))))
+
+(provide 'test-niwa-view-table-deferred)
+;;; test-niwa-view-table-deferred.el ends here

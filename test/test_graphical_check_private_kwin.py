@@ -145,8 +145,8 @@ class SessionTests(unittest.TestCase):
 
     def test_check_status_returned_and_strays_removed(self):
         npx = self.dir / "bin" / "npx"
-        npx.write_text('#!/bin/sh\nprintf "%s\\n" "$MEVEDEL_GRAPHICAL_HOST_HOME" '
-                       '"$MEVEDEL_GRAPHICAL_HOST_CONFIG" > "$KWIN_TEST_DIR/grammar-roots"\n'
+        npx.write_text('#!/bin/sh\nprintf "%s\\n" "$NIWA_GRAPHICAL_HOST_HOME" '
+                       '"$NIWA_GRAPHICAL_HOST_CONFIG" > "$KWIN_TEST_DIR/grammar-roots"\n'
                        + self.client("exit 3"))
         npx.chmod(0o755)
         host = self.dir / "host home"
@@ -158,7 +158,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual((self.dir / "grammar-roots").read_text().splitlines(),
                          [str(host), str(config)])
         socket = (self.dir / "socket").read_text().strip()
-        self.assertTrue(socket.endswith("/runtime/mevedel-kwin"), socket)
+        self.assertTrue(socket.endswith("/runtime/niwa-kwin"), socket)
         self.assertTrue(os.path.isabs(socket))
         self.assertIn("--virtual", (self.dir / "kwin-args").read_text().split())
 

@@ -1,5 +1,5 @@
 /* .excalidraw scenes and .excalidrawlib libraries. Import keeps the fields
-   mevedel stores (see model.mjs) after Excalidraw's own restore migrations;
+   niwa stores (see model.mjs) after Excalidraw's own restore migrations;
    export completes every element and derives Excalidraw's reconciliation
    fields, so excalidraw.com and other editors open the result directly. */
 import { generateNKeysBetween } from 'fractional-indexing';
@@ -7,7 +7,7 @@ import { check, identifier, validateElement, validateFile, fieldValid, validBack
 import { complete, resolveScene, seedOf, pointBounds, LINEAR } from './scene.mjs';
 import { lineHeightOf } from './text.mjs';
 
-export const SOURCE = 'https://github.com/FrauH0lle/mevedel';
+export const SOURCE = 'https://github.com/FrauH0lle/niwa';
 const COMMON = ['id', 'type', 'x', 'y', 'width', 'height', 'angle', 'strokeColor', 'backgroundColor',
   'fillStyle', 'strokeWidth', 'strokeStyle', 'roughness', 'opacity', 'roundness', 'seed', 'index',
   'groupIds', 'frameId', 'link', 'locked', 'customData', 'created'];

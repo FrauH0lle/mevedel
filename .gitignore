@@ -25,25 +25,25 @@ dist/
 # Undo-tree save-files
 *.~undo-tree
 
-# Local mevedel project state.
-!/.mevedel/
-.mevedel/*
+# Local niwa project state.
+!/.niwa/
+.niwa/*
 # Project-local
 #   - hooks
-!.mevedel/hooks.json
-!.mevedel/hooks
+!.niwa/hooks.json
+!.niwa/hooks
 #   - memory
-!.mevedel/memory
+!.niwa/memory
 #   - permissions
-!.mevedel/permissions.el
+!.niwa/permissions.el
 #   - skills
-!.mevedel/skills
+!.niwa/skills
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
-/relay/mevedel-relay
+/relay/niwa-relay
 /relay/relay
 
 /shared-editing/node_modules/

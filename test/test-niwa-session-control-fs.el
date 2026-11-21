@@ -1,0 +1,2765 @@
+;;; test-niwa-session-control-fs.el --- Pinned session control filesystem -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Covers target-side descriptor pinning and no-follow control operations.
+
+;;; Code:
+
+(require 'niwa-session-control-fs)
+(require 'niwa-transport)
+(require 'bytecomp)
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-sigpipe-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "niwa-sigpipe-test-support"))
+
+(defconst niwa-session-control-fs-test--file (or load-file-name buffer-file-name)
+  "This file, which the SIGPIPE-ignoring child loads.")
+
+(niwa-deftest niwa-session-control-fs-lock-session-open
+  (:doc "a competing lock refuses, owner death releases it, a dead owner cannot elect a slot")
+  (let* ((root (make-temp-file "niwa-control-owner-" t))
+         (target (file-name-concat root "topic"))
+         (slot (file-name-concat root "slot"))
+         (elect (list (list :op 'create :path slot :content "applied")))
+         first successor)
+    (unwind-protect
+        (progn
+          (setq first (niwa-session-control-fs-lock-session-open root))
+          (niwa-session-control-fs-program-value
+           (car (niwa-session-control-fs-lock-session-run
+                 first (list (list :op 'create :path target :content "after")))))
+          (let ((reason (error-message-string
+                         (should-error (niwa-session-control-fs-lock-session-open root .8)
+                                       :type 'file-error))))
+            (should (string-match-p "lock wait expired" reason))
+            (should (string-search (format "holder PID %s on %s" (process-id first) (system-name)) reason))
+            (should (string-search root reason)))
+          (signal-process first 'SIGKILL)
+          (while (process-live-p first) (accept-process-output first .05))
+          (should-error (niwa-session-control-fs-lock-session-run first elect) :type 'file-error)
+          (should-not (file-exists-p slot))
+          (setq successor (niwa-session-control-fs-lock-session-open root .5))
+          (niwa-session-control-fs-program-value
+           (car (niwa-session-control-fs-lock-session-run successor elect)))
+          (should (equal "applied" (niwa-session-control-fs-read-file slot))))
+      (mapc #'niwa-session-control-fs-lock-session-close (list first successor))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-call-with-locks
+  (:doc "the target and workspace have distinct owners on the same host, released after an error")
+  (let* ((root (make-temp-file "niwa-lock-order-" t))
+         (locks (mapcar (lambda (name) (file-name-concat root name)) '("target" "workspace"))) reached)
+    (unwind-protect
+        (progn
+          (should-error
+           (niwa-session-control-fs-call-with-locks
+            locks (lambda (target workspace)
+                    (should-not (= (process-id target) (process-id workspace)))
+                    (should (equal locks (mapcar (lambda (s) (process-get s 'lock)) (list target workspace))))
+                    (dolist (lock locks) (should (= 1 (call-process "flock" nil nil nil "-n" lock "true"))))
+                    (setq reached t)
+                    (error "Caller failed"))))
+          (should reached)
+          (dolist (lock locks) (should (= 0 (call-process "flock" nil nil nil "-n" lock "true")))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-lock-session-run
+  (:doc "large and non-ASCII frames survive a stopped program without leaking into the next call")
+  (let* ((root (make-temp-file "niwa-control-frames-" t))
+         (path (file-name-concat root "café"))
+         (content (encode-coding-string (make-string 100000 ?界) 'utf-8-unix))
+         (op (list :op 'write :path path :content content :coding 'no-conversion))
+         (niwa-session-control-fs--stage-local nil)
+         session)
+    (unwind-protect
+        (progn
+          (setq session (niwa-session-control-fs-lock-session-open root))
+          (should-error
+           (niwa-session-control-fs-program-value
+            (car (niwa-session-control-fs-lock-session-run
+                  session (list (list :op 'verify-hash :path path :content (make-string 64 ?0)) op)))))
+          (should-not (file-exists-p path))
+          (niwa-session-control-fs-program-value
+           (car (niwa-session-control-fs-lock-session-run session (list op))))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally path)
+            (should (equal content (buffer-string)))))
+      (niwa-session-control-fs-lock-session-close session)
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-lock-session-open/cold-local
+  (:doc "a first local operation does not need TRAMP's methods table")
+  (let ((root (make-temp-file "niwa-control-cold-" t)) owner)
+    (unwind-protect
+        (cl-progv '(tramp-methods) '(nil)
+          (makunbound 'tramp-methods)
+          (should-not (boundp 'tramp-methods))
+          (setq owner (niwa-session-control-fs-lock-session-open root))
+          (should (process-live-p owner)))
+      (niwa-session-control-fs-lock-session-close owner)
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-lock-session-run/replaced-directory
+  (:doc "a lock on a retired directory cannot authorize a slot in its replacement")
+  (let* ((root (make-temp-file "niwa-control-replaced-" t))
+         (lock (file-name-concat root "lock"))
+         (slot (file-name-concat lock "slot")) owner)
+    (unwind-protect
+        (progn
+          (make-directory lock)
+          (setq owner (niwa-session-control-fs-lock-session-open lock))
+          (rename-file lock (file-name-concat root "retired"))
+          (make-directory lock)
+          (should-error (niwa-session-control-fs-lock-session-run
+                         owner (list (list :op 'create :path slot :content "applied"))))
+          (should-not (file-exists-p slot)))
+      (niwa-session-control-fs-lock-session-close owner)
+      (delete-directory root t))))
+
+(defun niwa-session-control-fs-test--streamed-operations ()
+  "Return operations too large for the argument carrier, writing under /tmp.
+Used with `niwa-session-control-fs--stage-local' nil so the request
+streams over stdin."
+  (list (list :op 'write
+              :path (make-temp-name "/tmp/niwa-control-streamed-")
+              :content (make-string 200000 ?x))))
+
+(niwa-deftest niwa-session-control-fs--send-request-buffer
+  (:doc "sync and async carriers send bounded pieces without losing binary bytes or authority fencing")
+  (let* ((root (make-temp-file "niwa-control-chunks-" t))
+         (path (file-name-concat root "payload"))
+         (binary (concat (make-string (* 128 1024) ?x) (unibyte-string 0 128 255)))
+         (niwa-session-control-fs--stage-local nil)
+         (send (symbol-function 'process-send-region)))
+    (unwind-protect
+        (dolist (async '(nil t))
+          (let ((writes 0) results failure done)
+            (cl-letf (((symbol-function 'niwa-session-control-fs--pipe-capable-p)
+                       (lambda (_) t))
+                      ((symbol-function 'process-send-region)
+                       (lambda (process start end)
+                         (should (<= (- end start) 1024))
+                         (should (niwa-transport-busy-p))
+                         (cl-incf writes)
+                         (funcall send process start end))))
+              (let ((operations (list (list :op 'write :path path :content binary))))
+                (if async
+                    (niwa-session-control-fs-run-program-async
+                     operations (lambda (value err) (setq results value failure err done t)))
+                  (setq results (niwa-session-control-fs-run-program operations) done t)))
+              (with-timeout (10 (ert-fail "Chunked control request never settled"))
+                (while (not done) (accept-process-output nil 0.01))))
+            (should-not failure)
+            (should (eq 'ok (plist-get (car results) :status)))
+            (should (> writes 128))
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally path)
+              (should (equal binary (buffer-string))))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs--write-program-request ()
+  ,test
+  (test)
+  :doc "writes each field NUL-terminated, copying no payload"
+  (let* ((file (make-temp-file "niwa-control-request-"))
+         (payload (make-string (* 1024 1024) ?x))
+         (fields (list (list "write" "/tmp" "first" payload "0")
+                       (list "read" "/tmp" "second" "" "1"))))
+    (unwind-protect
+        (let* ((before (nth 4 (memory-use-counts)))
+               (_ (niwa-session-control-fs--write-program-request fields file))
+               (allocated (- (nth 4 (memory-use-counts)) before)))
+          (should (< allocated 4096))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally file)
+            (should (equal (mapconcat #'identity
+                                      (list "write" "/tmp" "first" "0"
+                                            "1048576" payload
+                                            "read" "/tmp" "second" "1" "0" "" "")
+                                      "\0")
+                           (buffer-string))))
+          (should (equal payload (nth 3 (car fields)))))
+      (delete-file file)))
+
+  :doc "writes non-ASCII and raw-byte fields as their UTF-8 bytes"
+  (let* ((file (make-temp-file "niwa-control-request-"))
+         (parent (concat "/tmp/\u00fc \u03bb \U0001F600"
+                         (string (unibyte-char-to-multibyte 200))))
+         (fields (list (list "read" parent "leaf" "" "0"))))
+    (unwind-protect
+        (progn
+          (niwa-session-control-fs--write-program-request fields file)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally file)
+            (should (equal (encode-coding-string
+                            (concat "read\0" parent "\0leaf\0" "0\0" "0\0" "\0")
+                            'utf-8-unix)
+                           (buffer-string)))))
+      (delete-file file)))
+
+  :doc "writes an empty request for no fields"
+  (let ((file (make-temp-file "niwa-control-request-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "stale"))
+          (niwa-session-control-fs--write-program-request nil file)
+          (should (= 0 (file-attribute-size (file-attributes file)))))
+      (delete-file file))))
+
+(niwa-deftest niwa-session-control-fs-paths-exist ()
+  (let* ((root (make-temp-file "niwa-control-exist-" t))
+         (present (file-name-concat root "present"))
+         (linked (file-name-concat root "linked"))
+         (original (symbol-function 'niwa-session-control-fs-run-program))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "" nil present nil 'silent)
+          (cl-letf (((symbol-function 'niwa-session-control-fs-run-program)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (apply original args))))
+            (should-not (niwa-session-control-fs-paths-exist nil))
+            (should (= calls 0))
+            (should (equal '(t nil nil)
+                           (niwa-session-control-fs-paths-exist
+                            (list present
+                                  (file-name-concat root "absent")
+                                  (file-name-concat root "gone" "leaf")))))
+            (should (= calls 1)))
+          ;; A symbolic link is refused, as for a single existence test.
+          (make-symbolic-link "present" linked)
+          (should-error (niwa-session-control-fs-paths-exist (list linked))
+                        :type 'file-error))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-run-program-async ()
+  ,test
+  (test)
+  :doc "runs a program without waiting and delivers its results"
+  (let* ((root (make-temp-file "niwa-control-async-" t))
+         (path (file-name-concat root "log"))
+         settled)
+    (unwind-protect
+        (progn
+          (should (processp
+                   (niwa-session-control-fs-run-program-async
+                    (list (list :op 'append :path path :content "one\n")
+                          (list :op 'read :path path))
+                    (lambda (results error) (setq settled (list results error))))))
+          (should-not settled)
+          (with-timeout (10 (ert-fail "Asynchronous program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status))
+                                          (car settled))))
+          (should (equal "one\n" (plist-get (nth 1 (car settled)) :value))))
+      (delete-directory root t)))
+
+  :doc "async and sync programs share the stable parent lock"
+  (let* ((root (make-temp-file "niwa-control-lock-" t))
+         (path (file-name-concat root "value"))
+         (pause (file-name-concat root "paused"))
+         (niwa-session-control-fs--test-pause-file pause)
+         first second)
+    (unwind-protect
+        (progn
+          (niwa-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "first"))
+           (lambda (results error) (setq first (list results error))) nil root)
+          (with-timeout (10 (ert-fail "Locked program never paused"))
+            (while (not (file-exists-p pause)) (accept-process-output nil 0.01)))
+          (should (niwa-session-control-fs-async-busy-p root))
+          (let ((niwa-session-control-fs--test-pause-file nil))
+            (niwa-session-control-fs-run-program-async
+             (list (list :op 'verify :path path :content "first")
+                   (list :op 'write :path path :content "second"))
+             (lambda (results error) (setq second (list results error))) nil root))
+          (accept-process-output nil 0.05)
+          (should-not second)
+          (write-region "" nil (concat pause ".continue") nil 'silent)
+          (with-timeout (10 (ert-fail "Locked programs never settled"))
+            (while (not (and first second)) (accept-process-output nil 0.01)))
+          (should-not (cadr first))
+          (should-not (cadr second))
+          (should-not (niwa-session-control-fs-async-busy-p root))
+          (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status))
+                                         (car second))))
+          (should (equal "second" (niwa-session-control-fs-read-file path))))
+      (write-region "" nil (concat pause ".continue") nil 'silent)
+      (niwa-session-control-fs-wait-async)
+      (delete-directory root t)))
+
+  :doc "runs synchronously where the editor is about to exit"
+  (let* ((root (make-temp-file "niwa-control-async-" t))
+         (niwa-session-control-fs--async-wait t)
+         settled)
+    (unwind-protect
+        (progn
+          (should-not (niwa-session-control-fs-run-program-async
+                       (list (list :op 'path-exists-p :path root))
+                       (lambda (results error) (setq settled (list results error)))))
+          (should (equal 'ok (plist-get (car (car settled)) :status))))
+      (delete-directory root t)))
+
+  :doc "failed children report errors where SIGPIPE is ignored"
+  (niwa-test-run-sigpipe-tests
+   niwa-session-control-fs-test--file
+   "\\`niwa-session-control-fs-run-program-async/closed-input")
+
+  :doc "quitting during a streamed request releases the child and buffers before propagating quit"
+  (let ((niwa-session-control-fs--stage-local nil)
+        (send (symbol-function 'process-send-region))
+        (spawn (symbol-function 'make-process))
+        (chunks 0) (callbacks 0) child buffers failure)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq child (apply spawn args)
+                       buffers (list (plist-get args :buffer) (plist-get args :stderr)))
+                 child))
+              ((symbol-function 'process-send-region)
+               (lambda (process start end)
+                 (when (= (cl-incf chunks) 2) (signal 'quit nil))
+                 (funcall send process start end))))
+      (should (eq 'quit
+                  (condition-case nil
+                      (niwa-session-control-fs-run-program-async
+                       (niwa-session-control-fs-test--streamed-operations)
+                       (lambda (_results err) (cl-incf callbacks) (setq failure err)))
+                    (quit 'quit)))))
+    (should (= callbacks 1))
+    (should (eq 'file-error (car failure)))
+    (should-not (process-live-p child))
+    (should-not (cl-some #'buffer-live-p buffers))
+    (should-not (niwa-transport-busy-p)))
+
+  :doc "counts its dispatch as a remote operation, so work a filter starts defers"
+  (let ((niwa-session-control-fs--stage-local nil)
+        busy settled)
+    (cl-letf* ((original (symbol-function 'process-send-region))
+               ((symbol-function 'process-send-region)
+                (lambda (&rest args)
+                  (setq busy (niwa-transport-busy-p))
+                  (apply original args))))
+      (niwa-session-control-fs-run-program-async
+       (niwa-session-control-fs-test--streamed-operations)
+       (lambda (results error) (setq settled (list results error)))))
+    (should busy)
+    (should-not (niwa-transport-busy-p))
+    (with-timeout (10 (ert-fail "Program never settled"))
+      (while (not settled) (accept-process-output nil 0.02)))))
+
+;; Closed-input writes must run with the interactive editor's SIGPIPE policy.
+(niwa-deftest niwa-session-control-fs-run-program-async/local ()
+  ,test
+  (test)
+  :doc "a small local request rides as arguments and writes nothing to stdin"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (sent 0) settled)
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-region))
+                   ((symbol-function 'process-send-region)
+                    (lambda (&rest args) (cl-incf sent) (apply send args))))
+          (should (processp
+                   (niwa-session-control-fs-run-program-async
+                    (list (list :op 'write :path path :content "hello"))
+                    (lambda (results error) (setq settled (list results error))))))
+          (with-timeout (10 (ert-fail "Local program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (= 0 sent))
+          (should (equal "hello" (niwa-session-control-fs-read-file path)))
+          (should-not (cl-some (lambda (name) (string-prefix-p ".niwa-control-fs-staged-" name))
+                               (directory-files root))))
+      (delete-directory root t)))
+
+  :doc "an argument-carried child can finish before the launcher resumes"
+  (let* ((root (make-temp-file "niwa-control-async-finished-" t))
+         (path (file-name-concat root "file"))
+         (spawn (symbol-function 'make-process))
+         (eof (symbol-function 'process-send-eof))
+         (calls 0) (eofs 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (let* ((process (apply spawn args))
+                            (proc (format "/proc/%d" (process-id process)))
+                            (deadline (+ (float-time) 5)))
+                       ;; Reap the real child without dispatching its sentinel.
+                       (while (and (file-exists-p proc) (< (float-time) deadline)))
+                       (should-not (file-exists-p proc))
+                       process)))
+                  ((symbol-function 'process-send-eof)
+                   (lambda (process) (cl-incf eofs) (funcall eof process))))
+          (niwa-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content "committed"))
+           (lambda (results error)
+             (cl-incf calls)
+             (setq settled (list results error))))
+          (should (niwa-session-control-fs-wait-async 10))
+          (should (= 1 calls))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 0 eofs))
+          (should (equal "committed" (with-temp-buffer
+                                       (insert-file-contents-literally path)
+                                       (buffer-string)))))
+      (delete-directory root t)))
+
+  :doc "a large local write is staged, never inlined, and its file lives until exit"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (payload (make-string 300000 ?y))
+         (spawn (symbol-function 'make-process))
+         (sent 0) staged-at-spawn command settled)
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-region))
+                   ((symbol-function 'process-send-region)
+                    (lambda (&rest args) (cl-incf sent) (apply send args)))
+                   ((symbol-function 'make-process)
+                    (lambda (&rest args)
+                      (setq command (plist-get args :command)
+                            staged-at-spawn
+                            (directory-files root nil "\\`\\.niwa-control-fs-staged-"))
+                      (apply spawn args))))
+          (niwa-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content payload))
+           (lambda (results error) (setq settled (list results error))))
+          (should (= 1 (length staged-at-spawn)))
+          (should-not (cl-some (lambda (arg) (and (stringp arg) (string-search "yyyyyyyy" arg)))
+                               command))
+          (with-timeout (10 (ert-fail "Local program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (= 0 sent))
+          (should (equal payload (niwa-session-control-fs-read-file path)))
+          (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "staged files are removed when the program fails as a whole"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-session-control-fs--programs)
+                   (lambda (_) (cons "false" "stat"))))
+          (niwa-session-control-fs-run-program-async
+           (list (list :op 'write :path (file-name-concat root "file")
+                       :content "payload"))
+           (lambda (results error) (setq settled (list results error))))
+          (with-timeout (10 (ert-fail "Failed program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (car settled))
+          (should (eq 'file-error (car (nth 1 settled))))
+          (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "the callback waits for an idle transport, runs once, and never in the sentinel's nesting"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (niwa-transport--enabled-p t)
+         (niwa-transport-retry-seconds 0.02)
+         (busy nil) (calls 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-transport-busy-p)
+                   (lambda (&optional _path) busy)))
+          (let ((process (niwa-session-control-fs-run-program-async
+                          (list (list :op 'path-exists-p :path root))
+                          (lambda (results error)
+                            (cl-incf calls) (setq settled (list results error))))))
+            (setq busy t)
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.2)
+            (should (= 0 calls))
+            (should niwa-session-control-fs--async-jobs)
+            (setq busy nil)
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.1)
+            (should (= 1 calls))
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))
+            (should-not niwa-session-control-fs--async-jobs)))
+      (niwa-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "even an idle or disabled transport never runs the callback inside the sentinel"
+  (let ((root (make-temp-file "niwa-control-async-local-" t)))
+    (unwind-protect
+        (dolist (enabled '(t nil))
+          (let ((niwa-transport--enabled-p enabled)
+                (in-sentinel nil) (calls 0) nested settled)
+            (let ((process (niwa-session-control-fs-run-program-async
+                            (list (list :op 'path-exists-p :path root))
+                            (lambda (results error)
+                              (cl-incf calls)
+                              (setq nested in-sentinel
+                                    settled (list results error))))))
+              (let ((sentinel (process-sentinel process)))
+                (set-process-sentinel
+                 process
+                 (lambda (&rest args)
+                   (setq in-sentinel t)
+                   (unwind-protect (apply sentinel args)
+                     (setq in-sentinel nil)))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))
+              (should-not nested)
+              (should (= 1 calls))
+              (should (eq 'ok (plist-get (car (car settled)) :status)))
+              (should-not niwa-session-control-fs--async-jobs))))
+      (niwa-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "a cancelled retry delivers the stored outcome exactly once"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (niwa-transport--enabled-p t)
+         (busy nil) (calls 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-transport-busy-p)
+                   (lambda (&optional _path) busy)))
+          (let ((process (niwa-session-control-fs-run-program-async
+                          (list (list :op 'path-exists-p :path root))
+                          (lambda (results error)
+                            (cl-incf calls) (setq settled (list results error))))))
+            (setq busy t)
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (should (= 0 calls))
+            (niwa-transport-cancel-pending)
+            (should (= 0 calls))
+            (with-timeout (10 (ert-fail "Cancelled outcome never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (should (= 1 calls))
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))
+            (niwa-transport-cancel-pending)
+            (setq busy nil)
+            (accept-process-output nil 0.1)
+            (should (= 1 calls))
+            (should-not niwa-session-control-fs--async-jobs)))
+      (niwa-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "wait-async lets programs in flight deliver and reports when none remain"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (should (niwa-session-control-fs-wait-async 0.1))
+          (dotimes (_ 3)
+            (niwa-session-control-fs-run-program-async
+             (list (list :op 'path-exists-p :path root))
+             (lambda (_results _error) (cl-incf calls))))
+          (should niwa-session-control-fs--async-jobs)
+          (should (niwa-session-control-fs-wait-async 10))
+          (should (= 3 calls))
+          (should-not niwa-session-control-fs--async-jobs))
+      (delete-directory root t)))
+
+  :doc "concurrent programs that stage nothing each deliver exactly once"
+  ;; Their deliveries share the transport's delayed queue, whose keys compare
+  ;; with `equal'; structurally equal keys coalesced 30 callbacks into 9.
+  (let* ((root (make-temp-file "niwa-control-async-concurrent-" t))
+         (file (file-name-concat root "input"))
+         delivered)
+    (unwind-protect
+        (progn
+          (write-region "x" nil file nil 'silent)
+          (dotimes (id 30)
+            (niwa-session-control-fs-run-program-async
+             (list (list :op 'read :path file))
+             (lambda (results error)
+               (should-not error)
+               (should (equal "x" (plist-get (car results) :value)))
+               (push id delivered))))
+          (should (niwa-session-control-fs-wait-async 10))
+          (should (equal (number-sequence 0 29) (sort delivered #'<)))
+          (should-not niwa-session-control-fs--async-jobs))
+      (delete-directory root t)))
+
+  :doc "a child finishing before EOF keeps its process, output and exit status"
+  (dolist (target '(make-process process-send-eof))
+    (let* ((root (make-temp-file "niwa-control-async-finished-" t))
+           (file (file-name-concat root "input"))
+           (calls 0)
+           (finish (lambda (process)
+                     (when (string-prefix-p "niwa-control-fs-async" (process-name process))
+                       (while (process-live-p process)
+                         (accept-process-output process 0.05)))
+                     process)))
+      (unwind-protect
+          (progn
+            (write-region "x" nil file nil 'silent)
+            (advice-add target (if (eq target 'make-process) :filter-return :before) finish)
+            (let ((process
+                   (niwa-session-control-fs-run-program-async
+                    (list (list :op 'read :path file))
+                    (lambda (results error)
+                      (should-not error)
+                      (should (equal "x" (plist-get (car results) :value)))
+                      (cl-incf calls)))))
+              (should (processp process))
+              (should (zerop (process-exit-status process))))
+            (should (niwa-session-control-fs-wait-async 10))
+            (should (= 1 calls))
+            (should-not niwa-session-control-fs--async-jobs))
+        (advice-remove target finish)
+        (delete-directory root t))))
+
+  :doc "cleanup runs from the delivery timer, never the sentinel, and precedes the callback"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (in-sentinel nil) (in-sentinel-cleanup nil) leftover settled)
+    (unwind-protect
+        (cl-letf* ((delete (symbol-function 'delete-file))
+                   (kill (symbol-function 'kill-buffer))
+                   ((symbol-function 'delete-file)
+                    (lambda (file &rest args)
+                      (when in-sentinel (setq in-sentinel-cleanup t))
+                      (apply delete file args)))
+                   ((symbol-function 'kill-buffer)
+                    (lambda (&rest args)
+                      (when in-sentinel (setq in-sentinel-cleanup t))
+                      (apply kill args))))
+          (let ((process (niwa-session-control-fs-run-program-async
+                          (list (list :op 'write :path path :content "payload"))
+                          (lambda (results error)
+                            (setq leftover
+                                  (directory-files
+                                   root nil "\\`\\.niwa-control-fs-staged-")
+                                  settled (list results error))))))
+            (let ((sentinel (process-sentinel process)))
+              (set-process-sentinel
+               process
+               (lambda (&rest args)
+                 (setq in-sentinel t)
+                 (unwind-protect (apply sentinel args)
+                   (setq in-sentinel nil)))))
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (should-not in-sentinel-cleanup)
+            (should-not leftover)
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))))
+      (delete-directory root t)))
+
+  :doc "a failed cleanup is reported, keeps the result, and its file is retried at exit"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (niwa-session-control-fs--orphaned-staged nil)
+         diagnostics settled)
+    (unwind-protect
+        (progn
+          (niwa-test--with-captured-diagnostics diagnostics
+            (cl-letf* ((delete (symbol-function 'delete-file))
+                       ((symbol-function 'delete-file)
+                        (lambda (file &rest args)
+                          (if (string-match-p "\\.niwa-control-fs-staged-" file)
+                              (signal 'file-error (list "Injected cleanup failure" file))
+                            (apply delete file args)))))
+              (niwa-session-control-fs-run-program-async
+               (list (list :op 'write
+                           :path (file-name-concat root "missing" "first")
+                           :content "one")
+                     (list :op 'write :path path :content "payload"))
+               (lambda (results error) (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (r) (plist-get r :status)) (car settled))))
+          ;; Both payloads were staged and the stopped program consumed neither.
+          (should (= 2 (length niwa-session-control-fs--orphaned-staged)))
+          (should (cl-every #'file-exists-p
+                            (mapcar #'car niwa-session-control-fs--orphaned-staged)))
+          (should-not niwa-session-control-fs--async-jobs)
+          (niwa-session-control-fs--exit-cleanup)
+          (should-not niwa-session-control-fs--orphaned-staged)
+          (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-")))
+      (setq niwa-session-control-fs--orphaned-staged nil)
+      (delete-directory root t)))
+
+  :doc "a failing kill hook still releases both private buffers and keeps the outcome"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         buffers diagnostics settled hook)
+    (setq hook (lambda ()
+                 (when (string-prefix-p " *niwa-control-fs-async*" (buffer-name))
+                   (error "Injected kill hook failure"))))
+    (unwind-protect
+        (progn
+          (niwa-test--with-captured-diagnostics diagnostics
+            (add-hook 'kill-buffer-hook hook)
+            (cl-letf (((symbol-function 'make-process)
+                       (lambda (&rest args)
+                         (setq buffers (list (plist-get args :buffer)
+                                             (plist-get args :stderr)))
+                         (apply spawn args))))
+              (niwa-session-control-fs-run-program-async
+               (list (list :op 'path-exists-p :path root))
+               (lambda (results error) (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not niwa-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-hook hook)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-hook nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
+  :doc "private buffer query vetoes cannot leak resources or lose the stored outcome"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         buffers settled query)
+    (setq query (lambda ()
+                  (not (string-prefix-p " *niwa-control-fs-async" (buffer-name)))))
+    (unwind-protect
+        (progn
+          (add-hook 'kill-buffer-query-functions query)
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq buffers (list (plist-get args :buffer)
+                                           (plist-get args :stderr)))
+                       (apply spawn args))))
+            (niwa-session-control-fs-run-program-async
+             (list (list :op 'path-exists-p :path root))
+             (lambda (results error) (setq settled (list results error))))
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02))))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not niwa-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-query-functions query)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-query-functions nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
+  :doc "a kill hook that quits still delivers once, kills the private buffers and clears the job"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         (calls 0) buffers diagnostics settled hook)
+    (setq hook (lambda ()
+                 (when (string-prefix-p " *niwa-control-fs-async*" (buffer-name))
+                   (signal 'quit nil))))
+    (unwind-protect
+        (progn
+          (niwa-test--with-captured-diagnostics diagnostics
+            (add-hook 'kill-buffer-hook hook)
+            (cl-letf (((symbol-function 'make-process)
+                       (lambda (&rest args)
+                         (setq buffers (list (plist-get args :buffer)
+                                             (plist-get args :stderr)))
+                         (apply spawn args))))
+              (niwa-session-control-fs-run-program-async
+               (list (list :op 'path-exists-p :path root))
+               (lambda (results error)
+                 (cl-incf calls)
+                 (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))
+              (accept-process-output nil 0.1)))
+          (should (= 1 calls))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not niwa-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-hook hook)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-hook nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
+  :doc "a program that stopped early leaves no later payload staged"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (second (file-name-concat root "second"))
+         settled)
+    (unwind-protect
+        (progn
+          (niwa-session-control-fs-run-program-async
+           (list (list :op 'write :path (file-name-concat root "missing" "first")
+                       :content "one")
+                 (list :op 'write :path second :content "two"))
+           (lambda (results error) (setq settled (list results error))))
+          (with-timeout (10 (ert-fail "Callback never delivered"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (r) (plist-get r :status)) (car settled))))
+          (should-not (file-exists-p second))
+          (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "a delivery that never runs leaves its staged file only until exit cleanup"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (niwa-transport--enabled-p nil)
+         (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-transport-run-at-time)
+                   (lambda (&rest _) nil)))
+          (let ((process (niwa-session-control-fs-run-program-async
+                          (list (list :op 'write
+                                      :path (file-name-concat root "missing" "first")
+                                      :content "one")
+                                (list :op 'write :path path :content "payload"))
+                          (lambda (&rest _) (cl-incf calls)))))
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.1)
+            (should (= 0 calls))
+            (should niwa-session-control-fs--async-jobs)
+            (should (directory-files root nil "\\`\\.niwa-control-fs-staged-"))
+            (niwa-session-control-fs--exit-cleanup)
+            (should-not niwa-session-control-fs--async-jobs)
+            (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-"))))
+      (setq niwa-session-control-fs--async-jobs nil)
+      (delete-directory root t)))
+
+  :doc "a request that cannot launch reports once and leaves no job or staged file"
+  (let* ((root (make-temp-file "niwa-control-async-local-" t))
+         (calls 0) failure)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest _) (signal 'file-error '("Cannot spawn")))))
+          (should-not (niwa-session-control-fs-run-program-async
+                       (list (list :op 'write :path (file-name-concat root "file")
+                                   :content "payload"))
+                       (lambda (_results error) (cl-incf calls) (setq failure error))))
+          (should (= 1 calls))
+          (should (eq 'file-error (car failure)))
+          (should-not niwa-session-control-fs--async-jobs)
+          (should-not (directory-files root nil "\\`\\.niwa-control-fs-staged-")))
+      (delete-directory root t))))
+
+(when (niwa-test-sigpipe-child-p)
+  (niwa-deftest niwa-session-control-fs-run-program-async/closed-input ()
+    ,test
+    (test)
+    :doc "reports a program that failed as a whole"
+    (let (settled)
+      (cl-letf (((symbol-function 'niwa-session-control-fs--programs)
+                 (lambda (_) (cons "false" "stat"))))
+        (niwa-session-control-fs-run-program-async
+         (list (list :op 'path-exists-p :path "/tmp"))
+         (lambda (results error) (setq settled (list results error)))))
+      (with-timeout (10 (ert-fail "Failed program never settled"))
+        (while (not settled) (accept-process-output nil 0.02)))
+      (should-not (car settled))
+      (should (eq 'file-error (car (nth 1 settled)))))
+
+    :doc "reports a program that exits before its request is written as failed"
+    (let ((niwa-session-control-fs--stage-local nil)
+          (send (symbol-function 'process-send-region))
+          settled)
+      (cl-letf (((symbol-function 'niwa-session-control-fs--programs)
+                 (lambda (_) (cons "false" "stat")))
+                ;; Busy-wait without servicing events so the program exits
+                ;; before the write, as it can on a slow runner.
+                ((symbol-function 'process-send-region)
+                 (lambda (process start end)
+                   (let ((path (format "/proc/%d" (process-id process)))
+                         (deadline (+ (float-time) 5)))
+                     ;; Timers cannot enforce a timeout in this deliberate
+                     ;; no-event wait: bound it by the clock instead.
+                     (while (and (file-exists-p path) (< (float-time) deadline)))
+                     (when (file-exists-p path) (ert-fail "Program never exited")))
+                   (funcall send process start end))))
+        (niwa-session-control-fs-run-program-async
+         (niwa-session-control-fs-test--streamed-operations)
+         (lambda (results error) (setq settled (list results error)))))
+      (with-timeout (10 (ert-fail "Failed program never settled"))
+        (while (not settled) (accept-process-output nil 0.02)))
+      (should-not (car settled))
+      (should (eq 'file-error (car (nth 1 settled))))
+      (should (equal "Portable control program failed" (nth 1 (nth 1 settled)))))))
+
+(niwa-deftest niwa-session-control-fs--program-arguments/large-field ()
+  (let* ((field (make-string (1+ niwa-session-control-fs--argument-field-budget) ?x))
+         (quote (symbol-function 'shell-quote-argument))
+         (quoted 0))
+    (cl-letf (((symbol-function 'shell-quote-argument)
+               (lambda (&rest args) (cl-incf quoted) (apply quote args))))
+      (should-not (niwa-session-control-fs--program-arguments (list (list field)))))
+    (should (zerop quoted))))
+
+(niwa-deftest niwa-session-control-fs-append-rotating ()
+  (let* ((root (make-temp-file "niwa-control-fs-" t))
+         (path (file-name-concat root "diagnostic.el"))
+         (archive (concat path ".1")))
+    (unwind-protect
+        (progn
+          (niwa-session-control-fs-append-rotating path "aa\n" 6)
+          (niwa-session-control-fs-append-rotating path "bb\n" 6)
+          (should-not (file-exists-p archive))
+          (niwa-session-control-fs-append-rotating path "cc\n" 6)
+          (should (equal "aa\nbb\n" (niwa-session-control-fs-read-file archive)))
+          (should (equal "cc\n" (niwa-session-control-fs-read-file path)))
+          (niwa-session-control-fs-append-rotating path "ddd\n" 6)
+          (should (equal "cc\n" (niwa-session-control-fs-read-file archive)))
+          (should-error (niwa-session-control-fs-append-rotating path "too large\n" 6))
+          (should (equal "ddd\n" (niwa-session-control-fs-read-file path)))
+          (niwa-session-control-fs-write-file path "old\nold\nnew\n")
+          (niwa-session-control-fs-append-rotating path "ok\n" 6)
+          (should (equal "new\n" (niwa-session-control-fs-read-file archive)))
+          (should (equal "ok\n" (niwa-session-control-fs-read-file path)))
+          (delete-file archive)
+          (make-symbolic-link path archive)
+          (should-error (niwa-session-control-fs-append-rotating path "x\n" 6))
+          (should (equal "ok\n" (niwa-session-control-fs-read-file path)))
+          (should-not (directory-files root nil "\\`.niwa-control-fs-")))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-operations
+  (:doc "round trips UTF-8 content and distinguishes creation conflicts")
+  (let* ((root (make-temp-file "niwa-control-fs-" t))
+         (path (file-name-concat root "lease")))
+    (unwind-protect
+        (progn
+          (should (numberp
+                   (niwa-session-control-fs-target-time root)))
+          (should
+           (niwa-session-control-fs-create-file path "ä/界"))
+          (should-not
+           (niwa-session-control-fs-create-file path "replacement"))
+          (should (equal "ä/界"
+                         (niwa-session-control-fs-read-file path)))
+          (niwa-session-control-fs-write-file path "replacement")
+          (should (equal "replacement"
+                         (niwa-session-control-fs-read-file path)))
+          (should (equal (list path)
+                         (niwa-session-control-fs-list-directory
+                          root "\\`lease\\'")))
+          (niwa-session-control-fs-delete-file path)
+          (should-not (file-exists-p path))
+          (let ((binary (unibyte-string 0 127 128 255))
+                (binary-path (file-name-concat root "binary")))
+            (should
+             (niwa-session-control-fs-create-file
+              binary-path binary 'no-conversion))
+            (should
+             (equal binary
+                    (niwa-session-control-fs-read-file
+                     binary-path 'no-conversion))))
+          ;; A newline in a name must not present itself as two entries,
+          ;; and neither a write nor an exclusive create may land inside a
+          ;; directory that occupies the name.
+          (let* ((tricky (file-name-concat root "odd\n00000000000000000001.el"))
+                 (occupied (file-name-concat root "occupied")))
+            (write-region "x" nil tricky nil 'silent)
+            (should (equal (list tricky)
+                           (niwa-session-control-fs-list-directory
+                            root "\\`odd")))
+            (should-not (niwa-session-control-fs-list-directory
+                         root "\\`0+1\\.el\\'"))
+            (delete-file tricky)
+            (make-directory occupied)
+            (should-error
+             (niwa-session-control-fs-write-file occupied "replacement"))
+            (should-not
+             (niwa-session-control-fs-create-file occupied "created"))
+            (should (file-directory-p occupied))
+            (should-not (directory-files occupied nil "\\`[^.]" t))
+            (delete-directory occupied t))
+          ;; A missing parent is the absent condition for every operation,
+          ;; not a working-directory failure.
+          (let ((orphan (file-name-concat root "gone" "record.el")))
+            (should-not (niwa-session-control-fs-path-exists-p orphan))
+            (should-not (niwa-session-control-fs-directory-p orphan))
+            (should-not (niwa-session-control-fs-list-directory
+                         (file-name-concat root "gone") ".*"))
+            (should-error (niwa-session-control-fs-read-file orphan)
+                          :type 'niwa-session-control-fs-absent))
+          ;; Missing parents are created one pinned component at a time,
+          ;; in one program after the attempt that found them missing.
+          (let ((nested (file-name-concat root "a" "b" "c"))
+                (programs 0))
+            (should-error
+             (niwa-session-control-fs-make-directory nested)
+             :type 'niwa-session-control-fs-absent)
+            (cl-letf* ((original (symbol-function
+                                  'niwa-session-control-fs-run-program))
+                       ((symbol-function 'niwa-session-control-fs-run-program)
+                        (lambda (&rest args)
+                          (cl-incf programs)
+                          (apply original args))))
+              (should (niwa-session-control-fs-make-directory nested t)))
+            (should (= 2 programs))
+            (should (niwa-session-control-fs-directory-p nested))
+            (should-not (niwa-session-control-fs-make-directory nested t))
+            ;; A linked ancestor is refused, not created through.
+            (make-symbolic-link "a" (file-name-concat root "linked-a"))
+            (should-error
+             (niwa-session-control-fs-make-directory
+              (file-name-concat root "linked-a" "x" "y") t)
+             :type 'file-error)
+            (should-not (file-exists-p (file-name-concat root "a" "x"))))
+          ;; Multi-kilobyte content must round trip byte for byte through the
+          ;; staged payload rather than through a command line.
+          (let* ((large-path (file-name-concat root "large"))
+                 (large (apply #'unibyte-string
+                               (mapcar (lambda (i) (% i 256))
+                                       (number-sequence
+                                        1 (* 64 1024))))))
+            (should
+             (niwa-session-control-fs-create-file
+              large-path large 'no-conversion))
+            (should
+             (equal large
+                    (niwa-session-control-fs-read-file
+                     large-path 'no-conversion))))
+          ;; No control path may resolve through a link: neither a linked
+          ;; parent component nor a linked final name.
+          (let* ((target (file-name-concat root "target"))
+                 (linked-parent (file-name-concat root "linked-dir"))
+                 (linked-leaf (file-name-concat root "linked-leaf")))
+            (make-directory target)
+            (niwa-session-control-fs-create-file
+             (file-name-concat target "record") "inside")
+            (make-symbolic-link "target" linked-parent)
+            (make-symbolic-link "target/record" linked-leaf)
+            (should-error
+             (niwa-session-control-fs-read-file
+              (file-name-concat linked-parent "record")))
+            (should-error
+             (niwa-session-control-fs-read-file linked-leaf))
+            (should-error
+             (niwa-session-control-fs-write-file linked-leaf "replaced"))
+            (should (equal "inside"
+                           (niwa-session-control-fs-read-file
+                            (file-name-concat target "record"))))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(niwa-deftest niwa-session-control-fs-read-file
+  (:doc "bounds native reads by bytes before transferring data to Emacs")
+  (let* ((root (make-temp-file "niwa-control-prefix-" t))
+         (path (file-name-concat root "notes"))
+         (bytes (encode-coding-string "a\u754cb" 'utf-8-unix)))
+    (unwind-protect
+        (progn
+          (niwa-session-control-fs-create-file path bytes 'no-conversion)
+          (should (equal (substring bytes 0 3)
+                         (niwa-session-control-fs-read-file path 'no-conversion 3)))
+          (should (equal "" (niwa-session-control-fs-read-file path nil 0)))
+          (should (equal bytes (niwa-session-control-fs-read-file path 'no-conversion 100)))
+          (should-error (niwa-session-control-fs-read-file path nil -1))
+          (should-error (niwa-session-control-fs-read-file path nil "4")))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-append-file
+  (:doc "appends deltas in order and refuses symlink leaves")
+  (let* ((root (make-temp-file "niwa-control-fs-append-" t))
+         (path (file-name-concat root "stream.el")))
+    (unwind-protect
+        (progn
+          ;; First append creates the file; later appends keep order and
+          ;; multibyte content intact.
+          (should (niwa-session-control-fs-append-file path "one\n"))
+          (should (niwa-session-control-fs-append-file
+                   path "zwei \u00e4\u754c\n"))
+          (should (equal "one\nzwei \u00e4\u754c\n"
+                         (niwa-session-control-fs-read-file path)))
+          ;; A symlink leaf is refused before any write.
+          (let ((link (file-name-concat root "link")))
+            (make-symbolic-link path link)
+            (should-error
+             (niwa-session-control-fs-append-file link "x\n"))
+            (should (equal "one\nzwei \u00e4\u754c\n"
+                           (niwa-session-control-fs-read-file path)))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs--programs ()
+  ,test
+  (test)
+  :doc "resolves the target interpreters once and retries after a failure"
+  (let ((root (make-temp-file "niwa-control-fs-programs-" t))
+        (real (symbol-function 'executable-find))
+        (lookups 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name &optional remote)
+                     (cl-incf lookups)
+                     (funcall real name remote))))
+          (clrhash niwa-session-control-fs--programs)
+          (niwa-session-control-fs-target-time root)
+          (should (= 2 lookups))
+          ;; Locating them costs one target round trip per `exec-path'
+          ;; entry, so every later operation reuses the resolved pair.
+          (niwa-session-control-fs-target-time root)
+          (niwa-session-control-fs-path-exists-p
+           (file-name-concat root "absent"))
+          (should (= 2 lookups))
+          ;; An absent name is a normal answer and keeps the pair.
+          (should-error
+           (niwa-session-control-fs-read-file
+            (file-name-concat root "absent")))
+          (should (= 2 lookups))
+          ;; A refused operation keeps the pair too: the program process
+          ;; itself ran, so the interpreters demonstrably work.  Only a
+          ;; program that fails as a whole retries the lookup.
+          (let ((link (file-name-concat root "link")))
+            (make-symbolic-link "absent" link)
+            (should-error (niwa-session-control-fs-read-file link)))
+          (niwa-session-control-fs-target-time root)
+          (should (= 2 lookups)))
+      (clrhash niwa-session-control-fs--programs)
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "refuses a non-Linux local host with a named constraint"
+  (let ((root (make-temp-file "niwa-control-fs-darwin-" t)))
+    (unwind-protect
+        (let ((system-type 'darwin))
+          (clrhash niwa-session-control-fs--programs)
+          (let ((err (should-error
+                      (niwa-session-control-fs-target-time root)
+                      :type 'user-error)))
+            (should (string-match-p "Linux host" (cadr err)))
+            (should (string-match-p "darwin" (cadr err)))))
+      (clrhash niwa-session-control-fs--programs)
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(defun niwa-session-control-fs-test--program-commands (thunk)
+  "Call THUNK and return the interpreter arguments of every program it ran."
+  (let ((niwa-session-control-fs--helper-enabled nil)
+        (process-file (symbol-function 'process-file))
+        commands)
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (program &optional infile buffer display &rest args)
+                 (when (equal "-p" (car args))
+                   (push args commands))
+                 (apply process-file program infile buffer display args))))
+      (funcall thunk))
+    (nreverse commands)))
+
+(defun niwa-session-control-fs-test--compressed-round-trip (locale)
+  "Check compressed remote script transport and UTF-8 content under LOCALE."
+  (let* ((host "control-fs-compressed")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-compressed-" t)))
+         (path (format "/niwamock:%s:%sfile" host root))
+         (content "eins\nzwei ä界\n")
+         (process-environment
+          (append (list (concat "LANG=" locale) (concat "LC_ALL=" locale))
+                  process-environment)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          ;; The locale really reaches the target-side command.
+          (should (equal (concat locale "|" (if (equal locale "C")
+                                               "ANSI_X3.4-1968" "UTF-8"))
+                         (with-temp-buffer
+                           (let ((default-directory (file-name-directory path)))
+                             (process-file "sh" nil t nil "-c"
+                                           "printf '%s|%s' \"$LC_ALL\" \"$(locale charmap)\""))
+                           (buffer-string))))
+          (let* (results
+                 (commands
+                  (niwa-session-control-fs-test--program-commands
+                   (lambda ()
+                     (setq results
+                           (niwa-session-control-fs-run-program
+                            (list (list :op 'write :path path :content content)
+                                  (list :op 'read :path path))))))))
+            (should (= 1 (length commands)))
+            (should (equal niwa-session-control-fs--compressed-bootstrap
+                           (nth 2 (car commands))))
+            (should (member (niwa-session-control-fs--compressed-script)
+                            (car commands)))
+            (should-not (member niwa-session-control-fs--program-script
+                                (car commands)))
+            (should (equal '(ok ok) (mapcar (lambda (result) (plist-get result :status))
+                                            results)))
+            (should (equal content (plist-get (nth 1 results) :value)))
+            (should (equal content (niwa-session-control-fs-read-file path)))))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs--script-arguments ()
+  ,test
+  (test)
+  :doc "sends the compressed script to a remote target under the C locale"
+  (niwa-session-control-fs-test--compressed-round-trip "C")
+
+  :doc "rejects malformed base64 even when gzip can decode all script bytes"
+  (let* ((host "control-fs-broken-base64")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-broken-base64-" t)))
+         (path (format "/niwamock:%s:%sfile" host root))
+         (niwa-session-control-fs--compressed-script
+          (concat (niwa-session-control-fs--compressed-script) "!")))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          (let ((err (should-error
+                      (niwa-session-control-fs-run-program
+                       (list (list :op 'write :path path :content "not written")
+                             (list :op 'read :path path)))
+                      :type 'file-error)))
+            (should (equal "Portable control program failed" (nth 1 err))))
+          (should-not (file-exists-p (file-name-concat root "file")))
+          (should-not (gethash (file-remote-p path)
+                               niwa-session-control-fs--programs)))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "uses the current script after reloading the compiled module with a warm cache"
+  (let* ((host "control-fs-reloaded")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-reloaded-" t)))
+         (path (format "/niwamock:%s:%sfile" host root))
+         (source (concat (file-name-sans-extension
+                          (locate-library "niwa-session-control-fs")) ".el"))
+         (compiled (file-name-concat root "niwa-session-control-fs.elc"))
+         (current-script niwa-session-control-fs--program-script)
+         (niwa-session-control-fs--program-script "exit 99\n")
+         (niwa-session-control-fs--compressed-script nil)
+         (byte-compile-dest-file-function (lambda (_) compiled)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          (should (niwa-session-control-fs--compressed-script))
+          (should (byte-compile-file source))
+          (load compiled nil t)
+          (should (equal current-script niwa-session-control-fs--program-script))
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'write :path path :content "reloaded")
+                        (list :op 'read :path path)))))
+            (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status)) results)))
+            (should (equal "reloaded" (plist-get (nth 1 results) :value)))))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "fails the whole program when the target cannot decompress the script"
+  (let* ((host "control-fs-broken-gzip")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-broken-gzip-" t)))
+         (path (format "/niwamock:%s:%sfile" host root)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          (let ((programs (niwa-session-control-fs--programs
+                           (file-remote-p path))))
+            (should (nth 2 programs))
+            (puthash (file-remote-p path)
+                     (list (nth 0 programs) (nth 1 programs) "false")
+                     niwa-session-control-fs--programs))
+          (let ((err (should-error
+                      (niwa-session-control-fs-run-program
+                       (list (list :op 'write :path path :content "x")))
+                      :type 'file-error)))
+            (should (equal "Portable control program failed" (nth 1 err))))
+          (should-not (file-exists-p (file-name-concat root "file")))
+          ;; A failed program drops the entry, so the next one re-resolves.
+          (should-not (gethash (file-remote-p path)
+                               niwa-session-control-fs--programs)))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "keeps the inline script on a target without gzip and for a local program"
+  (let* ((host "control-fs-no-gzip")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-no-gzip-" t)))
+         (remote (format "/niwamock:%s:%sfile" host root))
+         (local (file-name-concat root "local"))
+         (real (symbol-function 'executable-find)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (name &optional remote-p)
+                       (unless (and remote-p (equal name "gzip"))
+                         (funcall real name remote-p)))))
+            (dolist (path (list remote local))
+              (let* (results
+                     (commands
+                      (niwa-session-control-fs-test--program-commands
+                       (lambda ()
+                         (setq results
+                               (niwa-session-control-fs-run-program
+                                (list (list :op 'write :path path :content "inline")
+                                      (list :op 'read :path path))))))))
+                (ert-info ((format "Path %s" path))
+                  (should (= 1 (length commands)))
+                  (should (equal niwa-session-control-fs--program-script
+                                 (nth 2 (car commands))))
+                  (should (equal "inline" (plist-get (nth 1 results) :value))))))
+            (should-not (nth 2 (gethash (file-remote-p remote)
+                                        niwa-session-control-fs--programs)))))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "runs compressed remote programs under German UTF-8 when the locale is installed"
+  (progn
+    (let ((process-environment
+           (append '("LANG=de_DE.UTF-8" "LC_ALL=de_DE.UTF-8") process-environment)))
+      (unless (equal "UTF-8\n"
+                     (with-temp-buffer
+                       (and (eql 0 (call-process "locale" nil '(t nil) nil "charmap"))
+                            (buffer-string))))
+        (ert-skip "de_DE.UTF-8 locale is not installed")))
+    (niwa-session-control-fs-test--compressed-round-trip "de_DE.UTF-8"))
+
+  :doc "keeps decoder pipefail out of the evaluated program"
+  (let* ((host "control-fs-pipefail-scope")
+         (root (file-name-as-directory
+                (make-temp-file "niwa-control-fs-pipefail-scope-" t)))
+         (path (format "/niwamock:%s:%sfile" host root))
+         (niwa-session-control-fs--compressed-script nil)
+         (niwa-session-control-fs--program-script
+          (concat "if [[ -o pipefail ]]; then exit 99; fi\n"
+                  niwa-session-control-fs--program-script)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (clrhash niwa-session-control-fs--programs)
+          (should (niwa-session-control-fs-write-file path "scoped"))
+          (should (equal "scoped" (niwa-session-control-fs-read-file path))))
+      (clrhash niwa-session-control-fs--programs)
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs--program-results ()
+  ,test
+  (test)
+  :doc "accepts streamed bytes only with their successful trailing status"
+  (let* ((ops (list (list :op 'read :path "/tmp/read" :coding 'no-conversion)
+                    (list :op 'write :path "/tmp/write")))
+         (bytes (unibyte-string 0 128 255))
+         (encoded (base64-encode-string bytes t))
+         (results (niwa-session-control-fs--program-results
+                   ops (concat encoded "\0" "1 0\0\0" "2 0\0"))))
+    (should (equal bytes (plist-get (car results) :value)))
+    (should (eq 'ok (plist-get (cadr results) :status))))
+  :doc "a partial failed read discards bytes and leaves later writes skipped"
+  (let* ((ops (list (list :op 'read :path "/tmp/read")
+                    (list :op 'write :path "/tmp/write")))
+         (results (niwa-session-control-fs--program-results
+                   ops (concat "partial-base64\0" "1 67\0"))))
+    (should (eq 'failed (plist-get (car results) :status)))
+    (should-not (plist-get (car results) :value))
+    (should (eq 'skipped (plist-get (cadr results) :status))))
+  :doc "rejects absent completion status and misordered operation identities"
+  (let ((ops (list (list :op 'read :path "/tmp/read"))))
+    (dolist (output (list "eA==\0" (concat "eA==\0" "1 0")
+                          (concat "eA==\0" "2 0\0")
+                          (concat "eA==\0" "1 0\0extra\0" "2 0\0")))
+      (should-error (niwa-session-control-fs--program-results ops output))))
+  :doc "only a complete hash-mismatch snapshot exposes failed-operation evidence"
+  (let* ((op (list :op 'verify-hash :path "/tmp/snapshot" :snapshot-bytes 2))
+         (hash (secure-hash 'sha256 "x"))
+         (snapshot (concat "1 " hash "\nx"))
+         (encoded (base64-encode-string snapshot t)))
+    (let ((result (car (niwa-session-control-fs--program-results
+                        (list op) (concat encoded "\0" "1 72\0")))))
+      (should (equal (list :hash hash :bytes 1 :content "x")
+                     (plist-get result :observed)))
+      (should-not (plist-get result :value)))
+    (dolist (payload (list "" "partial" (concat "1 " hash "\n")
+                          (concat "1 " hash "\ny") (concat "2 " hash "\nxx")))
+      (should-error (niwa-session-control-fs--program-results
+                     (list op) (concat (base64-encode-string payload t) "\0" "1 72\0"))))
+    (let ((result (car (niwa-session-control-fs--program-results
+                        (list op) (concat "partial\0" "1 67\0")))))
+      (should-not (plist-get result :observed))
+      (should-not (plist-get result :value)))))
+
+(niwa-deftest niwa-session-control-fs--archive-results
+  (:doc "decodes native binary members and long UTF-8 names while rejecting mismatched or corrupt archives")
+  (let* ((root (make-temp-file "niwa-control-fs-archive-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root (concat (make-string 120 ?a) "\u754c\nlast")))
+         (payload (unibyte-string 0 1 127 128 255))
+         (operations (list (list :op 'read :path first :coding 'no-conversion)
+                           (list :op 'read :path second :coding 'no-conversion)))
+         (original (symbol-function 'niwa-session-control-fs--archive-results))
+         archive)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region payload nil first nil 'silent)
+            (write-region "" nil second nil 'silent))
+          (cl-letf (((symbol-function 'niwa-session-control-fs--archive-results)
+                     (lambda (ops bytes)
+                       (setq archive bytes)
+                       (funcall original ops bytes))))
+                   (should (equal (list payload "")
+                                  (mapcar (lambda (r) (plist-get r :value))
+                                          (niwa-session-control-fs-run-program operations)))))
+          (should (stringp archive))
+          (should (equal (list payload "")
+                         (mapcar (lambda (r) (plist-get r :value))
+                                 (niwa-session-control-fs--archive-results operations archive))))
+          (should-error (niwa-session-control-fs--archive-results
+                         (reverse operations) archive))
+          (should-error (niwa-session-control-fs--archive-results
+                         (list (car operations)) archive))
+          (should-error (niwa-session-control-fs--archive-results
+                         (append operations (list (car operations))) archive))
+          (should-error (niwa-session-control-fs--archive-results
+                         operations (substring archive 0 513)))
+          (let ((corrupt (copy-sequence archive)))
+            (aset corrupt 100 (if (= (aref corrupt 100) ?0) ?1 ?0))
+            (should-error (niwa-session-control-fs--archive-results operations corrupt))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-run-program
+  ()
+  ,test
+  (test)
+
+  :doc "inline writes and mode changes never follow a replaced temporary pathname"
+  (let* ((root (make-temp-file "niwa-control-temp-race-" t))
+         (outside (make-temp-file "niwa-control-temp-victim-" t))
+         (victim (file-name-concat outside "victim"))
+         (target (file-name-concat root "target"))
+         (niwa-session-control-fs--stage-local nil))
+    (unwind-protect
+        (dolist (verb '(write write-mode))
+          (dolist (after-proof '(nil t))
+            (write-region "innocent" nil victim nil 'silent)
+            (set-file-modes victim #o644)
+            (when (file-exists-p target) (delete-file target))
+            (let* ((needle (if after-proof
+                               "      exec 8>/proc/self/fd/8 || exit 66\n"
+                             "      trap 'rm -f -- \"$temporary\"' EXIT\n"))
+                   (niwa-session-control-fs--program-script
+                    (string-replace
+                     needle
+                     (concat needle "      rm -- \"$temporary\"; ln -s -- "
+                             (shell-quote-argument victim) " \"$temporary\"\n")
+                     niwa-session-control-fs--program-script))
+                   (result (car (niwa-session-control-fs-run-program
+                                 (list (list :op verb :path target
+                                             :content (if (eq verb 'write-mode) "700\nforged" "forged")))))))
+              (should (eq (if after-proof 'ok 'failed) (plist-get result :status)))
+              (should (equal "innocent" (with-temp-buffer
+                                          (insert-file-contents victim) (buffer-string))))
+              (should (= #o644 (file-modes victim))))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "inline writes reject an outside descriptor even when its temporary name matches"
+  (let* ((root (make-temp-file "niwa-control-alias-race-" t))
+         (outside (make-temp-file "niwa-control-alias-victim-" t))
+         (victim (file-name-concat outside "victim"))
+         (target (file-name-concat root "target"))
+         (niwa-session-control-fs--stage-local nil))
+    (unwind-protect
+        (dolist (verb '(write write-mode))
+          (write-region "innocent" nil victim nil 'silent)
+          (set-file-modes victim #o644)
+          (let* ((needle "      exec 8<\"$temporary\" || exit 66\n")
+                 (niwa-session-control-fs--program-script
+                  (string-replace
+                   needle
+                   (concat
+                    "      rm -- \"$temporary\"; ln -s -- "
+                    (shell-quote-argument victim) " \"$temporary\"\n"
+                    needle
+                    ;; The name now matches the opened inode without being a
+                    ;; symlink, but the descriptor was opened outside ROOT.
+                    "      rm -- \"$temporary\"; ln -- "
+                    (shell-quote-argument victim) " \"$temporary\"\n")
+                   niwa-session-control-fs--program-script))
+                 (result
+                  (car (niwa-session-control-fs-run-program
+                        (list (list :op verb :path target
+                                    :content (if (eq verb 'write-mode)
+                                                 "700\nforged" "forged")))))))
+            (should (eq 'failed (plist-get result :status)))
+            (should (equal "innocent" (with-temp-buffer
+                                        (insert-file-contents victim)
+                                        (buffer-string))))
+            (should (= #o644 (file-modes victim)))
+            (should-not (file-exists-p target))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "directory modes apply through pinned descriptors and refuse symlink targets"
+  (let* ((root (make-temp-file "niwa-control-directory-mode-" t))
+         (child (file-name-concat root "child"))
+         (link (file-name-concat root "link"))
+         (outside (make-temp-file "niwa-control-directory-victim-" t)))
+    (unwind-protect
+        (progn
+          (make-directory child)
+          (set-file-modes outside #o755)
+          (make-symbolic-link outside link)
+          (niwa-session-control-fs-program-value
+           (car (niwa-session-control-fs-run-program
+                 (list (list :op 'directory-mode :path child :content "555")))))
+          (should (= #o555 (file-modes child)))
+          (should-error
+           (niwa-session-control-fs-program-value
+            (car (niwa-session-control-fs-run-program
+                  (list (list :op 'directory-mode :path link :content "700"))))))
+          (should (= #o755 (file-modes outside))))
+      (set-file-modes child #o755)
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "batches independent binary reads in one archive without per-file encoding processes"
+  (let* ((root (make-temp-file "niwa-control-fs-bulk-" t))
+         (bin (file-name-concat root "bin"))
+         (marker (file-name-concat root "tar-used"))
+         (tar (executable-find "tar"))
+         (payload (encode-coding-string "Binary\0evidence\n" 'utf-8-unix))
+         (calls 0) paths)
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\n: >" (shell-quote-argument marker)
+                    "\nexec " (shell-quote-argument tar) " \"$@\"\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (dotimes (i 3)
+            (let ((path (file-name-concat root (number-to-string i) "session.org")))
+              (make-directory (file-name-directory path) t)
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region payload nil path nil 'silent))
+              (push path paths)))
+          (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
+                (niwa-session-control-fs--helper-enabled nil)
+                (original (symbol-function 'process-file)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args) (cl-incf calls) (apply original args))))
+                     (let ((results (niwa-session-control-fs-run-program
+                                     (mapcar (lambda (path) (list :op 'read :path path :coding 'no-conversion)) paths))))
+                       (should (equal '(ok ok ok) (mapcar (lambda (r) (plist-get r :status)) results)))
+                       (dolist (result results) (should (equal payload (plist-get result :value)))))))
+          (should (= 1 calls))
+          (should (file-exists-p marker)))
+      (delete-directory root t)))
+
+  :doc "bulk reads ignore archive preferences and reject a leaf replaced after proof"
+  (let* ((root (make-temp-file "niwa-control-fs-bulk-race-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (outside (file-name-concat root "outside"))
+         (tar (executable-find "tar"))
+         (niwa-session-control-fs--helper-enabled nil)
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (write-region "OUTSIDE-CANARY" nil outside nil 'silent)
+          ;; The wrapper runs after the target has proved both parents and
+          ;; checked both leaves, immediately before the actual archive read.
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\nrm -- " (shell-quote-argument first)
+                    "\nln -s -- " (shell-quote-argument outside) " "
+                    (shell-quote-argument first) "\nexec "
+                    (shell-quote-argument tar) " \"$@\"\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (append (list (concat "PATH=" bin ":" (getenv "PATH"))
+                               "TAR_OPTIONS=--dereference --remove-files")
+                         process-environment)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply original args))))
+                     (let ((results
+                            (niwa-session-control-fs-run-program
+                             (list (list :op 'read :path first :optional t)
+                                   (list :op 'read :path second)))))
+                       (should (equal '(failed ok)
+                                      (mapcar (lambda (r) (plist-get r :status)) results)))
+                       (should-not (plist-get (car results) :value))
+                       (should (equal "second" (plist-get (cadr results) :value))))))
+          (should (= calls 2))
+          (should (file-symlink-p first))
+          (should (file-exists-p second))
+          (should (equal "OUTSIDE-CANARY"
+                         (niwa-session-control-fs-read-file outside))))
+      (delete-directory root t)))
+
+  :doc "unavailable bulk carrier retries ordinary reads with ordered failure semantics"
+  (let* ((root (make-temp-file "niwa-control-fs-bulk-fallback-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (niwa-session-control-fs--helper-enabled nil)
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "first" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\nexit 127\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply original args))))
+                     (should (equal '("first" "second")
+                                    (mapcar (lambda (r) (plist-get r :value))
+                                            (niwa-session-control-fs-run-program
+                                             (list (list :op 'read :path first)
+                                                   (list :op 'read :path second))))))
+                     (should (= calls 2))
+                     (delete-file first)
+                     (should (equal '(absent skipped)
+                                    (mapcar (lambda (r) (plist-get r :status))
+                                            (niwa-session-control-fs-run-program
+                                             (list (list :op 'read :path first)
+                                                   (list :op 'read :path second))))))
+                     (should (equal '(absent ok)
+                                    (mapcar (lambda (r) (plist-get r :status))
+                                            (niwa-session-control-fs-run-program
+                                             (list (list :op 'read :path first :optional t)
+                                                   (list :op 'read :path second)))))))))
+      (delete-directory root t)))
+
+  :doc "rejected bulk output is discarded and retried against fresh native bytes"
+  (let* ((root (make-temp-file "niwa-control-fs-bulk-fresh-" t))
+         (niwa-session-control-fs--helper-enabled nil)
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (prog1 (apply original args)
+                         (when (= calls 1)
+                           (with-current-buffer (car (nth 2 args))
+                             (should (string-prefix-p "archive 0\0" (buffer-string)))
+                             (erase-buffer)
+                             (insert "archive 0\0invalid-base64!\0"))
+                           (write-region "updated" nil first nil 'silent))))))
+                   (should (equal '("updated" "second")
+                                  (mapcar (lambda (r) (plist-get r :value))
+                                          (niwa-session-control-fs-run-program
+                                           (list (list :op 'read :path first)
+                                                 (list :op 'read :path second)))))))
+          (should (= calls 2)))
+      (delete-directory root t)))
+
+  :doc "a complete-looking stream from a failed carrier cannot supply stale success"
+  (let* ((root (make-temp-file "niwa-control-fs-stream-failure-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (tar (executable-find "tar")))
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\n" (shell-quote-argument tar) " \"$@\"\n"
+                    "printf updated >" (shell-quote-argument first) "\nexit 1\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (should (equal '("updated" "second")
+                           (mapcar (lambda (r) (plist-get r :value))
+                                   (niwa-session-control-fs-run-program
+                                    (list (list :op 'read :path first)
+                                          (list :op 'read :path second))))))))
+      (delete-directory root t)))
+
+  :doc "runs every operation of a program in one target process"
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (alpha (file-name-concat root "alpha"))
+         (beta (file-name-concat root "beta"))
+         (sub (file-name-concat root "sub"))
+         (calls 0)
+         results)
+    (unwind-protect
+        (progn
+          (setq results
+                (cl-letf* ((niwa-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
+                           ((symbol-function 'process-file)
+                            (lambda (&rest args)
+                              (setq calls (1+ calls))
+                              (apply original args))))
+                  (niwa-session-control-fs-run-program
+                   (list (list :op 'make-directory :path sub)
+                         (list :op 'create :path alpha :content "ä/界")
+                         (list :op 'read :path alpha)
+                         (list :op 'list-directory :path root)
+                         (list :op 'target-time :path root)))))
+          ;; The whole program is one target process; that is the point.
+          (should (= 1 calls))
+          (should (equal '(ok ok ok ok ok)
+                         (mapcar (lambda (r) (plist-get r :status)) results)))
+          (should (equal "ä/界" (plist-get (nth 2 results) :value)))
+          (should (equal '("alpha" "sub")
+                         (sort (plist-get (nth 3 results) :value) #'string<)))
+          (should (integerp (plist-get (nth 4 results) :value)))
+          (should-not (file-exists-p beta)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "carries arbitrary bytes and names a shell cannot pass literally"
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (bytes (apply #'unibyte-string (number-sequence 0 255)))
+         (binary (file-name-concat root "binary"))
+         (odd (file-name-concat root "odd\nname"))
+         results)
+    (unwind-protect
+        (progn
+          (setq results
+                (niwa-session-control-fs-run-program
+                 (list (list :op 'write :path binary
+                             :content bytes :coding 'no-conversion)
+                       (list :op 'create :path odd :content "x")
+                       (list :op 'read :path binary :coding 'no-conversion)
+                       (list :op 'list-directory :path root))))
+          (should (equal '(ok ok ok ok)
+                         (mapcar (lambda (r) (plist-get r :status)) results)))
+          ;; A NUL byte survives the framing in both directions.
+          (should (equal bytes (plist-get (nth 2 results) :value)))
+          ;; A newline in a name must arrive as one entry, not two.
+          (should (equal '("binary" "odd\nname")
+                         (sort (plist-get (nth 3 results) :value) #'string<))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "delivers a request as arguments, falling back to a file when oversized"
+  ;; Arguments cost nothing; a stdin file costs TRAMP a remote temporary and a
+  ;; copy into it on every program.  Either way it stays one target process.
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (small (file-name-concat root "small"))
+         (large (file-name-concat root "large"))
+         (bulk (make-string (* 4 1024) ?x))
+         (niwa-session-control-fs--stage-local nil)
+         calls)
+    (unwind-protect
+        (cl-letf* ((niwa-session-control-fs--helper-enabled nil)
+                   (original (symbol-function 'process-file))
+                   ((symbol-function 'process-file)
+                    (lambda (&rest args)
+                      (push args calls)
+                      (apply original args))))
+          (should (equal '(ok)
+                         (mapcar (lambda (r) (plist-get r :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'write :path small
+                                              :content "tiny"))))))
+          (should (= 1 (length calls)))
+          ;; No stdin file exists at all: the fields rode the command line,
+          ;; and they arrive there in the order the script reads them.  The
+          ;; parent travels once, as the physical no-trailing-slash spelling
+          ;; the script both opens and proves against `pwd -P'.
+          (should-not (nth 1 (car calls)))
+          (let ((fields (last (car calls) 5)))
+            (should (equal "write" (nth 0 fields)))
+            (should (equal (directory-file-name
+                            (file-name-directory
+                             (file-truename small)))
+                           (nth 1 fields)))
+            (should (equal "small" (nth 2 fields)))
+            (should (equal (base64-encode-string "tiny" t) (nth 3 fields)))
+            (should (equal "0" (nth 4 fields))))
+          ;; The root parent keeps its only possible spelling.
+          (should (equal "/" (nth 1 (niwa-session-control-fs--program-fields
+                                     (list :op 'path-exists-p
+                                           :path "/niwa-missing")))))
+
+          (setq calls nil)
+          (should (equal '(ok ok)
+                         (mapcar (lambda (r) (plist-get r :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'write :path large
+                                              :content bulk)
+                                        (list :op 'read :path large))))))
+          ;; A large payload still rides the command line: its base64 is
+          ;; newline-wrapped, so no physical line outgrows the pty budget.
+          (should (= 1 (length calls)))
+          (should-not (nth 1 (car calls)))
+          (should (equal bulk
+                         (niwa-session-control-fs-read-file large)))
+          ;; A wrapped verify payload compares equal to the unwrapped
+          ;; observation, and still proves a mismatch.
+          (should (equal '(ok)
+                         (mapcar (lambda (r) (plist-get r :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'verify :path large
+                                              :content bulk))))))
+          (should (eq 'mismatch
+                      (plist-get
+                       (car (niwa-session-control-fs-run-program
+                             (list (list :op 'verify :path large
+                                         :content (concat bulk "y")))))
+                       :status)))
+          ;; Only a field past the kernel's one-argument ceiling moves the
+          ;; request to the stdin file; it does not become a second call.
+          (setq calls nil)
+          (let ((huge (make-string (* 128 1024) ?z)))
+            (should (equal '(ok)
+                           (mapcar (lambda (r) (plist-get r :status))
+                                   (niwa-session-control-fs-run-program
+                                    (list (list :op 'write :path large
+                                                :content huge))))))
+            (should (= 1 (length calls)))
+            (should (stringp (nth 1 (car calls))))
+            (should (equal huge
+                           (niwa-session-control-fs-read-file large)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "keeps operation fields independent across large mixed stdin requests"
+  (let* ((root (make-temp-file "niwa-control-mixed-fields-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (binary (concat (make-string (* 128 1024) ?x) (unibyte-string 0 128 255)))
+         (text "Unicode: λ\nsecond line\0"))
+    (unwind-protect
+        (let ((results (niwa-session-control-fs-run-program
+                        (list (list :op 'read :path first :optional t)
+                              (list :op 'write :path first :content binary)
+                              (list :op 'write :path second :content text)
+                              (list :op 'verify :path first :content binary)
+                              (list :op 'read :path second)
+                              (list :op 'verify :path second :content "mismatch")
+                              (list :op 'delete-file :path first)))))
+          (should (equal '(absent ok ok ok ok mismatch skipped)
+                         (mapcar (lambda (result) (plist-get result :status)) results)))
+          (should (equal text (decode-coding-string (plist-get (nth 4 results) :value) 'utf-8-unix)))
+          (should (equal binary (niwa-session-control-fs-read-file first 'no-conversion))))
+      (delete-directory root t)))
+
+  :doc "streams an oversized request over a pipe where the target allows one"
+  ;; The pipe carrier replaces the stdin file TRAMP would copy; the script
+  ;; must also read a payload that arrives in pipe-sized pieces.
+  (let* ((root (make-temp-file "niwa-control-pipe-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (binary (concat (make-string (* 512 1024) ?x) (unibyte-string 0 128 255)))
+         (text "Unicode: λ\nsecond line\0")
+         (niwa-session-control-fs--stage-local nil)
+         (spawns 0))
+    (unwind-protect
+        (cl-letf* (((symbol-function 'niwa-session-control-fs--pipe-capable-p)
+                    (lambda (_) t))
+                   ((symbol-function 'process-file)
+                    (lambda (&rest _) (error "Request file carrier used")))
+                   (original (symbol-function 'make-process))
+                   ((symbol-function 'make-process)
+                    (lambda (&rest args)
+                      (cl-incf spawns)
+                      (apply original args))))
+          (let ((results (niwa-session-control-fs-run-program
+                          (list (list :op 'write :path first :content binary)
+                                (list :op 'write :path second :content text)
+                                (list :op 'read :path second)
+                                (list :op 'verify :path second :content "mismatch")
+                                (list :op 'delete-file :path first)))))
+            (should (equal '(ok ok ok mismatch skipped)
+                           (mapcar (lambda (result) (plist-get result :status))
+                                   results)))
+            (should (equal text (decode-coding-string
+                                 (plist-get (nth 2 results) :value) 'utf-8-unix)))
+            (should (= 1 spawns)))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally first)
+            (should (equal binary (buffer-string)))))
+      (delete-directory root t)))
+
+  :doc "a truncated streamed field cannot replace or create a destination"
+  (let* ((root (make-temp-file "niwa-control-truncated-stream-" t))
+         (path (file-name-concat root "target"))
+         (process (symbol-function 'process-file))
+         (niwa-session-control-fs--stage-local nil))
+    (unwind-protect
+        (dolist (operation '(write create))
+          (when (eq operation 'write) (with-temp-file path (insert "original")))
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (program input &rest arguments)
+                       (should input)
+                       (with-temp-buffer
+                         (set-buffer-multibyte nil)
+                         (insert-file-contents-literally input)
+                         ;; Keep every encoded payload byte but remove its
+                         ;; final framing byte, simulating a torn transfer.
+                         (delete-region (1- (point-max)) (point-max))
+                         (let ((coding-system-for-write 'no-conversion))
+                           (write-region (point-min) (point-max) input nil 'silent)))
+                       (apply process program input arguments))))
+            (should (eq 'failed
+                        (plist-get
+                         (car (niwa-session-control-fs-run-program
+                               (list (list :op operation :path path
+                                           :content (make-string (* 128 1024) ?x))))) :status))))
+          (if (eq operation 'write)
+              (progn
+                (should (equal "original" (niwa-session-control-fs-read-file path)))
+                (delete-file path))
+            (should-not (file-exists-p path)))
+          (should-not (directory-files root nil "\\`\\.niwa-control")))
+      (delete-directory root t)))
+
+  :doc "a local target receives large payloads as staged files, not base64"
+  (let* ((root (make-temp-file "niwa-control-staged-" t))
+         (written (file-name-concat root "written"))
+         (created (file-name-concat root "fresh" "created"))
+         (binary (concat (make-string (* 64 1024) ?x) (unibyte-string 0 128 255)))
+         (text (concat (make-string 5000 ?a) "Unicode: \u03bb\n"))
+         calls)
+    (unwind-protect
+        (cl-letf* ((niwa-session-control-fs--helper-enabled nil)
+                   (original (symbol-function 'process-file))
+                   ((symbol-function 'process-file)
+                    (lambda (&rest args) (push args calls) (apply original args))))
+          (should
+           (equal '(ok ok ok ok)
+                  (mapcar (lambda (result) (plist-get result :status))
+                          (niwa-session-control-fs-run-program
+                           (list (list :op 'write :path written :content binary)
+                                 (list :op 'make-directory
+                                       :path (file-name-directory created))
+                                 (list :op 'create :path created :content text)
+                                 (list :op 'verify :path written :content binary))))))
+          ;; One process; the payloads never travelled as request fields.
+          (should (= 1 (length calls)))
+          (should-not (nth 1 (car calls)))
+          (should (member "write-staged" (car calls)))
+          (should (member "create-staged" (car calls)))
+          (should (equal binary (niwa-session-control-fs-read-file written 'no-conversion)))
+          (should (equal text (niwa-session-control-fs-read-file created)))
+          ;; An existing leaf still conflicts, and a program that stops
+          ;; early leaves no staged file behind.
+          (should (equal '(conflict)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'create :path created :content text))))))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'read :path (file-name-concat root "missing-dir" "x"))
+                                        (list :op 'write :path written :content text))))))
+          (should (equal binary (niwa-session-control-fs-read-file written 'no-conversion)))
+          (should-not (directory-files-recursively root "\\`\\.niwa-control" nil t)))
+      (delete-directory root t)))
+
+  :doc "carries a file-backed payload staged locally and inline otherwise"
+  (let* ((root (make-temp-file "niwa-control-source-" t))
+         (source (file-name-concat root "source"))
+         (small (file-name-concat root "small-source"))
+         (large-target (file-name-concat root "large"))
+         (small-target (file-name-concat root "small"))
+         (bytes (concat (make-string (* 16 1024) ?q) (unibyte-string 0 255))))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent)
+            (write-region "tiny" nil small nil 'silent))
+          (dolist (stage '(t nil))
+            (let ((niwa-session-control-fs--stage-local stage))
+              (should (equal '(ok ok)
+                             (mapcar (lambda (result) (plist-get result :status))
+                                     (niwa-session-control-fs-run-program
+                                      (list (list :op 'write :path large-target :source-file source)
+                                            (list :op 'create :path small-target :source-file small))))))
+              (should (equal bytes (niwa-session-control-fs-read-file large-target 'no-conversion)))
+              (should (equal "tiny" (niwa-session-control-fs-read-file small-target)))
+              (delete-file small-target)))
+          ;; The source stays where it was; staging copied it.
+          (should (file-exists-p source))
+          (should-not (directory-files root nil "\\`\\.niwa-control")))
+      (delete-directory root t)))
+
+  :doc "an unstageable payload travels inline and the target refuses it"
+  (let* ((root (make-temp-file "niwa-control-unstageable-" t))
+         (locked (file-name-concat root "locked"))
+         (proof (file-name-concat root "proof")))
+    (unwind-protect
+        (progn
+          (make-directory locked)
+          (write-region "kept" nil proof nil 'silent)
+          (set-file-modes locked #o500)
+          (skip-unless (not (file-writable-p locked)))
+          ;; No local error: the operation before it ran, and the write's
+          ;; own refusal comes back as its result.
+          (let ((results (niwa-session-control-fs-run-program
+                          (list (list :op 'verify :path proof :content "kept")
+                                (list :op 'write :path (file-name-concat locked "x")
+                                      :content "payload")))))
+            (should (equal '(ok failed)
+                           (mapcar (lambda (result) (plist-get result :status))
+                                   results))))
+          (should-not (file-exists-p (file-name-concat locked "x"))))
+      (set-file-modes locked #o700)
+      (delete-directory root t)))
+
+  :doc "stdin framing preserves the batched read archive path"
+  (let* ((root (make-temp-file "niwa-control-stdin-archive-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (process (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "one"))
+          (with-temp-file second (insert "two"))
+          (cl-letf (((symbol-function 'niwa-session-control-fs--program-arguments) #'ignore)
+                    ((symbol-function 'process-file)
+                     (lambda (&rest args) (cl-incf calls) (apply process args))))
+            (should (equal '("one" "two")
+                           (mapcar (lambda (result) (plist-get result :value))
+                                   (niwa-session-control-fs-run-program
+                                    (list (list :op 'read :path first)
+                                          (list :op 'read :path second)))))))
+          (should (= calls 1)))
+      (delete-directory root t)))
+
+  :doc "stops at the first operation that does not succeed"
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (alpha (file-name-concat root "alpha"))
+         (beta (file-name-concat root "beta"))
+         results)
+    (unwind-protect
+        (progn
+          (should (niwa-session-control-fs-create-file alpha "first"))
+          (setq results
+                (niwa-session-control-fs-run-program
+                 (list (list :op 'create :path alpha :content "second")
+                       (list :op 'write :path beta :content "unreached"))))
+          (should (equal 'conflict (plist-get (nth 0 results) :status)))
+          (should (equal 'skipped (plist-get (nth 1 results) :status)))
+          ;; A stopped program performs none of its remaining writes.
+          (should-not (file-exists-p beta))
+          (should (equal "first"
+                         (niwa-session-control-fs-read-file alpha)))
+          ;; Target diagnostics reach the caller instead of the framing.
+          (should (stringp (plist-get (nth 0 results) :diagnostic))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "expresses a precondition as a verify its writes depend on"
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (record (file-name-concat root "record"))
+         (next (file-name-concat root "next")))
+    (unwind-protect
+        (progn
+          (should (niwa-session-control-fs-write-file record "generation-1"))
+          ;; The expected bytes are present, so the dependent writes run.
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'verify :path record :content "generation-1")
+                        (list :op 'write :path record :content "generation-2")
+                        (list :op 'create :path next :content "claimed")))))
+            (should (equal '(ok ok ok)
+                           (mapcar (lambda (r) (plist-get r :status))
+                                   results))))
+          (should (equal "generation-2"
+                         (niwa-session-control-fs-read-file record)))
+          ;; A foreign writer moved the record, so nothing after the proof runs.
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'verify :path record :content "generation-1")
+                        (list :op 'write :path record :content "generation-3")))))
+            (should (equal 'mismatch (plist-get (nth 0 results) :status)))
+            (should (equal 'skipped (plist-get (nth 1 results) :status))))
+          (should (equal "generation-2"
+                         (niwa-session-control-fs-read-file record)))
+          ;; An absent record is its own answer, not a silent mismatch.
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'verify
+                              :path (file-name-concat root "missing")
+                              :content "anything")))))
+            (should (equal 'absent (plist-get (nth 0 results) :status)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "validates numeric mode and deadline guards before dependent writes"
+  (let* ((root (make-temp-file "niwa-control-fs-numeric-" t))
+         (record (file-name-concat root "record"))
+         (next (file-name-concat root "next")))
+    (unwind-protect
+        (progn
+          (write-region "original" nil record nil 'silent)
+          (set-file-modes record #o600)
+          (dolist (case
+                   (list (list 'verify-mode record "600" 'ok)
+                         (list 'verify-mode record "644" 'mismatch)
+                         (list 'verify-mode record "888" 'failed)
+                         (list 'verify-mode record "600\n" 'failed)
+                         (list 'before-time root
+                               (number-to-string
+                                (+ 3600 (niwa-session-control-fs-target-time root)))
+                               'ok)
+                         (list 'before-time root "0" 'mismatch)
+                         (list 'before-time root "-1" 'failed)
+                         (list 'before-time root "1; true" 'failed)))
+            (let ((results
+                   (niwa-session-control-fs-run-program
+                    (list (list :op (nth 0 case) :path (nth 1 case)
+                                :content (nth 2 case))
+                          (list :op 'create :path next :content "guarded")))))
+              (should (eq (nth 3 case) (plist-get (car results) :status)))
+              (if (eq (nth 3 case) 'ok)
+                  (progn
+                    (should (equal "guarded" (niwa-session-control-fs-read-file next)))
+                    (delete-file next))
+                (should (eq 'skipped (plist-get (cadr results) :status)))
+                (should-not (file-exists-p next))))))
+      (delete-directory root t)))
+
+  :doc "refuses a linked parent component and a linked final name"
+  (let* ((root (make-temp-file "niwa-control-fs-program-" t))
+         (target (file-name-concat root "target"))
+         (linked-dir (file-name-concat root "linked-dir"))
+         (linked-leaf (file-name-concat root "linked-leaf")))
+    (unwind-protect
+        (progn
+          (make-directory target)
+          (should (niwa-session-control-fs-create-file
+                   (file-name-concat target "record") "inside"))
+          (make-symbolic-link target linked-dir)
+          (make-symbolic-link (file-name-concat target "record") linked-leaf)
+          ;; A linked parent component fails the descriptor proof, and a
+          ;; linked final name is refused.  Both are reported per operation;
+          ;; `niwa-session-control-fs-program-value' is what raises them.
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'read
+                              :path (file-name-concat linked-dir "record"))))))
+            (should (equal 'failed (plist-get (nth 0 results) :status)))
+            (should-error
+             (niwa-session-control-fs-program-value (nth 0 results))
+             :type 'file-error))
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'read :path linked-leaf)))))
+            (should (equal 'failed (plist-get (nth 0 results) :status)))
+            (should-error
+             (niwa-session-control-fs-program-value (nth 0 results))
+             :type 'file-error))
+          ;; The legitimate path still reads.
+          (should (equal "inside"
+                         (plist-get
+                          (nth 0 (niwa-session-control-fs-run-program
+                                  (list (list :op 'read
+                                              :path (file-name-concat
+                                                     target "record")))))
+                          :value))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(niwa-deftest niwa-session-control-fs-delete-directories
+  ()
+  ,test
+  (test)
+
+  :doc "deletes every directory in one program, independently"
+  (let* ((root (make-temp-file "niwa-control-fs-batch-" t))
+         (one (file-name-concat root "one"))
+         (two (file-name-concat root "two"))
+         (absent (file-name-concat root "absent"))
+         (calls 0)
+         results)
+    (unwind-protect
+        (progn
+          (make-directory one)
+          (with-temp-file (file-name-concat one "data") (insert "x"))
+          (make-directory two)
+          (setq results
+                (cl-letf* ((niwa-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
+                           ((symbol-function 'process-file)
+                            (lambda (&rest args)
+                              (setq calls (1+ calls))
+                              (apply original args))))
+                  (niwa-session-control-fs-delete-directories
+                   (list one absent two))))
+          (should (= 1 calls))
+          ;; Deletion is idempotent: an already-absent directory
+          ;; reports ok and never stops the deletions after it.
+          (should (equal '(ok ok ok)
+                         (mapcar (lambda (r) (plist-get r :status)) results)))
+          (should-not (file-exists-p one))
+          (should-not (file-exists-p two)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "an empty path list runs no program"
+  (should-not (niwa-session-control-fs-delete-directories nil)))
+
+(niwa-deftest niwa-session-control-fs-listing-proof ()
+  ,test
+  (test)
+  :doc "proves exactly the listed entries, dotfiles and an absent directory included"
+  (let* ((root (make-temp-file "niwa-control-fs-listing-" t))
+         (directory (file-name-concat root "listed"))
+         (status (lambda (entries)
+                   (plist-get (car (niwa-session-control-fs-run-program
+                                    (list (niwa-session-control-fs-listing-proof
+                                           directory entries))))
+                              :status))))
+    (unwind-protect
+        (progn
+          (should (eq 'ok (funcall status nil)))
+          (make-directory directory)
+          (should (eq 'ok (funcall status nil)))
+          (dolist (name '("b" ".hidden" "a"))
+            (write-region "" nil (file-name-concat directory name) nil 'silent))
+          (let ((entries (niwa-session-control-fs-list-directory directory ".")))
+            (should (eq 'ok (funcall status entries)))
+            (should (eq 'mismatch (funcall status (cdr entries))))
+            (delete-file (file-name-concat directory "a"))
+            (should (eq 'mismatch (funcall status entries)))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-tree-sizes
+  ()
+  ,test
+  (test)
+
+  :doc "counts nested and hidden regular files in one target program"
+  (let* ((root (make-temp-file "niwa-control-fs-size-" t))
+         (one (file-name-concat root "one"))
+         (nested (file-name-concat one ".nested"))
+         (two (file-name-concat root "two"))
+         (calls 0)
+         results)
+    (unwind-protect
+        (progn
+          (make-directory nested t)
+          (make-directory two)
+          (with-temp-file (file-name-concat one "visible") (insert "abc"))
+          (with-temp-file (file-name-concat one ".hidden") (insert "12345"))
+          (with-temp-file (file-name-concat nested "data") (insert "1234567"))
+          (with-temp-file (file-name-concat two "data") (insert "four"))
+          (setq results
+                (cl-letf* ((niwa-session-control-fs--helper-enabled nil)
+                           (original (symbol-function 'process-file))
+                           ((symbol-function 'process-file)
+                            (lambda (&rest args)
+                              (setq calls (1+ calls))
+                              (apply original args))))
+                  (niwa-session-control-fs-tree-sizes (list one two))))
+          (should (= 1 calls))
+          (should (equal (list one two)
+                         (mapcar (lambda (result)
+                                   (plist-get result :path))
+                                 results)))
+          (should (equal '(ok ok)
+                         (mapcar (lambda (result)
+                                   (plist-get result :status))
+                                 results)))
+          (should (equal '(15 4)
+                         (mapcar (lambda (result)
+                                   (plist-get result :value))
+                                 results))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "refuses symlink entries and roots without suppressing later sizes"
+  (let* ((root (make-temp-file "niwa-control-fs-size-links-" t))
+         (linked-entry (file-name-concat root "linked-entry"))
+         (linked-root (file-name-concat root "linked-root"))
+         (good (file-name-concat root "good")))
+    (unwind-protect
+        (progn
+          (make-directory linked-entry)
+          (make-directory good)
+          (with-temp-file (file-name-concat good "data") (insert "valid"))
+          (make-symbolic-link (file-name-concat good "data")
+                              (file-name-concat linked-entry "link"))
+          (make-symbolic-link good linked-root)
+          (let ((results
+                 (niwa-session-control-fs-tree-sizes
+                  (list linked-entry linked-root good))))
+            (should (equal '(failed failed ok)
+                           (mapcar (lambda (result)
+                                     (plist-get result :status))
+                                   results)))
+            (should (= 5 (plist-get (nth 2 results) :value)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "treats a leading-dash directory name as data"
+  (let* ((root (make-temp-file "niwa-control-fs-size-dash-" t))
+         (tree (file-name-concat root "-delete"))
+         (sibling (file-name-concat root "sibling")))
+    (unwind-protect
+        (progn
+          (make-directory tree)
+          (with-temp-file (file-name-concat tree "data") (insert "safe"))
+          (with-temp-file sibling (insert "untouched"))
+          (let ((result (car (niwa-session-control-fs-tree-sizes
+                              (list tree)))))
+            (should (eq 'ok (plist-get result :status)))
+            (should (= 4 (plist-get result :value)))
+            (should (file-exists-p sibling))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "does not follow a descendant replaced by a symlink"
+  (let* ((root (make-temp-file "niwa-control-fs-size-link-race-" t))
+         (tree (file-name-concat root "tree"))
+         (outside (file-name-concat root "outside"))
+         (entry (file-name-concat tree "entry"))
+         (pause ".niwa-test-pause")
+         (worker-buffer (generate-new-buffer " *niwa-control-fs-size-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (make-directory entry t)
+          (make-directory outside)
+          (with-temp-file (file-name-concat entry "small") (insert "x"))
+          (with-temp-file (file-name-concat outside "large")
+            (insert (make-string 1000 ?x)))
+          (setq worker
+                (start-process
+                 "niwa-control-fs-size-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch" "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((niwa-session-control-fs--test-pause-file %S)) (prin1 (niwa-session-control-fs-tree-sizes (list %S)))))"
+                  (expand-file-name "niwa-session-control-fs.el"
+                                    niwa-test--worktree-root)
+                  pause tree)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (delete-directory entry t)
+          (make-symbolic-link outside entry)
+          (with-temp-file (file-name-concat root (concat pause ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should (zerop (process-exit-status worker)))
+          (with-current-buffer worker-buffer
+            (goto-char (point-min))
+            (should (search-forward ":status failed" nil t))))
+      (when (process-live-p worker)
+        (delete-process worker))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "an empty path list runs no program"
+  (should-not (niwa-session-control-fs-tree-sizes nil)))
+
+(niwa-deftest niwa-session-control-fs--program-value
+  (:doc "decodes only nonnegative integer tree byte counts")
+  (let ((op (list :op 'tree-size :path "/tmp/tree")))
+    (should (= 42 (niwa-session-control-fs--program-value op "42")))
+    (dolist (payload '("" "-1" "+1" "1.0" " 1" "1\n" "unknown"))
+      (should-error (niwa-session-control-fs--program-value op payload)
+                    :type 'file-error))))
+
+(niwa-deftest niwa-session-control-fs-program-parent-swap
+  (:doc "keeps a program's write in the opened directory when its pathname is swapped")
+  (let* ((root (make-temp-file "niwa-control-fs-root-" t))
+         (outside (make-temp-file "niwa-control-fs-outside-" t))
+         (moved (concat root ".moved"))
+         (path (file-name-concat root "lease"))
+         (pause ".niwa-test-pause")
+         (worker-buffer (generate-new-buffer " *niwa-control-fs-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (setq worker
+                (start-process
+                 "niwa-control-fs-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch"
+                 "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((niwa-session-control-fs--test-pause-file %S)) (niwa-session-control-fs-run-program (list (list :op 'write :path %S :content \"pinned\")))))"
+                  (expand-file-name "niwa-session-control-fs.el"
+                                    niwa-test--worktree-root)
+                  pause path)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (rename-file root moved)
+          (make-symbolic-link outside root)
+          (with-temp-file
+              (file-name-concat moved
+                                (concat (file-name-nondirectory pause)
+                                        ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should (zerop (process-exit-status worker)))
+          ;; A program pins each operation's own parent, so the write lands in
+          ;; the directory whose inode it opened, not the swapped pathname.
+          (should (equal "pinned"
+                         (with-temp-buffer
+                           (insert-file-contents
+                            (file-name-concat moved "lease"))
+                           (buffer-string))))
+          (should-not (file-exists-p (file-name-concat outside "lease"))))
+      (when (file-symlink-p root)
+        (delete-file root))
+      (when (file-directory-p moved)
+        (delete-directory moved t))
+      (when (file-directory-p outside)
+        (delete-directory outside t))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer)))))
+
+(niwa-deftest niwa-session-control-fs-read-leaf-swap
+  (:doc "refuses a file replaced by a symlink after its parent is pinned")
+  (let* ((root (make-temp-file "niwa-control-fs-read-swap-" t))
+         (outside (make-temp-file "niwa-control-fs-read-outside-" nil))
+         (path (file-name-concat root "segment.chat.org"))
+         (pause ".niwa-test-pause")
+         (worker-buffer (generate-new-buffer " *niwa-control-fs-read-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "inside"))
+          (with-temp-file outside (insert "outside"))
+          (setq worker
+                (start-process
+                 "niwa-control-fs-read-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch" "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((niwa-session-control-fs--test-pause-file %S)) (niwa-session-control-fs-read-file %S 'no-conversion)))"
+                  (expand-file-name "niwa-session-control-fs.el"
+                                    niwa-test--worktree-root)
+                  pause path)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (delete-file path)
+          (make-symbolic-link outside path)
+          (with-temp-file (file-name-concat root (concat pause ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should-not (zerop (process-exit-status worker))))
+      (when (process-live-p worker)
+        (delete-process worker))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (when (file-exists-p outside)
+        (delete-file outside)))))
+
+(niwa-deftest niwa-session-control-fs--take-diagnostic ()
+  ,test
+  (test)
+  :doc "carries target diagnostics without a local stderr file"
+  ;; Pointing `process-file' at a local stderr file makes TRAMP create a
+  ;; remote temporary and copy it back on every program.  The script ships
+  ;; diagnostics in a record instead, and no local temp may be created for it.
+  (let* ((root (make-temp-file "niwa-control-fs-diagnostic-" t))
+         (missing (file-name-concat root "absent" "leaf"))
+         (before (directory-files temporary-file-directory nil
+                                  "\\`\\.niwa-control-fs-stderr-"))
+         results)
+    (unwind-protect
+        (progn
+          (setq results
+                (niwa-session-control-fs-run-program
+                 (list (list :op 'write :path missing :content "x"))))
+          (should-not (eq 'ok (plist-get (nth 0 results) :status)))
+          ;; The enclosing diagnostic pipe survives the program's early stop.
+          (should (stringp (plist-get (nth 0 results) :diagnostic)))
+          (should (equal before
+                         (directory-files temporary-file-directory nil
+                                          "\\`\\.niwa-control-fs-stderr-"))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "keeps a stderr-shaped payload out of the operation records"
+  ;; The separation the framing exists for: a tool writing something that
+  ;; looks like a result must not become one.
+  (let* ((root (make-temp-file "niwa-control-fs-forge-" t))
+         (forged "1 0\0Zm9yZ2Vk\0")
+         (records (split-string
+                   (concat (base64-encode-string "real" t) "\0" "1 0\0"
+                           "diagnostic 0\0"
+                           (base64-encode-string forged t) "\0")
+                   "\0"))
+         (split (niwa-session-control-fs--take-diagnostic records)))
+    (unwind-protect
+        (progn
+          ;; The forged text arrives as diagnostic text, never as a record.
+          (should (equal forged (car split)))
+          (should (equal (list (base64-encode-string "real" t) "1 0" "")
+                         (cdr split))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "transports binary target errors without executing a skipped write"
+  (let* ((root (make-temp-file "niwa-control-fs-stderr-" t))
+         (process-environment (copy-sequence process-environment))
+         (command (file-name-concat root "mv"))
+         (path (file-name-concat root "record"))
+         (later (file-name-concat root "later"))
+         (forged "1 0\0Zm9yZ2Vk\0"))
+    (unwind-protect
+        (progn
+          ;; A failing target utility can emit arbitrary bytes on stderr.
+          ;; Exercise the real transport, including its encoding and pipe.
+          (write-region "#!/bin/sh\nprintf '1 0\\000Zm9yZ2Vk\\000\\n' >&2\nexit 1\n"
+                        nil command nil 'silent)
+          (set-file-modes command #o700)
+          (setenv "PATH" (concat root ":" (getenv "PATH")))
+          (write-region "original" nil path nil 'silent)
+          (let ((results
+                 (niwa-session-control-fs-run-program
+                  (list (list :op 'write :path path :content "replacement")
+                        (list :op 'create :path later :content "unreachable")))))
+            (should (eq 'failed (plist-get (car results) :status)))
+            (should (equal forged (plist-get (car results) :diagnostic)))
+            (should (eq 'skipped (plist-get (cadr results) :status)))
+            (should-not (file-exists-p later))
+            (should (equal "original" (niwa-session-control-fs-read-file path))))
+          (should (equal '("mv" "record")
+                         (directory-files root nil directory-files-no-dot-files-regexp))))
+      (delete-directory root t)))
+
+  :doc "reports no diagnostic when the target sent no record"
+  (let ((split (niwa-session-control-fs--take-diagnostic
+                (list "" "1 0" ""))))
+    (should (equal "" (car split)))
+    (should (equal (list "" "1 0" "") (cdr split)))))
+
+(niwa-deftest niwa-session-control-fs-parent-swap
+  (:doc "keeps a write in the opened directory when its pathname is swapped")
+  (let* ((root (make-temp-file "niwa-control-fs-root-" t))
+         (outside (make-temp-file "niwa-control-fs-outside-" t))
+         (moved (concat root ".moved"))
+         (path (file-name-concat root "lease"))
+         (pause ".niwa-test-pause")
+         (worker-buffer (generate-new-buffer " *niwa-control-fs-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (setq worker
+                (start-process
+                 "niwa-control-fs-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch"
+                 "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((niwa-session-control-fs--test-pause-file %S)) (niwa-session-control-fs-write-file %S \"pinned\")))"
+                  (expand-file-name "niwa-session-control-fs.el"
+                                    niwa-test--worktree-root)
+                  pause path)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (rename-file root moved)
+          (make-symbolic-link outside root)
+          (with-temp-file
+              (file-name-concat moved
+                                (concat (file-name-nondirectory pause)
+                                        ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should (zerop (process-exit-status worker)))
+          (should (equal "pinned"
+                         (with-temp-buffer
+                           (insert-file-contents
+                            (file-name-concat moved "lease"))
+                           (buffer-string))))
+          (should-not (file-exists-p (file-name-concat outside "lease"))))
+      (when (file-symlink-p root)
+        (delete-file root))
+      (when (file-directory-p moved)
+        (delete-directory moved t))
+      (when (file-directory-p outside)
+        (delete-directory outside t))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer)))))
+
+(niwa-deftest niwa-session-control-fs-create-or-verify
+  (:doc "creates once, accepts an identical record, and rejects a different one")
+  (let* ((root (make-temp-file "niwa-control-fs-verify-" t))
+         (path (file-name-concat root "marker")))
+    (unwind-protect
+        (progn
+          (should (niwa-session-control-fs-create-or-verify path "ä/界"))
+          (should (niwa-session-control-fs-create-or-verify path "ä/界"))
+          (should-not (niwa-session-control-fs-create-or-verify path "ä/界 changed"))
+          (should-not (niwa-session-control-fs-create-or-verify path "ä"))
+          (should (equal "ä/界" (niwa-session-control-fs-read-file path))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-file-hash ()
+  ,test
+  (test)
+  :doc "hash proof prevents deletion of different arbitrary bytes through pinned parents"
+  (let* ((root (file-name-as-directory (make-temp-file "niwa-control-hash-" t)))
+         (source (file-name-concat root "notes" "image.bin"))
+         (bytes (apply #'unibyte-string (number-sequence 0 255)))
+         (hash (secure-hash 'sha256 bytes)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory source))
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent))
+          (set-file-modes source #o640)
+          (should (equal (list :size 256 :sha256 hash)
+                         (niwa-session-control-fs-file-hash source)))
+          (should-error (niwa-session-control-fs-file-hash (file-name-concat root "missing"))
+                        :type 'niwa-session-control-fs-absent)
+          (should (equal '(ok mismatch skipped)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'verify-hash :path source :content hash)
+                                        (list :op 'verify-hash :path source :content (make-string 64 ?0))
+                                        (list :op 'delete-file :path source))))))
+          (should (file-exists-p source))
+          ;; Linked leaves are not hashed.
+          (make-symbolic-link source (file-name-concat root "linked"))
+          (should-error (niwa-session-control-fs-file-hash (file-name-concat root "linked"))
+                        :type 'file-error)
+          (should (equal '(ok ok)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (niwa-session-control-fs-run-program
+                                  (list (list :op 'verify-hash :path source :content hash)
+                                        (list :op 'delete-file :path source))))))
+          (should-not (file-exists-p source)))
+      (delete-directory root t)))
+
+  :doc "captures bounded binary conflict evidence in the hash guard, not after unlocking"
+  (let* ((root (make-temp-file "niwa-hash-snapshot-" t))
+         (source (file-name-concat root "image.bin"))
+         (missing (file-name-concat root "missing"))
+         (bytes (apply #'unibyte-string (number-sequence 0 255)))
+         (hash (secure-hash 'sha256 bytes)))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil source nil 'silent))
+          (dolist (limit '(0 255 256 257))
+            (dolist (expected (list nil (make-string 64 ?0)))
+              (let* ((results (niwa-session-control-fs-run-program
+                               (list (list :op 'verify-hash :path source :content expected
+                                           :snapshot-bytes limit)
+                                     (list :op 'delete-file :path source))
+                               root))
+                     (observed (plist-get (car results) :observed)))
+                (should (equal '(mismatch skipped)
+                               (mapcar (lambda (result) (plist-get result :status)) results)))
+                (should-not (plist-get (car results) :value))
+                (should (equal hash (plist-get observed :hash)))
+                (should (= 256 (plist-get observed :bytes)))
+                (if (> limit 256)
+                    (should (equal bytes (plist-get observed :content)))
+                  (should-not (plist-member observed :content))))))
+          (should (file-exists-p source))
+          (dolist (case (list (list source hash 'ok) (list missing nil 'ok)
+                             (list missing hash 'absent)))
+            (let ((result (car (niwa-session-control-fs-run-program
+                                (list (list :op 'verify-hash :path (car case)
+                                            :content (cadr case) :snapshot-bytes 257)) root))))
+              (should (eq (caddr case) (plist-get result :status)))
+              (should-not (plist-get result :observed))))
+          ;; Empty content is included, not confused with an absent file.
+          (write-region "" nil source nil 'silent)
+          (let ((observed (plist-get
+                           (car (niwa-session-control-fs-run-program
+                                 (list (list :op 'verify-hash :path source
+                                             :content hash :snapshot-bytes 1)) root))
+                           :observed)))
+            (should (equal (list :hash (secure-hash 'sha256 "") :bytes 0 :content "")
+                           observed)))
+          (make-symbolic-link source (file-name-concat root "linked"))
+          (should (eq 'failed
+                      (plist-get (car (niwa-session-control-fs-run-program
+                                       (list (list :op 'verify-hash
+                                                   :path (file-name-concat root "linked")
+                                                   :snapshot-bytes 257)) root))
+                                 :status))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-observation-time ()
+  ,test
+  (test)
+  :doc "the native observation clock works in read-only directories without creating files or changing age"
+  (let* ((root (make-temp-file "niwa-observation-clock-" t))
+         (path (file-name-concat root "read-only"))
+         (link (file-name-concat root "linked")))
+    (unwind-protect
+        (progn
+          (make-directory path)
+          (set-file-times path (seconds-to-time 100))
+          (set-file-modes path #o555)
+          (let* ((modified (file-attribute-modification-time (file-attributes path)))
+                 (before (float-time))
+                 (observed (niwa-session-control-fs-observation-time path)))
+            (should (floatp observed))
+            (should (<= before observed))
+            (should (<= observed (ceiling (float-time))))
+            (should (equal modified (file-attribute-modification-time (file-attributes path))))
+            (should (= #o555 (file-modes path)))
+            (should-not (directory-files path nil directory-files-no-dot-files-regexp)))
+          (make-symbolic-link path link)
+          (should-error (niwa-session-control-fs-observation-time link))
+          (should-error (niwa-session-control-fs-observation-time (file-name-concat root "missing")))
+          (dolist (payload '("" "not-a-clock" "-1" "1; true"))
+            (should-error (niwa-session-control-fs--program-value
+                           (list :op 'observation-time :path path) payload) :type 'file-error))
+          (should (= 1234.5 (niwa-session-control-fs--program-value
+                            (list :op 'observation-time :path path) "1234.500000"))))
+      (when (file-directory-p path) (set-file-modes path #o755))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-control-fs-observation-time-locale ()
+  ,test
+  (test)
+  :doc "the native observation clock reports a decimal point under a comma-decimal locale"
+  (skip-unless (member "de_DE.utf8" (process-lines "locale" "-a")))
+  (let ((root (make-temp-file "niwa-observation-locale-" t))
+        (process-environment (append '("LC_ALL=de_DE.UTF-8" "LANG=de_DE.UTF-8")
+                                     process-environment)))
+    (unwind-protect
+        (let ((before (float-time))
+              (observed (niwa-session-control-fs-observation-time root)))
+          (should (floatp observed))
+          (should (<= before observed (ceiling (float-time)))))
+      (delete-directory root t))))
+
+(provide 'test-niwa-session-control-fs)
+;;; test-niwa-session-control-fs.el ends here

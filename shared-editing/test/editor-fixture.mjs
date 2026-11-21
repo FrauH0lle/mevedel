@@ -6,7 +6,7 @@ import {handle} from '../host.mjs';
 import {contentHash} from '../view.mjs';
 
 // Packaged iframe and its real host API, connected over the native item port.
-/* An in-memory stand-in for mevedel-shared-library: the personal, installed
+/* An in-memory stand-in for niwa-shared-library: the personal, installed
    and built-in libraries. CATALOG lists public libraries; SOURCES maps a
    public library's source to its file text. */
 export function libraryHost(catalog = [], sources = {}) {
@@ -61,7 +61,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
       );
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const engine = process.env.MEVEDEL_BROWSER === 'firefox' ? firefox : chromium;
+  const engine = process.env.NIWA_BROWSER === 'firefox' ? firefox : chromium;
   const browser = await engine.launch({ headless: true });
   /* SCENE, .excalidraw text, opens a whiteboard with its image files. */
   async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, docked = false, actor = 'Guest: Alice', clock = false, hasTouch = false} = {}) {
@@ -102,7 +102,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
       asked.push({ discussionId, questionId, version, ...fields, expected, prompt: read.prompt });
       return { ...read, discussionId, questionId, queued: true };
     };
-    /* A stand-in for mevedel-collaboration-discussions-perform on this item. */
+    /* A stand-in for niwa-collaboration-discussions-perform on this item. */
     const discuss = async (args) => {
       if (args.op === 'post') {
         const whole = args.target?.kind === 'whole', id = whole ? 'general' : args.discussionId;
@@ -127,7 +127,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
       throw new Error('Unknown discussion action');
     };
     await page.exposeFunction('apply', async (args) => {
-      // Emacs owns the element library; this stands in for mevedel-shared-library.
+      // Emacs owns the element library; this stands in for niwa-shared-library.
       if (args.action.startsWith('library')) return library(args);
       if (args.action === 'discussion') return discuss(args);
       return run({ ...args, sync: args.action === 'read' });
@@ -159,7 +159,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
         document
           .querySelector('iframe')
           .contentWindow.postMessage(
-            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly, docked, name: 'Alice', appearance },
+            { type: 'niwa-editor', item, draft:{assistant:assistantDraft}, readOnly, docked, name: 'Alice', appearance },
             '*',
             [channel.port2],
           );

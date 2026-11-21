@@ -20,8 +20,8 @@ its script and result files. Bash pipeline framing remains Bash-specific.
 
 The [execution manual](../tools/execution.md) owns tool arguments and result
 handling; [managed Bash](../tools.md#managed-bash-execution) describes scheduling,
-progress, settlement, and recovery. The `mevedel-execution.el` facade exposes
-operations and immutable facts while `mevedel-execution-process.el` owns child
+progress, settlement, and recovery. The `niwa-execution.el` facade exposes
+operations and immutable facts while `niwa-execution-process.el` owns child
 processes and spools. Callers do not inspect process records or timers.
 
 The initiating execution row owns output and execution status. Successful empty-input
@@ -62,7 +62,7 @@ Its identity is scoped to session, owner, and execution, not
 command text. Execution IDs carry a fresh per-state prefix so resumed sessions
 cannot reuse the earlier state's counter in durable records or output paths.
 Foreground completion never produces a breadcrumb. Execution
-presentation records in `mevedel-execution-transcript.el` keep these facts
+presentation records in `niwa-execution-transcript.el` keep these facts
 reconstructable across redraw, reload, and compaction; they do not create a
 second process registry or alter delivery to the model or agent.
 
@@ -137,7 +137,7 @@ consumption also supports TRAMP takeover. Save As retains the compressed
 representation, Fork still excludes execution history, and transfer does not
 copy or rewrite it. Historical sessions are not proactively transformed.
 
-`mevedel-execution-spool.el` owns physical selection and asynchronous,
+`niwa-execution-spool.el` owns physical selection and asynchronous,
 operation-lifetime logical views behind stable artifact addresses. Read,
 Grep, Glob and Full output share that seam rather than individual gzip
 fallbacks. Views use logical names, bounded inflation, raw preference during
@@ -158,7 +158,7 @@ agent-originated MAIL and ordinary RESULT delivery to `/root`, under
 [ADR 0035](0035-separate-agent-messages-from-follow-up-work.md); a child's
 forwarded EXECUTION record does not itself gain wake eligibility. User controls
 can inspect all session owners, while model controls remain owner-scoped. Deterministic
-UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
+UTF-8, terminal, color, pager, and `NIWA_EXECUTION=1` defaults make child output
 consistent without changing user-authorized command semantics.
 
 Keeping output on the original row, and marking accepted input or observation

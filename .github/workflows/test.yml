@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         test-lane: [partitioned, fresh-files]
-        # mevedel is Linux-only: portable session storage needs procfs, GNU
+        # niwa is Linux-only: portable session storage needs procfs, GNU
         # stat, and bash, and refuses every other host outright. A macOS or
         # Windows job measures nothing the product claims to support.
         os: [ubuntu-latest]

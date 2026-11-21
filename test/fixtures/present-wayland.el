@@ -1,17 +1,17 @@
 ;;; present-wayland.el --- PGTK presentation scenario on a real compositor -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Loaded by a pgtk daemon that `test-mevedel-present-wayland.el' starts
+;; Loaded by a pgtk daemon that `test-niwa-present-wayland.el' starts
 ;; against a headless compositor.  It enables cheaper presentation, then
 ;; marks phases in the daemon's WAYLAND_DEBUG trace on stderr: a one-character
 ;; insertion, redisplays that change nothing, the visible bell, and painting
 ;; while a Lisp thread waits.  Observations go to
-;; the file named by MEVEDEL_NATIVE_RESULT.
+;; the file named by NIWA_NATIVE_RESULT.
 
 ;;; Code:
 
 (require 'cl-lib)
-(require 'mevedel-present)
+(require 'niwa-present)
 
 (defvar present-wayland--results nil
   "Plist of observations.")
@@ -29,7 +29,7 @@
 
 (defun present-wayland--mark (phase)
   "Mark the start of PHASE in the Wayland trace."
-  (princ (format "MEVEDEL-PHASE %s\n" phase) #'external-debugging-output))
+  (princ (format "NIWA-PHASE %s\n" phase) #'external-debugging-output))
 
 (defun present-wayland--idle-window (seconds)
   "Redisplay unchanged content for at least SECONDS, even when input is pending."
@@ -52,7 +52,7 @@
 (defun present-wayland--scenario (display)
   "Exercise cheaper presentation on DISPLAY."
   (blink-cursor-mode -1)
-  (module-load (getenv "MEVEDEL_NATIVE_SYNC_MODULE"))
+  (module-load (getenv "NIWA_NATIVE_SYNC_MODULE"))
   (let ((frame (make-frame-on-display
                 display '((width . 80) (height . 20) (menu-bar-lines . 0)
                           (tool-bar-lines . 0) (vertical-scroll-bars . nil)))))
@@ -64,8 +64,8 @@
     (dotimes (i 15) (insert (format "line %d\n" i)))
     (redisplay t)
     (present-wayland--wait 0.3)
-    (present-wayland--note :enabled (mevedel-present-ensure frame))
-    (present-wayland--note :state mevedel-present--state)
+    (present-wayland--note :enabled (niwa-present-ensure frame))
+    (present-wayland--note :state niwa-present--state)
     (present-wayland--note :size (list (frame-pixel-width frame) (frame-pixel-height frame)
                                        (frame-scale-factor frame)))
     ;; The next draw registers the frame and switches its window to GL.
@@ -93,20 +93,20 @@
       (present-wayland--mark "wrong-target")
       (present-wayland--note
        :wrong-target-rejected
-       (not (mevedel-test-wayland-sync frame-id
-                                       "mevedel-intentionally-wrong-target")))
+       (not (niwa-test-wayland-sync frame-id
+                                       "niwa-intentionally-wrong-target")))
       (present-wayland--mark "queue-configure")
-      (unless (mevedel-test-wayland-queue-configure frame-id display)
+      (unless (niwa-test-wayland-queue-configure frame-id display)
         (error "Could not queue configure on the fixture frame"))
       (present-wayland--mark "sync")
-      (let ((sync-result (mevedel-test-wayland-sync frame-id display)))
+      (let ((sync-result (niwa-test-wayland-sync frame-id display)))
         (unless (eq sync-result t)
           (error "Fixture frame display is not the expected Wayland display: %S"
                  sync-result))))
     (present-wayland--note :sync-completed t)
     (present-wayland--mark "idle")
     (let ((unread-command-events
-           (if (getenv "MEVEDEL_NATIVE_PENDING_INPUT")
+           (if (getenv "NIWA_NATIVE_PENDING_INPUT")
                (cons ?a unread-command-events)
              unread-command-events)))
       (present-wayland--note :idle-pending-input (input-pending-p))
@@ -134,7 +134,7 @@
       (thread-join thread))
     (present-wayland--mark "end")
     (present-wayland--note :survived t)
-    (present-wayland--note :stats (mevedel-present--stats))
+    (present-wayland--note :stats (niwa-present--stats))
     frame))
 
 (defun present-wayland--run ()
@@ -143,10 +143,10 @@ The display is not closed: a pgtk daemon aborts when the terminal of a
 displayed frame is deleted."
   (let ((status 0))
     (condition-case err
-        (present-wayland--scenario (getenv "MEVEDEL_NATIVE_DISPLAY"))
+        (present-wayland--scenario (getenv "NIWA_NATIVE_DISPLAY"))
       (error (setq status 1)
              (present-wayland--note :error (error-message-string err))))
-    (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT")
+    (with-temp-file (getenv "NIWA_NATIVE_RESULT")
       (let ((print-length nil) (print-level nil))
         (prin1 present-wayland--results (current-buffer))))
     (kill-emacs status)))

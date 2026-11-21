@@ -45,5 +45,5 @@
 
     return Object.freeze({show, renderChip});
   }
-  window.mevedelGoalView = Object.freeze({create});
+  window.niwaGoalView = Object.freeze({create});
 })();

@@ -1,0 +1,1811 @@
+;;; niwa-skills-core.el --- Skill model, discovery, and reload -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Owns the canonical skill model, frontmatter validation, discovery and source
+;; precedence, persisted enablement, session installation, lazy body loading,
+;; path-scoped activation state, and modification detection.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'niwa-skills-syntax)
+(require 'niwa-structs)
+(require 'niwa-tool-registry)
+(require 'niwa-utilities)
+
+(defvar niwa-skills--dirty-buffers)
+(defvar niwa-skills--watch-roots)
+
+;; `filenotify'
+(declare-function file-notify-add-watch "filenotify"
+                  (file flags callback))
+(declare-function file-notify-rm-watch "filenotify" (descriptor))
+(declare-function file-notify-valid-p "filenotify" (descriptor))
+
+;; `niwa-execution-target'
+(declare-function niwa-execution-target-capability
+                  "niwa-execution-target" (target name))
+(declare-function niwa-execution-target-identity
+                  "niwa-execution-target" (cl-x) t)
+(declare-function niwa-execution-target-label
+                  "niwa-execution-target" (target &optional directory))
+(declare-function niwa-execution-target-prefix
+                  "niwa-execution-target" (cl-x) t)
+(declare-function niwa-execution-target-same-path-domain-p
+                  "niwa-execution-target" (left right))
+(autoload 'niwa-execution-target-capability "niwa-execution-target")
+(autoload 'niwa-execution-target-identity "niwa-execution-target")
+(autoload 'niwa-execution-target-label "niwa-execution-target")
+(autoload 'niwa-execution-target-prefix "niwa-execution-target")
+(autoload 'niwa-execution-target-same-path-domain-p
+  "niwa-execution-target")
+
+;; `niwa-hooks'
+(declare-function niwa-hooks-annotate-rules-source
+                  "niwa-hooks"
+                  (rules source &optional source-file source-root))
+(declare-function niwa-hooks-normalize-rules
+                  "niwa-hooks" (rules &optional scope))
+(declare-function niwa-hooks-project-file-snapshot
+                  "niwa-hooks" (workspace file))
+(autoload 'niwa-hooks-annotate-rules-source "niwa-hooks")
+(autoload 'niwa-hooks-normalize-rules "niwa-hooks")
+(autoload 'niwa-hooks-project-file-snapshot "niwa-hooks")
+
+;; `niwa-permission-rules'
+(declare-function niwa-permission-rules-parse
+                  "niwa-permission-rules" (entry))
+(autoload 'niwa-permission-rules-parse "niwa-permission-rules")
+
+;; `niwa-plugins'
+(declare-function niwa-plugins-skill-dirs "niwa-plugins"
+                  (&optional workspace))
+(autoload 'niwa-plugins-skill-dirs "niwa-plugins")
+
+;; `niwa-session-artifacts'
+(declare-function niwa-session-artifacts-publish-text
+                  "niwa-session-artifacts"
+                  (session path content &optional coding))
+(autoload 'niwa-session-artifacts-publish-text
+  "niwa-session-artifacts")
+
+;; `niwa-structs'
+(defvar niwa--session)
+
+;; `niwa-utilities'
+(declare-function niwa--write-file-atomically
+                  "niwa-utilities" (path content &optional coding mode))
+
+;; `niwa-workspace'
+(declare-function niwa-workspace-state-dir
+                  "niwa-workspace" (workspace))
+(autoload 'niwa-workspace-state-dir "niwa-workspace")
+
+;; `subr'
+(defvar read-eval)
+
+;; `yaml'
+(declare-function yaml-parse-string "yaml" (string &rest args))
+(autoload 'yaml-parse-string "yaml")
+
+
+;;
+;;; Customization
+
+(defcustom niwa-skill-dirs
+  `(".niwa/skills/"
+    ".agents/skills/"
+    ,(file-name-concat niwa-user-dir "skills/")
+    "~/.agents/skills/")
+  "Directories scanned for SKILL.md files.
+
+Absolute paths and `~'-prefixed paths are scanned as-is and classified
+as `user' skills.  Relative paths are resolved against the current
+workspace root and classified as `project' skills.  Default directories
+scan local niwa resources, local shared agent resources, global
+niwa resources, then global shared agent resources."
+  :type '(repeat directory)
+  :group 'niwa)
+
+(defcustom niwa-skills-include-bundled t
+  "When non-nil, `niwa-skills-scan' also scans the bundled directory.
+Bundled skills ship with niwa and are
+discovered alongside user skills by default.  Set to nil to exclude
+them from skill enumeration; tests also let-bind this to nil to assert
+on exact user-skill contents without bundled skills leaking in."
+  :type 'boolean
+  :group 'niwa)
+
+(defconst niwa-skills--bundled-dir
+  (expand-file-name "skills/" niwa-tool-registry--source-dir)
+  "Absolute path to niwa's bundled skills directory.
+Scanned last by `niwa-skills-scan' so user-provided skills with
+the same name take precedence.")
+
+
+;;
+;;; Skill struct
+
+(cl-defstruct
+    (niwa-skill-dependency
+     (:constructor niwa-skill-dependency--create))
+  "One authored required-skill declaration.
+
+NAME is the name written after `!$'.  ARGUMENT-TEMPLATE is the optional
+raw full-line suffix.  SOURCE-KEY is the resolved child's canonical source
+identity, or nil when resolution failed."
+  (name nil :read-only t)
+  (argument-template nil :read-only t)
+  source-key)
+
+(cl-defstruct (niwa-skill (:constructor niwa-skill--create))
+  "A single skill loaded from a SKILL.md file.
+
+NAME is the invocation identifier (the string typed after `/' and
+matched by `Skill(name=...)').  Resolution: frontmatter `name' if
+present and valid, otherwise the skill directory name.  RAW-NAME
+immutably records that validated identifier before discovery qualifies
+NAME.  Raw skill names must match `[a-z0-9-]+' and be 1-64 chars.
+PLUGIN-NAME immutably records the owning plugin name for plugin skills
+and is nil otherwise.  Discovery may later prefix
+conflicting local names with `source:name'.  Plugin skills are
+namespaced after loading as `plugin-name:skill-name'.  Invalid skills
+are skipped at scan time with a warning.  DISPLAY-NAME is the
+human-friendly label used in completion annotations and listing output;
+defaults to NAME when the frontmatter omits `display-name'.  DESCRIPTION
+is the listing line shown to the model; falls back to the first non-empty
+paragraph/header of the body when frontmatter omits `description'.  BODY
+is the skill prompt text; populated lazily on first
+invocation.  SOURCE-FILE and SOURCE-DIR point at the SKILL.md and
+its containing directory.  DISCOVERY-ROOT is the configured root under
+which the skill was found.  SOURCE is a symbol tagging the origin
+scope/type \\=(`user', `project', `managed', `plugin', `bundled').
+SOURCE-FAMILY is `niwa', `agents', or nil and distinguishes ordinary
+resource roots without changing SOURCE's existing scope meaning.
+USER-INVOCABLE-P and MODEL-INVOCABLE-P gate `$name' dispatch and
+the model-facing skills roster respectively.  CONTEXT is `inline'
+\\=(default) or `fork'.  AGENT names the agent type for fork
+execution; if omitted, the fork inherits from the immediate parent
+invocation.  ALLOWED-TOOLS holds the raw
+  frontmatter strings; ALLOWED-TOOL-RULES holds the parsed niwa
+  permission rules.  PTC-PRIMITIVES narrows the nested tools available to a
+  request-owning command; `:unrestricted' means the field was omitted.  MODEL
+  names a tier or BACKEND:MODEL provider for
+  a request-owning invocation.  EFFORT selects its reasoning effort.
+ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
+parsed `arguments' frontmatter as a list of names with numeric-only
+entries filtered out.  PATH-PATTERNS contains globs that trigger
+conditional activation.  HOOKS is the normalized frontmatter `hooks'
+value.
+DEPENDENCIES holds authored required-skill descriptors with refresh-time
+source bindings.  DEPENDENCY-DIAGNOSTICS holds missing, ambiguous, or cyclic
+graph errors.  EFFECTIVE-MODEL-INVOCABLE-P incorporates the direct model gate
+and every enabled required descendant's effective gate.
+WARNINGS holds configuration diagnostics exposed by skill inspection.
+WORKSPACE owns persisted enablement for this session-scoped skill.
+ENABLED-P caches that workspace policy from the latest scan or mutation.
+ACTIVE-P records the current activation state for path-scoped
+skills."
+  name
+  (raw-name nil :read-only t)
+  (plugin-name nil :read-only t)
+  display-name
+  description
+  body
+  source-file
+  source-dir
+  (discovery-root nil :read-only t)
+  source
+  source-family
+  (user-invocable-p t)
+  (model-invocable-p t)
+  (context 'inline)
+  agent
+  allowed-tools
+  allowed-tool-rules
+  (ptc-primitives :unrestricted)
+  model
+  effort
+  argument-hint
+  argument-names
+  path-patterns
+  hooks
+  dependencies
+  dependency-diagnostics
+  (effective-model-invocable-p t)
+  warnings
+  (workspace nil :read-only t)
+  (enabled-p t)
+  active-p)
+
+
+;;
+;;; Skill state
+
+(defconst niwa-skills--state-file-name "skills-state.el"
+  "Workspace skill state file under `.niwa'.")
+
+(defun niwa-skills--state-file (workspace)
+  "Return WORKSPACE's persistent skill state file path."
+  (when workspace
+    (file-name-concat
+     (niwa-workspace-state-dir workspace)
+     niwa-skills--state-file-name)))
+
+(defun niwa-skills--read-state (workspace)
+  "Read persistent skill state for WORKSPACE, returning a plist."
+  (let ((file (niwa-skills--state-file workspace)))
+    (if (not (and file (file-readable-p file)))
+        nil
+      (condition-case err
+          (with-temp-buffer
+            (let ((read-eval nil))
+              (insert-file-contents file)
+              (let ((state (read (current-buffer))))
+                (unless (and (proper-list-p state)
+                             (= (length state) 2)
+                             (eq (car state) :disabled-keys)
+                             (listp (cadr state))
+                             (cl-every #'stringp (cadr state)))
+                  (error "Unsupported skill state format"))
+                (skip-chars-forward " \t\r\n")
+                (while (eq (char-after) ?\;)
+                  (forward-line 1)
+                  (skip-chars-forward " \t\r\n"))
+                (unless (eobp)
+                  (error "Unsupported skill state format"))
+                state)))
+        (error
+         (error "Could not read skill state %s: %s"
+                file (error-message-string err)))))))
+
+(defun niwa-skills--state-text (state)
+  "Return the durable skill STATE file contents."
+  (with-temp-buffer
+    (insert ";; Niwa skill state\n")
+    (insert ";; Auto-generated, safe to edit\n\n")
+    (pp state (current-buffer))
+    (buffer-string)))
+
+(defun niwa-skills--write-state (state workspace &optional session)
+  "Persist skill STATE for WORKSPACE through its optional live SESSION."
+  (let* ((file (or (niwa-skills--state-file workspace)
+                   (error "No workspace for skill state")))
+         (content (niwa-skills--state-text state)))
+    (if (file-remote-p file)
+        (progn
+          (unless (and session
+                       (eq workspace (niwa-session-workspace session)))
+            (user-error "Remote skill state requires its live session"))
+          (niwa-session-artifacts-publish-text
+           session file content 'utf-8-unix))
+      ;; The reader signals on malformed content, so a write that died in
+      ;; place would break every enablement check after the next rescan.
+      (niwa--write-file-atomically file content))))
+
+(defun niwa-skills--disabled-keys (workspace)
+  "Return persisted disabled skill keys for WORKSPACE."
+  (plist-get (niwa-skills--read-state workspace) :disabled-keys))
+
+(defun niwa-skills-source-key (source-file)
+  "Return the stable identity key for SOURCE-FILE."
+  (when source-file
+    (concat "file:" (or (ignore-errors (file-truename source-file))
+                        (expand-file-name source-file)))))
+
+(defun niwa-skills--workspace-source-key (source-file workspace)
+  "Return portable persisted identity for SOURCE-FILE in WORKSPACE."
+  (when source-file
+    (let* ((source (expand-file-name source-file))
+           (root (and workspace
+                      (file-name-as-directory
+                       (expand-file-name (niwa-workspace-root workspace)))))
+           (relative
+            (and root
+                 (niwa-execution-target-same-path-domain-p source root)
+                 (file-relative-name
+                  (or (file-remote-p source 'localname 'never) source)
+                  (or (file-remote-p root 'localname 'never) root)))))
+      (if (and relative
+               (not (file-name-absolute-p relative))
+               (not (equal relative ".."))
+               (not (string-prefix-p "../" relative)))
+          (concat "workspace:" relative)
+        (niwa-skills-source-key source)))))
+
+(defun niwa-skills--state-key (skill)
+  "Return stable workspace-persisted state key for SKILL."
+  (and (niwa-skill-p skill)
+       (niwa-skills--workspace-source-key
+        (niwa-skill-source-file skill)
+        (niwa-skill-workspace skill))))
+
+(defun niwa-skills--resolve-dependencies (skills)
+  "Resolve and validate required-skill metadata across SKILLS.
+Mutate current structs with canonical source bindings, deterministic
+diagnostics, and transitive model eligibility, then return SKILLS."
+  (let ((by-source (make-hash-table :test #'equal)))
+    (dolist (skill skills)
+      (when-let* ((source-key
+                   (niwa-skills-source-key
+                    (niwa-skill-source-file skill))))
+        (puthash source-key skill by-source))
+      (setf (niwa-skill-dependency-diagnostics skill) nil)
+      (dolist (dependency (niwa-skill-dependencies skill))
+        (setf (niwa-skill-dependency-source-key dependency) nil)))
+    (cl-labels
+        ((add-diagnostic
+          (skill message)
+          (unless (member message (niwa-skill-dependency-diagnostics skill))
+            (setf (niwa-skill-dependency-diagnostics skill)
+                  (append (niwa-skill-dependency-diagnostics skill)
+                          (list message)))))
+         (matching
+          (predicate)
+          (cl-remove-if-not predicate skills))
+         (target
+          (dependency)
+          (when-let* ((source-key
+                       (niwa-skill-dependency-source-key dependency)))
+            (gethash source-key by-source)))
+         (bind
+          (skill dependency)
+          (let* ((name (niwa-skill-dependency-name dependency))
+                 (qualified-p (string-search ":" name))
+                 (candidates
+                  (if qualified-p
+                      (matching (lambda (candidate)
+                                  (equal name (niwa-skill-name candidate))))
+                    (or
+                     (matching
+                      (if-let* ((plugin (niwa-skill-plugin-name skill)))
+                          (lambda (candidate)
+                            (and (equal plugin
+                                        (niwa-skill-plugin-name candidate))
+                                 (equal name
+                                        (niwa-skill-raw-name candidate))))
+                        (lambda (candidate)
+                          (and (equal (niwa-skill-discovery-root skill)
+                                      (niwa-skill-discovery-root candidate))
+                               (equal name
+                                      (niwa-skill-raw-name candidate))))))
+                     (matching
+                      (lambda (candidate)
+                        (equal name
+                               (niwa-skill-raw-name candidate))))))))
+            (cond
+             ((= 1 (length candidates))
+              (setf (niwa-skill-dependency-source-key dependency)
+                    (niwa-skills-source-key
+                     (niwa-skill-source-file (car candidates)))))
+             ((null candidates)
+              (add-diagnostic
+               skill (format "Required skill '%s' was not found" name)))
+             (t
+              (add-diagnostic
+               skill
+               (format "Required skill '%s' is ambiguous: %s"
+                       name
+                       (mapconcat #'identity
+                                  (sort (mapcar #'niwa-skill-name candidates)
+                                        #'string<)
+                                  ", "))))))))
+      (dolist (skill skills)
+        (dolist (dependency (niwa-skill-dependencies skill))
+          (bind skill dependency)))
+      (let ((states (make-hash-table :test #'eq)))
+        (cl-labels
+            ((visit
+              (skill path)
+              (puthash skill 'visiting states)
+              (dolist (dependency (niwa-skill-dependencies skill))
+                (when-let* ((child (target dependency)))
+                  (pcase (gethash child states)
+                    ('visiting
+                     (let* ((members (memq child path))
+                            (cycle (append members (list child)))
+                            (message
+                             (format
+                              "Required skill dependency cycle: %s"
+                              (mapconcat #'niwa-skill-name cycle " -> "))))
+                       (dolist (member members)
+                         (add-diagnostic member message))))
+                    ('done nil)
+                    (_ (visit child (append path (list child)))))))
+              (puthash skill 'done states)))
+          (dolist (skill skills)
+            (unless (gethash skill states)
+              (visit skill (list skill))))))
+      (let ((changed t))
+        (while changed
+          (setq changed nil)
+          (dolist (skill skills)
+            (dolist (dependency (niwa-skill-dependencies skill))
+              (when-let* ((child (target dependency)))
+                (dolist (message
+                         (niwa-skill-dependency-diagnostics child))
+                  (unless (member message
+                                  (niwa-skill-dependency-diagnostics skill))
+                    (add-diagnostic skill message)
+                    (setq changed t))))))))
+      (let ((effective (make-hash-table :test #'eq)))
+        (cl-labels
+            ((eligible-p
+              (skill)
+              (let ((cached (gethash skill effective 'missing)))
+                (if (not (eq cached 'missing)) cached
+                  (let ((value
+                         (and
+                          (niwa-skill-model-invocable-p skill)
+                          (null (niwa-skill-dependency-diagnostics skill))
+                          (cl-every
+                           (lambda (dependency)
+                             (when-let* ((child (target dependency)))
+                               (and (niwa-skill-enabled-p child)
+                                    (eligible-p child))))
+                           (niwa-skill-dependencies skill)))))
+                    (puthash skill value effective)
+                    value)))))
+          (dolist (skill skills)
+            (setf (niwa-skill-effective-model-invocable-p skill)
+                  (eligible-p skill)))))
+      skills)))
+
+(defun niwa-skills-set-enabled (skill enabled &optional session)
+  "Persist file-backed SKILL as ENABLED through optional live SESSION."
+  (unless (niwa-skill-p skill)
+    (user-error "Loaded skill is required"))
+  (let ((workspace (niwa-skill-workspace skill))
+        (key (niwa-skills--state-key skill)))
+    (unless workspace
+      (user-error "Skill has no workspace: %s" (niwa-skill-name skill)))
+    (unless key
+      (user-error "Skill has no stable source file: %s"
+                  (niwa-skill-name skill)))
+    (let* ((state (or (niwa-skills--read-state workspace)
+                      '(:disabled-keys nil)))
+           (disabled-keys
+            (cl-remove key (plist-get state :disabled-keys) :test #'equal)))
+      (unless enabled
+        (push key disabled-keys))
+      (setf (plist-get state :disabled-keys)
+            (sort (delete-dups disabled-keys) #'string<))
+      (niwa-skills--write-state state workspace session)
+      (setf (niwa-skill-enabled-p skill) enabled)
+      ;; A workspace may have several live sessions, each with its own skill
+      ;; structs.  Keep those cached copies consistent with the state just
+      ;; committed instead of waiting for an unrelated source-file rescan.
+      (let ((sessions (and session (list session))))
+        (dolist (buffer (buffer-list))
+          (when-let* ((candidate-session
+                       (buffer-local-value 'niwa--session buffer))
+                      ((eq workspace
+                           (niwa-session-workspace candidate-session))))
+            (push candidate-session sessions)))
+        (dolist (candidate-session
+                 (cl-delete-duplicates sessions :test #'eq))
+          (dolist (candidate (niwa-session-skills candidate-session))
+            (when (equal key (niwa-skills--state-key candidate))
+              (setf (niwa-skill-enabled-p candidate) enabled)))
+          (niwa-skills--resolve-dependencies
+           (niwa-session-skills candidate-session)))))))
+
+(defun niwa-skills-skill-enabled-p (skill)
+  "Return non-nil when SKILL is not user-disabled."
+  (and (niwa-skill-p skill)
+       (niwa-skill-enabled-p skill)))
+
+
+;;
+;;; Plist -> struct construction
+
+(defun niwa-skills--coerce-bool (val default)
+  "Coerce VAL to a boolean, returning DEFAULT when VAL is nil or missing.
+
+Accepts t, nil, strings (\"true\"/\"false\"/\"yes\"/\"no\"), and the
+yaml.el false sentinel :false.  Anything else is treated as t."
+  (cond
+   ((null val) default)
+   ((eq val :false) nil)
+   ((stringp val)
+    (pcase (downcase val)
+      ((or "false" "no" "off" "nil") nil)
+      (_ t)))
+   (t t)))
+
+(defun niwa-skills--coerce-context (val)
+  "Return VAL as a context symbol (`inline' or `fork')."
+  (pcase val
+    ((or 'fork "fork" :fork) 'fork)
+    (`(,single) (niwa-skills--coerce-context single))
+    (_ 'inline)))
+
+(defconst niwa-skills--name-regexp "\\`[a-z0-9-]+\\'"
+  "Regexp matching valid skill invocation identifiers.")
+
+(defconst niwa-skills--name-max-length 64
+  "Maximum allowed length for a skill invocation identifier.")
+
+(defun niwa-skills--valid-name-p (name)
+  "Return non-nil when NAME is a valid skill invocation identifier.
+Names must match `[a-z0-9-]+' and be 1-64 chars.
+Case-sensitive -- `Bad' is rejected."
+  (and (stringp name)
+       (<= 1 (length name) niwa-skills--name-max-length)
+       (let ((case-fold-search nil))
+         (string-match-p niwa-skills--name-regexp name))))
+
+(defun niwa-skills--parse-argument-names (val)
+  "Parse VAL into a list of argument names.
+Accepts a space-separated string or a YAML list.  Numeric-only
+entries are filtered out so they cannot shadow `$0'/`$1'/etc."
+  (let ((names (cond
+                ((null val) nil)
+                ((listp val) (cl-remove-if-not #'stringp val))
+                ((stringp val) (split-string val "[ \t]+" t))
+                (t nil))))
+    (cl-remove-if (lambda (n)
+                    (or (string-empty-p n)
+                        (string-match-p "\\`[0-9]+\\'" n)))
+                  names)))
+
+(defun niwa-skills--parse-ptc-primitives (plist source-file)
+  "Return PLIST's closed ToolCall primitive restriction for SOURCE-FILE."
+  (if (not (plist-member plist :ptc-primitives))
+      :unrestricted
+    (let ((value (plist-get plist :ptc-primitives)))
+      (unless (or (null value)
+                  (and (listp value)
+                       (cl-every (lambda (name)
+                                   (and (stringp name)
+                                        (not (string-blank-p name))))
+                                 value)))
+        (user-error
+         "Malformed ptc-primitives in %s: expected a list of tool names"
+         source-file))
+      (delete-dups (copy-sequence value)))))
+
+(defun niwa-skills-intersect-ptc-primitives (left right)
+  "Intersect ToolCall primitive restrictions LEFT and RIGHT.
+The sentinel `:unrestricted' is the identity; nil is an explicit empty set."
+  (cond
+   ((eq left :unrestricted) right)
+   ((eq right :unrestricted) left)
+   ((or (null left) (null right)) nil)
+   (t (seq-filter (lambda (name) (member name right)) left))))
+
+(defun niwa-skills--warn-shell (val source-file &optional workspace)
+  "Warn about a frontmatter shell VAL, which skills do not support.
+Body shell expansion always runs through the session Bash pipeline, so
+accepting a declared shell silently would run the skill under different
+semantics than its author wrote.  SOURCE-FILE identifies the skill;
+WORKSPACE owns the local diagnostic."
+  (when val
+    (niwa--warn-once
+     (niwa-diagnostic-scope workspace)
+     (list 'skill-declared-shell source-file)
+     "Skill at %s declares shell %S; skills run bash"
+     source-file val)))
+
+(defun niwa-skills--parse-allowed-tool-rules (entries source-file)
+  "Map each ENTRY through `niwa-permission-rules-parse'.
+
+ENTRIES is the raw `allowed-tools' frontmatter list.  Returns a
+list of parsed niwa permission rules.  A malformed entry aborts the whole
+skill load: this function signals `user-error' on the first bad
+entry, and `niwa-skills--build-skill''s `condition-case' skips
+  the offending skill with a warning naming SOURCE-FILE."
+  (mapcar (lambda (entry)
+            (condition-case err
+                (niwa-permission-rules-parse entry)
+              (user-error
+               (user-error
+                "Malformed allowed-tools entry %S in %s: %s"
+                entry source-file (error-message-string err)))))
+          entries))
+
+(defun niwa-skills--hooks-plist-to-rules (hooks)
+  "Convert plist-shaped HOOKS frontmatter to hook rule alists.
+YAML mappings naturally parse as `(:Event GROUPS ...)'; the hook
+subsystem consumes `((Event . GROUPS) ...)'.  Already-alist values are
+returned unchanged."
+  (cond
+   ((not (and (listp hooks) (keywordp (car-safe hooks))))
+    hooks)
+   (t
+    (let (rules)
+      (while hooks
+        (let ((key (pop hooks))
+              (groups (pop hooks)))
+          (when (keywordp key)
+            (push (cons (intern (substring (symbol-name key) 1))
+                        groups)
+                  rules))))
+      (nreverse rules)))))
+
+(defun niwa-skills--normalize-hooks (hooks &optional scope)
+  "Normalize SKILL.md HOOKS frontmatter for SCOPE request propagation."
+  (when hooks
+    (niwa-hooks-normalize-rules
+     (niwa-skills--hooks-plist-to-rules hooks)
+     scope)))
+
+(defun niwa-skills--first-paragraph (body)
+  "Return the first non-empty paragraph or header from BODY, or nil.
+Used as the description fallback when frontmatter omits a description.
+Strips leading `#' header characters and
+surrounding whitespace.  Returns nil when BODY is nil or contains
+no non-blank text."
+  (when (stringp body)
+    (with-temp-buffer
+      (insert body)
+      (goto-char (point-min))
+      ;; Skip leading blank lines.
+      (while (and (not (eobp))
+                  (looking-at-p "[ \t]*$"))
+        (forward-line 1))
+      (when (not (eobp))
+        (let ((start (point)))
+          (while (and (not (eobp))
+                      (not (looking-at-p "[ \t]*$")))
+            (forward-line 1))
+          (let* ((para (buffer-substring-no-properties start (point)))
+                 (stripped (replace-regexp-in-string
+                            "\\`[ \t#]+" "" para))
+                 (trimmed (string-trim stripped)))
+            (and (not (string-empty-p trimmed)) trimmed)))))))
+
+(defun niwa-skills--directory-name (skill-file)
+  "Return the directory name of SKILL-FILE.
+For `/path/to/grill-me/SKILL.md' returns `grill-me'."
+  (file-name-nondirectory
+   (directory-file-name (file-name-directory skill-file))))
+
+(defvar niwa-skills--frontmatter-cache
+  (make-hash-table :test #'equal)
+  "Parsed SKILL.md frontmatter keyed by file path and file fingerprint.")
+
+(defun niwa-skills--parse-frontmatter (skill-file &optional content workspace)
+  "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
+
+When CONTENT is nil, read SKILL-FILE once and reuse the previous parse
+while the file fingerprint is unchanged.  Installing a session's skills
+parses every discovered SKILL.md, and the YAML reader is by far the most
+expensive step in that scan.  CONTENT is parsed uncached: a caller holding
+those bytes read them for a reason of its own, and the file fingerprint
+does not identify them.
+
+The cached plist is copied out, so a caller may `plist-put' into its
+result without reaching the entry behind it.  WORKSPACE owns parse warnings."
+  (if content
+      (niwa-skills--parse-frontmatter-1 skill-file content workspace)
+    (let* ((path (expand-file-name skill-file))
+           (attributes (file-attributes path))
+           (fingerprint
+            (and attributes
+                 (list (file-attribute-file-identifier attributes)
+                       (file-attribute-modification-time attributes)
+                       (file-attribute-size attributes))))
+           (cached (and fingerprint
+                        (gethash path niwa-skills--frontmatter-cache))))
+      (if (and cached (equal fingerprint (car cached)))
+          (copy-sequence (cdr cached))
+        (let ((plist (niwa-skills--parse-frontmatter-1 skill-file nil workspace)))
+          (when (and fingerprint plist)
+            (puthash path (cons fingerprint plist)
+                     niwa-skills--frontmatter-cache))
+          (copy-sequence plist))))))
+
+(defun niwa-skills--parse-frontmatter-1 (skill-file content &optional workspace)
+  "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
+When CONTENT is nil, read SKILL-FILE once.  Preserve `:name' so callers
+can decide whether to honor it or use the directory name.  Frontmatter
+values remain inert data.  Return nil on read/parse failure and warn when
+YAML parsing fails, attributing the warning to WORKSPACE."
+  (when (or content
+            (and (file-readable-p skill-file)
+                 (file-regular-p skill-file)))
+    (condition-case err
+        (with-temp-buffer
+          (if content
+              (insert content)
+            (insert-file-contents skill-file))
+          (goto-char (point-min))
+          (when (looking-at-p "^---[ \t]*$")
+            (forward-line 1)
+            (let ((frontmatter-start (point)))
+              (unless (re-search-forward "^---[ \t]*$" nil t)
+                (error "Malformed frontmatter"))
+              (let* ((frontmatter-end (match-beginning 0))
+                     (plist
+                      (yaml-parse-string
+                       (buffer-substring-no-properties
+                        frontmatter-start frontmatter-end)
+                       :object-type 'plist
+                       :object-key-type 'keyword
+                       :sequence-type 'list)))
+                (forward-line 1)
+                (when-let* ((body (buffer-substring-no-properties
+                                   (point) (point-max)))
+                            ((not (string-blank-p body))))
+                  (setq plist (plist-put plist :system body)))
+                plist))))
+      (error
+       (niwa--warn-once
+        (niwa-diagnostic-scope workspace)
+        (list 'skill-invalid-yaml skill-file)
+        "Skill at %s has invalid YAML: %s; skipping"
+        skill-file (error-message-string err))
+       nil))))
+
+(defun niwa-skills--from-plist
+    (name plist source-file source
+          &optional source-family project-hooks-trusted-p plugin-name workspace
+          discovery-root diagnostic-scope)
+  "Build a `niwa-skill' from NAME and PLIST parsed from SOURCE-FILE.
+SOURCE is the origin tag symbol.  SOURCE-FAMILY is `niwa', `agents',
+or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
+project manifest.  NAME is the resolved invocation identifier (already
+validated by the caller).  Description fallback from the body is the
+caller's responsibility -- anything in PLIST's `:description' wins over
+the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
+  `plugin'.  WORKSPACE owns persisted enablement.  DISCOVERY-ROOT is the
+configured root under which SOURCE-FILE was found.  DIAGNOSTIC-SCOPE, when
+supplied, owns local warnings independently of persisted WORKSPACE state."
+  (let* ((description (plist-get plist :description))
+         (display-name (plist-get plist :display-name))
+         (disable-model (plist-get plist :disable-model-invocation))
+         (user-invocable (plist-get plist :user-invocable))
+         (context (niwa-skills--coerce-context (plist-get plist :context)))
+         (allowed-tools (plist-get plist :allowed-tools))
+         (agent (plist-get plist :agent))
+         (model (plist-get plist :model))
+         (effort (plist-get plist :effort))
+         (argument-hint (plist-get plist :argument-hint))
+         (arguments (plist-get plist :arguments))
+         (paths (plist-get plist :paths))
+         (shell (plist-get plist :shell))
+         (declared-hooks (plist-get plist :hooks))
+         (dependency-data
+          (and-let* ((body (plist-get plist :system)))
+            (plist-get (niwa-skills-syntax-parse-dependencies body)
+                       :dependencies)))
+         (hooks (and (or (not (eq source 'project))
+                         project-hooks-trusted-p)
+                     declared-hooks))
+         (warnings
+          (append
+           (when (and (eq context 'inline)
+                      (stringp agent)
+                      (not (string-blank-p agent)))
+             (list
+              (format "Agent %s is ignored for inline skills; use context: fork to select an agent"
+                      agent)))
+           (when (and declared-hooks (eq source 'project)
+                      (not project-hooks-trusted-p))
+             (list "Project skill hooks are ignored until the manifest is trusted")))))
+    (niwa-skills--warn-shell shell source-file (or diagnostic-scope workspace))
+    (niwa-skill--create
+     :name name
+     :raw-name name
+     :plugin-name plugin-name
+     :display-name (or (and (stringp display-name) display-name) name)
+     :description (and (stringp description) description)
+     :source-file source-file
+     :source-dir (file-name-directory source-file)
+     :discovery-root discovery-root
+     :source source
+     :source-family source-family
+     :user-invocable-p (niwa-skills--coerce-bool user-invocable t)
+     :model-invocable-p (not (niwa-skills--coerce-bool disable-model nil))
+     :context context
+     :agent (and (stringp agent) agent)
+     :allowed-tools (ensure-list allowed-tools)
+     :allowed-tool-rules
+     (niwa-skills--parse-allowed-tool-rules
+      (ensure-list allowed-tools) source-file)
+     :ptc-primitives (niwa-skills--parse-ptc-primitives plist source-file)
+     :model (and model
+                 (cond
+                  ((stringp model) model)
+                  ((symbolp model) (symbol-name model))))
+     :effort (if (stringp effort) (intern effort) effort)
+     :argument-hint (and (stringp argument-hint) argument-hint)
+     :argument-names (niwa-skills--parse-argument-names arguments)
+     :path-patterns (ensure-list paths)
+     :hooks
+     (when-let* ((rules (niwa-skills--normalize-hooks
+                         hooks (and (eq context 'fork) 'skill-fork))))
+       (niwa-hooks-annotate-rules-source
+        rules
+        (if (eq source 'project) 'project-file
+          (if (eq source 'plugin) 'plugin 'user-file))
+        source-file (file-name-directory source-file)))
+     :dependencies
+     (mapcar
+      (lambda (dependency)
+        (niwa-skill-dependency--create
+         :name (plist-get dependency :name)
+         :argument-template (plist-get dependency :argument-template)))
+      dependency-data)
+     :warnings warnings
+     :workspace workspace
+     :active-p (null paths))))
+
+
+;;
+;;; Discovery
+
+(defun niwa-skills--source-family-from-dir (dir)
+  "Return the resource family implied by DIR, or nil."
+  (when (stringp dir)
+    (let ((path (directory-file-name
+                 (expand-file-name (substitute-in-file-name dir)))))
+      (cond
+       ((or (equal path (expand-file-name "skills" niwa-user-dir))
+            (string-match-p "\\(?:\\`\\|/\\)\\.niwa/skills\\'" path))
+        'niwa)
+       ((string-match-p "\\(?:\\`\\|/\\)\\.agents/skills\\'" path)
+        'agents)))))
+
+(defun niwa-skills--resolve-dir (dir workspace-root)
+  "Resolve DIR against WORKSPACE-ROOT, returning (ABSOLUTE . SOURCE).
+SOURCE is `user' for absolute/`~'-prefixed paths and `project' for
+relative paths resolved against WORKSPACE-ROOT.  Returns nil if DIR is
+relative and WORKSPACE-ROOT is nil."
+  (cond
+   ((consp dir)
+    (when-let* ((resolved (niwa-skills--resolve-dir
+                           (car dir) workspace-root)))
+      (cons (car resolved) (cdr dir))))
+   ((file-name-absolute-p dir)
+    (let ((family (niwa-skills--source-family-from-dir dir)))
+      (cons (file-name-as-directory (expand-file-name dir))
+            (if family (cons 'user family) 'user))))
+   (workspace-root
+    (let* ((family (niwa-skills--source-family-from-dir dir))
+           (resolved (file-name-as-directory
+                      (expand-file-name dir workspace-root))))
+      (when (condition-case nil
+                (file-in-directory-p resolved workspace-root)
+              (file-error nil))
+        (cons resolved
+              (if family (cons 'project family) 'project)))))))
+
+(defun niwa-skills--scan-resolved-dir (dir source &optional workspace scope)
+  "Scan DIR with SOURCE, applying plugin namespacing when requested.
+WORKSPACE owns state; optional SCOPE supplies diagnostic-only ownership."
+  (let* ((plugin-name (and (consp source)
+                           (eq (car source) 'plugin)
+                           (cdr source)))
+         (source-tag (if (consp source) (car source) source))
+         (source-family (and (consp source)
+                             (memq (cdr source) '(niwa agents))
+                             (cdr source))))
+    (mapcar (lambda (skill)
+              (if plugin-name
+                  (niwa-skills--namespace-plugin-skill plugin-name skill)
+                skill))
+            (niwa-skills--scan-dir
+             dir source-tag source-family workspace plugin-name scope))))
+
+(defun niwa-skills-project-files (workspace-root)
+  "Return SKILL.md files under configured project roots in WORKSPACE-ROOT."
+  (let (files)
+    (dolist (raw niwa-skill-dirs)
+      (when-let* ((resolved (niwa-skills--resolve-dir raw workspace-root))
+                  (source (cdr resolved))
+                  ((eq (if (consp source) (car source) source) 'project))
+                  (dir (car resolved))
+                  ((file-directory-p dir)))
+        (setq files
+              (append files
+                      (directory-files-recursively
+                       dir "\\`SKILL\\.md\\'" nil nil nil)))))
+    (delete-dups files)))
+
+(defun niwa-skills--plugin-skill-dir-entries (&optional workspace)
+  "Return (PLUGIN-NAME . DIR) entries from plugins enabled in WORKSPACE."
+  (mapcar (lambda (entry)
+            (cons (cdr (cdr entry)) (car entry)))
+          (niwa-plugins-skill-dirs workspace)))
+
+(defun niwa-skills--plugin-skill-dirs (&optional workspace)
+  "Return existing skill directories from plugins enabled in WORKSPACE."
+  (mapcar #'cdr (niwa-skills--plugin-skill-dir-entries workspace)))
+
+(defun niwa-skills--namespace-plugin-skill (plugin-name skill)
+  "Prefix plugin SKILL with PLUGIN-NAME for user-facing invocation."
+  (let ((name (format "%s:%s" plugin-name (niwa-skill-name skill))))
+    (setf (niwa-skill-name skill) name)
+    (setf (niwa-skill-display-name skill) name)
+    skill))
+
+(defun niwa-skills--build-skill
+    (skill-file source &optional source-family workspace plugin-name discovery-root
+                diagnostic-scope)
+  "Build a `niwa-skill' for SKILL-FILE with SOURCE origin tag.
+SOURCE-FAMILY distinguishes `.niwa' and `.agents' resource roots.
+Performs name resolution (frontmatter `:name' > directory name) and
+validation.  WORKSPACE owns project hook trust.  PLUGIN-NAME records
+plugin ownership.  Returns nil with a
+warning when the skill is invalid \\(bad name, etc.).  Computes
+description fallback from the body when frontmatter omits `description'.
+DIAGNOSTIC-SCOPE supplies ownership for root-only scans."
+  (let* ((snapshot
+          (when (eq source 'project)
+            (niwa-hooks-project-file-snapshot workspace skill-file)))
+         (plist (niwa-skills--parse-frontmatter
+                 skill-file (plist-get snapshot :content)
+                 (or diagnostic-scope workspace))))
+    (when plist
+      (let* ((dir-name (niwa-skills--directory-name skill-file))
+             (frontmatter-name (plist-get plist :name))
+             (raw-name (or (and (stringp frontmatter-name) frontmatter-name)
+                           dir-name)))
+        (cond
+         ((not (niwa-skills--valid-name-p raw-name))
+          (niwa--warn-once
+           (niwa-diagnostic-scope (or diagnostic-scope workspace))
+           (list 'skill-invalid-name skill-file)
+           "Skill at %s has invalid name %S; skipping (must match %s, max %d chars)"
+           skill-file raw-name
+           niwa-skills--name-regexp
+           niwa-skills--name-max-length)
+          nil)
+         (t
+          ;; Description fallback uses the body from the same parse.
+          (unless (and (stringp (plist-get plist :description))
+                       (not (string-empty-p (plist-get plist :description))))
+            (when-let* ((body (plist-get plist :system))
+                        (fallback (niwa-skills--first-paragraph body)))
+              (setq plist (plist-put plist :description fallback))))
+          (niwa-skills--from-plist
+           raw-name plist skill-file source source-family
+           (plist-get snapshot :trusted-p) plugin-name workspace
+           discovery-root diagnostic-scope)))))))
+
+(defun niwa-skills--scan-dir
+    (dir source &optional source-family workspace plugin-name diagnostic-scope)
+  "Return a list of `niwa-skill' structs found under DIR.
+SOURCE is the origin tag applied to every skill scanned from DIR.
+SOURCE-FAMILY distinguishes `.niwa' and `.agents' resource roots.
+WORKSPACE owns project hook trust.  PLUGIN-NAME records plugin ownership.
+DIAGNOSTIC-SCOPE supplies ownership for root-only scans.
+Each SKILL.md is wrapped in `condition-case' so a single bad skill
+does not abort the whole scan."
+  (when (file-directory-p dir)
+    (let (result)
+      (dolist (skill-file (directory-files-recursively
+                           dir "\\`SKILL\\.md\\'" nil nil nil))
+        (let ((skill (condition-case err
+                         (niwa-skills--build-skill
+                          skill-file source source-family workspace plugin-name
+                          (file-name-as-directory (expand-file-name dir))
+                          diagnostic-scope)
+                       (error
+                        (niwa--warn-once
+                         (niwa-diagnostic-scope (or diagnostic-scope workspace))
+                         (list 'skill-load-failed skill-file)
+                         "Skill at %s failed to load: %s"
+                         skill-file (error-message-string err))
+                        nil))))
+          (when skill
+            (push skill result))))
+      (nreverse result))))
+
+(defconst niwa-skills--source-prefixes
+  '((project . "local")
+    (user . "global")
+    (bundled . "bundled")
+    (managed . "managed"))
+  "Source prefixes used when non-plugin skill names collide.")
+
+(defun niwa-skills--source-prefix (skill)
+  "Return the fallback conflict prefix for SKILL, or nil for plugin skills."
+  (let ((source (niwa-skill-source skill)))
+    (cond
+     ((eq source 'plugin) nil)
+     ((alist-get source niwa-skills--source-prefixes))
+     ((symbolp source) (symbol-name source)))))
+
+(defun niwa-skills--ordinary-skill-p (skill)
+  "Return non-nil for user/project resource-root SKILL."
+  (memq (niwa-skill-source skill) '(user project)))
+
+(defun niwa-skills--conflict-prefix (skill group)
+  "Return the visible conflict prefix for SKILL in GROUP."
+  (cond
+   ((eq (niwa-skill-source skill) 'plugin) nil)
+   ((not (niwa-skills--ordinary-skill-p skill))
+    (niwa-skills--source-prefix skill))
+   (t
+    (let* ((ordinary (cl-remove-if-not
+                      #'niwa-skills--ordinary-skill-p group))
+           (scope-key (lambda (s)
+                        (pcase (niwa-skill-source s)
+                          ('project "local")
+                          ('user "global"))))
+           (family-key (lambda (s)
+                         (pcase (niwa-skill-source-family s)
+                           ('niwa "niwa")
+                           ('agents "agents"))))
+           (scope (funcall scope-key skill))
+           (family (funcall family-key skill)))
+      (or (and family
+               (cl-every family-key ordinary)
+               (= 1 (cl-count family ordinary
+                              :key family-key :test #'equal))
+               family)
+          (and scope
+               (= 1 (cl-count scope ordinary
+                              :key scope-key :test #'equal))
+               scope)
+          (and scope family (format "%s-%s" scope family))
+          (niwa-skills--source-prefix skill))))))
+
+(defun niwa-skills--qualified-name-p (name)
+  "Return non-nil when NAME already has a visible prefix."
+  (and (stringp name) (string-search ":" name)))
+
+(defun niwa-skills--qualify-conflicting-names (skills)
+  "Return SKILLS with deterministic visible names.
+
+Unique non-plugin names stay unqualified.  Same-origin duplicates keep
+the first entry.  Cross-origin non-plugin conflicts are exposed with the
+shortest deterministic unique prefix.  Already-qualified names,
+including plugin skills, are left untouched."
+  (let ((seen (make-hash-table :test #'equal))
+        (groups (make-hash-table :test #'equal))
+        deduped)
+    (dolist (skill skills)
+      (let ((key (list (niwa-skill-source skill)
+                       (niwa-skill-source-family skill)
+                       (niwa-skill-name skill))))
+        (unless (gethash key seen)
+          (puthash key t seen)
+          (push skill deduped))))
+    (setq deduped (nreverse deduped))
+    (dolist (skill deduped)
+      (let ((name (niwa-skill-name skill)))
+        (unless (or (eq (niwa-skill-source skill) 'plugin)
+                    (niwa-skills--qualified-name-p name))
+          (puthash name (cons skill (gethash name groups)) groups))))
+    (maphash
+     (lambda (name group)
+       (when (> (length group) 1)
+         (dolist (skill group)
+           (when-let* ((prefix (niwa-skills--conflict-prefix
+                                skill group)))
+             (setf (niwa-skill-name skill)
+                   (format "%s:%s" prefix name))))))
+     groups)
+    deduped))
+
+(defun niwa-skills--apply-enable-state (skills workspace)
+  "Apply WORKSPACE's persisted enablement to SKILLS and return SKILLS."
+  (let ((disabled-keys (niwa-skills--disabled-keys workspace)))
+    (dolist (skill skills)
+      (setf (niwa-skill-enabled-p skill)
+            (not (member (niwa-skills--state-key skill) disabled-keys))))
+    skills))
+
+(defun niwa-skills-scan (&optional workspace-root dirs workspace)
+  "Scan skill directories and return a list of `niwa-skill' structs.
+
+DIRS defaults to `niwa-skill-dirs'.  WORKSPACE-ROOT is used to
+resolve relative entries; when nil, relative entries are skipped.
+Unique names remain unqualified.  When user/project/bundled/managed
+sources collide, all colliding entries are exposed as `source:name'.
+Same-source duplicates keep the first entry.  After scanning
+user/project directories, niwa's bundled skills directory is
+scanned, then plugins enabled in WORKSPACE are scanned last under
+`plugin-name:skill-name' names.
+Plugin skills are scanned only when DIRS is omitted, preserving exact
+explicit scans for tests and internal callers."
+  (let ((include-plugins (null dirs))
+        (dirs (or dirs niwa-skill-dirs))
+        result)
+    (dolist (raw dirs)
+      (when-let* ((resolved (niwa-skills--resolve-dir raw workspace-root))
+                  (dir (car resolved))
+                  (source (cdr resolved)))
+        (dolist (skill (niwa-skills--scan-resolved-dir
+                        dir source workspace (or workspace workspace-root)))
+          (push skill result))))
+    (when (and niwa-skills-include-bundled
+               (file-directory-p niwa-skills--bundled-dir))
+      (dolist (skill (niwa-skills--scan-dir
+                      niwa-skills--bundled-dir 'bundled nil workspace nil
+                      (or workspace workspace-root)))
+        (push skill result)))
+    (when include-plugins
+      (dolist (entry (niwa-plugins-skill-dirs workspace))
+        (when-let* ((resolved (niwa-skills--resolve-dir
+                               entry workspace-root)))
+          (dolist (skill (niwa-skills--scan-resolved-dir
+                          (car resolved) (cdr resolved) workspace
+                          (or workspace workspace-root)))
+            (push skill result)))))
+    (niwa-skills--resolve-dependencies
+     (niwa-skills--apply-enable-state
+      (niwa-skills--qualify-conflicting-names (nreverse result))
+      workspace))))
+
+
+;;
+;;; Lazy body loading
+
+(defun niwa-skill-load-body (skill)
+  "Populate SKILL's body slot from its SKILL.md and return the body.
+
+Reads the full markdown body through the canonical skill frontmatter parser
+on first call and caches the result on the struct.  Subsequent calls return
+the cached string without touching the filesystem.  Returns nil if the file
+has no body text or cannot be read."
+  (or (niwa-skill-body skill)
+      (when-let* ((file (niwa-skill-source-file skill))
+                  (parsed (niwa-skills--parse-frontmatter
+                           file nil (niwa-skill-workspace skill)))
+                  (body (plist-get parsed :system))
+                  ((not (string-blank-p body))))
+        (setf (niwa-skill-body skill) body)
+        body)))
+
+
+;;
+;;; Session installation
+
+(defun niwa-skills--preserve-active-skills (skills old-skills)
+  "Copy runtime path-scoped activation from OLD-SKILLS into SKILLS.
+Path-scoped skills start dormant from frontmatter, but can become
+active during a session after a matching file touch.  Rescans rebuild
+skill structs from disk, so preserve that runtime state for skills
+with the same name and source file."
+  (let ((active-keys (make-hash-table :test #'equal)))
+    (dolist (skill old-skills)
+      (when (and (niwa-skill-path-patterns skill)
+                 (niwa-skill-active-p skill))
+        (puthash (cons (niwa-skill-name skill)
+                       (niwa-skill-source-file skill))
+                 t active-keys)))
+    (dolist (skill skills)
+      (when (and (niwa-skill-path-patterns skill)
+                 (gethash (cons (niwa-skill-name skill)
+                                (niwa-skill-source-file skill))
+                          active-keys))
+        (setf (niwa-skill-active-p skill) t)))
+    skills))
+
+(defun niwa-skills-install (session &optional buffer)
+  "Populate SESSION's skills slot by scanning `niwa-skill-dirs'.
+
+Uses SESSION's workspace root to resolve relative directory entries.
+Idempotent: existing entries on SESSION's skills slot are replaced.
+
+BUFFER is the chat buffer that consumes this session's skills; it
+defaults to the current buffer.  When non-nil it is registered as a
+consumer of every resolved skill directory so that hot-reload events
+can mark the right sessions dirty (see
+`niwa-skills-check-for-modifications').  Watcher and mtime caches
+are refreshed to match the freshly scanned skill set."
+  (let* ((ws (niwa-session-workspace session))
+         (root (and ws (niwa-workspace-root ws)))
+         (buffer (or buffer (current-buffer)))
+         (old-skills (niwa-session-skills session))
+         (skills (niwa-skills--preserve-active-skills
+                  (niwa-skills-scan root nil ws) old-skills))
+         (dirs (niwa-skills--collect-roots root skills ws)))
+    (setf (niwa-session-skills session) skills)
+    (when (buffer-live-p buffer)
+      (niwa-skills--register-buffer
+       buffer dirs (niwa-session-execution-target session)
+       (append (niwa-skills--resolved-roots root)
+               (mapcar #'file-name-as-directory
+                       (niwa-skills--plugin-skill-dirs ws)))))
+    (niwa-skills--refresh-mtime-cache skills buffer)
+    (remhash buffer niwa-skills--dirty-buffers)
+    session))
+
+(defun niwa-session-get-skill (session name)
+  "Return the skill named NAME from SESSION, or nil if not found.
+When called inside a chat buffer, run a hot-reload pull-check first so
+external skill changes are picked up before lookup."
+  (when (buffer-live-p (current-buffer))
+    (niwa-skills-ensure-fresh (current-buffer) session))
+  (cl-find name (niwa-session-skills session)
+           :key #'niwa-skill-name :test #'equal))
+
+(defun niwa-session-get-skill-by-source (session source-file)
+  "Return SESSION skill discovered from exact SOURCE-FILE, or nil.
+No name fallback is attempted."
+  (when (buffer-live-p (current-buffer))
+    (niwa-skills-ensure-fresh (current-buffer) session))
+  (when-let* ((key (niwa-skills-source-key source-file)))
+    (cl-find key (niwa-session-skills session)
+             :key (lambda (skill)
+                    (niwa-skills-source-key
+                     (niwa-skill-source-file skill)))
+             :test #'equal)))
+
+
+;;
+;;; Modification detection (hot reload)
+
+(defun niwa-skills--filenotify-supported-p ()
+  "Return non-nil when this Emacs has filesystem-notification support.
+Probes for any of the backend `*-add-watch' primitives Emacs uses to
+implement `file-notify-add-watch'.  Avoids depending on internals
+\\(`file-notify--library') which moved between Emacs versions.
+
+A batch Emacs reports no support: a notification arrives as an input
+event, and without a command loop nothing delivers it."
+  (and (not noninteractive)
+       (require 'filenotify nil 'noerror)
+       (or (fboundp 'inotify-add-watch)
+           (fboundp 'kqueue-add-watch)
+           (fboundp 'gfile-add-watch)
+           (fboundp 'w32notify-add-watch))))
+
+(defun niwa-skills--default-modification-checking ()
+  "Return the default value for `niwa-skills-check-for-modifications'.
+Always includes `check-on-save' (zero external deps).  Adds
+`watch-files' when this Emacs has filesystem-notification support."
+  (let ((strategies (list 'check-on-save)))
+    (when (niwa-skills--filenotify-supported-p)
+      (push 'watch-files strategies))
+    (nreverse strategies)))
+
+(defcustom niwa-skills-check-for-modifications
+  (niwa-skills--default-modification-checking)
+  "When and how to detect changes to skill files on disk.
+
+A list of symbols.  Strategies compose; each one independently flips
+a per-chat-buffer dirty flag that is consumed by the next pull-check
+in `niwa-slash-capf', `niwa-session-get-skill', the dynamic
+skills prompt section, and skill-change reminders.
+
+Recognized strategies:
+
+`check-on-save'      Hook `before-save-hook' globally; saving a
+                     SKILL.md inside a registered skill directory
+                     marks every consumer of that directory dirty.
+                     Catches in-Emacs edits with zero external deps.
+
+`watch-files'        Use `file-notify-add-watch' on each registered
+                     top-level skill directory plus every leaf
+                     directory currently containing a SKILL.md.
+                     Catches creates, deletes, renames and external
+                     edits to existing skills.  Requires
+                     filesystem-notification support in Emacs.
+
+`stat-when-checking' At pull-check time, stat each known SKILL.md
+                     against a cached modtime.  Catches external
+                     edits even on remote/networked filesystems
+                     where `file-notify' is unreliable.  O(N) stats
+                     per pull-check where N is the skill count, so
+                     enable selectively.
+
+The default selects `check-on-save' plus `watch-files' on platforms
+that support filesystem notifications.  Set to nil to disable
+hot-reload entirely; users can then run \\[niwa-skills-rescan]
+manually."
+  :type '(set (const :tag "Detect in-Emacs saves via `before-save-hook'"
+                     check-on-save)
+              (const :tag "Watch skill directories with `file-notify'"
+                     watch-files)
+              (const :tag "Stat skill files at pull-check time"
+                     stat-when-checking))
+  :group 'niwa
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'niwa-skills--reconcile-strategies)
+           (niwa-skills--reconcile-strategies))))
+
+(defun niwa-skills--strategy-active-p (sym)
+  "Return non-nil when SYM is in `niwa-skills-check-for-modifications'."
+  (memq sym niwa-skills-check-for-modifications))
+
+
+;;;; State
+
+(defvar niwa-skills--watchers (make-hash-table :test #'equal)
+  "Live `file-notify' watchers keyed by absolute directory path.
+Values are descriptors returned by `file-notify-add-watch'.  Entries
+are added by `niwa-skills--ensure-watcher' and removed by
+`niwa-skills--remove-watcher-if-unused' when no buffer consumes
+them anymore.")
+
+(defvar niwa-skills--remote-watch-states
+  (make-hash-table :test #'equal)
+  "Last reported file-notification support state per execution target.")
+
+(defvar niwa-skills--dir-buffers (make-hash-table :test #'equal)
+  "Map of absolute directory path to list of consumer chat buffers.
+A buffer joins the list for every directory its session resolves
+\\(top-level + existing subdirectories + any leaf containing a SKILL.md)
+so that watcher events on that directory can identify which sessions
+to mark dirty.")
+
+(defvar niwa-skills--dirty-buffers (make-hash-table :test #'eq)
+  "Hash set of chat buffers awaiting a skills rescan.
+Membership is added by save-hook, watcher callback, or stat recheck
+and cleared by `niwa-skills-install' (which performs the rescan).")
+
+(defvar niwa-skills--mtime-cache (make-hash-table :test #'equal)
+  "Map of (BUFFER . SKILL.md absolute path) to last-known mtime.")
+
+
+;;;; Buffer registry
+
+(defun niwa-skills--nearest-existing-directory (dir)
+  "Return the nearest existing ancestor directory of DIR, or nil."
+  (let ((dir (file-name-as-directory (expand-file-name dir)))
+        parent)
+    (catch 'found
+      (while dir
+        (when (file-directory-p dir)
+          (throw 'found dir))
+        (setq parent (file-name-directory (directory-file-name dir)))
+        (if (or (null parent) (equal parent dir))
+            (throw 'found nil)
+          (setq dir (file-name-as-directory parent)))))))
+
+(defun niwa-skills--existing-subdirectories (dir)
+  "Return every existing subdirectory under DIR, including DIR.
+Directory file notifications are not recursive, so `watch-files'
+needs to watch pre-existing subdirectories as well as the configured
+skill root."
+  (let ((dir (file-name-as-directory (expand-file-name dir)))
+        result)
+    (when (file-directory-p dir)
+      (push dir result)
+      (dolist (entry (directory-files dir t directory-files-no-dot-files-regexp))
+        (when (and (file-directory-p entry)
+                   (not (file-symlink-p entry)))
+          (setq result
+                (append (niwa-skills--existing-subdirectories entry)
+                        result)))))
+    result))
+
+(defun niwa-skills--collect-roots (workspace-root skills &optional workspace)
+  "Return the list of directories to watch for SKILLS.
+Includes every resolved entry of `niwa-skill-dirs' plus its
+existing subdirectories, enabled plugin skill directories, the nearest
+existing parent for roots that do not yet exist, and every directory
+that currently contains one of SKILLS' source files (leaves).  Bundled
+skills are intentionally excluded -- they only change when niwa
+itself updates and would waste a watcher slot.  WORKSPACE-ROOT is used
+to resolve relative entries; relative entries are skipped when it is
+nil.  Plugin roots are resolved from plugins enabled in WORKSPACE."
+  (let ((dirs (make-hash-table :test #'equal)))
+    (dolist (raw niwa-skill-dirs)
+      (when-let* ((resolved (niwa-skills--resolve-dir raw workspace-root))
+                  (dir (car resolved)))
+        (puthash dir t dirs)
+        (if (file-directory-p dir)
+            (dolist (subdir (niwa-skills--existing-subdirectories dir))
+              (puthash subdir t dirs))
+          (when-let* ((parent (niwa-skills--nearest-existing-directory
+                               dir)))
+            (puthash parent t dirs)))))
+    (dolist (dir (niwa-skills--plugin-skill-dirs workspace))
+      (puthash dir t dirs)
+      (dolist (subdir (niwa-skills--existing-subdirectories dir))
+        (puthash subdir t dirs)))
+    (dolist (skill skills)
+      (unless (eq (niwa-skill-source skill) 'bundled)
+        (when-let* ((file (niwa-skill-source-file skill))
+                    (leaf (file-name-directory file)))
+          (puthash (file-name-as-directory leaf) t dirs))))
+    (let (result)
+      (maphash (lambda (k _v) (push k result)) dirs)
+      result)))
+
+(defun niwa-skills--register-buffer (buffer dirs &optional target roots)
+  "Register BUFFER as a consumer of every directory in DIRS.
+Drops BUFFER's prior registrations to keep the registry consistent
+when the resolved directory set changes (e.g. a leaf directory was
+deleted), then installs watchers on the new set when `watch-files' is
+active.  TARGET supplies cached remote notification capabilities.
+ROOTS are the resolved discovery roots used to filter ancestor events.
+Removes now-orphan watchers."
+  (niwa-skills--unregister-buffer buffer)
+  (with-current-buffer buffer
+    (setq niwa-skills--watch-roots roots))
+  (dolist (dir dirs)
+    (let ((entry (gethash dir niwa-skills--dir-buffers)))
+      (puthash dir (cons buffer entry) niwa-skills--dir-buffers)))
+  (when (niwa-skills--strategy-active-p 'watch-files)
+    (dolist (dir dirs)
+      (niwa-skills--ensure-watcher dir target (niwa-diagnostic-scope buffer))))
+  (niwa-skills--gc-watchers))
+
+(defun niwa-skills--unregister-buffer (buffer)
+  "Drop BUFFER from every directory's consumer list.
+Watchers whose consumer list becomes empty are torn down."
+  (let (remove update)
+    (maphash (lambda (dir consumers)
+               (when (memq buffer consumers)
+                 (let ((rest (delq buffer (copy-sequence consumers))))
+                   (if rest
+                       (push (cons dir rest) update)
+                     (push dir remove)))))
+             niwa-skills--dir-buffers)
+    (dolist (dir remove)
+      (remhash dir niwa-skills--dir-buffers))
+    (dolist (entry update)
+      (puthash (car entry) (cdr entry) niwa-skills--dir-buffers))
+    (dolist (dir remove)
+      (niwa-skills--remove-watcher-if-unused dir)))
+  (remhash buffer niwa-skills--dirty-buffers)
+  (niwa-skills--clear-mtime-cache-for-buffer buffer))
+
+(defun niwa-skills--gc-watchers ()
+  "Remove watchers whose directories no longer have any consumer."
+  (let (orphans)
+    (maphash (lambda (dir _desc)
+               (unless (gethash dir niwa-skills--dir-buffers)
+                 (push dir orphans)))
+             niwa-skills--watchers)
+    (dolist (dir orphans)
+      (niwa-skills--remove-watcher-if-unused dir))))
+
+(defun niwa-skills--release-on-kill ()
+  "Buffer-local `kill-buffer-hook' that drops this buffer from the registry."
+  (niwa-skills--unregister-buffer (current-buffer)))
+
+
+;;;; Marking dirty
+
+(defun niwa-skills--mark-dir-dirty (dir)
+  "Mark every chat buffer consuming DIR as needing a rescan."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (dolist (buffer (gethash dir niwa-skills--dir-buffers))
+      (when (buffer-live-p buffer)
+        (puthash buffer t niwa-skills--dirty-buffers)))))
+
+(defun niwa-skills--mark-buffer-dirty (buffer)
+  "Mark BUFFER as needing a rescan."
+  (when (buffer-live-p buffer)
+    (puthash buffer t niwa-skills--dirty-buffers)))
+
+
+;;;; check-on-save strategy
+
+(defun niwa-skills--file-under-watched-dirs (file)
+  "Return registered directories containing FILE.
+Walks the entries of `niwa-skills--dir-buffers' so this only
+returns directories that have at least one consumer."
+  (when (and (stringp file) (not (string-empty-p file)))
+    (let* ((file (expand-file-name file))
+           hits)
+      (maphash (lambda (dir _consumers)
+                 (when (string-prefix-p dir file)
+                   (push dir hits)))
+               niwa-skills--dir-buffers)
+      hits)))
+
+(defun niwa-skills--before-save-hook ()
+  "Mark consumers dirty when saving a SKILL.md under a registered dir."
+  (when-let* ((file buffer-file-name)
+              ((string-equal "SKILL.md" (file-name-nondirectory file))))
+    (dolist (dir (niwa-skills--file-under-watched-dirs file))
+      (niwa-skills--mark-dir-dirty dir))))
+
+
+;;;; watch-files strategy
+
+(defvar-local niwa-skills--watch-roots nil
+  "Skill roots this buffer's watchers serve, resolved at installation.
+Configured and plugin roots both count.  Resolving them in a
+file-notification callback would touch a remote workspace from inside a
+process filter.")
+(put 'niwa-skills--watch-roots 'permanent-local t)
+
+(defun niwa-skills--resolved-roots (workspace-root)
+  "Return `niwa-skill-dirs' resolved against WORKSPACE-ROOT."
+  (delq nil (mapcar (lambda (raw) (car (niwa-skills--resolve-dir raw workspace-root)))
+                    niwa-skill-dirs)))
+
+(defun niwa-skills--watch-event-relevant-p (buffer dir files)
+  "Return non-nil when FILES changing in watched DIR can change BUFFER's skills.
+Any change inside a skill directory counts.  A configured root that does
+not exist yet is watched through its nearest existing ancestor, where
+niwa and other programs write unrelated files; there only an entry on
+the path to a configured root counts."
+  (let ((roots (buffer-local-value 'niwa-skills--watch-roots buffer)))
+    (or (not (cl-some (lambda (root)
+                        (and (string-prefix-p dir root) (not (equal dir root))))
+                      roots))
+        (cl-some (lambda (root) (string-prefix-p root dir)) roots)
+        (cl-some (lambda (file)
+                   (let ((path (file-name-as-directory (expand-file-name file dir))))
+                     (cl-some (lambda (root) (string-prefix-p path root)) roots)))
+                 files))))
+
+(defun niwa-skills--watch-callback (event)
+  "Mark the firing directory's consumers dirty when EVENT concerns skills.
+EVENT is `(DESCRIPTOR ACTION FILE [FILE2])'.  Filtering on action is
+deliberately permissive: a `created'/`changed'/`deleted'/`renamed'/
+`attribute-changed' event under a skill directory always triggers
+a rescan, which discovers new leaves, dropped leaves, and edited
+SKILL.md files in one walk.  An event in the ancestor watched for a
+missing root counts only on the path to that root, see
+`niwa-skills--watch-event-relevant-p'.  The `stopped' action is
+ignored."
+  (let ((descriptor (nth 0 event))
+        (action (nth 1 event))
+        (files (nthcdr 2 event)))
+    (unless (eq action 'stopped)
+      (maphash (lambda (dir desc)
+                 (when (equal desc descriptor)
+                   (dolist (buffer (gethash dir niwa-skills--dir-buffers))
+                     (when (and (buffer-live-p buffer)
+                                (niwa-skills--watch-event-relevant-p
+                                 buffer dir files))
+                       (niwa-skills--mark-buffer-dirty buffer)))))
+               niwa-skills--watchers))))
+
+(cl-defun niwa-skills--ensure-watcher (dir &optional target scope)
+  "Install a `file-notify' watcher on DIR if none is live yet.
+Silently no-ops on platforms without filenotify support, when DIR does
+not exist, or when matching remote TARGET has neither `inotifywait'
+nor `gio'.  Errors during watcher installation are downgraded to
+warnings -- a missing watcher only degrades hot-reload, it never
+breaks normal operation.  SCOPE is the consuming workspace's captured root.
+
+A batch Emacs never installs a watcher.  File-notification arrives as
+an input event, and without a command loop nothing ever delivers it;
+worse, the first pending notification stops process sentinel dispatch
+for the rest of the session (Emacs 30.2, reproducible with emacs -Q
+--batch: watch a directory, touch it, and every later subprocess
+sentinel is silently dropped)."
+  (when noninteractive
+    (cl-return-from niwa-skills--ensure-watcher))
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (remote-prefix (file-remote-p dir))
+         (watch-supported-p t))
+    (when (and remote-prefix target)
+      (when (equal remote-prefix
+                   (niwa-execution-target-prefix target))
+        (let* ((identity (niwa-execution-target-identity target))
+               (supported
+                (and (or (niwa-execution-target-capability
+                          target 'inotifywait)
+                         (niwa-execution-target-capability target 'gio))
+                     t))
+               (previous
+                (gethash identity niwa-skills--remote-watch-states
+                         'unknown)))
+          (setq watch-supported-p supported)
+          (unless (eq previous supported)
+            (puthash identity supported
+                     niwa-skills--remote-watch-states)
+            (unless supported
+              (niwa-diagnostic-message (or scope 'unavailable)
+               (concat
+                "remote skill watching unavailable on %s; "
+                "save checks and M-x niwa-skills-rescan remain "
+                "available (install inotifywait or gio to enable watching)")
+               (niwa-execution-target-label target)))))))
+    (when (and watch-supported-p (file-directory-p dir))
+      (let ((existing (gethash dir niwa-skills--watchers)))
+        (when (and existing
+                   (not (ignore-errors (file-notify-valid-p existing))))
+          (remhash dir niwa-skills--watchers)
+          (setq existing nil))
+        (unless existing
+          (condition-case err
+              (let ((desc (file-notify-add-watch
+                           dir '(change attribute-change)
+                           #'niwa-skills--watch-callback)))
+                (puthash dir desc niwa-skills--watchers))
+            (error
+             (save-current-buffer
+               (niwa--warn-once
+                (or scope 'unavailable)
+                (list 'skill-watcher dir)
+                "Skill watcher failed for %s: %s"
+                dir (error-message-string err))))))))))
+
+(defun niwa-skills--remove-watcher-if-unused (dir)
+  "Tear down the watcher for DIR when no buffer consumes it."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (unless (gethash dir niwa-skills--dir-buffers)
+      (when-let* ((desc (gethash dir niwa-skills--watchers)))
+        (ignore-errors (file-notify-rm-watch desc))
+        (remhash dir niwa-skills--watchers)))))
+
+(defun niwa-skills--teardown-all-watchers ()
+  "Tear down every live watcher.  Used by strategy reconciliation."
+  (maphash (lambda (_dir desc)
+             (ignore-errors (file-notify-rm-watch desc)))
+           niwa-skills--watchers)
+  (clrhash niwa-skills--watchers))
+
+
+;;;; stat-when-checking strategy
+
+(defun niwa-skills--mtime-cache-key (buffer file)
+  "Return the stat-cache key for BUFFER and FILE."
+  (cons buffer file))
+
+(defun niwa-skills--file-mtime (file)
+  "Return the modification time of FILE as a Lisp time, or nil."
+  (when (and (stringp file)
+             (file-readable-p file))
+    (file-attribute-modification-time (file-attributes file))))
+
+(defun niwa-skills--clear-mtime-cache-for-buffer (buffer)
+  "Remove every stat-cache entry for BUFFER."
+  (let (keys)
+    (maphash (lambda (key _mtime)
+               (when (eq (car-safe key) buffer)
+                 (push key keys)))
+             niwa-skills--mtime-cache)
+    (dolist (key keys)
+      (remhash key niwa-skills--mtime-cache))))
+
+(defun niwa-skills--refresh-mtime-cache (skills buffer)
+  "Rebuild BUFFER's `niwa-skills--mtime-cache' entries from SKILLS.
+Stale entries for BUFFER (skill file no longer present in SKILLS) are
+dropped so the cache cannot grow unboundedly across rescans."
+  (let ((seen (make-hash-table :test #'equal)))
+    (dolist (skill skills)
+      (when-let* ((file (niwa-skill-source-file skill))
+                  (mtime (niwa-skills--file-mtime file)))
+        (puthash (niwa-skills--mtime-cache-key buffer file)
+                 mtime
+                 niwa-skills--mtime-cache)
+        (puthash file t seen)))
+    (let (orphans)
+      (maphash (lambda (key _mtime)
+                 (when (eq (car-safe key) buffer)
+                   (let ((file (cdr key)))
+                     (unless (gethash file seen)
+                       (push key orphans)))))
+               niwa-skills--mtime-cache)
+      (dolist (key orphans)
+        (remhash key niwa-skills--mtime-cache)))))
+
+(defun niwa-skills--stat-recheck (session buffer)
+  "Mark BUFFER dirty when any of SESSION's skill files has changed mtime.
+Cheap when the skill set is small; one `file-attributes' call per
+skill.  The mtime cache is per consumer buffer so one session's rescan
+does not mask a pending change from another live session."
+  (catch 'dirty
+    (dolist (skill (niwa-session-skills session))
+      (when-let* ((file (niwa-skill-source-file skill)))
+        (let ((cached (gethash (niwa-skills--mtime-cache-key buffer file)
+                               niwa-skills--mtime-cache))
+              (current (niwa-skills--file-mtime file)))
+          (unless (and cached (equal cached current))
+            (niwa-skills--mark-buffer-dirty buffer)
+            (throw 'dirty t)))))))
+
+
+;;;; Pull-check
+
+(defun niwa-skills-ensure-fresh (buffer session)
+  "Rescan SESSION's skills if BUFFER is marked dirty.
+Optional `stat-when-checking' strategy first stats every known skill
+file and may flip the dirty flag.  When the flag is set, calls
+`niwa-skills-install' which clears it.  No-op when BUFFER is
+unregistered (e.g. tests that bypass chat-buffer setup)."
+  (when (and (buffer-live-p buffer) session)
+    (when (niwa-skills--strategy-active-p 'stat-when-checking)
+      (niwa-skills--stat-recheck session buffer))
+    (when (gethash buffer niwa-skills--dirty-buffers)
+      (with-current-buffer buffer
+        (niwa-skills-install session buffer)))))
+
+;;;; Strategy reconciliation
+
+(defun niwa-skills--reconcile-strategies ()
+  "Add or remove global hooks/watchers to match the active strategy set.
+Called by `niwa-skills-check-for-modifications''s `:set' and at
+load time so toggling the defcustom at runtime takes effect without
+restarting Emacs."
+  (cond
+   ((niwa-skills--strategy-active-p 'check-on-save)
+    (add-hook 'before-save-hook #'niwa-skills--before-save-hook))
+   (t
+    (remove-hook 'before-save-hook #'niwa-skills--before-save-hook)))
+  (cond
+   ((niwa-skills--strategy-active-p 'watch-files)
+    (maphash (lambda (dir consumers)
+               (let* ((buffer (cl-find-if #'buffer-live-p consumers))
+                      (session
+                       (and buffer
+                            (buffer-local-value 'niwa--session buffer)))
+                      (target
+                       (and session
+                            (niwa-session-execution-target session))))
+                 (niwa-skills--ensure-watcher
+                  dir target (niwa-diagnostic-scope buffer))))
+             niwa-skills--dir-buffers))
+   (t
+    (niwa-skills--teardown-all-watchers))))
+
+(defun niwa-skills-install-hot-reload ()
+  "Install global skill hot-reload hooks/watchers for active strategies."
+  (niwa-skills--reconcile-strategies))
+
+(defun niwa-skills-uninstall-hot-reload ()
+  "Remove all global skill hot-reload hooks/watchers and registry state."
+  (remove-hook 'before-save-hook #'niwa-skills--before-save-hook)
+  (niwa-skills--teardown-all-watchers)
+  (maphash (lambda (_dir buffers)
+             (dolist (buffer buffers)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (remove-hook 'kill-buffer-hook
+                                #'niwa-skills--release-on-kill
+                                t)))))
+           niwa-skills--dir-buffers)
+  (clrhash niwa-skills--dir-buffers)
+  (clrhash niwa-skills--dirty-buffers)
+  (clrhash niwa-skills--frontmatter-cache)
+  (clrhash niwa-skills--mtime-cache)
+  (clrhash niwa-skills--remote-watch-states))
+
+(niwa-skills--reconcile-strategies)
+
+
+;;;; Manual rescan
+
+;;;###autoload
+(defun niwa-skills-rescan ()
+  "Rescan skill directories for the current chat buffer's session.
+Use this when a hot-reload strategy missed an event (e.g. on remote
+filesystems where `file-notify' is silently unreliable, or when
+`niwa-skills-check-for-modifications' is nil)."
+  (interactive)
+  (let ((session (and (boundp 'niwa--session) niwa--session)))
+    (unless session
+      (niwa-diagnostic-user-error
+       (niwa-diagnostic-scope (current-buffer))
+       "No niwa session in this buffer"))
+    (niwa-skills--mark-buffer-dirty (current-buffer))
+    (niwa-skills-ensure-fresh (current-buffer) session)
+    (message "Rescanned %d skills"
+             (length (niwa-session-skills session)))))
+
+
+;;
+;;; Conditional activation
+
+(defun niwa-skills--glob-matches-p (pattern path)
+  "Return non-nil if glob PATTERN matches PATH or its basename.
+Uses `wildcard-to-regexp' for glob translation."
+  (let ((re (wildcard-to-regexp pattern)))
+    (or (string-match-p re path)
+        (string-match-p re (file-name-nondirectory path)))))
+
+(defun niwa-skills--path-matches-p (path patterns)
+  "Return non-nil if PATH matches any glob in PATTERNS."
+  (and path patterns
+       (cl-some (lambda (pat) (niwa-skills--glob-matches-p pat path))
+                patterns)))
+
+(defun niwa-skills-maybe-activate (session path)
+  "Activate dormant SESSION skills whose path-patterns match PATH.
+
+Idempotent: already-active skills are left alone.  Returns the list of
+skills newly activated by this call."
+  (let (activated)
+    (dolist (skill (niwa-session-skills session))
+      (when (and (not (niwa-skill-active-p skill))
+                 (niwa-skills-skill-enabled-p skill)
+                 (niwa-skill-path-patterns skill)
+                 (niwa-skills--path-matches-p
+                  path (niwa-skill-path-patterns skill)))
+        (setf (niwa-skill-active-p skill) t)
+        (push skill activated)))
+    (nreverse activated)))
+
+(provide 'niwa-skills-core)
+
+;;; niwa-skills-core.el ends here

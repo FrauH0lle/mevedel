@@ -1,0 +1,414 @@
+;;; niwa-collaboration-editing.el --- Shared editor room bridge -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Room guests exchange bounded data with the same durable editor queue used
+;; by model tools.  Presence stays on the live transport and never enters it.
+
+;;; Code:
+
+(require 'niwa-artifact-backend)
+(require 'niwa-shared-editing)
+(require 'niwa-shared-conversation)
+(require 'niwa-shared-library)
+
+;; `niwa-artifact-store'
+(declare-function niwa-artifact-store-attach
+                  "niwa-artifact-store" (session id &optional buffer))
+
+;; `niwa-collaboration'
+(declare-function niwa-collaboration--guest "niwa-collaboration" (room peer))
+(declare-function niwa-collaboration--room-for-session "niwa-collaboration" (session))
+
+;; `niwa-collaboration-artifact'
+(declare-function niwa-collaboration--workspace-rooms
+                  "niwa-collaboration-artifact" (workspace))
+
+;; `niwa-collaboration-discussions'
+(declare-function niwa-collaboration-discussions-perform
+                  "niwa-collaboration-discussions"
+                  (room guest args callback &optional authorize))
+(autoload 'niwa-collaboration-discussions-perform "niwa-collaboration-discussions")
+
+;; `niwa-collaboration-guest'
+(declare-function niwa-collaboration--request-id-p "niwa-collaboration-guest" (value))
+
+;; `niwa-collaboration-projection'
+(declare-function niwa-collaboration--canonical-records
+                  "niwa-collaboration-projection" (data-buffer))
+
+;; `niwa-collaboration-transport'
+(declare-function niwa-collaboration--transport-send "niwa-collaboration-transport" (transport peer frame))
+
+;; `niwa-structs'
+(declare-function niwa-session-workspace "niwa-structs" (cl-x) t)
+
+(defun niwa-collaboration-editing--browser-value (value)
+  "Project VALUE for an editor without duplicating content and image snapshots.
+The editor restores CRDT state and needs contribution attribution and target
+IDs, while exact before/after snapshots stay on the host for reversion."
+  (if (not (listp value)) value
+    (let ((visible (copy-sequence value)))
+      (if (plist-member visible :result)
+          (plist-put visible :result
+                     (niwa-collaboration-editing--browser-value
+                      (plist-get visible :result)))
+        (cl-remf visible :content)
+        (cl-remf visible :transaction)
+        (cl-remf visible :png)
+        (when (plist-member visible :transactions)
+          (plist-put
+           visible :transactions
+           (vconcat
+            (mapcar
+             (lambda (tx)
+               (list :id (plist-get tx :id) :revision (plist-get tx :revision)
+                     :actor (plist-get tx :actor) :time (plist-get tx :time)
+                     :changes
+                     (vconcat
+                      (mapcar (lambda (change)
+                                (list :id (plist-get change :id)
+                                      :after (if (plist-get change :after) t :json-false)))
+                              (append (plist-get tx :changes) nil)))))
+             (append (plist-get visible :transactions) nil)))))
+        visible))))
+
+(defun niwa-collaboration-editing--send (room peer req-id value &optional raw)
+  "Send bounded VALUE chunks to PEER in ROOM for REQ-ID.
+For a broadcast event to peer zero, REQ-ID is nil.
+VALUE is projected for a browser editor, without content, picture and
+contribution snapshots, unless RAW is non-nil."
+  (let* ((encoded (base64-encode-string
+                   (encode-coding-string
+                    (niwa-shared-editing--json
+                     (if raw value
+                       (niwa-collaboration-editing--browser-value value)))
+                    'utf-8-unix) t))
+         (length (length encoded))
+         (offset 0))
+    (when (> length (* 48 1024 1024)) (error "Editing response is too large"))
+    (while (< offset length)
+      (let ((end (min length (+ offset 65536))))
+        (niwa-collaboration--transport-send
+         (plist-get room :transport) peer
+         (append (if req-id (list :t "editing" :reqId req-id) (list :t "editing-event"))
+                 (list :offset offset :total length :data (substring encoded offset end))))
+        (setq offset end)))))
+
+(defun niwa-collaboration-editing--changed (workspace state result)
+  "Publish WORKSPACE's committed STATE and RESULT to the guests of its rooms.
+Each room gets one broadcast: guests not viewing the item use only its
+listing fields.  The update is included only while someone views it.
+A deleted item reaches every guest as a `deleted' event naming who
+deleted it; a guest viewing it is no longer in it."
+  (let ((id (plist-get state :id)))
+    (dolist (room (niwa-collaboration--workspace-rooms workspace))
+      (when-let* (((plist-get room :session))
+                  (guests (plist-get room :guests))
+                  ((> (hash-table-count guests) 0)))
+        (let (viewed)
+          (maphash (lambda (_peer guest)
+                     (when (equal (plist-get guest :editing-item) id)
+                       (setq viewed t)
+                       (when (plist-get state :deleted)
+                         (plist-put guest :editing-item nil))))
+                   guests)
+          (niwa-collaboration-editing--send
+           room 0 nil
+           (if (plist-get state :deleted)
+               (list :event "deleted" :id id
+                     :actor (string-remove-prefix "Guest: " (or (plist-get state :actor) "")))
+             (append (list :event "changed" :id id
+                           :kind (plist-get state :kind) :title (plist-get state :title)
+                           :revision (plist-get state :revision))
+                     (when viewed
+                       (list :update (plist-get result :update)
+                             :discussions (plist-get result :discussions)
+                             :transactions (plist-get state :transactions)))))))))))
+
+(defun niwa-collaboration-editing--presence (room peer guest args)
+  "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."
+  (let ((now (float-time)) (point (plist-get args :point))
+        (trail (plist-get args :trail)) (preview (plist-get args :preview)))
+    (when (and (plist-get guest :writable)
+               (equal (plist-get guest :editing-item) (plist-get args :id))
+               (if (equal (plist-get args :mode) "clear")
+                   (plist-get guest :editing-pointing)
+                 (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045))
+               (member (plist-get args :mode) '("cursor" "laser" "selection" "clear"))
+               (or (null preview)
+                   (and (equal (plist-get args :mode) "cursor") (listp preview)
+                        (let ((op (plist-get preview :opId)) (shapes (plist-get preview :shapes)))
+                          (and (or (null op) (and (stringp op) (<= (length op) 80)))
+                               (listp shapes) (<= (length shapes) 100)
+                               (cl-every
+                                (lambda (shape)
+                                  (and (listp shape)
+                                       (stringp (plist-get shape :id))
+                                       (<= (length (plist-get shape :id)) 80)
+                                       (let ((box (plist-get shape :box)))
+                                         (and (listp box) (= (length box) 4)
+                                              (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) box)
+                                              (>= (nth 2 box) 0) (>= (nth 3 box) 0))))) shapes)))))
+               (or (null trail)
+                   (and (equal (plist-get args :mode) "laser")
+                        (listp trail) (<= (length trail) 64)
+                        (cl-every
+                         ;; (X Y AGE INK): INK indexes samples drawn while held, or is 0.
+                         (lambda (sample)
+                           (and (listp sample) (= (length sample) 4)
+                                (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000)))
+                                          (butlast sample))
+                                (<= 0 (nth 2 sample) 550)
+                                (natnump (nth 3 sample))))
+                         trail)))
+               (or (null point)
+                   (and (listp point) (= (length point) 2)
+                        (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) point))))
+      ;; A terminal clear may follow the last sample immediately.  Forward it
+      ;; once, without allowing repeated clears to bypass the traffic bound.
+      (plist-put guest :editing-pointing (not (equal (plist-get args :mode) "clear")))
+      (unless (equal (plist-get args :mode) "clear")
+        (plist-put guest :editing-presence-at now))
+      (let ((frame (list :t "editing-presence" :id (plist-get args :id)
+                         :peer peer :name (plist-get guest :name)
+                         :mode (plist-get args :mode) :point (and point (vconcat point))
+                         :preview (when preview
+                                    (list :opId (plist-get preview :opId)
+                                          :shapes (vconcat (mapcar
+                                                            (lambda (shape)
+                                                              (list :id (plist-get shape :id)
+                                                                    :box (vconcat (plist-get shape :box))))
+                                                            (plist-get preview :shapes)))))
+                         :trail (and trail (vconcat (mapcar #'vconcat trail))))))
+        (when (equal (plist-get args :mode) "clear")
+          (setq frame (append frame (list :clientId (plist-get guest :editing-client)
+                                          :clock (1+ (or (plist-get guest :editing-clock) 0))))))
+        (when (equal (plist-get args :mode) "selection")
+          (let ((client (plist-get args :clientId)) (cursor (plist-get args :cursor))
+                (clock (plist-get args :clock)))
+            (unless (and (integerp client) (<= 0 client #xffffffff)
+                         (integerp clock) (<= 0 clock #x1fffffffffffff)
+                         (or (null (plist-get guest :editing-client))
+                             (= client (plist-get guest :editing-client)))
+                         (> clock (or (plist-get guest :editing-clock) -1))
+                         (< (length (niwa-shared-editing--json cursor)) 2000))
+              (error "Invalid document presence"))
+            (maphash (lambda (other candidate)
+                       (when (and (not (equal other peer))
+                                  (equal client (plist-get candidate :editing-client)))
+                         (error "Document presence identity is in use")))
+                     (plist-get room :guests))
+            (plist-put guest :editing-client client)
+            (plist-put guest :editing-clock clock)
+            (setq frame (append frame (list :clientId client :clock clock :cursor cursor)))))
+        (maphash (lambda (other recipient)
+                   (when (and (not (equal other peer))
+                              (equal (plist-get recipient :editing-item)
+                                     (plist-get args :id)))
+                     (niwa-collaboration--transport-send
+                      (plist-get room :transport) other frame)))
+                 (plist-get room :guests))))))
+
+(defun niwa-collaboration-editing-depart (room peer)
+  "Clear PEER's ephemeral presence in ROOM before departure or item switch."
+  (when-let* ((guest (niwa-collaboration--guest room peer)))
+    (when-let* ((timer (plist-get (plist-get guest :editing-transfer) :timer)))
+      (cancel-timer timer))
+    (plist-put guest :editing-transfer nil)
+    (maphash
+     (lambda (other _recipient)
+       (unless (equal peer other)
+         (niwa-collaboration--transport-send
+          (plist-get room :transport) other
+          (list :t "editing-presence" :id (plist-get guest :editing-item)
+                :peer peer :mode "clear" :clientId (plist-get guest :editing-client)
+                :clock (1+ (or (plist-get guest :editing-clock) 0))))))
+     (plist-get room :guests))
+    (plist-put guest :editing-client nil)
+    (plist-put guest :editing-pointing nil)
+    (plist-put guest :editing-clock nil)))
+
+(defun niwa-collaboration-editing--conversation (session item-id)
+  "Return bounded archived conversation records for ITEM-ID in SESSION."
+  (let* ((history (niwa-shared-conversation-history
+                   session item-id :limit niwa-shared-conversation--history-limit))
+         (selected (mapcar (lambda (turn) (plist-get turn :text))
+                           (reverse (plist-get history :turns)))))
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq-local niwa--session session)
+      (dolist (text selected) (insert text "\n"))
+      (let ((records (niwa-collaboration--canonical-records (current-buffer))))
+        (dolist (record records)
+          (plist-put record :id (concat "archive:" (plist-get record :id))))
+        (list :conversation (vconcat records)
+              :conversationTruncated (if (plist-get history :truncated) t :json-false))))))
+
+(cl-defun niwa-collaboration-editing-dispatch
+    (room peer guest req-id args workspace authorize attach &optional conversation)
+  "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM.
+GUEST is PEER's entry in ROOM, which must still be current.
+Items live in WORKSPACE.  AUTHORIZE, called without arguments, says whether
+ROOM may still act; with GUEST's presence and write permission it is checked
+at dispatch, at queue admission, before commit and before replying.
+ATTACH is called with the ID of each item a successful edit touched.
+CONVERSATION, when non-nil, is called with an item ID and returns
+properties appended to a successful read reply."
+  (let* ((action (plist-get args :action))
+         (read-only (member action '("list" "read" "export" "status")))
+         (room-authorize authorize)
+         (authorize (lambda ()
+                      (and (eq guest (niwa-collaboration--guest room peer))
+                           (or read-only (plist-get guest :writable))
+                           (funcall room-authorize)))))
+    (unless (and (member action '("list" "status" "read" "create" "import" "update"
+                                  "rename" "revert" "delete" "export" "discussion"
+                                  "library" "library-add" "library-remove" "library-install" "library-uninstall"
+                                  "library-catalog" "library-fetch"))
+                 (or (equal action "discussion") (funcall authorize)))
+      (error "This link does not permit that editing operation"))
+    ;; The element library belongs to the host, not to a session item.
+    (when (string-prefix-p "library" action)
+      (cl-return-from niwa-collaboration-editing-dispatch
+        (niwa-shared-library-handle
+         args (lambda (reply)
+                (when (funcall authorize)
+                  (niwa-collaboration-editing--send room peer req-id reply))))))
+    ;; Discussions belong to every kind of store item; the editor reaches them
+    ;; through its own channel, which also carries its attachments.
+    (when (equal action "discussion")
+      (cl-return-from niwa-collaboration-editing-dispatch
+        (niwa-collaboration-discussions-perform
+         room guest
+         (append (list :action (plist-get args :op)
+                       :item (concat "artifact:" (niwa-shared-editing--valid-id
+                                                  (plist-get args :id))))
+                 args)
+         (lambda (reply)
+           (when (eq guest (niwa-collaboration--guest room peer))
+             (niwa-collaboration-editing--send
+              room peer req-id
+              (if (plist-get reply :error) reply (list :result reply)))))
+         (lambda () (eq guest (niwa-collaboration--guest room peer))))))
+    (when (equal action "read")
+      (niwa-shared-editing--valid-id (plist-get args :id))
+      (niwa-collaboration-editing-depart room peer)
+      (plist-put guest :editing-item (plist-get args :id)))
+    ;; Closed keys prevent guests providing host state or attribution.
+    (let ((request (list :action action
+                         :sync (if (equal action "read") t :json-false)
+                         :actor (concat "Guest: " (plist-get guest :name)))))
+      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range))
+        (when (plist-member args key)
+          (setq request (plist-put request key (plist-get args key)))))
+      (niwa-artifact-backend-call
+       workspace request
+       (lambda (reply)
+         (when (funcall authorize)
+           (condition-case err
+               (progn
+                 (unless (or read-only (equal action "delete")
+                             (plist-get reply :error))
+                   (when-let* ((id (or (plist-get (plist-get reply :result) :id)
+                                       (plist-get args :id))))
+                     (funcall attach id)))
+                 (when (and conversation (equal action "read")
+                            (not (plist-get reply :error)))
+                   (setq reply
+                         (list :result
+                               (append (plist-get reply :result)
+                                       (condition-case history-error
+                                           (funcall conversation (plist-get args :id))
+                                         (error (list :conversationError
+                                                      (error-message-string history-error))))))))
+                 (niwa-collaboration-editing--send
+                  room peer req-id
+                  (if (plist-get reply :error) reply
+                    (list :result (plist-get reply :result)))))
+             (error (niwa-collaboration-editing--send
+                     room peer req-id (list :error (error-message-string err)))))))
+       authorize))))
+
+(defun niwa-collaboration-editing--dispatch (room peer guest req-id args)
+  "Execute ARGS for GUEST's REQ-ID in session ROOM.
+The room must still serve its session.  Editing an item from a chat's room
+attaches it to that chat, and read replies carry the item's conversation."
+  (let ((session (plist-get room :session)))
+    (niwa-collaboration-editing-dispatch
+     room peer guest req-id args (niwa-session-workspace session)
+     (lambda () (eq room (niwa-collaboration--room-for-session session)))
+     (lambda (id) (niwa-artifact-store-attach session id))
+     (lambda (id) (niwa-collaboration-editing--conversation session id)))))
+
+(defun niwa-collaboration-editing-handle (room peer frame &optional dispatch)
+  "Handle bounded editor FRAME from authenticated PEER in ROOM.
+A completed transfer goes to DISPATCH, called like
+`niwa-collaboration-editing--dispatch' (the default, for session
+rooms) with ROOM, PEER, the guest, the request id and the decoded args.
+A transfer carries at most ROOM's `:editing-max-bytes' of base64, 24 MiB
+unless the room says otherwise."
+  (when-let* ((guest (niwa-collaboration--guest room peer)))
+    (let ((req-id (plist-get frame :reqId)))
+      (condition-case err
+          (if (equal (plist-get frame :t) "editing-presence")
+              (niwa-collaboration-editing--presence room peer guest frame)
+            (unless (niwa-collaboration--request-id-p req-id)
+              (error "Invalid editing request identity"))
+            (let* ((offset (plist-get frame :offset)) (total (plist-get frame :total))
+                   (data (plist-get frame :data))
+                   (transfer (plist-get guest :editing-transfer)))
+              (unless (and (integerp offset) (>= offset 0)
+                           (integerp total) (> total 0)
+                           (<= total (or (plist-get room :editing-max-bytes)
+                                         (* 24 1024 1024)))
+                           (stringp data) (<= (length data) 65536)
+                           (string-match-p "\\`[A-Za-z0-9+/=]+\\'" data))
+                (error "Invalid editing transfer"))
+              (when (= offset 0)
+                (let ((reserved total))
+                  (maphash (lambda (other candidate)
+                             (unless (equal other peer)
+                               (cl-incf reserved (or (plist-get (plist-get candidate :editing-transfer) :total) 0))))
+                           (plist-get room :guests))
+                  (when (> reserved (* 48 1024 1024))
+                    (error "Room transfers are busy; retry shortly")))
+                (when-let* ((timer (plist-get transfer :timer))) (cancel-timer timer))
+                (setq transfer (list :id req-id :total total :offset 0 :parts nil
+                                     :started (float-time)))
+                (plist-put transfer :timer
+                           (run-at-time 60 nil
+                                        (lambda ()
+                                          (when (eq transfer (plist-get guest :editing-transfer))
+                                            (plist-put guest :editing-transfer nil)))))
+                (plist-put guest :editing-transfer transfer))
+              (unless (and transfer (equal req-id (plist-get transfer :id))
+                           (= total (plist-get transfer :total))
+                           (= offset (plist-get transfer :offset))
+                           (< (- (float-time) (plist-get transfer :started)) 60)
+                           (<= (+ offset (length data)) total))
+                (error "Editing transfer interrupted; retry"))
+              (plist-put transfer :parts (cons data (plist-get transfer :parts)))
+              (plist-put transfer :offset (+ offset (length data)))
+              (when (= (plist-get transfer :offset) total)
+                (cancel-timer (plist-get transfer :timer))
+                (plist-put guest :editing-transfer nil)
+                (funcall
+                 (or dispatch #'niwa-collaboration-editing--dispatch)
+                 room peer guest req-id
+                 (niwa-shared-editing--parse
+                  (decode-coding-string
+                   (base64-decode-string (apply #'concat (nreverse (plist-get transfer :parts))))
+                   'utf-8-unix))))))
+        (error
+         (when-let* ((timer (plist-get (plist-get guest :editing-transfer) :timer)))
+           (cancel-timer timer))
+         (plist-put guest :editing-transfer nil)
+         (when (niwa-collaboration--request-id-p req-id)
+           (niwa-collaboration-editing--send
+            room peer req-id (list :error (error-message-string err)))))))))
+
+(add-hook 'niwa-artifact-backend-change-hook #'niwa-collaboration-editing--changed)
+
+(provide 'niwa-collaboration-editing)
+;;; niwa-collaboration-editing.el ends here

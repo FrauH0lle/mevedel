@@ -8,10 +8,10 @@ import shutil
 import sys
 import time
 
-if os.getenv("MEVEDEL_TEST_STATUS_LOG"):
-    with open(os.environ["MEVEDEL_TEST_STATUS_LOG"], "a", encoding="utf-8") as log:
+if os.getenv("NIWA_TEST_STATUS_LOG"):
+    with open(os.environ["NIWA_TEST_STATUS_LOG"], "a", encoding="utf-8") as log:
         log.write(os.path.basename(sys.argv[0]) + " " + " ".join(sys.argv[1:]) + "\n")
-time.sleep(float(os.getenv("MEVEDEL_TEST_STATUS_DELAY", "0")))
+time.sleep(float(os.getenv("NIWA_TEST_STATUS_DELAY", "0")))
 
 if os.path.basename(sys.argv[0]) == "npm":
     if sys.argv[1] == "view":
@@ -21,7 +21,7 @@ if os.path.basename(sys.argv[0]) == "npm":
     target.mkdir(parents=True, exist_ok=True)
     (target / "install-invocation.json").write_text(json.dumps(sys.argv[1:]))
     time.sleep(0.1)
-    if os.getenv("MEVEDEL_TEST_INSTALL_FAIL"):
+    if os.getenv("NIWA_TEST_INSTALL_FAIL"):
         print("Fixture installation failed")
         sys.exit(1)
     adapter = target / "node_modules" / ".bin" / "claude-agent-acp"
@@ -31,28 +31,28 @@ if os.path.basename(sys.argv[0]) == "npm":
     print("Fixture adapter installed")
 elif sys.argv[1:] == ["--version"]:
     if os.path.basename(sys.argv[0]) == "node":
-        if os.getenv("MEVEDEL_TEST_NODE_FAILURE"):
+        if os.getenv("NIWA_TEST_NODE_FAILURE"):
             print("PRIVATE-DIAGNOSTIC-DO-NOT-FORWARD")
             sys.exit(3)
-        print(os.getenv("MEVEDEL_TEST_NODE_VERSION", "v22.4.0"))
+        print(os.getenv("NIWA_TEST_NODE_VERSION", "v22.4.0"))
     elif os.path.basename(sys.argv[0]) == "claude-agent-acp":
         print("0.86.0")
     else:
-        print(os.getenv("MEVEDEL_TEST_CLAUDE_VERSION", "2.1.293") + " (Claude Code)")
+        print(os.getenv("NIWA_TEST_CLAUDE_VERSION", "2.1.293") + " (Claude Code)")
 elif sys.argv[1:] == ["auth", "status", "--json"]:
-    if os.getenv("MEVEDEL_TEST_LOGGED_OUT"):
+    if os.getenv("NIWA_TEST_LOGGED_OUT"):
         # The real CLI exits 1 while still printing valid status JSON.
         print(json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}))
         sys.exit(1)
     print(json.dumps({"loggedIn": True,
-                      "authMethod": os.getenv("MEVEDEL_TEST_AUTH_METHOD", "claude.ai"),
-                      "apiProvider": os.getenv("MEVEDEL_TEST_AUTH_PROVIDER", "firstParty"), "subscriptionType": "max"}))
+                      "authMethod": os.getenv("NIWA_TEST_AUTH_METHOD", "claude.ai"),
+                      "apiProvider": os.getenv("NIWA_TEST_AUTH_PROVIDER", "firstParty"), "subscriptionType": "max"}))
 elif sys.argv[1:2] == ["install"]:
-    channel = os.getenv("MEVEDEL_TEST_INSTALL_CHANNEL")
+    channel = os.getenv("NIWA_TEST_INSTALL_CHANNEL")
     if channel:
         with open(channel, "w") as stream:
             stream.write(sys.argv[2])
-    sys.exit(1 if os.getenv("MEVEDEL_TEST_INSTALL_FAIL") else 0)
+    sys.exit(1 if os.getenv("NIWA_TEST_INSTALL_FAIL") else 0)
 elif sys.argv[1:] == ["auth", "login", "--claudeai"]:
     # The current CLI's output; the prompt line has no newline.
     print("Opening browser to sign in...")

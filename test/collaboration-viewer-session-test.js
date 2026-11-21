@@ -37,7 +37,7 @@ const store = new Map();
 
 function build(tierBytes, seed, models = [], roomId = 'here') {
   store.clear();
-  if (seed) store.set('mevedel-rooms', JSON.stringify(seed));
+  if (seed) store.set('niwa-rooms', JSON.stringify(seed));
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   const document = {
     getElementById: id => nodes[id],
@@ -45,7 +45,7 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
   };
   const copied = [];
   const window = {
-    mevedelComposer: {expandable() {}, setExpanded() {}},
+    niwaComposer: {expandable() {}, setExpanded() {}},
     location: {origin: 'https://relay.example', pathname: '/'},
     localStorage: {
       getItem: key => (store.has(key) ? store.get(key) : null),
@@ -60,7 +60,7 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
   const modelRequests = [];
   const notices = [];
   const state = {mode: 'ask', owner: tierBytes === 64, connected: true, turnCount: 2, models};
-  const controller = window.mevedelSessionView.create({
+  const controller = window.niwaSessionView.create({
     state,
     send: frame => (frame.t === 'session-models' ? modelRequests : sent).push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
@@ -130,7 +130,7 @@ function roomLink(nodes, index) {
   assert.equal(openLink(nodes, 0),
                `https://relay.example/#other.${secretOf(2, 64)}`);
   // What the browser was handed is what is stored.
-  assert.equal(JSON.parse(store.get('mevedel-rooms'))[0].secret,
+  assert.equal(JSON.parse(store.get('niwa-rooms'))[0].secret,
                secretOf(2, 64));
   // The same room twice is one room, not a second announcement of it.
   controller.offerRoom({name: 'flow',
@@ -144,7 +144,7 @@ function roomLink(nodes, index) {
   card.children[card.children.length - 1].children[2].dispatch('click');
   assert.deepEqual(cards(nodes), []);
   assert.deepEqual(rooms(nodes), ['flow']);
-  assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 1);
+  assert.equal(JSON.parse(store.get('niwa-rooms')).length, 1);
 
   // A row is its name and one group of actions, so the layout can give the
   // actions their own column instead of stacking them in one cell.
@@ -155,7 +155,7 @@ function roomLink(nodes, index) {
   // Forget is the one thing that does drop it.
   actions.children.at(-1).dispatch('click');
   assert.deepEqual(rooms(nodes), []);
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')), []);
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms')), []);
   assert.equal(controller.hasRooms(), false);
 }
 
@@ -176,7 +176,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
                `https://relay.example/#other.${secretOf(2, 48)}`);
   // Capping is presentation: the browser keeps what it was handed, so
   // the owner tab beside this one still gets its own tier.
-  assert.equal(JSON.parse(store.get('mevedel-rooms'))[0].secret,
+  assert.equal(JSON.parse(store.get('niwa-rooms'))[0].secret,
                secretOf(2, 64));
 }
 
@@ -201,7 +201,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
   assert.deepEqual(rooms(nodes), []);
   assert.equal(controller.hasRooms(), false);
   // It is still remembered, for the tabs that are not standing in it.
-  assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 1);
+  assert.equal(JSON.parse(store.get('niwa-rooms')).length, 1);
 }
 
 // Two tabs share one key, so a write merges rather than replaces: one
@@ -212,7 +212,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
           workspace: 'ws'}]);
   controller.offerRoom({name: 'mine',
                         link: `https://relay.example/#other.${secretOf(5, 64)}`});
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms'))
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms'))
                    .map(room => room.room).sort(),
                    ['elsewhere', 'other']);
 }
@@ -233,7 +233,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
   assert.deepEqual(rooms(nodes), []);
   controller.offerRoom({name: 'unplaced',
                         link: `https://relay.example/#nowhere.${secretOf(9, 64)}`});
-  assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 3);
+  assert.equal(JSON.parse(store.get('niwa-rooms')).length, 3);
 }
 
 // A refusal is news, not a room: it shows, and it is not kept.
@@ -247,7 +247,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
                          message: 'The host declined'});
   assert.deepEqual(cards(nodes), ['flow · refused']);
   assert.deepEqual(rooms(nodes), []);
-  assert.equal(store.get('mevedel-rooms'), undefined);
+  assert.equal(store.get('niwa-rooms'), undefined);
 }
 
 // A second request refused while the first waits settles its own notice.
@@ -306,9 +306,9 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
 // the tab standing in it does not.
 {
   const {controller, nodes} = build(48);
-  controller.rememberCurrent('Lobby · mevedel');
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
-                   [{room: 'here', name: 'Lobby · mevedel',
+  controller.rememberCurrent('Lobby · niwa');
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms')),
+                   [{room: 'here', name: 'Lobby · niwa',
                      secret: secretOf(1, 48), workspace: 'ws'}]);
   assert.deepEqual(rooms(nodes), []);
 }
@@ -318,15 +318,15 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
 // to the tab that follows it.
 {
   const {controller} = build(64);
-  controller.rememberCurrent('Lobby · mevedel', true);
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
-                   [{room: 'here', name: 'Lobby · mevedel',
+  controller.rememberCurrent('Lobby · niwa', true);
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms')),
+                   [{room: 'here', name: 'Lobby · niwa',
                      secret: secretOf(1, 64), workspace: 'ws', lobby: true}]);
   // Standing in the lobby, there is no way back to it.
   assert.equal(controller.lobbyLink(), null);
 }
 {
-  const seed = [{room: 'lobby', name: 'Lobby · mevedel', secret: secretOf(6, 64),
+  const seed = [{room: 'lobby', name: 'Lobby · niwa', secret: secretOf(6, 64),
                  workspace: 'ws', lobby: true},
                 {room: 'room', name: 'draw', secret: secretOf(7, 64), workspace: 'ws'},
                 {room: 'far', name: 'Lobby · far', secret: secretOf(8, 64),
@@ -342,38 +342,38 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
   assert.equal(controller.lobbyLink(), null);
   // An owner's host names the running lobby; it is kept like one opened.
   controller.rememberLobby(`https://relay.example/#lobby.${secretOf(6, 64)}`,
-                           'Lobby · mevedel');
+                           'Lobby · niwa');
   assert.equal(controller.lobbyLink(), `https://relay.example/#lobby.${secretOf(6, 64)}`);
-  assert.equal(JSON.parse(store.get('mevedel-rooms'))[0].lobby, true);
+  assert.equal(JSON.parse(store.get('niwa-rooms'))[0].lobby, true);
   // A malformed link is ignored.
   controller.rememberLobby('https://relay.example/', 'Lobby · broken');
-  assert.equal(JSON.parse(store.get('mevedel-rooms')).length, 1);
+  assert.equal(JSON.parse(store.get('niwa-rooms')).length, 1);
 }
 // A lobby first stored as an ordinary room, such as an offer, is marked
 // once it says what it is.
 {
-  const {controller} = build(64, [{room: 'lobby', name: 'Lobby · mevedel',
+  const {controller} = build(64, [{room: 'lobby', name: 'Lobby · niwa',
                                    secret: secretOf(6, 64), workspace: 'ws'}]);
   assert.equal(controller.lobbyLink(), null);
   controller.rememberLobby(`https://relay.example/#lobby.${secretOf(6, 64)}`,
-                           'Lobby · mevedel');
+                           'Lobby · niwa');
   assert.equal(controller.lobbyLink(), `https://relay.example/#lobby.${secretOf(6, 64)}`);
 }
 // Rotated links make a new lobby; the old one's dead link goes, and other
 // workspaces' lobbies stay.
 {
   const {controller} = build(64, [
-    {room: 'old', name: 'Lobby · mevedel', secret: secretOf(6, 64), workspace: 'ws', lobby: true},
+    {room: 'old', name: 'Lobby · niwa', secret: secretOf(6, 64), workspace: 'ws', lobby: true},
     {room: 'far', name: 'Lobby · far', secret: secretOf(8, 64), workspace: 'other-ws', lobby: true},
     {room: 'room', name: 'draw', secret: secretOf(7, 64), workspace: 'ws'}]);
-  controller.rememberLobby(`https://relay.example/#new.${secretOf(9, 64)}`, 'Lobby · mevedel');
+  controller.rememberLobby(`https://relay.example/#new.${secretOf(9, 64)}`, 'Lobby · niwa');
   assert.equal(controller.lobbyLink(), `https://relay.example/#new.${secretOf(9, 64)}`);
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')).map(room => room.room).sort(),
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms')).map(room => room.room).sort(),
                    ['far', 'new', 'room']);
   // Remembering the same lobby again changes nothing.
-  const before = store.get('mevedel-rooms');
-  controller.rememberLobby(`https://relay.example/#new.${secretOf(9, 64)}`, 'Lobby · mevedel');
-  assert.equal(store.get('mevedel-rooms'), before);
+  const before = store.get('niwa-rooms');
+  controller.rememberLobby(`https://relay.example/#new.${secretOf(9, 64)}`, 'Lobby · niwa');
+  assert.equal(store.get('niwa-rooms'), before);
 }
 
 // The room a tab stands in is kept under the name its host gives it now,
@@ -382,7 +382,7 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
   const {controller} = build(48);
   controller.rememberCurrent('2026-10-05T17-00-abc');
   controller.rememberCurrent('Pipeline diagram');
-  assert.deepEqual(JSON.parse(store.get('mevedel-rooms')),
+  assert.deepEqual(JSON.parse(store.get('niwa-rooms')),
                    [{room: 'here', name: 'Pipeline diagram',
                      secret: secretOf(1, 48), workspace: 'ws'}]);
 }

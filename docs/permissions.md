@@ -1,14 +1,14 @@
 # Permission system
 
-The core policy has four owners. `mevedel-permission-mode.el` owns mode
-normalization and session-scoped transitions; `mevedel-permission-rules.el`
+The core policy has four owners. `niwa-permission-mode.el` owns mode
+normalization and session-scoped transitions; `niwa-permission-rules.el`
 owns rule matching, precedence buckets, protected-path policy, and resource
-grants; `mevedel-permission-persistence.el` owns authority-store validation and
-target-aware I/O. `mevedel-permissions.el` is the decision facade that combines
-those facts with tool policy. `mevedel-permission-review.el` owns optional
+grants; `niwa-permission-persistence.el` owns authority-store validation and
+target-aware I/O. `niwa-permissions.el` is the decision facade that combines
+those facts with tool policy. `niwa-permission-review.el` owns optional
 automatic exception review before human queue admission.
 
-`mevedel-implementation-policy.el` owns accepted implementation-policy data and
+`niwa-implementation-policy.el` owns accepted implementation-policy data and
 exact model resolution. The mode owner projects its request-local permission
 override through this same decision facade; implementation policy is not a
 separate rule store or a session-mode transition.
@@ -35,7 +35,7 @@ capabilities before execution. An approval applies only within the requested and
 approved scope; it cannot override an absolute denial or workflow ceiling.
 
 
-Single decision function `mevedel-check-permission`. Decision chain:
+Single decision function `niwa-check-permission`. Decision chain:
 
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
@@ -110,7 +110,7 @@ running `PermissionRequest` or `PermissionDenied`; they are not policy denials.
   allow. Its payload identifies the original policy, user, reviewer, `PreToolUse`, or
   `PermissionRequest` provenance.
 
-`mevedel-tool-permission-decide-now` decides a call that a running tool makes
+`niwa-tool-permission-decide-now` decides a call that a running tool makes
 on the model's behalf without dispatching it, such as WebFetch following a
 redirect to another host. It runs the same decision chain under a given
 buffer's session, request, agent invocation and buffer-local policy, but never
@@ -163,7 +163,7 @@ branch.
 
 Steps 2 and 5 consume rules from multiple buckets, in this order:
 invocation `skill-permission-rules`, request `skill-permission-rules`,
-session rules, persistent rules, defcustom `mevedel-permission-rules`.
+session rules, persistent rules, defcustom `niwa-permission-rules`.
 
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
@@ -192,7 +192,7 @@ restrictions still pass through the ordinary chain.
 
 ## Rule format
 
-Rules live on `mevedel-permission-rules` with form
+Rules live on `niwa-permission-rules` with form
 `(TOOL-NAME &key SPECIFIER VALUE :network BOOL :file-system GRANTS
 :sandbox-permissions LEVEL :action ACTION)`.
 One specifier per rule:
@@ -251,7 +251,7 @@ Before Bash rules match, leading `NAME=value` assignments are removed from
 each command segment when `NAME` is a safe environment variable and the value
 is plain text. The built-in list covers locale, terminal, color and similar
 variables that cannot load code or choose another executable
-(`mevedel-permission-rules-builtin-safe-env-vars`); permission stores add
+(`niwa-permission-rules-builtin-safe-env-vars`); permission stores add
 names through `:safe-env-vars`. Classification uses the same stripped command,
 so `LANG=C cat file` is read-only. Other assignments, and values containing
 expansions, keep the command complex. Explicit denies, Plan, and protected-path
@@ -278,13 +278,13 @@ and defcustom rules can contribute a reusable profile. Invocation- and
 request-scoped delegated rules may still authorize ordinary operations but
 never broaden the child sandbox.
 
-`mevedel-protected-paths` is an alist from glob to `read-only` or
+`niwa-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only, and so is the
 [artifact store](view.md#artifact-store)'s bookkeeping under
-`.mevedel/artifacts/.state/` -- metadata, shared item state, discussions and versions -- and
-`.mevedel/leases/`, so a model write cannot bypass an item's lease, versions
+`.niwa/artifacts/.state/` -- metadata, shared item state, discussions and versions -- and
+`.niwa/leases/`, so a model write cannot bypass an item's lease, versions
 and validation. These directory boundaries cover future artifact ids and missing
-bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
+bookkeeping files too. Authored files under `.niwa/artifacts/ID/` stay writable,
 including file creation and atomic replacement. Before a confined launch, missing
 protected state directories and their parents are created only in the primary
 workspace root, never in writable memory or additional roots; only the protected
@@ -311,7 +311,7 @@ kept). A workspace symlink into `~/.ssh` is therefore as protected as
 `~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
 
 Read and ApplyPatch, including resource-backed reads and writes, open the
-authorized canonical path through `scripts/mevedel-pin.py`. It walks the path
+authorized canonical path through `scripts/niwa-pin.py`. It walks the path
 from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
 descriptor that Emacs reads or writes through, so a directory a confined
 process swaps for a symlink after authorization, or a dangling link it
@@ -351,11 +351,11 @@ can finish after request cancellation so an aborted turn still has a review
 patch. They retain request identity, owner liveness, target and policy checks;
 replacement requests or changed authority still refuse their pending launch.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
-A pattern below `**/.mevedel/`, mevedel's own state directory, protects in the
+A pattern below `**/.niwa/`, niwa's own state directory, protects in the
 Bash sandbox the whole directory its literal part names, without a walk:
-`**/.mevedel/artifacts/.state/**` is one mount however many artifacts there
+`**/.niwa/artifacts/.state/**` is one mount however many artifacts there
 are. A literal file pattern protects the file. Native
-tool checks match the pattern itself, at any depth; a `.mevedel` nested deeper
+tool checks match the pattern itself, at any depth; a `.niwa` nested deeper
 in a root is covered by native tool checks only.
 Existing Git directories are still discovered under every writable discovery
 root, but a missing root-level `.git` mount target is created only at the primary
@@ -382,7 +382,7 @@ additional authority or remembered grants. Missing confinement or a remote
 target refuses the call; Plan denies all Eval modes. Review evidence includes
 the persistent definitions, sandbox age, feature count and fixed confinement.
 
-In Ask and Edits, `mevedel-permission-reviewer` selects the user or automatic
+In Ask and Edits, `niwa-permission-reviewer` selects the user or automatic
 review first. Automatic review typically approves task-relevant observational
 live Eval and clearly scoped requests without involving the user; mutations,
 unknown effects and unclear scope go to the user.
@@ -416,7 +416,7 @@ remembering off clears its path and network selections, without converting them
 to independent grants. Independent selections remain unchanged. The `g` extent
 selector preserves each path's remembering scope.
 The current invocation always receives the complete approved request.
-`.mevedel/permissions.el` stores a plist containing both `:rules` and
+`.niwa/permissions.el` stores a plist containing both `:rules` and
 `:resource-grants`, and optionally `:safe-env-vars`, a list of environment
 variable names (see [Rule format](#rule-format)). It lives with the project on
 its execution target and stores
@@ -432,8 +432,8 @@ to the session's execution target:
 
 | Session | Global store | Project store |
 | --- | --- | --- |
-| Local | `mevedel-user-dir/permissions.el` (default `~/.mevedel/permissions.el`) | `PROJECT/.mevedel/permissions.el` |
-| TRAMP | Target user's `~/.mevedel/permissions.el` | Target's `PROJECT/.mevedel/permissions.el` |
+| Local | `niwa-user-dir/permissions.el` (default `~/.niwa/permissions.el`) | `PROJECT/.niwa/permissions.el` |
+| TRAMP | Target user's `~/.niwa/permissions.el` | Target's `PROJECT/.niwa/permissions.el` |
 
 Both stores contribute `:rules`, `:resource-grants`, and `:safe-env-vars`; the
 safe variable names of both stores are combined. Global and project
@@ -442,7 +442,7 @@ explicit denies still win. Resource grants are additive, retaining their read
 or write access and exact or recursive extent. Paths in either store refer to
 the execution target, including `~` and filesystem requirements in command
 profiles. Durable files use native paths, without client-specific TRAMP prefixes.
-Local `mevedel-user-dir` customization does not relocate remote stores.
+Local `niwa-user-dir` customization does not relocate remote stores.
 
 ### Workspace-relative exact grants
 
@@ -457,7 +457,7 @@ glob rules are unchanged.
 
 Loading captures the store-owning workspace's canonical, target-qualified root
 and the relative spelling in a private runtime `:workspace-origin` record. The
-base is neither `.mevedel/` nor the current agent or child working directory.
+base is neither `.niwa/` nor the current agent or child working directory.
 The workspace root itself is canonicalized; no symlink component below that
 captured root is permitted for relative authority, even if the link currently
 points inside the workspace. Missing paths remain bounded by the same root and
@@ -512,7 +512,7 @@ changes refuse to overwrite an invalid file; fix it to the current
 `(:rules (...) :resource-grants (...))` shape first. Missing files are valid
 empty stores.
 
-Before each permission-controlled tool, mevedel refreshes both stores once and
+Before each permission-controlled tool, niwa refreshes both stores once and
 uses that snapshot for every rule and resource-grant lookup in the invocation.
 A remote refresh waits until the transport is idle, so it cannot re-enter a
 TRAMP command already in flight. Thus an external edit or revocation, including
@@ -579,7 +579,7 @@ Approving a tree installs its grant before checking queued siblings. Rechecks
 retain the originating tool buffer and delegated rules, and a captured hook ask
 continues to require its own answer.
 
-Read-only tools also receive mevedel's installed package source directory as
+Read-only tools also receive niwa's installed package source directory as
 an allowed root, so the model can read bundled manuals named by an absolute
 tool-description path. Mutation-capable tools do not receive this root; an
 installed package outside the active workspace therefore remains outside their
@@ -630,7 +630,7 @@ grant is given back.
 Local slash commands may own deterministic workflows outside the model tool
 pipeline. `/worktree status` and `/worktree create` run argv-safe Git commands
 directly on the session execution target because the user explicitly typed the
-command in the mevedel UI. That does not grant the model any Bash permission.
+command in the niwa UI. That does not grant the model any Bash permission.
 When the model uses the `git-worktree` skill and falls back to creating a
 worktree itself, creation happens through the normal Bash tool and this
 permission chain.
@@ -650,7 +650,7 @@ complete tree are therefore queued on the root session, not displayed as
 independent blocking overlays, and carry the requesting agent's canonical path
 for attribution. Nested ToolCall asks instead show their envelope and child
 tool-use identities, including for root-owned requests.
-`mevedel-permission-queue.el` owns a heterogeneous FIFO with five entry kinds:
+`niwa-permission-queue.el` owns a heterogeneous FIFO with five entry kinds:
 
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation
@@ -668,12 +668,12 @@ above the schedule's stored mode, is flagged as an escalation. The approved
 mode is not capped by the creating session's mode.
 
 Only the head is visible in the view interaction zone. The permission UI
-registers that head with `mevedel-view-interaction.el`, which owns ordering,
+registers that head with `niwa-view-interaction.el`, which owns ordering,
 callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 `deny-session`, `always-allow`) can coalesce
 queued siblings by re-running the decision chain. Resolved siblings leave the
 queue before any callback runs. Execution admission and rechecks share one
-pure decision in `mevedel-tool-exec-permission.el`: it orders operation
+pure decision in `niwa-tool-exec-permission.el`: it orders operation
 policy, full escalation, denied capabilities, command
 resources, and missing capabilities, and names the one thing that still
 stands in the way. Admission resolves that need through hooks, optional approval
@@ -698,7 +698,7 @@ coalescing siblings by re-running policy never fire that hook again.
 ### Absence timeout
 
 Permission prompts wait indefinitely by default. With
-`mevedel-permission-queue-timeout` set to a number of seconds (default nil,
+`niwa-permission-queue-timeout` set to a number of seconds (default nil,
 Customize suggests 3600), the root session's whole unanswered human queue
 expires after that long without a human answer. Root and agent cards share the
 one deadline, kept in the transient `permission-absence` session slot.
@@ -712,7 +712,7 @@ one deadline, kept in the transient `permission-absence` session slot.
   outside their folded details; nothing redraws on a timer.
 - Expiry detaches the complete queue and sets the hold below before any
   callback can run, retires remote controls
-  (`mevedel-collaboration-retire-permission-requests`), then settles each entry
+  (`niwa-collaboration-retire-permission-requests`), then settles each entry
   through the exactly-once gate with `(deny . REASON)`, settlement phase
   `expired` and `absence` hook provenance. The reason tells the model the user
   may be absent, that nothing was authorized, and not to retry just to get an
@@ -738,7 +738,7 @@ one deadline, kept in the transient `permission-absence` session slot.
   turns, running commands and collaboration can keep the
   [sleep inhibitor](sessions.md#system-sleep) held.
 
-`mevedel-notify-function` (default nil) receives a kind and a details plist;
+`niwa-notify-function` (default nil) receives a kind and a details plist;
 `:session` identifies the session. If a workspace schedule fails before it
 opens a session, `:session` is nil and `:workspace` identifies the workspace.
 
@@ -767,10 +767,10 @@ does not work: it has card keys, not DBus notification keywords.
 ;; One formatter, reused by every wrapper below.  A notification is a
 ;; glance surface: name the session, name the tool, and give one
 ;; truncated line of the command -- never the whole thing.
-(defun my/mevedel-permission-summary (entry)
+(defun my/niwa-permission-summary (entry)
   (let ((session (plist-get entry :session)))
     (format "%s%s: %s"
-            (if session (concat (mevedel-session-name session) " ") "")
+            (if session (concat (niwa-session-name session) " ") "")
             (or (plist-get entry :tool-name) (plist-get entry :kind))
             (truncate-string-to-width
              (replace-regexp-in-string
@@ -781,48 +781,48 @@ does not work: it has card keys, not DBus notification keywords.
                   ""))
              110 nil nil t))))
 
-(defun my/mevedel-notice-body (kind details)
+(defun my/niwa-notice-body (kind details)
   (if (eq kind 'permission)
-      (my/mevedel-permission-summary details)
+      (my/niwa-permission-summary details)
     (plist-get details :text)))
 
 ;; Desktop notification via Emacs's built-in DBus client
 ;; (notifications.el ships with Emacs and talks to the same
 ;; freedesktop daemon notify-send does):
 (require 'notifications)
-(setq mevedel-notify-function
+(setq niwa-notify-function
       (lambda (kind details)
         (notifications-notify
-         :title (format "mevedel: %s" kind)
+         :title (format "niwa: %s" kind)
          :urgency 'critical
          :timeout 0
-         :body (my/mevedel-notice-body kind details))))
+         :body (my/niwa-notice-body kind details))))
 
 ;; The same through the notify-send binary; destination 0 makes
 ;; call-process fire-and-forget:
-(setq mevedel-notify-function
+(setq niwa-notify-function
       (lambda (kind details)
         (call-process "notify-send" nil 0 nil
-                      "--app-name=mevedel" "--urgency=critical"
+                      "--app-name=niwa" "--urgency=critical"
                       "--expire-time=0"
-                      (format "mevedel: %s" kind)
-                      (my/mevedel-notice-body kind details))))
+                      (format "niwa: %s" kind)
+                      (my/niwa-notice-body kind details))))
 
 ;; Optional phone wake via ntfy; send no card or conversation content.
-(setq mevedel-notify-function
+(setq niwa-notify-function
       (lambda (_kind _details)
-        (call-process "curl" nil 0 nil "-s" "-d" "Open mevedel"
+        (call-process "curl" nil 0 nil "-s" "-d" "Open niwa"
                       "https://ntfy.sh/YOUR-TOPIC")))
 ```
 
 The desktop wrappers request a non-expiring critical notification.  The
 notification server may ignore the timeout hint.
 
-`mevedel-permission-prompt.el` is the focused UI owner for all four entry
+`niwa-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, dangerous-command
 presentation, and Eval presentation. The queue passes
 the entry, attribution, pending count, and settlement callback through
-`mevedel-permission-prompt-render`; the UI owner selects its presentation.
+`niwa-permission-prompt-render`; the UI owner selects its presentation.
 Rendering an Eval card does not load the execution-policy adapter. The queue
 retains ordering and outcome semantics; the shared interaction primitive retains
 overlay settlement and request cancellation.
@@ -841,9 +841,9 @@ picker hint. Folding changes presentation only. Every key, including `g`, `c`,
 `n` and `p`, works in either state.
 
 The preview elides a Bash command longer than
-`mevedel-permission-command-display-limit` (400 characters) and an Eval
-expression longer than `mevedel-eval-expression-display-limit` (8 lines).
-The `mevedel--remote` descriptor a browser collaborator reads is built from the
+`niwa-permission-command-display-limit` (400 characters) and an Eval
+expression longer than `niwa-eval-expression-display-limit` (8 lines).
+The `niwa--remote` descriptor a browser collaborator reads is built from the
 complete card, independent of local folding -- the native expansion binding
 does not control the browser, which must not approve what it cannot see. It includes the admission mode, approval
 cause, warnings and selected resource scope, including directory selections on
@@ -851,13 +851,13 @@ one-shot cards without remembering controls. A side-conversation mutation also
 carries the warning that its parent request is still active; the browser and
 Emacs disclose the same concurrency risk before approval.
 
-`mevedel-bash-policy.el` supplies Bash classification and reusable rule patterns. `mevedel-tool-exec-permission.el` combines that policy
+`niwa-bash-policy.el` supplies Bash classification and reusable rule patterns. `niwa-tool-exec-permission.el` combines that policy
 with the generic permission chain, persists approved authority, and adapts
 Bash and Eval decisions to the permission queue. Execution and rendering stay
-in `mevedel-tool-exec.el`.
+in `niwa-tool-exec.el`.
 
 Permission diagnostics are persisted to `permission-log.el` in the session
-directory when `mevedel-permission-log-enabled` is non-nil. The log is
+directory when `niwa-permission-log-enabled` is non-nil. The log is
 diagnostic only: resume never replays it into live permission state.
 Entries recorded before first materialization are buffered transiently and
 flushed when the session directory is created.
@@ -1001,7 +1001,7 @@ invocation-only; users may still author broader rules directly.
 
 Bash, fresh Eval, and native external tool helpers share the guarded child
 launcher and use one effective policy: required in Edits, off in Full Access,
-and the session's configured `mevedel-sandbox-mode` in Ask. On Linux, the backend resolves
+and the session's configured `niwa-sandbox-mode` in Ask. On Linux, the backend resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
 process, and network namespaces. Each probe attempt defaults to a 500 ms bound
 and retains at most 64 KiB of combined diagnostics. The probe waits for its own
@@ -1009,7 +1009,7 @@ process only, running no timers or other process output that would charge
 their time to the bound. A probe that times out or cannot start says nothing
 about the backend, so it is cached as retryable and the next launch probes
 again. If the full probe fails,
-Mevedel retries without replacing `/proc`. A successful retry retains the
+Niwa retries without replacing `/proc`. A successful retry retains the
 mount, user, process, and network boundary while exposing the host `/proc`
 view; pending and execution facts record `proc: host` instead of treating the
 whole backend as unavailable. A full successful profile mounts `/` read-only,
@@ -1026,7 +1026,7 @@ is inherited by descendants.
 Local confinement also masks the ssh-agent socket named by `SSH_AUTH_SOCK` and
 unsets the variable: a socket on a read-only mount still accepts connections,
 so an inherited agent would let confined code sign with the user's keys. Git
-over SSH instead uses a fetch-only broker (`scripts/mevedel-git-ssh.py`), started
+over SSH instead uses a fetch-only broker (`scripts/niwa-git-ssh.py`), started
 only for a command that names `git` in a local repository with SSH fetch
 remotes. Confined Git reaches it through `GIT_SSH_COMMAND` and a socket in a
 per-command owner-only directory under the tool-server socket root; that root is
@@ -1073,14 +1073,14 @@ and the ICE session manager controls the desktop session.
 Masking hides paths, but the temporary directory must stay shared, because
 commands, native tools and fresh Eval exchange files through it, and other
 programs put sockets there and under `/run`. A local confined command
-therefore starts through `scripts/mevedel-landlock.py`, which applies a
+therefore starts through `scripts/niwa-landlock.py`, which applies a
 Landlock ruleset before the command and its descendants run. It restricts
 `LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (Landlock ABI 9): connecting to, or sending
 a datagram to, a pathname Unix socket created outside the command fails with
 `EACCES` unless that individual socket is allowed:
 
 - the Git SSH broker's per-command socket and the Wayland socket bound
-  back into the runtime directory, the sockets mevedel provides. The MCP
+  back into the runtime directory, the sockets niwa provides. The MCP
   socket root needs no entry: it is masked, and only the broker directory is
   bound back beneath it;
 - explicitly approved write grants naming a socket. A directory grant, even
@@ -1127,8 +1127,8 @@ command to connect. File access to its directory alone is insufficient. Sockets
 created by the current command and its descendants need no additional grant.
 
 The `abi` probe on the host and the launcher inside confinement run `python3`
-on the script in mevedel's source directory, like the Git SSH broker and the
-execution spool worker. When the workspace is a writable mevedel checkout, a
+on the script in niwa's source directory, like the Git SSH broker and the
+execution spool worker. When the workspace is a writable niwa checkout, a
 confined edit to one of these scripts runs as host code at the next probe or
 launch; this development setup is outside the boundary.
 
@@ -1324,7 +1324,7 @@ The first direct fallback in each live session emits one user-visible warning
 and adds one model-visible note to the affected tool result. Later fallbacks do
 not repeat the warning, but completed Bash and fresh-Eval results retain their
 actual invocation facts for the transcript and audit trail. Additive filesystem
-facts include read and write grant counts. Mevedel does not add a persistent
+facts include read and write grant counts. Niwa does not add a persistent
 sandbox status-line item.
 
 Protected restrictions are layered after writable roots. Existing glob matches
@@ -1340,7 +1340,7 @@ snapshot.
 
 ### Optional approval review
 
-`mevedel-permission-reviewer` is `user` by default. Set it to `auto` to review
+`niwa-permission-reviewer` is `user` by default. Set it to `auto` to review
 permission exceptions before displaying a card. The `guardian` workload may
 approve the complete invocation once, deny with a reason, or defer. It sees
 actual root user intent, exact arguments, requested capabilities, current target
@@ -1389,7 +1389,7 @@ entry type when approval is required. Edits automatically permits confined
 fresh Eval, while live Eval remains an exception. Full Access permits both. Like Bash,
 an `ask` fires `PermissionRequest` before queue admission without changing the
 specialized card. The expression shown in the prompt is subject to
-`mevedel-eval-expression-display-limit`.  The prompt also shows the
+`niwa-eval-expression-display-limit`.  The prompt also shows the
 requested execution mode and, for live Eval, whether UI preservation is
 enabled. An optional `justification` on any Eval call appears on the card and
 in reviewer evidence as the model's quoted reason. It never authorizes anything
@@ -1429,10 +1429,10 @@ provenance.
 
 ## Sub-agent permission propagation
 
-Sub-agent buffers carry `mevedel--session` set buffer-locally to the
+Sub-agent buffers carry `niwa--session` set buffer-locally to the
 **root session struct, by reference** (allocated in
-`mevedel-agent-conversation-open`). The pipeline reads
-`mevedel--session` from the current buffer at tool-dispatch entry, so a
+`niwa-agent-conversation-open`). The pipeline reads
+`niwa--session` from the current buffer at tool-dispatch entry, so a
 tool dispatched at any nesting depth observes the root's permission mode,
 direct rules, explicit denies, protected resources, resource grants, and
 confinement policy. Any
@@ -1472,20 +1472,20 @@ user explicitly resolves it or interrupts that agent turn. Redraws use the
 ordinary interaction-zone lifecycle and preserve the active composer draft.
 
 If the permission step ever runs without a session in context,
-`mevedel-tool-permission-step` emits a `display-warning` once per tool
+`niwa-tool-permission-step` emits a `display-warning` once per tool
 ("Permission step for ... ran with no session in context"); that
 fallback would silently consult only the defcustom-scoped global
 defaults, which is the actual hazard. Repeats are logged quietly to
 `*Messages*` without disturbing the echo area.
 
-`mevedel-tool-permission.el` owns permission-step path fan-out, decision
+`niwa-tool-permission.el` owns permission-step path fan-out, decision
 logging, permission hook dispatch, and prompt orchestration. The Pipeline only
 places that step in the standard tool sequence.
 
 ## Bash permission example
 
 ```elisp
-(setq mevedel-permission-rules
+(setq niwa-permission-rules
       '(("Bash" :action ask)                       ; default ask
         ("Bash" :pattern "echo"     :action allow)
         ("Bash" :pattern "echo *"   :action allow)
@@ -1494,7 +1494,7 @@ places that step in the standard tool sequence.
         ("Bash" :pattern "git log*" :action allow)
         ("Bash" :pattern "rm *"     :action deny)))
 
-(setq mevedel-bash-dangerous-commands
+(setq niwa-bash-dangerous-commands
       '("rm" "sudo" "dd" "chmod" "curl" "wget" "ssh"))
 ```
 

@@ -121,7 +121,7 @@ streaming can concatenate assistant messages without an intervening newline.
 Extraction and view hiding use the same delimiter rules, including while a
 proposal streams. If a Plan response contains at least one
 standalone proposal tag but no complete, nonblank proposal
-can be extracted, mevedel shows a warning explaining why approval is unavailable
+can be extracted, niwa shows a warning explaining why approval is unavailable
 and asks you to have the assistant resend the full plan with correctly separated
 tags. It does not repair the transcript, publish a proposal, or leave Plan mode.
 Ordinary inline discussion of tag names, tool output, and injected agent output
@@ -247,7 +247,7 @@ each toggle otherwise moved the card and the transcript above it by one row
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
 proposals, and on acceptance sets only the new Goal's budget, not the
-`mevedel-goal-token-budget` default. The first proposal resolves the
+`niwa-goal-token-budget` default. The first proposal resolves the
 `plan-implementation` workload and snapshots its model and effort into the same
 persisted selection. Later preset changes do not replace that selection.
 `M` changes only that implementation snapshot; choosing a model that cannot
@@ -264,7 +264,7 @@ If a step has no clear code location, it uses the most relevant file it reads an
 explains that anchor in its reply. The notes stay unsent, without
 prepared changes. The assistant must not edit code or send, take or close notes.
 Its reply summarizes the note numbers and steps and points to the notes list.
-Open `M-x mevedel-notes-list` to take, send, edit or delete each one; taking invites
+Open `M-x niwa-notes-list` to take, send, edit or delete each one; taking invites
 [Buddy's watch](buddy.md#workspace-dial-and-taken-notes) while you implement it.
 This choice uses the same Location, Context, model, skill and retry machinery as
 Direct. It also exits sticky Plan, although NoteWrite creation is allowed there,
@@ -399,7 +399,7 @@ directory that exists with no fork is refused with the fork transaction's
 cleanup command.
 
 Acceptance is final even if preparation fails. The source session persists a
-bounded retry record, and `mevedel-retry-plan-implementation` resumes from the
+bounded retry record, and `niwa-retry-plan-implementation` resumes from the
 completed preparation step instead of recreating artifacts, summaries, or
 worktrees. A post-acceptance preparation failure settles the original approval;
 it never restores an action that could archive the same proposal again. Here
@@ -425,7 +425,7 @@ successfully, whether gptel's FSM or an external engine such as Claude Code owns
 it. While kickoff authority is staged before admission, a competing ordinary
 composer submission is refused rather than inheriting that authority.
 Provider errors and aborts retain the record with the terminal reason for
-`mevedel-retry-plan-implementation`. Recorded reasons are bounded text: error
+`niwa-retry-plan-implementation`. Recorded reasons are bounded text: error
 data can carry whole requests or sessions, so printing is depth-limited and
 truncated rather than copying transcripts into the record and echo area.
 If recovery finds the matching Goal already durable but paused by session

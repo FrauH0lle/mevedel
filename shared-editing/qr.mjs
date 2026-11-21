@@ -17,4 +17,4 @@ function svg(text) {
     + `<rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
 }
 
-window.mevedelQr = Object.freeze({ svg });
+window.niwaQr = Object.freeze({ svg });

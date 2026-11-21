@@ -1,13 +1,13 @@
-# mevedel collaboration relay
+# niwa collaboration relay
 
-A content-blind rendezvous point for mevedel live browser collaboration.
+A content-blind rendezvous point for niwa live browser collaboration.
 The Emacs host and browser guests both dial it; it routes sealed binary
 envelopes between them and serves the static viewer. It never holds a room
 key: every session payload is AES-256-GCM sealed end to end, and the key
 travels only in the share link's URL fragment.
 
 The sealed payload protocol is **5**. Update the Emacs host, browser viewer
-and `mevedel-remote-artifact` clients together. Rebuild the relay binary to
+and `niwa-remote-artifact` clients together. Rebuild the relay binary to
 serve the updated viewer, then reload browser tabs. The relay's content-blind
 forwarding protocol is unchanged.
 
@@ -27,7 +27,7 @@ Every guest frame also carries `"nonce"`, random per socket; the host keeps
 the first it accepts and adds it to each frame for that peer alone, and
 guests drop frames bearing another nonce. The host refuses a frame without
 a nonce of 1 to 64 base64url characters and, once it has one, any frame bearing another. Broadcasts carry none and are limited to
-`mevedel-collaboration--broadcast-types`; sending another type to peer 0
+`niwa-collaboration--broadcast-types`; sending another type to peer 0
 is an error.
 
 Viewer destination links keep content selectors after the bearer fragment,
@@ -129,13 +129,13 @@ republished after rename; `currentSegment` remains frame metadata.
 - `GET /healthz` — liveness.
 
 With `-host-token` set, a `role=host` upgrade must carry the token in the
-`X-Mevedel-Host-Token` header or it is answered 404. Use this mode for a
+`X-Niwa-Host-Token` header or it is answered 404. Use this mode for a
 public-facing relay to keep strangers from opening rooms, holding idle
 connections, or driving outbound Web Push. Omit it for a tokenless localhost
 or test relay.
 Guests are never asked for it: their authority is the bearer link, and a
 stranger's room carries only their own ciphertext. Set the matching
-`mevedel-collaboration-relay-host-token` in Emacs when the relay uses one. A
+`niwa-collaboration-relay-host-token` in Emacs when the relay uses one. A
 header rather than a query parameter, because reverse proxies log query
 strings.
 
@@ -154,21 +154,21 @@ Linux binaries for amd64 and arm64, tagged `relay-<short sha>`
 change produces a new binary too. `go vet` and `go test` gate the release.
 
 ```bash
-gh release download relay-<short sha> -p 'mevedel-relay-linux-amd64'
+gh release download relay-<short sha> -p 'niwa-relay-linux-amd64'
 ```
 
 ## Build and run
 
 ```bash
-go build -o mevedel-relay .
-./mevedel-relay -addr 127.0.0.1:7466 \
+go build -o niwa-relay .
+./niwa-relay -addr 127.0.0.1:7466 \
   -host-token "$(head -c 24 /dev/urandom | base64)" \
-  -vapid-key-file ./mevedel-relay-vapid.pem
+  -vapid-key-file ./niwa-relay-vapid.pem
 go test ./...
 ```
 
 For local-network use, run it on the machine you like and point
-`mevedel-collaboration-relay-url` at it (`ws://127.0.0.1:7466`).
+`niwa-collaboration-relay-url` at it (`ws://127.0.0.1:7466`).
 
 ## Deploying behind nginx
 
@@ -190,33 +190,33 @@ Systemd unit:
 
 ```ini
 [Unit]
-Description=mevedel collaboration relay
+Description=niwa collaboration relay
 After=network.target
 
 [Service]
-EnvironmentFile=/etc/mevedel-relay
-ExecStart=/usr/local/bin/mevedel-relay -addr 127.0.0.1:7466 -host-token ${MEVEDEL_HOST_TOKEN} -vapid-key-file /var/lib/mevedel-relay/vapid.pem
+EnvironmentFile=/etc/niwa-relay
+ExecStart=/usr/local/bin/niwa-relay -addr 127.0.0.1:7466 -host-token ${NIWA_HOST_TOKEN} -vapid-key-file /var/lib/niwa-relay/vapid.pem
 DynamicUser=yes
-StateDirectory=mevedel-relay
+StateDirectory=niwa-relay
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Create `/etc/mevedel-relay` as a root-owned mode-0600 file containing
-`MEVEDEL_HOST_TOKEN=<random-token>`:
+Create `/etc/niwa-relay` as a root-owned mode-0600 file containing
+`NIWA_HOST_TOKEN=<random-token>`:
 
 ```bash
 TOKEN=$(head -c 24 /dev/urandom | base64)
-sudo install -o root -g root -m 600 /dev/null /etc/mevedel-relay
-printf 'MEVEDEL_HOST_TOKEN=%s\n' "$TOKEN" | sudo tee /etc/mevedel-relay >/dev/null
+sudo install -o root -g root -m 600 /dev/null /etc/niwa-relay
+printf 'NIWA_HOST_TOKEN=%s\n' "$TOKEN" | sudo tee /etc/niwa-relay >/dev/null
 ```
 
-Then set `mevedel-collaboration-relay-url` to `wss://collab.example.net` and
-`mevedel-collaboration-relay-host-token` to the same token. To print only the
+Then set `niwa-collaboration-relay-url` to `wss://collab.example.net` and
+`niwa-collaboration-relay-host-token` to the same token. To print only the
 value expected by that option later, run
-`sudo sed -n 's/^MEVEDEL_HOST_TOKEN=//p' /etc/mevedel-relay`.
+`sudo sed -n 's/^NIWA_HOST_TOKEN=//p' /etc/niwa-relay`.
 
 ### yunohost
 

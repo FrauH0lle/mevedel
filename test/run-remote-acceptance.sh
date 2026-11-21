@@ -3,11 +3,11 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 fixture="$root/test/remote-target/Containerfile"
-image=localhost/mevedel-remote-target:test
+image=localhost/niwa-remote-target:test
 suffix=$$
-ssh_container=mevedel-remote-ssh-$suffix
-podman_container=mevedel-remote-podman-$suffix
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/mevedel-remote-acceptance.XXXXXX")
+ssh_container=niwa-remote-ssh-$suffix
+podman_container=niwa-remote-podman-$suffix
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/niwa-remote-acceptance.XXXXXX")
 ssh_workspace_volume="$scratch/ssh-workspace"
 podman_workspace_volume="$scratch/podman-workspace"
 client_home=$HOME
@@ -81,7 +81,7 @@ podman run --detach \
     --security-opt apparmor=unconfined \
     --security-opt seccomp=unconfined \
     --publish 127.0.0.1::22 \
-    --volume "$scratch/id_ed25519.pub:/home/mevedel/.ssh/authorized_keys:ro" \
+    --volume "$scratch/id_ed25519.pub:/home/niwa/.ssh/authorized_keys:ro" \
     --volume "$ssh_workspace_volume:/workspace" \
     "$image" >/dev/null
 podman run --detach \
@@ -95,17 +95,17 @@ port=$(podman port "$ssh_container" 22/tcp)
 port=${port##*:}
 cat >>"$scratch/ssh-config" <<EOF
 
-Host mevedel-acceptance-alias-a
+Host niwa-acceptance-alias-a
     HostName 127.0.0.1
     Port $port
 
-Host mevedel-acceptance-alias-b
+Host niwa-acceptance-alias-b
     HostName 127.0.0.1
     Port $port
 EOF
 i=0
 until "$ssh_path" -F "$scratch/ssh-config" \
-    -p "$port" mevedel@127.0.0.1 true 2>/dev/null; do
+    -p "$port" niwa@127.0.0.1 true 2>/dev/null; do
     i=$((i + 1))
     if [ "$i" -ge 30 ]; then
         echo "SSH target did not become ready" >&2
@@ -130,19 +130,19 @@ if ! npx @emacs-eask/cli emacs --batch --eval \
     test -n "$grammar_file"
 fi
 export PATH="$scratch/bin:$PATH"
-export MEVEDEL_TEST_SSH_CONFIG="$scratch/ssh-config"
-export MEVEDEL_TEST_SSH_ROOT="/ssh:mevedel@127.0.0.1#$port:/workspace/"
-export MEVEDEL_TEST_SSH_ALIAS_A_ROOT="/ssh:mevedel@mevedel-acceptance-alias-a:/workspace/"
-export MEVEDEL_TEST_SSH_ALIAS_B_ROOT="/ssh:mevedel@mevedel-acceptance-alias-b:/workspace/"
-export MEVEDEL_TEST_PODMAN_ROOT="/podman:$podman_container:/workspace/"
-export MEVEDEL_TEST_PODMAN_IMAGE="$image"
-export MEVEDEL_TEST_PODMAN_VOLUME="$podman_workspace_volume"
-echo "mevedel: remote acceptance diagnostic: the Docker selector is not provisioned here; its journeys skip, and genuine Docker Engine evidence is external."
-echo "mevedel: remote acceptance diagnostic: all aliases and independent clients share this host and container route; physical second-host and distinct-route evidence is external."
-echo "mevedel: remote acceptance diagnostic: ordinary entry and Plan Worktree selection use callable command seams; rendered UI keypress automation is external."
-if [ -n "${MEVEDEL_TEST_SHARED_EDITING:-}" ]; then
+export NIWA_TEST_SSH_CONFIG="$scratch/ssh-config"
+export NIWA_TEST_SSH_ROOT="/ssh:niwa@127.0.0.1#$port:/workspace/"
+export NIWA_TEST_SSH_ALIAS_A_ROOT="/ssh:niwa@niwa-acceptance-alias-a:/workspace/"
+export NIWA_TEST_SSH_ALIAS_B_ROOT="/ssh:niwa@niwa-acceptance-alias-b:/workspace/"
+export NIWA_TEST_PODMAN_ROOT="/podman:$podman_container:/workspace/"
+export NIWA_TEST_PODMAN_IMAGE="$image"
+export NIWA_TEST_PODMAN_VOLUME="$podman_workspace_volume"
+echo "niwa: remote acceptance diagnostic: the Docker selector is not provisioned here; its journeys skip, and genuine Docker Engine evidence is external."
+echo "niwa: remote acceptance diagnostic: all aliases and independent clients share this host and container route; physical second-host and distinct-route evidence is external."
+echo "niwa: remote acceptance diagnostic: ordinary entry and Plan Worktree selection use callable command seams; rendered UI keypress automation is external."
+if [ -n "${NIWA_TEST_SHARED_EDITING:-}" ]; then
     node --no-experimental-webstorage --test shared-editing/test/room.browser.mjs
-elif [ -n "${MEVEDEL_TEST_REMOTE_TEST:-}" ]; then
+elif [ -n "${NIWA_TEST_REMOTE_TEST:-}" ]; then
     selector_home="$scratch/selector-home"
     mkdir -p "$selector_home/.cache" "$selector_home/.config" \
         "$selector_home/.local/share" "$selector_home/.local/state"
@@ -152,16 +152,16 @@ elif [ -n "${MEVEDEL_TEST_REMOTE_TEST:-}" ]; then
     XDG_DATA_HOME="$selector_home/.local/share" \
     XDG_STATE_HOME="$selector_home/.local/state" \
     npx @emacs-eask/cli emacs --batch \
-        -l test/test-mevedel-execution-remote.el \
-        -l test/test-mevedel-permission-relative-remote.el \
-        -l test/test-mevedel-history-search-remote.el \
-        -l test/test-mevedel-claude-code-remote.el \
-        --eval '(progn (message "mevedel: running selected remote journey")
-                       (test-mevedel-execution-remote-run-selector))'
+        -l test/test-niwa-execution-remote.el \
+        -l test/test-niwa-permission-relative-remote.el \
+        -l test/test-niwa-history-search-remote.el \
+        -l test/test-niwa-claude-code-remote.el \
+        --eval '(progn (message "niwa: running selected remote journey")
+                       (test-niwa-execution-remote-run-selector))'
 else
-    npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el \
-        test/test-mevedel-permission-relative-remote.el \
-        test/test-mevedel-execution-process-stderr.el \
-        test/test-mevedel-history-search-remote.el \
-        test/test-mevedel-claude-code-remote.el
+    npx @emacs-eask/cli test ert test/test-niwa-execution-remote.el \
+        test/test-niwa-permission-relative-remote.el \
+        test/test-niwa-execution-process-stderr.el \
+        test/test-niwa-history-search-remote.el \
+        test/test-niwa-claude-code-remote.el
 fi

@@ -3,17 +3,17 @@
 Supports `@note`, `@ref`, `@file`, `@agent`, `@mcp`.
 
 Expansion runs as a gptel prompt transform (priority -90) via
-`mevedel--transform-expand-mentions`, dispatching through
-`mevedel-mention-handlers`. Each mention becomes a compact
+`niwa--transform-expand-mentions`, dispatching through
+`niwa-mention-handlers`. Each mention becomes a compact
 `[kind:KEY -- STATUS]` placeholder in the prompt text; the full content
-is a staged reminder entry (`mevedel-reminders-stage-entry`) that the
+is a staged reminder entry (`niwa-reminders-stage-entry`) that the
 WAIT injector delivers in the synthetic reminder message after the
 current input and records in the hidden injection row. Deduplication
 commits ride the deferred reminder commit channel, so a request that
 dies before injection never marks content as shown.
 
 Root `WaitAgent` steering has no new gptel request on which that transform can
-run. At its delivery boundary, `mevedel-mentions-expand-user-input` therefore
+run. At its delivery boundary, `niwa-mentions-expand-user-input` therefore
 applies the same expansion to the prepared steering text before the
 suspended request re-enters `WAIT`; the returned reminder items are staged on
 the same fsm and delivered by the reminder injector later in that WAIT. The
@@ -21,7 +21,7 @@ original bound text remains in the composer, history, or pending-steering
 entry; only the model-ready copy contains placeholders. Expansion returns
 media contexts and deduplication updates explicitly: ordinary request
 transforms apply both, while steering attaches the media to its own injected
-user message with `mevedel-mentions-wrap-prompt-media` and commits
+user message with `niwa-mentions-wrap-prompt-media` and commits
 deduplication only when the steering entry is delivered.
 
 Inline `$skill` attachment scanning lives next to this transform and reuses
@@ -52,7 +52,7 @@ session-only `ApplyPatch` there, while an ordinary, shared, memory, or bare endp
 denied before the namespace can be materialized. Note conversations use the
 same Plan boundary; `Eval` is unavailable under Plan.
 
-`mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
+`niwa-mention-bindings.el` owns the shared atomic binding lifecycle for
 skills, direct notes, files, and MCP resources. Kind-specific discovery,
 resolution, content loading, permission checks, and request annotations remain
 in the skill and mention modules. File token recognition and braced-path
@@ -87,7 +87,7 @@ their current state.
 
 Composer drafts, pending input, retries, transcript prompts, history recall,
 and persisted input history carry the propertized prompt string. Copying or
-yanking a bound token inside mevedel preserves its locator; plain external text
+yanking a bound token inside niwa preserves its locator; plain external text
 has no property and follows normal send-time binding. Editing a token or
 lexically extending it removes only that occurrence's binding. Edits elsewhere
 and untouched copied occurrences retain theirs. Bindings add no face, badge,
@@ -149,8 +149,8 @@ schema, send-time binding, and dispatch branches.
   return a gitignore-filtered recursive listing
   (`rg --files --hidden --sort path`, without following descendant symlinks)
   capped at
-  `mevedel-file-mention-directory-max-entries` (default 1000). Text
-  contents read through `mevedel-tool-fs-read-slurp-file-contents` (512 KiB cap,
+  `niwa-file-mention-directory-max-entries` (default 1000). Text
+  contents read through `niwa-tool-fs-read-slurp-file-contents` (512 KiB cap,
   line numbers). Text delivery explicitly labels the attachment as task data,
   not host-loaded workspace instructions. An instruction-like filename such as
   `AGENTS.local.md` does not activate the attached contents as policy. The user
@@ -169,11 +169,11 @@ schema, send-time binding, and dispatch branches.
   in document order; a reminder names the `pages` value that continues a
   longer document. Otherwise the
   mention is rejected with an explanatory placeholder. Runs
-  `mevedel-check-permission "Read"` first — any non-allow yields
+  `niwa-check-permission "Read"` first — any non-allow yields
   "permission denied". Missing and unreadable files are rejected.
 - **@agent:name** — asks main agent to delegate via
   `Agent(task_name="NAME", message=...)` (the name is validated against
-  `mevedel-agent--registry` before the reminder is created). This delegation
+  `niwa-agent--registry` before the reminder is created). This delegation
   mention is not an `agent://` resource address, which is read-only inspection.
 - **@mcp:server:uri** — attaches an MCP resource via mcp.el
   (`mcp-hub-get-servers`, `mcp-server-connections`, `mcp-read-resource`).
@@ -192,7 +192,7 @@ Every rejection branch emits a follow-up `<system-reminder>` telling the
 LLM the bracketed placeholder is a system annotation, not user text.
 
 Context producers can mark generated prompt text with the transient
-`mevedel-mention-literal` property. Mention expansion preserves that text rather
+`niwa-mention-literal` property. Mention expansion preserves that text rather
 than activating tokens inside supplied code; it does not hide the code from the
 model. Producers must reconstruct this marking on temporary request copies when
 the generated context is rebuilt from persisted transcripts.
@@ -223,7 +223,7 @@ suppressed only after accepted delivery.
 
 ## Dedup
 
-- Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
+- Per-session: `niwa-session-mentions-shown` keyed on `(KIND . KEY)`
   stores `(turn . content-hash)`; unchanged hashes skip repeated text-reminder
   injection. Media contexts remain part of each request that mentions them;
   ordinary path/MIME context entries are deduplicated within that request. Direct notes use their UUID as `KEY`, so changed
@@ -232,7 +232,7 @@ suppressed only after accepted delivery.
   resources use server name plus URI. The kind and exact locator prevent
   cross-kind collisions, while the current content hash causes changed content
   to be attached again.
-- Read dedup: `@file` records reads on `mevedel-session-touched-files`
+- Read dedup: `@file` records reads on `niwa-session-touched-files`
   so later Read calls short-circuit
 
 ## Drag/drop grants
@@ -251,17 +251,17 @@ expansion and released again if the entry never reaches the model.
 ## Clipboard images
 
 `C-y` in the view composer saves a clipboard image to
-`<workspace-root>/.mevedel/state/media/` and inserts an `@file` mention for it.
+`<workspace-root>/.niwa/state/media/` and inserts an `@file` mention for it.
 The saved image follows the same pending exact-file grant and media
 attachment path as a dropped file. If no clipboard image is available,
 `C-y` falls back to normal text yank.
 
 ## Completion
 
-`mevedel-note-capf` (`@note` and `@ref`), `mevedel-file-capf`, `mevedel-agent-capf`,
-`mevedel-mcp-capf` (two-stage: server names at `@mcp:`, resource URIs at
+`niwa-note-capf` (`@note` and `@ref`), `niwa-file-capf`, `niwa-agent-capf`,
+`niwa-mcp-capf` (two-stage: server names at `@mcp:`, resource URIs at
 `@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
-Registered in `mevedel-install`/`-uninstall`.
+Registered in `niwa-install`/`-uninstall`.
 
 `@file` completion enumerates only inside the session's allowed roots, so
 `../` stops at each root boundary and an out-of-root or remote-escaping

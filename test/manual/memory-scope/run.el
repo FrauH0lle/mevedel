@@ -8,7 +8,7 @@
 (require 'helpers (file-name-concat (locate-dominating-file load-file-name "Eask") "test" "helpers"))
 (require 'gptel-openai-extras)
 (require 'gptel-openai-oauth)
-(require 'mevedel-tool-patch)
+(require 'niwa-tool-patch)
 
 (defvar scope--nested-p nil
   "Whether this case exposes project storage at local://shared/.")
@@ -92,14 +92,14 @@
                           (concat (match-string 1 line)
                                   (scope--resolve root session (match-string 2 line) t)) line))
                     (split-string (car args) "\n") "\n"))
-            (proposal (mevedel-tool-patch-parse patch root)))
+            (proposal (niwa-tool-patch-parse patch root)))
        ;; Check every parsed destination too; malformed headers cannot bypass mapping.
        (dolist (op (plist-get proposal :operations))
          (dolist (path (delq nil (list (plist-get op :path) (plist-get op :move-path))))
            (unless (or (file-in-directory-p path (file-name-concat root "local" session))
                        (file-in-directory-p path (file-name-concat root "shared")))
              (error "Patch path outside writable scope"))))
-       (mevedel-tool-patch-commit (mevedel-tool-patch-planned-changes proposal))
+       (niwa-tool-patch-commit (niwa-tool-patch-planned-changes proposal))
        "Patch applied"))))
 
 (defun scope--tools (root session record)
@@ -221,7 +221,7 @@
   "Execute writer and isolated reader for KIND under ARM in TRIAL."
   (let* ((scope--freeform-p (equal arm "freeform-work"))
          (scope--nested-p (or scope--freeform-p (equal arm "nested-shared")))
-         (root (make-temp-file "mevedel-scope-case-" t))
+         (root (make-temp-file "niwa-scope-case-" t))
          (writer (format "work-%d" trial)) (reader (if (equal kind "scratch") writer "next-session"))
          (notes (cond (scope--freeform-p (scope--shared-address (if (= trial 1) "export-investigation.md" "backend-findings.md")))
                       ((equal arm "split") "local://notes.md")
@@ -268,7 +268,7 @@
       (delete-directory root t))))
 
 (ert-deftest scope-experiment ()
-  (if (getenv "MEVEDEL_SCOPE_SMOKE")
+  (if (getenv "NIWA_SCOPE_SMOKE")
       (let ((root (make-temp-file "scope-smoke-" t)))
         (unwind-protect
             (progn
@@ -300,9 +300,9 @@
                   (should-not (string-match-p "sessions/\\|topics/\\|local://" system))
                   (should (string-match-p "Search for relevant existing material" system)))))
           (delete-directory root t)))
-    (let* ((config-path (getenv "MEVEDEL_SCOPE_PROVIDER"))
-           (output (getenv "MEVEDEL_SCOPE_OUTPUT"))
-           (model (intern (getenv "MEVEDEL_SCOPE_MODEL")))
+    (let* ((config-path (getenv "NIWA_SCOPE_PROVIDER"))
+           (output (getenv "NIWA_SCOPE_OUTPUT"))
+           (model (intern (getenv "NIWA_SCOPE_MODEL")))
            config backend rows)
       (unwind-protect
           (progn
@@ -317,12 +317,12 @@
             (delete-file config-path)
             (dotimes (index 2)
               (dolist (kind '("scratch" "handoff" "correction"))
-                (dolist (arm (cond ((getenv "MEVEDEL_SCOPE_FREEFORM") '("freeform-work"))
-                                  ((getenv "MEVEDEL_SCOPE_NESTED") '("nested-shared"))
+                (dolist (arm (cond ((getenv "NIWA_SCOPE_FREEFORM") '("freeform-work"))
+                                  ((getenv "NIWA_SCOPE_NESTED") '("nested-shared"))
                                   ((= index 0) '("split" "shared-default"))
                                   (t '("shared-default" "split"))))
                   (let (row)
-                    (mevedel-test--with-captured-diagnostics nil
+                    (niwa-test--with-captured-diagnostics nil
                       (setq row (scope--case backend model arm (1+ index) kind)))
                     (push row rows)
                     (scope--put output (decode-coding-string (json-serialize (vconcat (reverse rows)) :false-object :false :null-object nil) 'utf-8-unix)))))))

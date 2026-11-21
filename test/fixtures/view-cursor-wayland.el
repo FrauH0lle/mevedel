@@ -7,23 +7,23 @@
 
 ;;; Code:
 
-(setq load-path (read (getenv "MEVEDEL_TEST_LOAD_PATH")))
-(require 'mevedel-view)
-(setq mevedel-present-enabled nil)
+(setq load-path (read (getenv "NIWA_TEST_LOAD_PATH")))
+(require 'niwa-view)
+(setq niwa-present-enabled nil)
 (run-at-time
  0.1 nil
  (lambda ()
    (let ((status 0) result)
      (condition-case err
          (let ((frame (make-frame-on-display
-                       (getenv "MEVEDEL_NATIVE_DISPLAY")
+                       (getenv "NIWA_NATIVE_DISPLAY")
                        '((width . 143) (height . 58) (menu-bar-lines . 0)
                          (tool-bar-lines . 0) (vertical-scroll-bars . nil)))))
            (select-frame frame)
            (blink-cursor-mode -1)
            (sit-for 0.1)
            (switch-to-buffer (get-buffer-create "*cursor-regression*"))
-           (mevedel-surface-mode)
+           (niwa-surface-mode)
            (local-set-key [left] #'backward-char)
            (local-set-key [right] #'forward-char)
            (setq-local buffer-invisibility-spec t
@@ -32,7 +32,7 @@
            (insert (apply #'concat (make-list 60 "ordinary line\n")))
            (let ((start (point)))
              (insert "Right now there are up to 5 `Calling Tool: arg...` lines "
-                     "(`mevedel-view-pending-tools-visible-max`), each added and "
+                     "(`niwa-view-pending-tools-visible-max`), each added and "
                      "removed separately. With fast parallel calls, that makes "
                      "the area flicker. They also use a different style from "
                      "the settled group just above them, which already reads "
@@ -58,7 +58,7 @@
              (setq result (list :rows rows :line-height (frame-char-height)
                                 :modified (buffer-modified-p)))))
        (error (setq status 1 result (list :error (error-message-string err)))))
-     (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT") (prin1 result (current-buffer)))
+     (with-temp-file (getenv "NIWA_NATIVE_RESULT") (prin1 result (current-buffer)))
      (kill-emacs status))))
 
 ;;; view-cursor-wayland.el ends here

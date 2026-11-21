@@ -9,7 +9,7 @@
   // handing on more than you hold is not expressible.
   // Module scope, not instance scope: it is read while the instance's
   // own bindings are still being initialised.
-  const STORE = 'mevedel-rooms';
+  const STORE = 'niwa-rooms';
 
   const TIERS = [
     {name: 'view', bytes: 32, what: 'read only'},
@@ -22,7 +22,7 @@
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
     const promptInput = document.getElementById('new-session-prompt');
-    window.mevedelComposer.expandable(promptInput);
+    window.niwaComposer.expandable(promptInput);
     const modelInput = document.getElementById('new-session-model');
     const modelLabel = document.getElementById('new-session-model-label');
     const effortInput = document.getElementById('new-session-effort');
@@ -32,9 +32,9 @@
     const submit = document.getElementById('new-session-create');
     const lede = document.getElementById('new-session-lede');
     // The first prompt carries files like any other prompt.
-    const files = window.mevedelAttachments.create({
+    const files = window.niwaAttachments.create({
       list: document.getElementById('new-session-attachments'), notice});
-    window.mevedelAttachments.bind(files, {
+    window.niwaAttachments.bind(files, {
       target: document.getElementById('new-session-form'), input: promptInput,
       button: document.getElementById('new-session-attach'),
       picker: document.getElementById('new-session-files')});
@@ -260,7 +260,7 @@
       notices.push({reqId, name: name || 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
-      window.mevedelComposer.setExpanded(promptInput, false);
+      window.niwaComposer.setExpanded(promptInput, false);
       render();
     }
 
@@ -516,7 +516,7 @@
       inviteQr.hidden = shown;
       if (shown) return;
       button.setAttribute('aria-pressed', 'true');
-      inviteQr.querySelector('.invite-qr-code').innerHTML = window.mevedelQr.svg(linkFor(tier.bytes));
+      inviteQr.querySelector('.invite-qr-code').innerHTML = window.niwaQr.svg(linkFor(tier.bytes));
       inviteQr.querySelector('figcaption').textContent =
         `Scan to join with ${tier.name} access: ${tier.what}.`;
     }
@@ -529,7 +529,7 @@
         row.append(el('span', 'invite-name', tier.name));
         row.append(el('span', 'invite-what', tier.what));
         const actions = el('span', 'room-actions');
-        if (inviteQr && window.mevedelQr) {
+        if (inviteQr && window.niwaQr) {
           const qr = el('button', 'btn quiet', 'QR code');
           qr.type = 'button';
           qr.setAttribute('aria-pressed', 'false');
@@ -592,5 +592,5 @@
                           openNewSession: open});
   }
 
-  window.mevedelSessionView = Object.freeze({create});
+  window.niwaSessionView = Object.freeze({create});
 })();

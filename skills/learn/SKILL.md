@@ -55,5 +55,5 @@ the existing file's style, and state each new instruction with its relevant scop
 Update or replace duplicate or stale entries instead of appending another copy.
 
 Invoking this skill authorizes the requested write-back, but every concrete edit
-still uses normal mevedel tool permissions and review. Ask only when the correct
+still uses normal niwa tool permissions and review. Ask only when the correct
 destination or scope is materially ambiguous.

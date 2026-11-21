@@ -13,7 +13,7 @@
 
   function renderMarkdown(text) {
     const root = el('div', 'prose');
-    root.innerHTML = window.mevedelMarkdown.render(text);
+    root.innerHTML = window.niwaMarkdown.render(text);
     // Only add our DOM-built, textContent-based highlighter after sanitizing;
     // never reinterpret code text as HTML.
     root.querySelectorAll('pre > code').forEach(code => {
@@ -377,7 +377,7 @@
         ? 'This artifact was deleted on the host'
         : `Open ${record.title || record.artifact || 'this artifact'}`);
     if (available) {
-      window.mevedelNav.link(open, href({artifact: record}), () => onArtifactOpen(record));
+      window.niwaNav.link(open, href({artifact: record}), () => onArtifactOpen(record));
     }
     card.append(open);
     return card;
@@ -503,7 +503,7 @@
       const available = typeof onAgentOpen === 'function' && !!record.sender;
       const open = el(available ? 'a' : 'button', 'btn quiet', 'Open transcript');
       if (available) {
-        window.mevedelNav.link(open, href({agent: {path: record.sender}}), () => onAgentOpen(record.sender));
+        window.niwaNav.link(open, href({agent: {path: record.sender}}), () => onAgentOpen(record.sender));
       } else {
         open.type = 'button';
         open.disabled = true;
@@ -818,6 +818,6 @@
     return true;
   }
 
-  window.mevedelTranscriptRenderer = Object.freeze(
+  window.niwaTranscriptRenderer = Object.freeze(
     {renderRecord, markContinuations, groupActivity, fitActivityFailures, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey, messageAction});
 })();

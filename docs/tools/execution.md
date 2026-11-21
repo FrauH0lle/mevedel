@@ -81,7 +81,7 @@ The transport accepts only `git-upload-pack` and `git-upload-archive`, and only
 for the SSH destinations of the repository's fetch remotes as configured when
 the command started. Push, other remote commands, other hosts, extra ssh
 options and Git configuration such as `remote.NAME.uploadpack` are refused with
-a `mevedel-git-ssh:` message before ssh runs. Push stays with the user: a
+a `niwa-git-ssh:` message before ssh runs. Push stays with the user: a
 refusal is not a confinement failure to retry, and a push is escalated only
 when the user asked for it. A wrapper that runs Git without `git` in the
 command text, submodule remotes, and remote execution targets do not get the
@@ -308,7 +308,7 @@ A stop is neutral, not a failure,
 though the model-facing outcome fact stays `failure`. The owner's own mailbox
 delivery of that completion adds no second line; a parent receiving a child's
 forwarded completion shows it as a notice. One classifier,
-`mevedel-tool-exec-completion`, turns a completion's termination and outcome
+`niwa-tool-exec-completion`, turns a completion's termination and outcome
 into the word every surface shows (the Emacs notice and breadcrumb, the
 browser record and its group summary); the first matching rule wins:
 a stop termination (stopped, interrupted, cancelled, owner-stopped) says
@@ -380,7 +380,7 @@ Calls yield and use the managed polling controls above. StopExecution kills the
 child and discards its definitions. Request abort does the same before yield;
 after yield the call survives request abort, like fresh Eval. Idle services hold
 neither agent results nor sleep inhibition and do not block rewind/transfer. The one-shot
-`mevedel-eval-sandbox-idle-timeout` defaults to 600 seconds; nil disables expiry.
+`niwa-eval-sandbox-idle-timeout` defaults to 600 seconds; nil disables expiry.
 Session close, Emacs exit, rewind, fork and control transfer kill the sandbox.
 Working-directory or writable-root changes restart it on the next call.
 Results report lost definitions after reset, crash, expiry or restart once a

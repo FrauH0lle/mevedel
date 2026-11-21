@@ -1,6 +1,6 @@
-Set up mevedel-native repository guidance for this workspace.
+Set up niwa-native repository guidance for this workspace.
 
-You are running inside mevedel. Your job is to inspect the repository,
+You are running inside niwa. Your job is to inspect the repository,
 ask only the useful setup questions, and then create or improve the
 files that make future agent work in this workspace sharper.
 
@@ -20,7 +20,7 @@ User-provided focus: {{ARGUMENTS}}
 
 Produce high-signal, repo-specific guidance. Prefer a small accurate
 artifact over a comprehensive but generic one. Reuse useful material
-from existing AI instruction files, but convert it to mevedel-native
+from existing AI instruction files, but convert it to niwa-native
 shape when writing new files.
 
 ## Phase 1: Choose Scope
@@ -34,7 +34,7 @@ Good first questions:
   - `{ label: "Project AGENTS.md (Recommended)", description: "Shared repo guidance committed with the project." }`
   - `{ label: "Personal AGENTS.local.md", description: "Private local guidance for this checkout." }`
   - `{ label: "Both project + personal", description: "Shared guidance plus private preferences." }`
-- Optional mevedel artifacts:
+- Optional niwa artifacts:
   - `{ label: "Skills + hooks (Recommended)", description: "Add reusable workflows and lifecycle automation when the repo justifies them." }`
   - `{ label: "Skills only", description: "Add $name-invocable workflows without hooks." }`
   - `{ label: "Hooks only", description: "Add lifecycle automation without skills." }`
@@ -56,8 +56,8 @@ Prioritize:
 - `AGENTS.md`, `AGENTS.local.md`, `.cursor/rules/`,
   `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`,
   `.clinerules`, `opencode.json`, `.mcp.json`
-- existing `.agents/skills/`, `.agents/memory/`, `.mevedel/skills/`,
-  `.mevedel/memory/`, `.mevedel/hooks.json`, `.mevedel/hooks/`
+- existing `.agents/skills/`, `.agents/memory/`, `.niwa/skills/`,
+  `.niwa/memory/`, `.niwa/hooks.json`, `.niwa/hooks/`
 - `git worktree list`, when sibling worktrees may carry fresher local
   guidance
 
@@ -134,18 +134,18 @@ a skill is meant for explicit user invocation only.
 
 For durable model memory, prefer project memory under
 `{{PROJECT_MEMORY_DIR}}` and user memory under `{{USER_MEMORY_DIR}}`
-when the guidance is portable across agent tools. Use `.mevedel/memory/`
-only for mevedel-specific memories.
+when the guidance is portable across agent tools. Use `.niwa/memory/`
+only for niwa-specific memories.
 
 ## Phase 7: Write Hooks
 
 Create hooks only when automation has a clear payoff. Prefer simple
 project hooks in `{{HOOKS_FILE}}` plus scripts in `{{HOOKS_DIR}}`;
-mevedel also loads project hooks from `.agents/hooks.json` and
+niwa also loads project hooks from `.agents/hooks.json` and
 `.agents/hooks.el`.
 Make hook behavior inspectable and bounded. If adding project hooks,
 tell the user they must review and trust them with
-`M-x mevedel-hooks-trust-project`.
+`M-x niwa-hooks-trust-project`.
 
 ## Phase 8: Final Response
 

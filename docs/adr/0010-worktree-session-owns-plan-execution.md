@@ -58,7 +58,7 @@ repository-relative paths and inserted into the target. In use, accepting a
 plan opened a new buffer that lacked the whole planning conversation, and the
 planning conversation simply ended: the user had to find the new buffer and
 could not continue the discussion there. Worktree Fork, added later
-(`mevedel-session-fork-create`), already copies a conversation into a linked
+(`niwa-session-fork-create`), already copies a conversation into a linked
 worktree with retargeted paths and restored session-edited files, so the
 clean-session path, its target-only recovery, the worktree-only summary and the
 target Goal reservation were removed in favour of forking. Consequences: the

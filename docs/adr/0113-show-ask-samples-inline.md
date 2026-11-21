@@ -12,7 +12,7 @@ the option it belongs to.
 Samples are wrapped into rows at the width of the narrowest window showing the
 view, continuation rows
 marked `↪`. The panel's height is fixed per question: the longest of that
-question's samples in rows, capped by `mevedel-ask-sample-height`. Moving between
+question's samples in rows, capped by `niwa-ask-sample-height`. Moving between
 options therefore never moves anything below the panel. The panel shows the
 sample-bearing option point visited last. Moving onto an option without a
 sample, or out of the question, leaves the panel unchanged, and only reaching a
@@ -46,7 +46,7 @@ line count, moving the next question by as much on an 80-column window.
 
 ## Consequences
 
-- Long samples make the form taller, by at most `mevedel-ask-sample-height`
+- Long samples make the form taller, by at most `niwa-ask-sample-height`
   rows: only the open question shows its panel
   ([ADR 0127](0127-open-one-ask-question-at-a-time.md)).
 - Samples are fontified as Markdown once per form and cached.

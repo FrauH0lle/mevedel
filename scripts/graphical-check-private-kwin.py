@@ -30,7 +30,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-SOCKET = "mevedel-kwin"
+SOCKET = "niwa-kwin"
 GRACE = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 
@@ -172,7 +172,7 @@ def run_session(command, session_timeout, base_env=None):
         raise SystemExit("graphical-check-private-kwin: cannot become subreaper")
     signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
     previous = {sig: signal.getsignal(sig) for sig in signals}
-    private = tempfile.mkdtemp(prefix="mevedel-kwin-")
+    private = tempfile.mkdtemp(prefix="niwa-kwin-")
     try:
         for sig in signals:
             signal.signal(sig, _interrupt)
@@ -210,8 +210,8 @@ def main(argv=None):
     options = parse_arguments(sys.argv[1:] if argv is None else argv)
     # Keep grammar lookup roots as metadata, not as the session's HOME/XDG.
     env = os.environ | {
-        "MEVEDEL_GRAPHICAL_HOST_HOME": os.environ.get("HOME") or str(Path.home()),
-        "MEVEDEL_GRAPHICAL_HOST_CONFIG": os.environ.get("XDG_CONFIG_HOME", ""),
+        "NIWA_GRAPHICAL_HOST_HOME": os.environ.get("HOME") or str(Path.home()),
+        "NIWA_GRAPHICAL_HOST_CONFIG": os.environ.get("XDG_CONFIG_HOME", ""),
     }
     return run_session(check_command(options.check_args),
                        options.session_timeout, base_env=env)

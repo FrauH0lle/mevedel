@@ -1,8 +1,8 @@
-// The machine-facing entry point mevedel drives: newline-delimited JSON on
+// The machine-facing entry point niwa drives: newline-delimited JSON on
 // stdin and stdout, one request per line.  It is not meant for people; the
 // attach/detach commands and the MCP server are.
 //
-// mevedel keeps its own record of attached links, so a request carries the
+// niwa keeps its own record of attached links, so a request carries the
 // link itself (over the pipe, never on a command line or in output):
 //
 //   in   {id, link, guestId, name, ref?, body?}

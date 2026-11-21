@@ -1,6 +1,6 @@
 /* Trusted room controller. The opaque editor gets only an item-scoped port. */
 'use strict';
-window.mevedelEditingView = {
+window.niwaEditingView = {
   create({ state, send, el, flash, summarize, href, onVisibility = () => {}, onCatalog = () => {},
            onDock = () => {}, onFocusChat = () => {} }) {
     const box = document.getElementById('editing-box'),
@@ -19,7 +19,7 @@ window.mevedelEditingView = {
       catalogFailed = false,
       current = null,
       connected = false,
-      room = window.mevedelViewerTransport.parseFragment(window.location.hash)?.roomId || '',
+      room = window.niwaViewerTransport.parseFragment(window.location.hash)?.roomId || '',
       frame = null,
       recovering = false,
       sequence = 0,
@@ -54,10 +54,10 @@ window.mevedelEditingView = {
     // state; the editor reports both and performs the rename. A docked item
     // shares the page with the room, which keeps the page title.
     function roomTitle() {
-      return state.sessionName ? `${state.sessionName} · mevedel` : 'mevedel live session';
+      return state.sessionName ? `${state.sessionName} · niwa` : 'niwa live session';
     }
     function retitle() {
-      if (!panel.hidden && !docked) document.title = state.editorTitle = `${titleInput.value} · mevedel`;
+      if (!panel.hidden && !docked) document.title = state.editorTitle = `${titleInput.value} · niwa`;
       else if (state.editorTitle) {
         state.editorTitle = null;
         document.title = roomTitle();
@@ -147,7 +147,7 @@ window.mevedelEditingView = {
       new TextDecoder('utf-8', { fatal: true }).decode(
         Uint8Array.from(atob(text), (c) => c.charCodeAt(0)),
       );
-    const draftKey = (id) => `mevedel-editing:${room}:${id}`;
+    const draftKey = (id) => `niwa-editing:${room}:${id}`;
     function readDraft(id) {
       try {
         const draft = JSON.parse(localStorage.getItem(draftKey(id)));
@@ -311,7 +311,7 @@ window.mevedelEditingView = {
         }
         button.title = disabled ? unavailableReason : `Open ${item.title}`;
         button.setAttribute('aria-describedby', 'editing-status');
-        if (!disabled) window.mevedelNav.link(button, href({shared: item.id}), () => openItem(item.id));
+        if (!disabled) window.niwaNav.link(button, href({shared: item.id}), () => openItem(item.id));
         list.append(button);
       }
       document
@@ -469,7 +469,7 @@ window.mevedelEditingView = {
         if (current !== id || frame !== editorFrame) return;
         frame.contentWindow.postMessage(
           {
-            type: 'mevedel-editor',
+            type: 'niwa-editor',
             item: result,
             draft,
             readOnly: state.readOnly || recoveryOnly,
@@ -490,7 +490,7 @@ window.mevedelEditingView = {
       titleInput.value = catalog.get(requestedItem)?.title || '';
       titleInput.readOnly = true;
       showState('');
-      document.title = state.editorTitle = 'Shared work · mevedel';
+      document.title = state.editorTitle = 'Shared work · niwa';
       const note = el('p', 'panel-note', message);
       note.setAttribute('role', retry ? 'alert' : 'status');
       holder.replaceChildren(note);
@@ -510,7 +510,7 @@ window.mevedelEditingView = {
       pendingView(unavailableReason);
       render();
       // Room identity contains no bearer credentials. Never send the fragment to the editor.
-      room = window.mevedelViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || '';
+      room = window.niwaViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || '';
       try {
         const items = await request({ action: 'list' });
         if (generation !== availabilityGeneration) return;
@@ -589,7 +589,7 @@ window.mevedelEditingView = {
     function connection(up) {
       if (up) return;
       // The main viewer restores stored credentials after stripping the URL hash.
-      room = window.mevedelViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || room;
+      room = window.niwaViewerTransport.parseFragment(`#${state.fragment}`)?.roomId || room;
       connected = false;
       available = false;
       checking = false;

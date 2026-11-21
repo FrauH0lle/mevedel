@@ -22,11 +22,11 @@ The relay serves the viewer but never receives the room key.
 ## Start and stop sharing
 
 `/collab` starts a room for the current session, dialing the relay at
-`mevedel-collaboration-relay-url` as a WebSocket client, and
+`niwa-collaboration-relay-url` as a WebSocket client, and
 reports its bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
 without printing any secret, and `/collab stop` ends that session's room.
-`/collab stop all` (or `M-x mevedel-collaboration-stop-all`) ends every
+`/collab stop all` (or `M-x niwa-collaboration-stop-all`) ends every
 session's room and every lobby, and forgets lobbies recorded to restart.
 `/collab lobby` shares a workspace's session list instead; see
 [the lobby](#the-lobby).
@@ -52,7 +52,7 @@ work continues in Emacs; the host's own handoff is never held up.
 
 An open share or lobby requests that the host stay awake while a guest is
 connected, and for two hours after it starts or the last guest leaves,
-whichever is later. `mevedel-collaboration-keep-awake-idle-time` configures this
+whichever is later. `niwa-collaboration-keep-awake-idle-time` configures this
 empty-share interval in seconds; nil disables the cutoff, while zero keeps
 the host awake only while guests are connected. This prevents a forgotten
 empty share from blocking sleep indefinitely. A connected browser tab still
@@ -62,10 +62,10 @@ Temporary relay outages leave the share open. Losing connected guests starts
 the idle interval; repeated unsuccessful reconnects do not extend it. Rejoining
 guests request keep-awake again. The cutoff does not stop sharing or invalidate
 links, but a sleeping host cannot serve guests until it wakes and reconnects.
-Active mevedel requests independently prevent sleep, even after this cutoff.
+Active niwa requests independently prevent sleep, even after this cutoff.
 `/collab status` reports the keep-awake request and its idle expiry, not proof
 that the OS inhibitor succeeded. These requests inhibit sleep only while
-`mevedel-sleep-inhibit` is enabled and its command is available.
+`niwa-sleep-inhibit` is enabled and its command is available.
 
 The relay (the Go binary in `relay/`, which also serves the static viewer)
 is content-blind: every frame is sealed with AES-256-GCM under a room key
@@ -99,7 +99,7 @@ host once sent another connection cannot be replayed as an answer to this
 one; the remote-artifact package also takes a request's answer only from a
 frame bearing its own nonce. A guest takes only the first `challenge` on a
 socket. Broadcasts carry no nonce, and the host broadcasts only a bounded
-list of frame types (`mevedel-collaboration--broadcast-types`): `record`,
+list of frame types (`niwa-collaboration--broadcast-types`): `record`,
 `remove`, `notice`, `status`, `store-artifacts`, `agents`, `history-index`,
 `goal`, `tasks`, `background-work`, `discussions`, `bye`, and shared-editing
 change events (`editing` with `reqId` `event`); any other type must name its
@@ -120,7 +120,7 @@ than through the command allowlist:
 
 - `set-mode` changes the session permission mode, including to `full-auto`.
   The `mode` slash command stays in
-  `mevedel-collaboration-unsafe-guest-commands` for every guest: that
+  `niwa-collaboration-unsafe-guest-commands` for every guest: that
   refusal protects the allowlist from becoming an escalation path, and says
   nothing about a credential the host handed out for this purpose. The
   viewer offers the mode in its session settings, and keeps showing the mode
@@ -159,7 +159,7 @@ than through the command allowlist:
   fork is saved but its room cannot start, the host closes the child's
   buffers in Emacs, releases its lock and keeps the saved session. The
   refusal names its session id and says to open it in Emacs with
-  `M-x mevedel`.
+  `M-x niwa`.
 
 - `rewind` truncates the shared conversation after a settled assistant response,
   leaving working files alone. Only owner links offer **Rewind to here** beside
@@ -248,7 +248,7 @@ re-checks the token on every owner frame.
 ## Narrowed interactions
 
 A mirrored interaction reaches every writable guest by default. The closed
-`:audience` contract on its `mevedel--remote` descriptor is either nil for
+`:audience` contract on its `niwa--remote` descriptor is either nil for
 that default or the symbol `owner` to restrict it to owner-link guests. Both
 the creation broadcast and the replay a joining guest receives apply the
 filter, and so does the
@@ -509,7 +509,7 @@ count, and the consumers of an [artifact room](#artifact-rooms) while
 connected, marked `NAME (remote)`; the host at Emacs does not appear.
 
 Each hello carries the tab's page and visibility, and a sealed `viewing`
-frame reports every later change. `mevedel-collaboration-presence` recomputes
+frame reports every later change. `niwa-collaboration-presence` recomputes
 the workspace on each change, admission, departure, rename or room stop, and
 sends a guest a `presence` frame only when its content changed. Frames carry
 display names only; browser IDs stay on the host. Whiteboard cursors remain
@@ -691,25 +691,25 @@ one-time codes and host-key questions when a connection reopens, taking over a
 portable session lease another client let expire, and GPG passphrases read for
 `auth-source` through loopback pinentry. The failing step reports an error
 instead of hanging. A question on a client frame reaches the person there as
-usual. Before its first write to a remote target, mevedel asks once per target
+usual. Before its first write to a remote target, niwa asks once per target
 and Emacs process whether to keep the project's state there; a daemon nobody
-sits at sets `mevedel-session-durability-accept-target-storage` to accept in
+sits at sets `niwa-session-durability-accept-target-storage` to accept in
 advance. Questions that read single keys instead of the minibuffer are reached
 only from host commands.
 
-`mevedel-restart-unsafe-p` tells whether restarting this Emacs would interrupt
-mevedel work: a turn running or settling in any buffer (`mevedel-busy-p`,
+`niwa-restart-unsafe-p` tells whether restarting this Emacs would interrupt
+niwa work: a turn running or settling in any buffer (`niwa-busy-p`,
 including retained agents awaiting admission or terminal publication), a
 session's live command or Monitor, or an active Goal waiting between turns. A
 host can wait for it to return nil before restarting a daemon whose rooms are
-idle. `mevedel-busy-p` alone ignores those idle waits; the sleep inhibitor
+idle. `niwa-busy-p` alone ignores those idle waits; the sleep inhibitor
 uses it so that waiting does not keep a machine awake.
 
 The cockpit refuses to open, so a bare `/goal` from a guest is refused
 rather than opening a menu on the host's screen.
 
 Steps that run without the guard never ask either. Tool calls are confirmed by
-mevedel's permission pipeline, whose prompts room participants can answer, so
+niwa's permission pipeline, whose prompts room participants can answer, so
 session and agent buffers turn off gptel's own confirmation. A session save
 whose visited file changed on disk fails with an error instead of asking
 whether to save anyway. Tool file visits skip unsafe local variables, the
@@ -723,16 +723,16 @@ link that lists the workspace's sessions and opens or creates them. `/collab
 lobby` starts the current workspace's lobby and presents its links in the
 share panel; `/collab lobby stop` stops it, and `/collab lobby rotate`
 replaces its credentials. A host without a keyboard, such as an Emacs daemon,
-starts one with `(mevedel-collaboration-lobby-start DIRECTORY)`, which
+starts one with `(niwa-collaboration-lobby-start DIRECTORY)`, which
 returns the lobby with its links under `:link-view`, `:link-full` and
 `:link-owner`. `/collab status` reports running lobbies beside rooms.
 
 Unlike a room, a lobby's credentials persist, and so does the lobby itself.
-The credentials are generated once and stored in `.mevedel/lobby` in the
+The credentials are generated once and stored in `.niwa/lobby` in the
 workspace state directory, readable only by the user. A lobby runs until it is
 stopped: starting one records its workspace root in `lobbies.el` under
-`mevedel-user-dir`, and exiting Emacs leaves that record in place. When the
-next Emacs runs `mevedel-install`, it restarts every recorded lobby, after
+`niwa-user-dir`, and exiting Emacs leaves that record in place. When the
+next Emacs runs `niwa-install`, it restarts every recorded lobby, after
 startup has finished when it is installed from the init file, so the relay
 settings that follow it apply. The restarted lobby dials the same relay room,
 its links keep working, and browser tabs still within their reconnect window
@@ -832,17 +832,17 @@ whichever tab is shown.
 
 An artifact room shares one artifact with consumers elsewhere, such as Claude
 Code or Codex through the
-[remote-artifact package](https://github.com/FrauH0lle/mevedel/blob/master/remote-artifact/README.md), without giving them
+[remote-artifact package](https://github.com/FrauH0lle/niwa/blob/master/remote-artifact/README.md), without giving them
 the workspace. It is the third room kind beside session rooms and the lobby and
 runs independently of the lobby: starting, stopping or rotating the lobby does
 not touch it. This Emacs, the artifact's origin, stays authoritative and carries
 out every read itself.
 
-`M-x mevedel-collaboration-share-artifact` asks for one of the workspace's
+`M-x niwa-collaboration-share-artifact` asks for one of the workspace's
 whiteboards, documents or HTML artifacts, confirms the first share, copies the
 edit link to the kill ring and shows both links in a help window, never in
 `*Messages*`. A host without a keyboard shares with
-`(mevedel-collaboration-artifact-room-share DIRECTORY ID)`, which returns
+`(niwa-collaboration-artifact-room-share DIRECTORY ID)`, which returns
 `:link-view` and `:link-edit`. Markdown, image and other file artifacts
 cannot be shared.
 
@@ -855,25 +855,25 @@ Links keep the room shape `WEB-ORIGIN/#ROOM-ID.SECRET`: a view link's secret
 is the 32-byte room key, an edit link's the key and a 16-byte write token. No
 owner token is minted, and one offered in a hello is ignored. The link names no
 artifact. The credentials are generated on the first share and stored in the
-artifact's bookkeeping as `.mevedel/artifacts/.state/ID/link`, readable only by
+artifact's bookkeeping as `.niwa/artifacts/.state/ID/link`, readable only by
 the user; their existence is what makes the artifact shared. Sharing again
 returns the same links, also after the room stopped or Emacs restarted.
 
 ### Revoking, rotating, deleting, restarting
 
 Sharing, revoking and rotating are one host operation,
-`(mevedel-collaboration-artifact-room-sharing WORKSPACE ID OPERATION)` with
+`(niwa-collaboration-artifact-room-sharing WORKSPACE ID OPERATION)` with
 OPERATION `share`, `revoke` or `rotate`; the commands, the daemon functions and
 the browser all go through it. Starting or ending a share notifies store
 observers, so browser listings and Project artifacts update.
 
-- **Revoke** (`M-x mevedel-collaboration-revoke-artifact`, or
-  `(mevedel-collaboration-artifact-room-revoke DIRECTORY ID)`) stops the room
+- **Revoke** (`M-x niwa-collaboration-revoke-artifact`, or
+  `(niwa-collaboration-artifact-room-revoke DIRECTORY ID)`) stops the room
   and deletes the credentials. Every connected consumer receives
   `{"t": "bye", "reason": "revoked"}` and is disconnected; the links never
   work again, and sharing afterwards mints new ones.
-- **Rotate** (`M-x mevedel-collaboration-rotate-artifact`, or
-  `(mevedel-collaboration-artifact-room-rotate DIRECTORY ID)`) is revoke then
+- **Rotate** (`M-x niwa-collaboration-rotate-artifact`, or
+  `(niwa-collaboration-artifact-room-rotate DIRECTORY ID)`) is revoke then
   share: consumers are told `revoked`, and the new links are returned or shown.
 - **Deleting** a shared artifact revokes it with reason `artifact-deleted`; the
   credentials go with its bookkeeping. A **duplicate** gets fresh bookkeeping,
@@ -882,8 +882,8 @@ observers, so browser listings and Project artifacts update.
   keeps the credentials.
 
 The roots of workspaces with shared artifacts are recorded per user in
-`mevedel-user-dir` as `artifact-rooms.eld` (mode 0600). Beside the lobby restore,
-`mevedel-install` runs `mevedel-collaboration-artifact-room-restore` once
+`niwa-user-dir` as `artifact-rooms.eld` (mode 0600). Beside the lobby restore,
+`niwa-install` runs `niwa-collaboration-artifact-room-restore` once
 startup is done. It scans each recorded root's bookkeeping for credentials and
 redials every shared artifact's room under its stored room id, so links handed
 out before the restart keep working. A root with no shared artifacts left, or
@@ -894,8 +894,8 @@ not.
 A consumer that dials a room with no host -- revoked, deleted or the origin
 offline -- is closed by the relay and reports one generic "Origin unavailable
 (revoked, deleted, or offline)". The browser viewer opening an artifact link
-gets the artifact welcome and shows only "Paste this link into mevedel or an
-MCP client." Project artifacts (`M-x mevedel-artifacts`) marks shared
+gets the artifact welcome and shows only "Paste this link into niwa or an
+MCP client." Project artifacts (`M-x niwa-artifacts`) marks shared
 artifacts in its Link column and details, and browser store listings mark them
 `shared` (see [sharing from the browser](#sharing-from-the-browser)).
 
@@ -908,7 +908,7 @@ room's. The room answers with its own welcome only:
 ```
 
 The welcome omits `origin` by default. Only an explicitly configured
-`mevedel-collaboration-artifact-room-origin-name` adds `"origin": "NAME"`;
+`niwa-collaboration-artifact-room-origin-name` adds `"origin": "NAME"`;
 no workspace directory or machine name is generated. Consumers use the relay
 host when no origin name is supplied. The welcome sends no session snapshot,
 roster, models, queue,
@@ -957,7 +957,7 @@ consumer's hello declared (unverified), so the Revert button applies as to
 any agent's edit; they attach the item to no session.
 
 An HTML artifact's room serves its files instead: everything in its directory
-`.mevedel/artifacts/ID/`, pages and assets alike. Any link tier may run
+`.niwa/artifacts/ID/`, pages and assets alike. Any link tier may run
 `files`, answered `{result: {primary, files: [{file, bytes}]}}`, and `read`
 with an optional `file` (default the primary file), answered `{result: {file,
 hash, bytes, text}}` for UTF-8 text or with base64 `data` in place of `text`
@@ -1003,18 +1003,18 @@ escapes in `text` and batches of several files count against it too. No action
 deletes the artifact or creates another one.
 
 A committed file change fires the store's change notification
-(`mevedel-artifact-store-changed-functions`), so origin session rooms, the
+(`niwa-artifact-store-changed-functions`), so origin session rooms, the
 lobby and their viewers refresh their listings as after a local `ApplyPatch`.
 The room's consumers get a change event for it, as below.
 
 Consumers cannot list, save or restore versions; versions stay the origin's
 tool for larger damage. Instead the origin records one version per working
 stretch of a room: once the room has committed no write for
-`mevedel-collaboration-artifact-room-version-idle` seconds (300), or when its
+`niwa-collaboration-artifact-room-version-idle` seconds (300), or when its
 last consumer leaves, its transport drops or the room stops. The version is
 the store's own, as after a local turn (an HTML artifact's is its primary
 file). Every committed write from the room calls
-`mevedel-collaboration-artifact-room-wrote`, which restarts the wait; for an
+`niwa-collaboration-artifact-room-wrote`, which restarts the wait; for an
 HTML artifact only writes of the primary file count, as locally only the
 primary file is versioned. Reads record nothing.
 
@@ -1047,27 +1047,27 @@ like any frame outside the allowlist.
 A room with a connected consumer, or within its idle interval, keeps the
 machine awake under the lobby's rule (`shared artifact active`).
 
-### Remote artifacts in mevedel
+### Remote artifacts in niwa
 
-Another mevedel consumes an artifact link as a **remote artifact**: the
+Another niwa consumes an artifact link as a **remote artifact**: the
 whiteboard, document or HTML artifact is listed with the workspace's own
 artifacts and agents use it through the same `shared://` addresses,
 `SharedEdit` and `ApplyPatch`, while every read and edit goes live to the
 origin. Nothing about it is written into the local artifact store and nothing
 is cached.
 
-`M-x mevedel-remote-artifact-attach` reads the link without echo (it never
+`M-x niwa-remote-artifact-attach` reads the link without echo (it never
 enters a chat, `*Messages*` or the minibuffer history), connects once to read
 the welcome, and registers the artifact with the current workspace under its
 origin id, so both sides call it the same thing. With a prefix argument, or
 when that id names a local artifact or another attached one, it asks for
 another name, the artifact's alias here. Attaching the same link again
 refreshes it, and under a new name renames it. `M-x
-mevedel-remote-artifact-detach` forgets it; the origin and other holders are
+niwa-remote-artifact-detach` forgets it; the origin and other holders are
 unaffected. Project artifacts attaches with `R` and detaches the selected
 remote artifact with `d`; the cockpit's Share menu has `R` and `D` under
 Remote artifacts. Links are kept per user, outside the project, in
-`mevedel-user-dir`'s `remote-artifacts.eld` (mode 0600), by workspace root;
+`niwa-user-dir`'s `remote-artifacts.eld` (mode 0600), by workspace root;
 the artifact backend restores a workspace's attachments on its first lookup
 of that workspace.
 
@@ -1118,14 +1118,14 @@ cards carry the latest one this Emacs heard, so an open panel can offer a
 [reload](#artifact-viewing). Events arrive while the bridge holds a connection
 to the origin, which it closes after 5 idle minutes.
 
-mevedel does not reimplement the relay transport: it runs the
-[remote-artifact package's](https://github.com/FrauH0lle/mevedel/blob/master/remote-artifact/README.md#the-bridge-for-mevedel)
+niwa does not reimplement the relay transport: it runs the
+[remote-artifact package's](https://github.com/FrauH0lle/niwa/blob/master/remote-artifact/README.md#the-bridge-for-niwa)
 `bridge` command as one private subprocess, by default the copy shipped with
-mevedel under `mevedel-shared-editing-node-program`
-(`mevedel-remote-artifact-command` chooses another). The package's pool
+niwa under `niwa-shared-editing-node-program`
+(`niwa-remote-artifact-command` chooses another). The package's pool
 connects on first use and closes a connection after 5 idle minutes. Each
 agent's edits use their own connection whose display name is
-`mevedel-remote-artifact-display-name` (default `USER@HOST`) followed by the
+`niwa-remote-artifact-display-name` (default `USER@HOST`) followed by the
 agent path, so the origin attributes them as `Agent: USER@HOST /root/worker
 (remote)`; reads use the plain display name.
 
@@ -1151,12 +1151,12 @@ material every session in the workspace can read, which in a whiteboard or
 chat project may be nothing but uploaded reference data. Browsing, reading,
 uploading and removing all need a full or owner link; a view link gets no
 **Files** tab and its requests are refused, so it still reveals only the
-session list. The host owns this in `mevedel-collaboration-files.el`.
+session list. The host owns this in `niwa-collaboration-files.el`.
 
 The project's own listing is the authority. It is `project-files` for the
 lobby's workspace root -- the VC backend's tracked and untracked files minus
 ignored ones in a repository, the transient project's ignores elsewhere --
-with workspace state under every `.mevedel/` component removed, including
+with workspace state under every `.niwa/` component removed, including
 nested projects and submodules, because it holds lobby credentials, permissions
 and memory. Private directories are not descended into for reference clones.
 A Git repository cloned inside a
@@ -1169,7 +1169,7 @@ from project.el itself (`project-vc-merge-submodules`), and with
 their path relative to the root, but a path is accepted only when the
 listing shows it: a file must be listed, and a folder must hold a listed
 file. The resolved name is then re-verified beneath the root with
-`mevedel-resource-within-root-p` before any I/O, which also refuses a
+`niwa-resource-within-root-p` before any I/O, which also refuses a
 symlinked file or folder. An ignored, private or linked file is therefore
 neither readable nor writable from a browser.
 
@@ -1620,7 +1620,7 @@ sheet. The viewer polls with `fetch-agent` frames while the sheet is
 open and refetches promptly on a roster change; the host validates the
 path against the agent registry -- never the filesystem -- and answers
 with targeted `agent` frames chunked under the wire bound. The reply
-crosses `mevedel-collaboration--canonical-records` over the agent's
+crosses `niwa-collaboration--canonical-records` over the agent's
 resident conversation buffer, the same projection that scrubs the root
 transcript, so only visible user text, response text, and settled tool
 records and allowlisted presentation travel, excluding raw hidden audit and
@@ -1658,7 +1658,7 @@ conversation runs turns that ask too.
 A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
-`mevedel-collaboration-remote-interactions` gates that surface. Lease
+`niwa-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, file-restoring rewind, edit, Worktree forks, publication, and execution-target
 changes remain host operations. The owner-only `fork` frame above creates
 Conversation Forks only. Owner acceptance of a Worktree plan is the typed,
@@ -1745,7 +1745,7 @@ refresh the same pending card. Explicit truncation marks oversized review text.
 ## Commands, skills, and tool display
 
 A writable guest's welcome also publishes the invocation roster its link
-tier is admitted to. `mevedel-collaboration-guest-skills` is an alist keyed
+tier is admitted to. `niwa-collaboration-guest-skills` is an alist keyed
 by `full` and `owner` whose values follow the `global-minor-mode` mode-list
 shape: `t`, `nil`, or a list of names, `(not NAME...)`, `t`, and `nil` read
 left to right until one decides, with an implicit `nil` at the end. An owner
@@ -1753,7 +1753,7 @@ link without its own entry inherits the `full` entry; the default admits an
 owner link to everything and a full link to nothing. The candidate universe
 is every local slash command plus every user-invocable skill, a bare name
 resolving to the command first, and
-`mevedel-collaboration-unsafe-guest-commands` wins over any admission: it
+`niwa-collaboration-unsafe-guest-commands` wins over any admission: it
 holds the commands that escalate, mutate durable state, manage the share, or
 only report to the host's display (`tokens`, `ps`, `tools`, `worktree`
 included), none of which can do anything useful for a guest, and `buddy`, which
@@ -1780,8 +1780,8 @@ and counts each tool's failures beside it. The running count stays in its
 one-line heading; the full summary is available on hover. The host also sends
 the group's total failure count; when the heading's ellipsis cuts the summary,
 the viewer shows that total as `(N failed)` beside it, checked once per render.
-Browser activity groups come from the same `mevedel-activity-group` module as
-the Emacs view's, through `mevedel-activity-group-partition`.
+Browser activity groups come from the same `niwa-activity-group` module as
+the Emacs view's, through `niwa-activity-group-partition`.
 Opening the group exposes the original tool/message/completion rows, with
 their own disclosure choices intact. Newly grouped rows already being read
 remain open; an explicit group fold wins thereafter. Scope changes, compound

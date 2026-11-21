@@ -1,0 +1,768 @@
+;;; test-niwa-file-state.el --- Tests for niwa-file-state.el -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'niwa-structs)
+(require 'niwa-file-state)
+(require 'niwa-workspace)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+
+
+;;
+;;; File state structs
+
+(niwa-deftest niwa-file-state--create
+  (:doc "`niwa-file-state--create' creates with all slots")
+  (let ((state (niwa-file-state--create
+                :path "/tmp/foo"
+                :content "hello"
+                :mtime '(0 0 0 0)
+                :size 5)))
+    (should (equal "/tmp/foo" (niwa-file-state-path state)))
+    (should (equal "hello" (niwa-file-state-content state)))
+    (should (equal '(0 0 0 0) (niwa-file-state-mtime state)))
+    (should (= 5 (niwa-file-state-size state)))))
+
+(niwa-deftest niwa-file-interaction--create
+  (:doc "`niwa-file-interaction--create' creates with defaults")
+  (let ((entry (niwa-file-interaction--create)))
+    (should (null (niwa-file-interaction-read-turn entry)))
+    (should (null (niwa-file-interaction-modified-turn entry)))))
+
+
+;;
+;;; File state factory
+
+(niwa-deftest niwa-file-state-from-file
+  ()
+  ,test
+  (test)
+  :doc "reads existing file into state"
+  (let ((tmp (make-temp-file "niwa-fs-" nil ".txt" "hello world")))
+    (unwind-protect
+        (let ((state (niwa-file-state-from-file tmp)))
+          (should (niwa-file-state-p state))
+          (should (equal (expand-file-name tmp)
+                         (niwa-file-state-path state)))
+          (should (equal "hello world" (niwa-file-state-content state)))
+          (should (= 11 (niwa-file-state-size state)))
+          (should (niwa-file-state-mtime state)))
+      (delete-file tmp)))
+
+  :doc "returns nil for missing file"
+  (should (null (niwa-file-state-from-file "/tmp/niwa-nonexistent-xyz")))
+
+  :doc "captures empty file"
+  (let ((tmp (make-temp-file "niwa-fs-empty-" nil ".txt" "")))
+    (unwind-protect
+        (let ((state (niwa-file-state-from-file tmp)))
+          (should (niwa-file-state-p state))
+          (should (equal "" (niwa-file-state-content state)))
+          (should (= 0 (niwa-file-state-size state))))
+      (delete-file tmp)))
+
+  :doc "captures an oversized file as a fingerprint without its content"
+  (let ((tmp (make-temp-file "niwa-fs-big-" nil ".log"
+                             (make-string 4096 ?x))))
+    (unwind-protect
+        (let* ((niwa-file-cache-max-file-bytes 1024)
+               (state (niwa-file-state-from-file tmp)))
+          (should (niwa-file-state-p state))
+          (should (null (niwa-file-state-content state)))
+          ;; No content means no claim on the cache byte budget, but the
+          ;; fingerprint still describes the file on disk.
+          (should (= 0 (niwa-file-state-size state)))
+          (should (= 4096 (niwa-file-state-stat-size state)))
+          (should (niwa-file-state-mtime state))
+          (should (niwa-file-state-ctime state)))
+      (delete-file tmp))))
+
+
+;;
+;;; LRU cache primitives
+
+(niwa-deftest niwa-file-cache-put
+  ()
+  ,test
+  (test)
+  :doc "inserts new state and promotes to MRU"
+  (let* ((cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "aa" :size 2))
+         (b (niwa-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (should (= 2 (hash-table-count (niwa-file-cache-table cache))))
+    (should (= 5 (niwa-file-cache-total-bytes cache)))
+    (should (equal (expand-file-name "/tmp/b")
+                   (car (niwa-file-cache-order cache)))))
+
+  :doc "update in place replaces prior size"
+  (let* ((cache (niwa-test-file-cache-create))
+         (v1 (niwa-file-state--create :path "/tmp/a" :content "aa" :size 2))
+         (v2 (niwa-file-state--create :path "/tmp/a" :content "aaaaa" :size 5)))
+    (niwa-file-cache-put cache v1)
+    (niwa-file-cache-put cache v2)
+    (should (= 1 (hash-table-count (niwa-file-cache-table cache))))
+    (should (= 5 (niwa-file-cache-total-bytes cache)))
+    (should (equal "aaaaa"
+                   (niwa-file-state-content
+                    (niwa-file-cache-get cache "/tmp/a")))))
+
+  :doc "returns the state argument"
+  (let* ((cache (niwa-test-file-cache-create))
+         (s (niwa-file-state--create :path "/tmp/a" :content "x" :size 1)))
+    (should (eq s (niwa-file-cache-put cache s)))))
+
+(niwa-deftest niwa-file-cache-get
+  ()
+  ,test
+  (test)
+  :doc "returns nil for missing key"
+  (let ((cache (niwa-test-file-cache-create)))
+    (should (null (niwa-file-cache-get cache "/tmp/missing"))))
+
+  :doc "returns cached state and promotes to MRU"
+  (let* ((cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "aa" :size 2))
+         (b (niwa-file-state--create :path "/tmp/b" :content "bb" :size 2))
+         (c (niwa-file-state--create :path "/tmp/c" :content "cc" :size 2)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (niwa-file-cache-put cache c)
+    ;; Order is now (c b a); touch a to promote.
+    (should (eq a (niwa-file-cache-get cache "/tmp/a")))
+    (should (equal (expand-file-name "/tmp/a")
+                   (car (niwa-file-cache-order cache))))))
+
+(niwa-deftest niwa-file-cache-remove
+  ()
+  ,test
+  (test)
+  :doc "removes existing entry and decrements total bytes"
+  (let* ((cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "aa" :size 2))
+         (b (niwa-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (should (niwa-file-cache-remove cache "/tmp/a"))
+    (should (= 1 (hash-table-count (niwa-file-cache-table cache))))
+    (should (= 3 (niwa-file-cache-total-bytes cache)))
+    (should (null (niwa-file-cache-get cache "/tmp/a"))))
+
+  :doc "returns nil when removing missing entry"
+  (let ((cache (niwa-test-file-cache-create)))
+    (should (null (niwa-file-cache-remove cache "/tmp/missing")))))
+
+(niwa-deftest niwa-file-cache--evict
+  ()
+  ,test
+  (test)
+  :doc "drops least recently used entries by count"
+  (let* ((niwa-file-cache-max-entries 2)
+         (niwa-file-cache-max-bytes (* 1024 1024))
+         (cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "a" :size 1))
+         (b (niwa-file-state--create :path "/tmp/b" :content "b" :size 1))
+         (c (niwa-file-state--create :path "/tmp/c" :content "c" :size 1)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (niwa-file-cache-put cache c)
+    (should (= 2 (hash-table-count (niwa-file-cache-table cache))))
+    (should (null (niwa-file-cache-get cache "/tmp/a")))
+    (should (niwa-file-cache-get cache "/tmp/b"))
+    (should (niwa-file-cache-get cache "/tmp/c")))
+
+  :doc "drops least recently used entries by byte limit"
+  (let* ((niwa-file-cache-max-entries 100)
+         (niwa-file-cache-max-bytes 5)
+         (cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "aaa" :size 3))
+         (b (niwa-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (should (= 1 (hash-table-count (niwa-file-cache-table cache))))
+    (should (= 3 (niwa-file-cache-total-bytes cache)))
+    (should (null (niwa-file-cache-get cache "/tmp/a"))))
+
+  :doc "MRU promotion protects recently used from eviction"
+  (let* ((niwa-file-cache-max-entries 2)
+         (niwa-file-cache-max-bytes (* 1024 1024))
+         (cache (niwa-test-file-cache-create))
+         (a (niwa-file-state--create :path "/tmp/a" :content "a" :size 1))
+         (b (niwa-file-state--create :path "/tmp/b" :content "b" :size 1))
+         (c (niwa-file-state--create :path "/tmp/c" :content "c" :size 1)))
+    (niwa-file-cache-put cache a)
+    (niwa-file-cache-put cache b)
+    (niwa-file-cache-get cache "/tmp/a") ; promote a
+    (niwa-file-cache-put cache c)        ; should evict b, not a
+    (should (niwa-file-cache-get cache "/tmp/a"))
+    (should (null (niwa-file-cache-get cache "/tmp/b")))
+    (should (niwa-file-cache-get cache "/tmp/c"))))
+
+;;
+;;; Session interaction helpers
+
+(niwa-deftest niwa-session-record-interaction
+  (:before-each (niwa-workspace-clear-registry)
+   :after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "records read interaction with turn count"
+  (let* ((ws (niwa-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+         (session (niwa-session-create "main" ws))
+         (entry (niwa-session-record-interaction session "/tmp/a" 'read 3)))
+    (should (niwa-file-interaction-p entry))
+    (should (eq entry (gethash (expand-file-name "/tmp/a")
+                               (niwa-session-touched-files session))))
+    (should (= 3 (niwa-file-interaction-read-turn entry)))
+    (should (null (niwa-file-interaction-modified-turn entry))))
+
+  :doc "records modify interaction"
+  (let* ((ws (niwa-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+         (session (niwa-session-create "main" ws))
+         (entry (niwa-session-record-interaction session "/tmp/a" 'modify 7)))
+    (should (= 7 (niwa-file-interaction-modified-turn entry)))
+    (should (null (niwa-file-interaction-read-turn entry))))
+
+  :doc "updates existing entry in place"
+  (let* ((ws (niwa-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+         (session (niwa-session-create "main" ws)))
+    (niwa-session-record-interaction session "/tmp/a" 'read 1)
+    (niwa-session-record-interaction session "/tmp/a" 'modify 2)
+    (let ((entry (gethash (expand-file-name "/tmp/a")
+                          (niwa-session-touched-files session))))
+      (should (= 1 (niwa-file-interaction-read-turn entry)))
+      (should (= 2 (niwa-file-interaction-modified-turn entry)))))
+
+  :doc "errors on unknown kind"
+  (let* ((ws (niwa-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+         (session (niwa-session-create "main" ws)))
+    (should-error
+     (niwa-session-record-interaction session "/tmp/a" 'bogus 1))))
+
+
+;;
+;;; External change detection
+
+(niwa-deftest niwa-file-cache-detect-external-changes
+  ()
+  ,test
+  (test)
+  :doc "returns empty list when no files changed"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (should (null (niwa-file-cache-detect-external-changes cache))))
+      (delete-file tmp)))
+
+  :doc "detects a rewrite that kept its mtime but changed size"
+  ;; A tool that restores timestamps -- cp -p, rsync -t, tar -x, a formatter
+  ;; using touch -r -- leaves the clock saying nothing happened.  Treating
+  ;; "not newer" as "identical" hides the change for the rest of the session,
+  ;; because nothing refreshes the entry either.
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time (file-attributes tmp))))
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (write-region "hello there" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (eq 'modified (plist-get (car changes) :status)))))
+      (delete-file tmp)))
+
+  :doc "detects a same-size rewrite that restored its mtime"
+  ;; Userland can set mtime but not ctime, so a tool that restores
+  ;; timestamps still moves the inode's change time.  Comparing it closes
+  ;; the case that mtime and size alone cannot see.
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time (file-attributes tmp))))
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (write-region "world" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (eq 'modified (plist-get (car changes) :status)))))
+      (delete-file tmp)))
+
+  :doc "reports a fingerprint entry without reading the file back"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-big-" nil ".log"
+                              (make-string 4096 ?x))))
+    (unwind-protect
+        (let ((niwa-file-cache-max-file-bytes 1024))
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (should (null (niwa-file-cache-detect-external-changes cache)))
+          (write-region (make-string 8192 ?y) nil tmp nil 'silent)
+          (let ((change (car (niwa-file-cache-detect-external-changes
+                              cache))))
+            (should (eq 'modified (plist-get change :status)))
+            (should (plist-get change :content-omitted))
+            (should (null (plist-get change :old)))
+            (should (null (plist-get change :new)))
+            (should (= 8192 (plist-get change :stat-size)))))
+      (delete-file tmp)))
+
+  :doc "detects a rewrite whose mtime went backwards"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (write-region "goodbye" nil tmp nil 'silent)
+          (set-file-times tmp (time-subtract (current-time) 60))
+          (should (= 1 (length
+                        (niwa-file-cache-detect-external-changes cache)))))
+      (delete-file tmp)))
+
+  :doc "detects modified file with advanced mtime and different content"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          ;; Advance mtime by one second and rewrite content.
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file tmp (insert "world"))
+            (set-file-times tmp future))
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (let ((change (car changes)))
+              (should (eq 'modified (plist-get change :status)))
+              (should (equal (expand-file-name tmp) (plist-get change :path)))
+              (should (equal "hello" (plist-get change :old)))
+              (should (equal "world" (plist-get change :new))))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "ignores mtime bumps when content is unchanged"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (let ((future (time-add (current-time) 2)))
+            (set-file-times tmp future))
+          (should (null (niwa-file-cache-detect-external-changes cache))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "detects deleted file"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (delete-file tmp)
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (let ((change (car changes)))
+              (should (eq 'deleted (plist-get change :status)))
+              (should (equal "hello" (plist-get change :old)))
+              (should (null (plist-get change :new))))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "does not mutate cache on detection"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file tmp (insert "world"))
+            (set-file-times tmp future))
+          (niwa-file-cache-detect-external-changes cache)
+          (let ((state (niwa-file-cache-get
+                        cache (expand-file-name tmp))))
+            (should (equal "hello" (niwa-file-state-content state)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "bypasses stale TRAMP attributes when the target changes externally"
+  (let* ((cache (niwa-test-file-cache-create))
+         (root (make-temp-file "niwa-remote-ec-" t))
+         (native (file-name-concat root "a.txt"))
+         (remote (concat "/niwamock:external-change:" native)))
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp '("external-change")
+          (with-temp-file native (insert "old"))
+          (niwa-file-cache-put
+           cache (niwa-file-state-from-file remote))
+          (with-temp-file native (insert "new-value"))
+          (set-file-times native (time-add (current-time) 2))
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (equal "new-value" (plist-get (car changes) :new)))
+            (niwa-file-cache-consume-external-changes cache changes))
+          (should
+           (equal "new-value"
+                  (niwa-file-state-content
+                   (niwa-file-cache-get cache remote)))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-file-cache-consume-external-changes
+  ()
+  ,test
+  (test)
+  :doc "updates modified entry to current on-disk state"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file tmp (insert "world"))
+            (set-file-times tmp future))
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (niwa-file-cache-consume-external-changes cache changes))
+          (let ((state (niwa-file-cache-get
+                        cache (expand-file-name tmp))))
+            (should (equal "world" (niwa-file-state-content state))))
+          (should (null (niwa-file-cache-detect-external-changes cache))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "removes deleted entry from cache"
+  (let* ((cache (niwa-test-file-cache-create))
+         (tmp (make-temp-file "niwa-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (niwa-file-cache-put cache (niwa-file-state-from-file tmp))
+          (delete-file tmp)
+          (let ((changes (niwa-file-cache-detect-external-changes cache)))
+            (niwa-file-cache-consume-external-changes cache changes))
+          (should (= 0 (hash-table-count (niwa-file-cache-table cache)))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+
+;;
+;;; Session recording
+
+(niwa-deftest niwa-session-file-cache-excluded-p
+  ()
+  ,test
+  (test)
+  :doc "excludes everything in session directories, keeps the store and ordinary files"
+  (let* ((root (make-temp-file "niwa-excl-" t))
+         (sessions (file-name-concat root ".niwa" "sessions"))
+         (own (file-name-concat sessions "main-2026-09-02T14-03-19ca"))
+         (sibling (file-name-concat sessions "other-2026-09-02T18-37-6662"))
+         (neighbour (file-name-concat sessions "not-a-session"))
+         (ws (niwa-workspace--create
+              :type 'file :id "excl" :root root :name "test"))
+         (session (niwa-session--create
+                   :name "main" :workspace ws :save-path own)))
+    (unwind-protect
+        (progn
+          (dolist (dir (list own sibling neighbour))
+            (make-directory (file-name-concat dir "artifacts") t))
+          ;; A session directory is recognized by its sidecar, so the
+          ;; plain neighbour stays watched.
+          (dolist (dir (list own sibling))
+            (write-region "(:schema-version 1)" nil
+                          (niwa-session-artifacts-sidecar-path dir)
+                          nil 'silent))
+          (dolist (path (list (file-name-concat own "telemetry-log.el")
+                              (file-name-concat own "segment-0001.chat.org")
+                              (file-name-concat own "file-history" "abc")
+                              (file-name-concat own "artifacts" "page.html")
+                              (file-name-concat sibling "telemetry-log.el")))
+            (should (niwa-session-file-cache-excluded-p session path)))
+          (dolist (path (list (file-name-concat root ".niwa" "artifacts" "a" "index.html")
+                              (file-name-concat neighbour "telemetry-log.el")
+                              (file-name-concat root ".niwa"
+                                                "permissions.el")
+                              (file-name-concat root "niwa-view.el")))
+            (should-not (niwa-session-file-cache-excluded-p session path))))
+      (delete-directory root t)))
+
+  :doc "excludes nothing when the session has no save path"
+  (let ((session (niwa-session--create :name "main")))
+    (should-not (niwa-session-file-cache-excluded-p
+                 session "/tmp/anything.el"))))
+
+(niwa-deftest niwa-session-record-file-access
+  ()
+  ,test
+  (test)
+  :doc "records read interaction and refreshes workspace cache"
+  (let* ((tmp (make-temp-file "niwa-ia-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "record-access"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 3)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read)
+          (let ((entry (gethash (expand-file-name tmp)
+                                (niwa-session-touched-files session))))
+            (should entry)
+            (should (= 3 (niwa-file-interaction-read-turn entry)))
+            (should (null (niwa-file-interaction-modified-turn entry))))
+          (should (niwa-file-cache-get
+                   (niwa-workspace-file-cache ws) tmp)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "records modify interaction and preserves existing read-turn"
+  (let* ((tmp (make-temp-file "niwa-ia-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "record-access-2"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read)
+          (setf (niwa-session-turn-count session) 4)
+          (niwa-session-record-file-access session tmp 'modify)
+          (let ((entry (gethash (expand-file-name tmp)
+                                (niwa-session-touched-files session))))
+            (should (= 1 (niwa-file-interaction-read-turn entry)))
+            (should (= 4 (niwa-file-interaction-modified-turn entry)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "records the interaction but never caches session bookkeeping"
+  ;; niwa rewrites its own logs and segments every turn.  Caching one
+  ;; would report those writes back as external edits for the rest of the
+  ;; session and let a multi-megabyte log evict every real entry.
+  (let* ((root (make-temp-file "niwa-ia-own-" t))
+         (own (file-name-concat root ".niwa" "sessions" "main-1"))
+         (log (file-name-concat own "telemetry-log.el"))
+         (ws (niwa-workspace--create
+              :type 'file :id "record-access-own" :root root :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws :save-path own
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 2)))
+    (unwind-protect
+        (progn
+          (make-directory own t)
+          (write-region "(:event request-queued)" nil log nil 'silent)
+          (niwa-session-record-file-access session log 'read)
+          ;; The interaction entry still exists: Edit's read-before-write
+          ;; gate reads it, and refusing to record would break editing.
+          (should (gethash (expand-file-name log)
+                           (niwa-session-touched-files session)))
+          (should-not (niwa-file-cache-get
+                       (niwa-workspace-file-cache ws) log)))
+      (delete-directory root t)))
+
+  :doc "records interaction even when session has no workspace"
+  (let* ((session (niwa-session--create
+                   :name "main" :workspace nil
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 7)))
+    (niwa-session-record-file-access session "/tmp/no-ws" 'read)
+    (let ((entry (gethash (expand-file-name "/tmp/no-ws")
+                          (niwa-session-touched-files session))))
+      (should entry)
+      (should (= 7 (niwa-file-interaction-read-turn entry))))))
+
+
+;;
+;;; Read deduplication
+
+(niwa-deftest niwa-session-forget-read-ranges
+  (:doc "a compacted read is no longer a duplicate but keeps its read turn")
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-compacted"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (should (niwa-session-read-is-duplicate-p session tmp nil nil))
+          (niwa-session-forget-read-ranges session)
+          (should-not (niwa-session-read-is-duplicate-p session tmp nil nil))
+          (should (niwa-file-interaction-read-turn
+                   (gethash (expand-file-name tmp) (niwa-session-touched-files session))))
+          ;; The next Read is recorded normally again.
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (should (niwa-session-read-is-duplicate-p session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(niwa-deftest niwa-session-read-is-duplicate-p
+  ()
+  ,test
+  (test)
+  :doc "returns nil for never-read file"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-never"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (should-not (niwa-session-read-is-duplicate-p
+                     session tmp nil nil))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns non-nil when file and range match and mtime unchanged"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-hit"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (should (niwa-session-read-is-duplicate-p
+                   session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when content changed under a preserved mtime"
+  ;; A duplicate verdict tells the model to reuse what it already has, so a
+  ;; rewrite the clock did not record would hand it stale bytes.
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-preserved"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time
+                      (file-attributes tmp))))
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (write-region "hello there" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when the mtime went backwards"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-regressed"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (write-region "goodbye" nil tmp nil 'silent)
+          (set-file-times tmp (time-subtract (current-time) 60))
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when range differs"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-range"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read 1 10)
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp 20 10))
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp nil nil))
+          (should (niwa-session-read-is-duplicate-p
+                   session tmp 1 10)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when mtime advances after record"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-mtime"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file tmp (insert "world"))
+            (set-file-times tmp future))
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when session has no workspace"
+  (let* ((session (niwa-session--create
+                   :name "main" :workspace nil
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (should-not (niwa-session-read-is-duplicate-p
+                 session "/tmp/x" nil nil)))
+
+  :doc "returns nil when tool-driven modify happened after read"
+  (let* ((tmp (make-temp-file "niwa-dedup-" nil ".txt" "hello"))
+         (ws (niwa-workspace--create
+              :type 'file :id "dedup-post-modify"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (niwa-test-file-cache-create)))
+         (session (niwa-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (niwa-session-record-file-access session tmp 'read nil nil)
+          (should (niwa-session-read-is-duplicate-p
+                   session tmp nil nil))
+          (setf (niwa-session-turn-count session) 2)
+          (niwa-session-record-file-access session tmp 'modify)
+          (should-not (niwa-session-read-is-duplicate-p
+                       session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(provide 'test-niwa-file-state)
+;;; test-niwa-file-state.el ends here

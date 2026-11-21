@@ -9,44 +9,44 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'mevedel-gptel-retry)
+(require 'niwa-gptel-retry)
 (require 'gptel-openai-oauth)
-(require 'mevedel-gptel-stream-bridge)
-(require 'mevedel-telemetry-usage)
-(require 'mevedel-agent-exec)
+(require 'niwa-gptel-stream-bridge)
+(require 'niwa-telemetry-usage)
+(require 'niwa-agent-exec)
 
-(defconst mevedel-retry-test--success
+(defconst niwa-retry-test--success
   (concat "event: response.output_text.delta\n"
           "data: {\"delta\":\"Recovered answer\"}\n\n"
           "event: response.completed\n"
           "data: {\"response\":{\"status\":\"completed\",\"error\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"))
 
-(defconst mevedel-retry-test--failure
+(defconst niwa-retry-test--failure
   (concat "event: response.output_text.delta\n"
           "data: {\"delta\":\"Abandoned output\"}\n\n"
           "event: response.failed\n"
           "data: {\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"Model at capacity\"},\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}}\n\n"))
 
-(defmacro mevedel-retry-test--with-http (responses &rest body)
+(defmacro niwa-retry-test--with-http (responses &rest body)
   "Evaluate BODY against local HTTP RESPONSES, with all state isolated."
   (declare (indent 1) (debug t))
   `(let* ((data-buf (generate-new-buffer " *retry-data*"))
-          (session (mevedel-session--create :name "retry-test"))
-          (request (mevedel-request--create :id "retry-test-request" :session session))
+          (session (niwa-session--create :name "retry-test"))
+          (request (niwa-request--create :id "retry-test-request" :session session))
           (remaining ,responses)
           (requests nil) (clients nil) (scheduled nil) (chunk-timers nil) (transports nil)
           (finished 0) (failed 0) (aborted 0) (waits 0)
           (gptel--request-alist nil)
-          (mevedel-gptel-retry--states nil)
+          (niwa-gptel-retry--states nil)
           (gptel-use-curl t)
-          (mevedel-test-allow-provider-requests t)
+          (niwa-test-allow-provider-requests t)
           (gptel-log-level nil)
           (gptel-post-request-hook
            (list (lambda ()
                    (dolist (entry gptel--request-alist)
                      (unless (assq (car entry) transports)
                        (push (cons (car entry)
-                                   (plist-get (gptel-fsm-info (cadr entry)) :mevedel-retry-attempt))
+                                   (plist-get (gptel-fsm-info (cadr entry)) :niwa-retry-attempt))
                              transports))))))
           (gptel-org-convert-response nil)
           (gptel-post-response-functions nil)
@@ -69,7 +69,7 @@
                                       (string-to-number (match-string 1 input))))))
                   (process-put client 'answered t)
                   (push (substring input (+ 4 (string-match "\r\n\r\n" input))) requests)
-                  (let ((response (or (pop remaining) mevedel-retry-test--success)))
+                  (let ((response (or (pop remaining) niwa-retry-test--success)))
                     (if (and (stringp response) (string-prefix-p "HTTP/" response))
                         ;; A complete raw response, such as a proxy error page.
                         (process-send-string client response)
@@ -101,7 +101,7 @@
                 :handlers
                 `((WAIT ,(lambda (machine)
                            (cl-incf waits)
-                           (mevedel-gptel-retry-dispatch machine)))
+                           (niwa-gptel-retry-dispatch machine)))
                   (TOOL gptel--handle-tool-use)
                   (TRET gptel--handle-tool-result)
                   (DONE ,(lambda (_machine) (cl-incf finished)))
@@ -110,13 +110,13 @@
      (unwind-protect
          (progn
            (with-current-buffer data-buf
-             (setq-local mevedel--current-request request)
-             (setq-local mevedel--session session)
+             (setq-local niwa--current-request request)
+             (setq-local niwa--session session)
              (setq-local gptel-backend backend)
              (setq-local gptel-model 'test-model))
-           (setf (mevedel-request-fsm request) fsm)
-           (mevedel-gptel-retry-install)
-           (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+           (setf (niwa-request-fsm request) fsm)
+           (niwa-gptel-retry-install)
+           (cl-letf (((symbol-function 'niwa-transport-run-at-time)
                       (lambda (_seconds function &rest args)
                         (let ((timer (run-at-time 3600 nil #'ignore)))
                           (push (list timer function args) scheduled)
@@ -124,7 +124,7 @@
              ,@body))
        (dolist (entry scheduled) (cancel-timer (car entry)))
        (dolist (timer chunk-timers) (cancel-timer timer))
-       (mevedel-gptel-retry-uninstall)
+       (niwa-gptel-retry-uninstall)
        (dolist (entry gptel--request-alist)
          (when (processp (car entry))
            (set-process-sentinel (car entry) #'ignore)
@@ -136,7 +136,7 @@
        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 ;; A lexical queue is consumed by a local loop rather than symbol-value.
-(defmacro mevedel-retry-test--drain-native (&optional until-wait)
+(defmacro niwa-retry-test--drain-native (&optional until-wait)
   "Wait for native completion, optionally stopping at retry backoff."
   `(let ((deadline (+ (float-time) 10)))
      (while (and (< (float-time) deadline)

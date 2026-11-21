@@ -17,6 +17,6 @@ No genuine directive-turn boundary records were found in 8,425 saved transcript
 and publication files at the source. With coordinator approval, the two encoded
 `directive-turn-boundary` records and the enclosed directive-shaped turn were
 added to the sanitized copy. Their shape is from the historical writer
-`mevedel-directive-request.el` at `988a8911`, functions
-`mevedel--insert-directive-turn` and `mevedel--insert-directive-turn-end`.
+`niwa-directive-request.el` at `988a8911`, functions
+`niwa--insert-directive-turn` and `niwa--insert-directive-turn-end`.
 They are synthetic coverage, not claimed to have existed in the source session.

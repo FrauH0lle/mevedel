@@ -1,16 +1,16 @@
 # Hooks
 
-Hooks run configured automation at mevedel lifecycle and tool boundaries.
+Hooks run configured automation at niwa lifecycle and tool boundaries.
 Use them for policy checks, formatting, linting, context injection, and
 notifications. Command handlers receive JSON; native Elisp handlers receive
-a mevedel event plist. The [architectural rationale](adr/0066-hooks-follow-lifecycle-boundaries.md)
+a niwa event plist. The [architectural rationale](adr/0066-hooks-follow-lifecycle-boundaries.md)
 explains the event boundary and ordering choices.
 
 ## Hook execution flow
 
 ```mermaid
 flowchart TD
-    A[Stable mevedel lifecycle event] --> B[Collect configured hook layers in precedence order]
+    A[Stable niwa lifecycle event] --> B[Collect configured hook layers in precedence order]
     B --> C[Match event and target]
     C --> D[Run handlers in order]
     D --> E{Decision returned?}
@@ -58,32 +58,32 @@ Lisp shape:
 ((PreToolUse
   ((:matcher "Bash"
     :hooks ((:type command
-             :command ".mevedel/hooks/block-rm.sh"
+             :command ".niwa/hooks/block-rm.sh"
              :timeout 10
              :description "Block destructive rm")
             (:type elisp
-             :function my-mevedel-bash-policy)))))
+             :function my-niwa-bash-policy)))))
  (PostToolUse
   ((:matcher "ApplyPatch"
     :hooks ((:type command
-             :command ".mevedel/hooks/format-changed-file"
+             :command ".niwa/hooks/format-changed-file"
              :timeout 30))))))
 ```
 
 Configuration sources:
 
-- `mevedel-hook-rules`: user defcustom, Emacs-local.
+- `niwa-hook-rules`: user defcustom, Emacs-local.
 - `~/.agents/hooks.el`, `~/.agents/hooks.json`,
-  `~/.mevedel/hooks.el`, and `~/.mevedel/hooks.json`: user files,
+  `~/.niwa/hooks.el`, and `~/.niwa/hooks.json`: user files,
   shareable across projects on one machine.
-- Activated plugin manifests may contribute hooks only after mevedel has
+- Activated plugin manifests may contribute hooks only after niwa has
   shown a concise consent summary for the plugin's executable hooks.
-  Mevedel reads the Codex default `./hooks/hooks.json` when the manifest
+  Niwa reads the Codex default `./hooks/hooks.json` when the manifest
   omits `hooks`, or the manifest `hooks` field when present. That field
   must be a single path.
 - `<workspace>/.agents/hooks.el`, `<workspace>/.agents/hooks.json`,
-  `<workspace>/.mevedel/hooks.el`, and
-  `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
+  `<workspace>/.niwa/hooks.el`, and
+  `<workspace>/.niwa/hooks.json`: project hooks, trusted per
   workspace.
 - Skill frontmatter `hooks`: scoped to a command invocation. Project skill
   declarations require exact workspace/path/content trust. Instruction
@@ -95,12 +95,12 @@ Configuration sources:
 
 Hook handlers run from lower-precedence roots to higher-precedence roots
 so later rewrite fields preserve the package-wide resource precedence.
-Layers merge additively in this order: `mevedel-hook-rules`, user
+Layers merge additively in this order: `niwa-hook-rules`, user
 `.agents/hooks.el`, user `.agents/hooks.json`, user
-`.mevedel/hooks.el`, user `.mevedel/hooks.json`, enabled plugin hooks,
+`.niwa/hooks.el`, user `.niwa/hooks.json`, enabled plugin hooks,
 trusted project `.agents/hooks.el`, trusted project `.agents/hooks.json`,
-trusted project `.mevedel/hooks.el`, trusted project
-`.mevedel/hooks.json`, session, request, and agent invocation. Command-skill
+trusted project `.niwa/hooks.el`, trusted project
+`.niwa/hooks.json`, session, request, and agent invocation. Command-skill
 hooks are folded into the owned request or agent invocation. Deny decisions
 remain restrictive across all layers;
 allow decisions do not override existing explicit permission denies.
@@ -120,7 +120,7 @@ JSON shape:
         "hooks": [
           {
             "type": "command",
-            "command": ".mevedel/hooks/block-rm.sh",
+            "command": ".niwa/hooks/block-rm.sh",
             "timeout": 10,
             "failClosed": true
           }
@@ -133,7 +133,7 @@ JSON shape:
 
 ## Matching
 
-`matcher` is event-specific.  For tool events it matches the mevedel tool
+`matcher` is event-specific.  For tool events it matches the niwa tool
 name (`Bash`, `Read`, `ApplyPatch`, `Agent`, MCP names when wrapped).
 For agent events it matches agent role.  For compaction it matches
 `manual` or `auto`.
@@ -170,7 +170,7 @@ workspace cwd cannot make a foreign-target plugin valid. Project-file and user
 hooks keep the working directories listed above.
 
 Commands executed on a remote session target inherit that target's shell
-environment.  Mevedel does not forward the client's `process-environment`;
+environment.  Niwa does not forward the client's `process-environment`;
 project plugins receive only their deliberate compatibility variables in
 addition to the target environment.  Client-local user and plugin commands
 continue to inherit the client environment.
@@ -178,11 +178,11 @@ continue to inherit the client environment.
 Loaded handlers retain `:source-file` and `:source-root` metadata so dispatch
 does not infer origin from the event cwd or copy executable code between
 machines.  Project-relative commands such as
-`.mevedel/hooks/block-rm.sh` therefore resolve consistently regardless of the
+`.niwa/hooks/block-rm.sh` therefore resolve consistently regardless of the
 session cwd.  A command handler without trusted project, user, or plugin
 provenance is refused before launch.  Default timeout is 30 seconds with a
 global cap, armed as soon as the child exists rather than after its stdin is
-written. Remote commands acknowledge startup before mevedel writes JSON: this
+written. Remote commands acknowledge startup before niwa writes JSON: this
 prevents the preceding transport shell from reading ahead into input and
 discarding it on `exec`. Waiting for that acknowledgment uses the same timeout
 and cancellation ownership; the internal acknowledgment is not hook output, and
@@ -205,20 +205,20 @@ after TRAMP drains stderr; local command exit handling drains its separate
 stderr pipe up to the output cap or a 50 ms drain budget, so a surviving writer
 cannot monopolize exit handling even with truncation disabled. Both preserve final diagnostics before logging
 or building a block reason. Each
-stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
+stdout/stderr stream is capped by `niwa-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
 
 Plugin command hooks receive compatibility environment variables:
 
-- `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `MEVEDEL_PLUGIN_ROOT` point at
+- `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `NIWA_PLUGIN_ROOT` point at
   the plugin root.
-- `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
-  `<workspace>/.mevedel/state/plugin-data/<plugin-name>` and are created before
+- `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `NIWA_PLUGIN_DATA` point at
+  `<workspace>/.niwa/state/plugin-data/<plugin-name>` and are created before
   the command starts.
 
 Plugin scripts and bundled resources must be located through a plugin-root
-variable, for example `"$MEVEDEL_PLUGIN_ROOT/scripts/check.sh"`, not a relative
+variable, for example `"$NIWA_PLUGIN_ROOT/scripts/check.sh"`, not a relative
 installation path. The working directory identifies the conversation's work;
 it does not relocate the plugin root or change the root/data environment values.
 
@@ -245,7 +245,7 @@ records ahead of the declarative layers while retaining Emacs buffer-local,
 global-inheritance, and hook-depth ordering. The shared engine owns decision
 normalization, one log record per handler, serial payload mutation, decision
 merging, error policy, and event-specific terminal short-circuiting. Normal
-zero-argument `mevedel-session-start-hook` and `mevedel-session-end-hook`
+zero-argument `niwa-session-start-hook` and `niwa-session-end-hook`
 remain notification hooks outside this decision engine.
 
 Only `command` and `elisp` handlers are supported.
@@ -437,7 +437,7 @@ prompt share one combined disclosure, preserving contribution order in the
 expanded details. Pending context is cleared at the transcript commit boundary,
 before request startup, so a later dispatch error cannot duplicate context that
 is already stored.  An error before transcript insertion leaves it pending for
-retry.  If a prepared WaitAgent steering attempt loses its waiter race, mevedel
+retry.  If a prepared WaitAgent steering attempt loses its waiter race, niwa
 transfers the approved context into the queued prompt. Earlier FIFO entries
 cannot consume it, draining does not rerun `UserPromptSubmit`, and editing or
 clearing the queue restores the context for the next user submission.
@@ -561,8 +561,8 @@ Shell hooks are arbitrary code in their resource environment.  Project-file
 commands run on the target and must not run unless the workspace hook config
 is trusted. By default:
 
-- user defcustom and user `.agents/hooks.*` / `.mevedel/hooks.*` files are trusted.
-- project `.agents/hooks.*`, `.mevedel/hooks.*`, and `SKILL.md` hook declarations
+- user defcustom and user `.agents/hooks.*` / `.niwa/hooks.*` files are trusted.
+- project `.agents/hooks.*`, `.niwa/hooks.*`, and `SKILL.md` hook declarations
   are ignored until the user trusts them for that workspace.
 - trust state lives under user state, keyed by workspace id and project
   hook file hashes.
@@ -597,24 +597,24 @@ original `:permission-provenance`.
 
 Notification hooks:
 
-- `mevedel-session-start-hook`
-- `mevedel-session-end-hook`, with `mevedel-session-end-reason` bound to the
+- `niwa-session-start-hook`
+- `niwa-session-end-hook`, with `niwa-session-end-reason` bound to the
   `SessionEnd` reason while it runs
 
 Control/argument hooks:
 
-- `mevedel-user-prompt-submit-functions`
-- `mevedel-user-prompt-expansion-functions`
-- `mevedel-pre-tool-use-functions`
-- `mevedel-permission-request-functions`
-- `mevedel-permission-denied-functions`
-- `mevedel-post-tool-use-functions`
-- `mevedel-pre-compact-functions`
-- `mevedel-post-compact-functions`
-- `mevedel-subagent-start-functions`
-- `mevedel-subagent-stop-functions`
-- `mevedel-stop-functions`
-- `mevedel-stop-failure-functions`
+- `niwa-user-prompt-submit-functions`
+- `niwa-user-prompt-expansion-functions`
+- `niwa-pre-tool-use-functions`
+- `niwa-permission-request-functions`
+- `niwa-permission-denied-functions`
+- `niwa-post-tool-use-functions`
+- `niwa-pre-compact-functions`
+- `niwa-post-compact-functions`
+- `niwa-subagent-start-functions`
+- `niwa-subagent-stop-functions`
+- `niwa-stop-functions`
+- `niwa-stop-failure-functions`
 
 These support normal `add-hook` usage, including buffer-local hooks
 with LOCAL non-nil. Programmatic hooks use the same decision plist
@@ -648,9 +648,9 @@ and the next successful session settlement publishes the append atomically.
 Bounded entries created before the session has a save path are backfilled when
 it first materializes.  Non-readable runtime values such as closures are
 converted to printable strings before writing. Hook and permission logs share
-the diagnostic value/line codec in `mevedel-utilities.el`; their append, queue,
+the diagnostic value/line codec in `niwa-utilities.el`; their append, queue,
 and failure policies remain owned by each log.  The in-memory log remains
-capped by `mevedel-hooks-log-limit`; the persistent file is append-only for the
+capped by `niwa-hooks-log-limit`; the persistent file is append-only for the
 session.  A failed append warns, remains queued, and retries after the next
 successful session save.
 
@@ -660,7 +660,7 @@ Only explicit structured fields such as `:additional-context`,
 model-visible content.  Random script output belongs in the hook log, with
 important failures surfaced to the user in the view or messages.
 
-Slow hook runs are surfaced after `mevedel-hooks-slow-threshold` seconds.
+Slow hook runs are surfaced after `niwa-hooks-slow-threshold` seconds.
 If the view already has an active spinner, its status changes to show the
 running hook event; otherwise the user sees a `message`.  The temporary
 status has a per-run ownership token.  It replaces only the progress state
@@ -673,13 +673,13 @@ tool line includes a second line such as `blocked by PreToolUse: reason`.
 
 Useful commands:
 
-- `mevedel-hooks-list`: show effective hooks for the current session.
-- `mevedel-hooks-trust-project`: trust the current project's hook files and
+- `niwa-hooks-list`: show effective hooks for the current session.
+- `niwa-hooks-trust-project`: trust the current project's hook files and
   skill manifests.
-- `mevedel-hooks-run-dry`: show which native and declarative hooks would
+- `niwa-hooks-run-dry`: show which native and declarative hooks would
   run for an event/matcher target without executing Elisp or shell
   handlers.
-- `mevedel-hooks-reload`: forget the memoized hook configuration so the
+- `niwa-hooks-reload`: forget the memoized hook configuration so the
   next event re-reads every config file.  The user, plugin, and project
   layers are remembered per workspace for the process — re-resolving
   them costs several target round trips per event on a remote workspace

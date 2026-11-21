@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 
-WORKER = Path(__file__).resolve().parents[1] / "scripts/mevedel-execution-spool.py"
+WORKER = Path(__file__).resolve().parents[1] / "scripts/niwa-execution-spool.py"
 SPEC = importlib.util.spec_from_file_location("execution_spool", WORKER)
 spool = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(spool)
@@ -72,8 +72,8 @@ class SpoolTests(unittest.TestCase):
     def test_compress_threshold_suffix_private_and_nonregular(self):
         for name, body in (("short.log", b"x" * 65535),
                            ("wrong.txt", b"x" * 65536),
-                           (".mevedel-spool-private.log", b"x" * 65536),
-                           (".mevedel-spool-private/job.log", b"x" * 65536)):
+                           (".niwa-spool-private.log", b"x" * 65536),
+                           (".niwa-spool-private/job.log", b"x" * 65536)):
             with self.subTest(name=name):
                 path = self.file(name, body)
                 self.assertEqual("skipped", spool.compress(path)["status"])
@@ -87,7 +87,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_compress_retired_pending_log_but_view_stays_hidden(self):
         body = b"retired\n" * (64 * 1024 * 1024 // 8)
-        path = self.file("executions/.mevedel-pending-executions/foreground.log", body)
+        path = self.file("executions/.niwa-pending-executions/foreground.log", body)
         facts = self.cli("--compress", path)
         self.assertEqual("compressed", facts["status"])
         self.assertEqual(64 * 1024 * 1024, facts["raw_bytes"])
@@ -150,7 +150,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_compress_parent_selected_temporary_cli_and_private_mode(self):
         raw = self.file("parent-owned.log", b"raw output\n" * 20000)
-        temporary = raw.parent / ".mevedel-spool-parent-chosen"
+        temporary = raw.parent / ".niwa-spool-parent-chosen"
         original_open = spool.os.open
         opened = []
 
@@ -177,7 +177,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_compress_parent_temporary_rejects_unsafe_paths_without_changes(self):
         raw = self.file("parent-owned.log", b"raw output\n" * 20000)
-        for temporary in (self.root / ".mevedel-spool-wrong-directory",
+        for temporary in (self.root / ".niwa-spool-wrong-directory",
                           self.source / "not-private",
                           raw):
             with self.subTest(temporary=temporary):
@@ -189,7 +189,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_compress_parent_temporary_never_overwrites_existing_entry(self):
         raw = self.file("parent-owned.log", b"raw output\n" * 20000)
-        temporary = self.source / ".mevedel-spool-parent-chosen"
+        temporary = self.source / ".niwa-spool-parent-chosen"
         target = self.file("precious", b"preserve this")
         for kind in ("file", "symlink", "dangling-symlink", "directory"):
             with self.subTest(kind=kind):
@@ -218,7 +218,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_compress_parent_temporary_removed_on_error_and_incompressible(self):
         raw = self.file("parent-owned.log", b"raw output\n" * 20000)
-        temporary = self.source / ".mevedel-spool-parent-chosen"
+        temporary = self.source / ".niwa-spool-parent-chosen"
         with patch.object(spool.os, "fsync", side_effect=OSError("write fault")):
             with self.assertRaisesRegex(OSError, "write fault"):
                 spool.compress(raw, temporary)
@@ -232,7 +232,7 @@ class SpoolTests(unittest.TestCase):
 
     def test_view_rejects_compression_temporary_option(self):
         raw = self.file("ordinary")
-        temporary = self.source / ".mevedel-spool-not-for-view"
+        temporary = self.source / ".niwa-spool-not-for-view"
         facts = self.cli("--view", raw, self.dest, "read", "--temporary", temporary, success=False)
         self.assertIn("requires compression", facts["error"])
         self.assertFalse(self.dest.exists())
@@ -451,15 +451,15 @@ class SpoolTests(unittest.TestCase):
         self.assertEqual(b"authorized", self.dest.read_bytes())
 
     def test_view_hides_private_paths_at_every_depth(self):
-        self.file("top/.mevedel-pending-executions/private.log", b"secret")
-        self.file("top/.mevedel-spool-temporary", b"secret")
-        self.file("executions/.mevedel-pending-executions/private.log.gz", b"secret")
+        self.file("top/.niwa-pending-executions/private.log", b"secret")
+        self.file("top/.niwa-spool-temporary", b"secret")
+        self.file("executions/.niwa-pending-executions/private.log.gz", b"secret")
         self.file("visible", b"public")
         spool.view(self.source, self.dest, "grep")
         self.assertEqual(["executions", "top", "visible"], sorted(p.name for p in self.dest.iterdir()))
         self.assertEqual([], list((self.dest / "top").iterdir()))
         self.assertEqual([], list((self.dest / "executions").iterdir()))
-        for name in ("a/.mevedel-pending-executions/z", "a/.mevedel-spool-x"):
+        for name in ("a/.niwa-pending-executions/z", "a/.niwa-spool-x"):
             self.assertTrue(spool.hidden(name))
             with self.assertRaisesRegex(ValueError, "Private"):
                 spool.view(self.source / name, self.root / "private", "read")

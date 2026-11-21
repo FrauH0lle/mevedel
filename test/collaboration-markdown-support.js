@@ -15,7 +15,7 @@ function installMarkdown(context, Element) {
     browser = new JSDOM('', {runScripts: 'outside-only'});
     browser.window.eval(fs.readFileSync(resolve(__dirname, '../relay/viewer/markdown.js'), 'utf8'));
   }
-  context.window.mevedelMarkdown = browser.window.mevedelMarkdown;
+  context.window.niwaMarkdown = browser.window.niwaMarkdown;
   if (Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')) return;
 
   function convert(node) {

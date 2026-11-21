@@ -3,11 +3,11 @@
 
 self.addEventListener('push', event => {
   event.waitUntil(
-    self.registration.showNotification('New mevedel activity', {
+    self.registration.showNotification('New niwa activity', {
       body: 'Open MevView to see the encrypted session update.',
       icon: '/icon.png',
       badge: '/icon.png',
-      tag: 'mevedel-activity',
+      tag: 'niwa-activity',
       renotify: true,
     }));
 });

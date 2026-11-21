@@ -3,7 +3,7 @@
 Status: accepted
 
 The optional permission reviewer uses the existing `guardian` workload before
-a human card is admitted in Ask or Edits. `mevedel-permission-reviewer` defaults
+a human card is admitted in Ask or Edits. `niwa-permission-reviewer` defaults
 to `user`; `auto` may approve the complete invocation once, deny it, or defer.
 It does not review ordinary automatically confined work or Full Access.
 

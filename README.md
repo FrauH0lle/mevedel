@@ -1,6 +1,6 @@
-# mevedel
+# niwa
 
-*mevedel* is an Emacs LLM workflow package, originally inspired by `evedel`,
+*niwa* is an Emacs LLM workflow package, originally inspired by `evedel`,
 now focused on chat sessions, notes, tool use, agents, and
 persistent project context. It is built on
 [gptel](https://github.com/karthink/gptel), is versatile enough so that it can
@@ -8,14 +8,14 @@ be utilized in various types of buffers, and isn't limited to just programming
 buffers.
 
 > [!WARNING]
-> `mevedel` uses a lot of tokens. Consider using a model which allows caching.
+> `niwa` uses a lot of tokens. Consider using a model which allows caching.
 
 > [!WARNING]
 > The package is functional but still work in progress. Expect missing features, unexpected behavior and bugs.
 
 ## What does this package do?
 
-`mevedel` began as a fork of the Emacs package
+`niwa` began as a fork of the Emacs package
 [evedel](https://github.com/daedsidog/evedel), building on its overlay-based
 instruction model and integrating it with
 [gptel](https://github.com/karthink/gptel) for direct LLM interaction. It has
@@ -32,7 +32,7 @@ Key features:
   `@note:{query}` mentions to choose which notes to attach to a chat.
 - Can cycle through note overlays across buffers.
 - Retained asynchronous child agents plus focused explorer, verifier, and
-  reviewer workflows using mevedel’s agent runtime.
+  reviewer workflows using niwa’s agent runtime.
 - Durable Goals (say "Create a goal for..." or use `/goal <objective>`) that
   keep one objective in every root turn and continue automatically while idle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
@@ -49,7 +49,7 @@ Key features:
   sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
   buffer, so older turns stay browsable on disk.
-- Persistent memory (`.mevedel/memory/` and `.agents/memory/`) and project
+- Persistent memory (`.niwa/memory/` and `.agents/memory/`) and project
   instruction files (`AGENTS.md`) for customizing LLM behavior.
 - `@note`, `@file`, `@agent`, and `@mcp` mention syntax in chat buffers.
 
@@ -85,12 +85,12 @@ Key features:
 
 Remote Linux targets require `rg`, `bash`, `setsid`, and `python3`.  Git is
 required only for Git-backed workflows, Bubblewrap follows the configured
-sandbox mode, and media converters remain optional.  Mevedel probes these
+sandbox mode, and media converters remain optional.  Niwa probes these
 capabilities but does not install target dependencies.
 
 On a remote workspace, another package doing remote I/O from a process
-sentinel can interrupt a mevedel command mid-conversation; TRAMP then refuses
-the nested call and you see `Forbidden reentrant call of Tramp`.  Mevedel
+sentinel can interrupt a niwa command mid-conversation; TRAMP then refuses
+the nested call and you see `Forbidden reentrant call of Tramp`.  Niwa
 holds off its own work while the connection is busy, but it cannot hold off
 anybody else's.  Projectile is the one worth stopping, because it advises
 `delete-file` and so triggers on every temporary file any sentinel deletes —
@@ -104,11 +104,11 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
 
 ``` emacs-lisp
 (straight-use-package
- '(mevedel :host github
-           :repo "FrauH0lle/mevedel"
+ '(niwa :host github
+           :repo "FrauH0lle/niwa"
            :files ("*.el"
                    ("native" "native/*.c" "native/*.eld")
-                   ("scripts" "scripts/mevedel-mcp-stdio.py")
+                   ("scripts" "scripts/niwa-mcp-stdio.py")
                    "agents"
                    "prompts"
                    "skills"
@@ -128,32 +128,32 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                    "docs/agents/*.md"
                    "tools")))
 
-(use-package mevedel
+(use-package niwa
   :after gptel
   :config
-  (mevedel-install))
+  (niwa-install))
 ```
 
-`mevedel-install` is an interactive command and should be run when changing
+`niwa-install` is an interactive command and should be run when changing
 installation-dependent custom variables. Spinner options refresh active views
 when applied through Customize; they do not require reinstalling or restarting
 a request.
 
-Run `mevedel-uninstall` to deactivate `mevedel`.
+Run `niwa-uninstall` to deactivate `niwa`.
 
-To keep global user state somewhere other than `~/.mevedel/`, set
-`mevedel-user-dir` before mevedel loads, for example with `:custom` (or a
-`setq` in `:init`). The defaults of `mevedel-skill-dirs` and
-`mevedel-memory-dirs` are computed from it at load time; a later change
+To keep global user state somewhere other than `~/.niwa/`, set
+`niwa-user-dir` before niwa loads, for example with `:custom` (or a
+`setq` in `:init`). The defaults of `niwa-skill-dirs` and
+`niwa-memory-dirs` are computed from it at load time; a later change
 does not move them.
 
 ``` emacs-lisp
-(use-package mevedel
+(use-package niwa
   :after gptel
   :custom
-  (mevedel-user-dir (expand-file-name "mevedel/" user-emacs-directory))
+  (niwa-user-dir (expand-file-name "niwa/" user-emacs-directory))
   :config
-  (mevedel-install))
+  (niwa-install))
 ```
 
 ### Claude Pro/Max subscriptions
@@ -161,57 +161,57 @@ does not move them.
 Install the unmodified Claude CLI using its
 [official instructions](https://code.claude.com/docs/en/setup) and run
 `claude auth login` in a terminal with your Claude Pro or Max account (Team and
-Enterprise logins also work). Then run `M-x mevedel-claude-code-setup`: it
+Enterprise logins also work). Then run `M-x niwa-claude-code-setup`: it
 checks Claude Code 2.1.293+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
 subscription login without starting a model request. Subscription selection
 rejects API authentication and does not enable paid overflow.
 
 When Claude Code exposes the subscription login's hard expiry in its local
-credentials file, Mevedel warns once per expiry at session or turn startup.
-Set `mevedel-claude-code-login-warning-days` to change Mevedel's three-day
+credentials file, Niwa warns once per expiry at session or turn startup.
+Set `niwa-claude-code-login-warning-days` to change Niwa's three-day
 lead time, or to nil to disable advance warnings. After expiry, sign in again
 with `claude auth login` before retrying, including when a context summary fails.
-Mevedel does not extract or cache tokens, and does not warn if expiry metadata
+Niwa does not extract or cache tokens, and does not warn if expiry metadata
 is unavailable.
 
-Mevedel keeps the native CLI on its own configured release channel
+Niwa keeps the native CLI on its own configured release channel
 (`autoUpdatesChannel`, `latest` by default) and the managed ACP adapter on its
 latest release.
 A Claude launch starts a background check when one is due (daily, hourly after
 a failure). A new runtime is selected only after its versions and ACP handshake
 pass; running invocations keep their executables, and a failed check keeps the
 previous runtime. **Install/update adapter** in the setup buffer, or
-`M-x mevedel-claude-code-install-adapter`, checks now and reports progress and
+`M-x niwa-claude-code-install-adapter`, checks now and reports progress and
 the result in the echo area; it refuses while another check holds the
-installation lock. Set `mevedel-claude-code-auto-update` to nil to disable
+installation lock. Set `niwa-claude-code-auto-update` to nil to disable
 automatic checks. Package-manager CLI binaries and a custom
-`mevedel-claude-code-adapter-executable` are validated, never replaced. Keep
-`mevedel-claude-code-directory` stable: it holds the managed runtimes and the
+`niwa-claude-code-adapter-executable` are validated, never replaced. Keep
+`niwa-claude-code-directory` stable: it holds the managed runtimes and the
 conversation directory used for resume. Claude runs on the Emacs host, also for
 remote project tools.
 
-Adapter diagnostic logs default to `~/.mevedel/claude-agent-logs` on the Emacs
-host. Customize `mevedel-claude-code-agent-log-directory` to change the directory,
-or set it to nil to stop mevedel from enabling logging. Mevedel expands the path
+Adapter diagnostic logs default to `~/.niwa/claude-agent-logs` on the Emacs
+host. Customize `niwa-claude-code-agent-log-directory` to change the directory,
+or set it to nil to stop niwa from enabling logging. Niwa expands the path
 and sets `CLAUDE_AGENT_LOGS` only in the adapter's launch environment; an inherited
 value (even an empty string) always wins, including when the option is nil.
 After an adapter crash, check this directory for diagnostics. Changes apply to
 new adapter processes, not already running conversations.
 
 Select `Claude Code:sonnet`, `Claude Code:opus`, `Claude Code:fable` or
-`Claude Code:haiku` in a session's model menu. Mevedel supplies its tools over
-MCP; no API key or MCP configuration is needed. Use mevedel's model and tools
+`Claude Code:haiku` in a session's model menu. Niwa supplies its tools over
+MCP; no API key or MCP configuration is needed. Use niwa's model and tools
 menus; gptel's HTTP request-controls menu is unavailable. The model picker also
 switches an existing root conversation between Claude Code and an API provider.
 If Claude's native history is missing or diverged,
-`M-x mevedel-claude-code-recover-history` continues from a labelled transcript
+`M-x niwa-claude-code-recover-history` continues from a labelled transcript
 excerpt. In the collaboration browser, owners repair these through **Recovery**.
 Read [session lifecycle and restrictions](docs/sessions.md#external-conversation-references)
 before using Fork, Rewind or Save As with this provider.
 
 ## Usage
 
-mevedel’s function revolves around chat sessions and notes within your Emacs
+niwa’s function revolves around chat sessions and notes within your Emacs
 buffers. Notes mark code with optional text that you send or mention when you
 want the model to see it.
 
@@ -219,17 +219,17 @@ The video at the [beginning](#what-does-this-package-do) of this README should
 give you a good impression on the usage.
 
 You can send your requests to the LLM either via the chat buffer (accessible by
-using `mevedel`) or by sending a note into its own conversation.
+using `niwa`) or by sending a note into its own conversation.
 
 ### Quick start
 
 1. Configure a gptel backend or follow [Claude subscription setup](#claude-promax-subscriptions).
-2. Install the package and run `M-x mevedel-install`.
-3. Open a project and run `M-x mevedel` to create or resume a chat session.
-   For remote work: visit remote/container directory → `M-x mevedel`.
+2. Install the package and run `M-x niwa-install`.
+3. Open a project and run `M-x niwa` to create or resume a chat session.
+   For remote work: visit remote/container directory → `M-x niwa`.
 4. Type in the composer at the bottom of the view; use `/help` for local slash
    commands.
-5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
+5. Run `/init` or `M-x niwa-init` to bootstrap or improve project guidance.
 6. Use `/goal <objective>` for durable automatic continuation toward one
    objective.
 7. Use `/review` or `/verify` to inspect changes before committing.
@@ -251,10 +251,10 @@ The rest of this README is intentionally manual-style. The main moving parts are
 ### Notes
 
 A note is a marked code range with optional text, created by you or the agent
-(or as a Buddy remark). Use `M-x mevedel-note-create` in a visited source file
+(or as a Buddy remark). Use `M-x niwa-note-create` in a visited source file
 to mark the active region, or the current line when no region is active. The
 text is optional: submitting an empty answer keeps a code-only note. A label
-is collapsed by default (`mevedel-note-labels` is `collapsed`): a single line
+is collapsed by default (`niwa-note-labels` is `collapsed`): a single line
 shows `▍ Note N · You  note text` (or `AI` / `Buddy`), cut with `…` at 80
 columns or the space left after indentation and bar, whichever is smaller.
 Expanded labels sit below the complete source line at the code's indentation.
@@ -266,14 +266,14 @@ marked text. Expanded label rows remain untinted. Only states needing
 attention appear after the header, dimmed: `change ready`, `change stale`,
 `working…`, `Buddy watches`, `looks done`, or `paused` for a paused take.
 Labels show neither sent/unsent status nor menu instructions.
-Set `mevedel-note-labels` to `expanded` to show the full wrapped text initially.
+Set `niwa-note-labels` to `expanded` to show the full wrapped text initially.
 Nested labels stack below their source lines; the inner note's tint wins on
 overlapping code. Both identities appear in the entry hint.
 Notes follow source edits. A note is unsent, sent, taken or closed (done,
 deleted or dismissed). Its context reaches a prompt only when you send or
 mention it.
 
-Inside a note, `M-m` (or `mevedel-ov-dispatch-key`) opens an inline **Actions** row.
+Inside a note, `M-m` (or `niwa-ov-dispatch-key`) opens an inline **Actions** row.
 Overlapping notes offer their number, author and first text line even when
 their labels are collapsed.
 Its keys are `s` send/reopen, `p` preview prompt, `t` take/drop, `i` edit, `g` tags, `x` done,
@@ -281,16 +281,16 @@ Its keys are `s` send/reopen, `p` preview prompt, `t` take/drop, `i` edit, `g` t
 `e` expand/collapse. `a` apply and `m` merge appear only for a prepared change;
 `r` revert appears only for applied changes. Plain letters still insert source
 text outside the menu; entering a note shows an echo-area hint even when collapsed.
-`M-x mevedel-notes-toggle-labels` expands all notes in the current buffer
+`M-x niwa-notes-toggle-labels` expands all notes in the current buffer
 if any are collapsed; otherwise it collapses them all. Display state belongs
 to each live overlay and is not persisted. Moving point never changes style.
-`mevedel-note-edit`, `mevedel-note-delete`, and
-`mevedel-note-menu` are available through `M-x` too. Deleting a note never edits
+`niwa-note-edit`, `niwa-note-delete`, and
+`niwa-note-menu` are available through `M-x` too. Deleting a note never edits
 its source code. Creating or editing a note does not send anything to a model.
 
 Choose **preview** to inspect the exact prompt that sending would build, without
 starting a conversation or contacting a model. Choose **send** in that menu,
-or use `M-x mevedel-note-send`, to open the note's
+or use `M-x niwa-note-send`, to open the note's
 own conversation beside the code. Graphical Emacs uses an anchored child frame;
 terminal Emacs uses a side window. Type below the prompt and press `C-c C-c`
 to reply. The transcript above is read-only. `C-c C-v` shows retained provider
@@ -320,11 +320,11 @@ Use **revert** in the note menu, or `C-c C-b` at the note or in its conversation
 to reverse one applied turn without Rewind. Choose a turn if several changed
 files. Revert preserves disjoint later edits and refuses with file/line ranges
 if the changed lines were edited again; save or undo unsaved source edits first.
-`M-x mevedel-note-revert-change` also offers recently closed notes when invoked
+`M-x niwa-note-revert-change` also offers recently closed notes when invoked
 away from a note. A successful revert reopens a done note; deleting a note never
 reverts its code changes.
 
-`M-x mevedel-note-send-batch` sends several loaded notes into one conversation.
+`M-x niwa-note-send-batch` sends several loaded notes into one conversation.
 Sending a note includes all descendants, at every depth, without duplicating
 their code. Sending a child does not include its parent. A descendant with its
 own conversation is named but excluded together with its subtree. Batch send
@@ -336,7 +336,7 @@ Implement action: the session's permission mode decides whether edits are allowe
 Choose `S` in the Actions row for a settings transient: base preset, the existing
 chat model/effort selector, and permission mode. Before send, settings persist
 on the note without contacting a model; afterward they change its live session.
-The base preset defaults to `mevedel-implement` and remains changeable. A durable
+The base preset defaults to `niwa-implement` and remains changeable. A durable
 note layer keeps isolation, input recording and conversation keys across preset
 changes and resume, preserving the base preset's system prompt and tools.
 Explicit forks are ordinary chats without that layer.
@@ -348,15 +348,15 @@ from their notes instead. Cleanup preserves them while open or recently-closed
 notes still refer to them. Once references expire they can be collected by the
 normal age limit, only when a safe local reference check proves them unreferenced.
 
-Choose **take** in the source menu, or use `M-x mevedel-note-take`, to implement
+Choose **take** in the source menu, or use `M-x niwa-note-take`, to implement
 the note yourself. Its expanded label says **Buddy watches**: Buddy uses its text
 as its brief and may say **looks done**, but only you mark it done. **Drop**
-(`M-x mevedel-note-drop`) returns it to unsent and stops that watch without
+(`M-x niwa-note-drop`) returns it to unsent and stops that watch without
 changing code or discarding its conversation. Sending a taken note instead
 changes it to sent and stops watching. Sending or taking a Buddy remark first
 keeps it as your own note, so later reviews cannot retract it.
 
-`M-x mevedel-buddy-set-level` saves a dial per workspace: **Quiet** speaks only
+`M-x niwa-buddy-set-level` saves a dial per workspace: **Quiet** speaks only
 when asked, **Watching** flags likely mistakes around recent edits at your
 pause, and **Active** also offers ideas near a known goal (a taken note or a
 nearby authored note). Active is the default. Taken notes are watched at every
@@ -364,14 +364,14 @@ level while their watch is active. After a restart, restored taken notes stay
 taken but show **paused** until you take them again or set the workspace dial.
 Explicit review and guidance requests are not limited by the automatic dial.
 
-`M-x mevedel-notes-list` lists the whole workspace, including unopened files,
+`M-x niwa-notes-list` lists the whole workspace, including unopened files,
 grouped by attention state. Use `v` or `RET` to visit, `e` to edit, `t` to edit
 tags, `T` to take or drop, `s` to send or reopen, `a` to apply, `d` to delete,
 `x` to mark done, `g` to refresh and `q` to close. Recently
 closed notes form a folded group: `TAB` toggles it, the State column shows the
 close reason, and `r` restores the selected note. Listing does not open source
 files. Missing sources show their last observed state without probing each file.
-`M-x mevedel-note-set-tags` also edits tags at point; an empty answer removes all.
+`M-x niwa-note-set-tags` also edits tags at point; an empty answer removes all.
 
 Mention `@note:3` in a chat to attach that note's current code and text, or
 `@note:{parser and not tests}` to attach notes matching a tag query. Numbers bind
@@ -383,9 +383,9 @@ placeholder. Notes are
 never automatic prompt context. The mode line summarizes working, ready and
 stale notes in the current workspace using only in-memory state.
 
-`M-x mevedel-note-done` explicitly closes a note as done.
+`M-x niwa-note-done` explicitly closes a note as done.
 Done, deleted and dismissed notes share recently closed;
-`M-x mevedel-note-restore` brings one back with its text,
+`M-x niwa-note-restore` brings one back with its text,
 tags and attachments. Restore follows the old code when it can find it; if the
 code changed, it falls back to the old line and column, clamped to the file.
 Notes never close merely because their code was edited.
@@ -393,29 +393,29 @@ Notes never close merely because their code was edited.
 Recently closed keeps the newest 100 done or deleted notes for up to 30 elapsed
 days by default. Dismissed notes do not count against that limit, but still
 expire by age.
-Customize `mevedel-notes-closed-max-count` and
-`mevedel-notes-closed-max-age-days`; nil disables either limit. Limits are checked
+Customize `niwa-notes-closed-max-count` and
+`niwa-notes-closed-max-age-days`; nil disables either limit. Limits are checked
 when closing, listing or restoring closed notes and when writing the store, not
 by a background timer. Expiry never reverts file changes. Imported archived
 notes marked exempt from expiry do not count against these limits.
 
 Notes use the workspace instruction store, not a session's private state, and
 appear when their source file is opened, without starting a session, once
-`mevedel-notes-global-mode` is enabled. Enable it in your init so it does not
-wait for `mevedel-install`; enabling it loads only a small hook and also shows
+`niwa-notes-global-mode` is enabled. Enable it in your init so it does not
+wait for `niwa-install`; enabling it loads only a small hook and also shows
 notes in buffers that are already open:
 
 ``` emacs-lisp
-(mevedel-notes-global-mode 1)
+(niwa-notes-global-mode 1)
 ```
 
-The first file with notes loads `mevedel` before showing them, so note
-keybindings set in your `mevedel` configuration (such as a `use-package`
+The first file with notes loads `niwa` before showing them, so note
+keybindings set in your `niwa` configuration (such as a `use-package`
 `:config` block) already apply. Restored taken notes remain paused; restoring
 notes does not start Buddy.
 The file-visit hook discovers local stores and restores remembered notes without
-remote I/O. A small local index (`$XDG_STATE_HOME/mevedel/remote-notes.el`, or
-`~/.local/state/mevedel/remote-notes.el`) remembers only remote workspace roots
+remote I/O. A small local index (`$XDG_STATE_HOME/niwa/remote-notes.el`, or
+`~/.local/state/niwa/remote-notes.el`) remembers only remote workspace roots
 with notes, never note content. After a restart, the first file visit in an
 indexed root queues one background store read for that Emacs run. For direct
 SSH/SCP roots it uses only the visit's existing SSH master and restores notes
@@ -424,8 +424,8 @@ Unindexed roots cause no remote notes traffic. If connection sharing is absent,
 the master disappears, or the read fails, it does not reconnect or fall back to
 blocking I/O; resume or an explicit workspace operation loads the notes instead.
 
-The first note in a recognized project (VCS or project.el) creates `.mevedel/`
-and saves the note. If the project's `.gitignore` does not cover `.mevedel/`,
+The first note in a recognized project (VCS or project.el) creates `.niwa/`
+and saves the note. If the project's `.gitignore` does not cover `.niwa/`,
 the command tells you; it never changes your ignore policy. Outside a project,
 an existing workspace state directory still saves notes. Otherwise notes stay
 in memory, and a one-time message says they are not saved there.
@@ -436,24 +436,24 @@ Old saved sessions still resume; their former directive turns appear as ordinary
 turns and participate in ordinary conversation context.
 
 Noted code is tinted by author, matching the theme-derived label color. The
-faces are `mevedel-note-you`, `mevedel-note-agent` and `mevedel-note-buddy`
-for the code, and `mevedel-note-label-you`, `mevedel-note-label-agent` and
-`mevedel-note-label-buddy` for the headers and bars. These are bold and inherit
+faces are `niwa-note-you`, `niwa-note-agent` and `niwa-note-buddy`
+for the code, and `niwa-note-label-you`, `niwa-note-label-agent` and
+`niwa-note-label-buddy` for the headers and bars. These are bold and inherit
 `font-lock-keyword-face` (you), `font-lock-function-name-face` (agent), or
 `font-lock-warning-face` (Buddy). Code backgrounds blend 10% of the matching
 foreground into the default background at load and theme enable, without overriding
 user-customized tint backgrounds. Code faces use `:extend t`.
 
-The note conversation frame uses `mevedel-note-frame-width`,
-`mevedel-note-frame-height`, `mevedel-note-frame-min-height` and
-`mevedel-note-frame-border-width`. The former directive-named modules, symbols
+The note conversation frame uses `niwa-note-frame-width`,
+`niwa-note-frame-height`, `niwa-note-frame-min-height` and
+`niwa-note-frame-border-width`. The former directive-named modules, symbols
 and options have no aliases; update any personal configuration to the note names.
 
 ### Overlays
 
 Notes are highlighted in the buffer via an overlay. The overlay contains an
 action menu which can be toggled via
-`mevedel-ov-dispatch-key` and grants access to common operations.
+`niwa-ov-dispatch-key` and grants access to common operations.
 
 Selections starting at the beginning of a line and ending at its end (or the
 beginning of the next line) remain whole-line instructions while you edit.
@@ -488,22 +488,22 @@ The source menu exposes the same note actions as the workspace notes list.
 
 | Custom Variable                      | Variable Description                                                      |
 |--------------------------------------|---------------------------------------------------------------------------|
-| `mevedel-ov-dispatch-key`            | Keybind to open overlay actions.                                          |
+| `niwa-ov-dispatch-key`            | Keybind to open overlay actions.                                          |
 
 ### Evil
 
 [Evil](https://github.com/emacs-evil/evil) integration is optional and never
-enabled by loading mevedel or `mevedel-evil.el`. Install and enable Evil yourself,
+enabled by loading niwa or `niwa-evil.el`. Install and enable Evil yourself,
 then opt in once (repeated calls are safe):
 
 ```emacs-lisp
-(mevedel-evil-setup)
+(niwa-evil-setup)
 ```
 
 Setup requires Evil at call time and reports a clear error if it is missing.
 Evil is not a runtime dependency, and evil-collection is not required. The
 integration follows its special-buffer conventions: the session view, read-only
-tables, and reports start in normal state; editable `mevedel-surface-mode`
+tables, and reports start in normal state; editable `niwa-surface-mode`
 buffers start in insert state. Note/prompt minibuffers retain your configured
 minibuffer state (Emacs state by default). Use `i` or `a` to type in the composer
 and Escape to return to normal-state navigation. In the session view,
@@ -542,7 +542,7 @@ applies there (`g` actions use `gr`, and `h`/`j`/`k`/`l` actions use uppercase).
 
 Other table action keys intentionally override normal-state editing commands
 only in those read-only tables. In source buffers, invoke the ordinary
-`mevedel-delete-instructions` command from visual state using your own bindings
+`niwa-delete-instructions` command from visual state using your own bindings
 or `M-x`: `V` creates an explicit line span, `v` an explicit character span.
 Block selections are rejected rather than silently flattened. Commands leave
 visual state cleanly; vanilla Emacs region commands keep their existing behavior.
@@ -561,7 +561,7 @@ conversation history. Selective region undo remains text-only.
 
 ### Workspaces
 
-mevedel assigns buffers to a project workspace which is used to determine in
+niwa assigns buffers to a project workspace which is used to determine in
 which folders the LLM is allowed to operate. A native file tool targeting an
 exact path outside those roots prompts for read or write access. The user can
 grant that invocation only, the current session, or the workspace persistently;
@@ -571,32 +571,32 @@ memory roots, the configured plans directory, and manually configured roots.
 
 | Command                       | Command Description                                                |
 |-------------------------------|--------------------------------------------------------------------|
-| `mevedel-add-project-root`    | Add a directory to the additional allowed roots for the workspace. |
-| `mevedel-remove-project-root` | Remove a directory from the additional allowed roots.              |
-| `mevedel-list-project-roots`  | Display all currently allowed roots for the workspace.             |
+| `niwa-add-project-root`    | Add a directory to the additional allowed roots for the workspace. |
+| `niwa-remove-project-root` | Remove a directory from the additional allowed roots.              |
+| `niwa-list-project-roots`  | Display all currently allowed roots for the workspace.             |
 
 | Custom Variable                      | Variable Description                                                      |
 |--------------------------------------|---------------------------------------------------------------------------|
-| `mevedel-workspace-functions`        | Functions to determine the workspace for the current buffer.              |
-| `mevedel-workspace-types-alist`      | Alist mapping workspace types to their defining functions.                |
-| `mevedel-workspace-additional-roots` | Alist mapping workspace roots to lists of additional allowed directories. |
-| `mevedel-file-cache-max-entries`     | Maximum number of files kept in the workspace file cache.                |
-| `mevedel-file-cache-max-bytes`       | Maximum total content size kept in the workspace file cache.             |
+| `niwa-workspace-functions`        | Functions to determine the workspace for the current buffer.              |
+| `niwa-workspace-types-alist`      | Alist mapping workspace types to their defining functions.                |
+| `niwa-workspace-additional-roots` | Alist mapping workspace roots to lists of additional allowed directories. |
+| `niwa-file-cache-max-entries`     | Maximum number of files kept in the workspace file cache.                |
+| `niwa-file-cache-max-bytes`       | Maximum total content size kept in the workspace file cache.             |
 
 ### Management
 
 | Command                           | Command Description                                                   |
 |-----------------------------------|-----------------------------------------------------------------------|
-| `mevedel-note-create`             | Create a note on the region or current line; text is optional.        |
-| `mevedel-notes-list`              | List the workspace's notes, grouped by attention state.               |
-| `mevedel-delete-instructions`     | Close notes either at point or within the selected region.            |
-| `mevedel-delete-all-instructions` | Confirm deletion of notes in the current workspace.                    |
-| `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
-| `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
-| `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
-| `mevedel-inspect-effective-prompt` | Inspect the live prompt components, exact prompt, and effective tools. |
-| `mevedel-abort`                   | Abort any active request in the current buffer.                       |
-| `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
+| `niwa-note-create`             | Create a note on the region or current line; text is optional.        |
+| `niwa-notes-list`              | List the workspace's notes, grouped by attention state.               |
+| `niwa-delete-instructions`     | Close notes either at point or within the selected region.            |
+| `niwa-delete-all-instructions` | Confirm deletion of notes in the current workspace.                    |
+| `niwa`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
+| `niwa-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
+| `niwa-init`                    | Bootstrap or refresh project instruction files.                       |
+| `niwa-inspect-effective-prompt` | Inspect the live prompt components, exact prompt, and effective tools. |
+| `niwa-abort`                   | Abort any active request in the current buffer.                       |
+| `niwa-version`                 | Show (or insert with prefix arg) the current niwa version.         |
 
 Bulk deletion includes all buffers in the current workspace, not other
 workspaces. Buffers without a workspace share one global instruction bucket;
@@ -606,13 +606,13 @@ them within its retention limits.
 
 | Custom Variable               | Variable Description                                             |
 |-------------------------------|------------------------------------------------------------------|
-| `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg.     |
-| `mevedel-user-dir`            | Global user-state directory for skills, memory, plugins, config, and permissions. Set before mevedel loads. |
+| `niwa-default-chat-preset` | Default preset when `niwa` is invoked without prefix arg.     |
+| `niwa-user-dir`            | Global user-state directory for skills, memory, plugins, config, and permissions. Set before niwa loads. |
 
 ### Sessions
 
 Each chat lives in its own session under
-`<workspace>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`. Sessions auto-save at
+`<workspace>/.niwa/sessions/<timestamp>-<12-hex-suffix>/`. Sessions auto-save at
 turn boundaries and checkpoint periodically while a request runs, keep tracked-file backups, and can be reopened or renamed.
 Rewind is an in-place undo that truncates later conversation and restores
 captured files. Conversation Fork creates a child session that shares the
@@ -623,38 +623,38 @@ it read-only instead of corrupting the writer's transcript.
 
 | Command                  | Command Description                                                |
 |--------------------------|--------------------------------------------------------------------|
-| `mevedel`                | Pick a saved session to resume, join, take over, recover, or explicitly discard, or start a new one. |
-| `mevedel-take-control`   | Take control of a read-only session; requests it when a live client holds the lease. |
-| `mevedel-release-control`| Hand the lease back and keep watching the session read-only.        |
-| `mevedel-toggle-follow`  | Toggle whether a non-owner view follows the owner's published turns. |
-| `mevedel-refresh-session`| Re-read the owner's newest published state now.                     |
-| `mevedel-save-session`   | Force a save; with prefix arg, save a copy under a fresh id.        |
-| `mevedel-rename-session` | Rename the current session without changing its ID or directory.              |
-| `mevedel-retry-session-naming` | Request a new automatic title, e.g. after a failed one; prefix arg asks for a description. |
-| `mevedel-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
+| `niwa`                | Pick a saved session to resume, join, take over, recover, or explicitly discard, or start a new one. |
+| `niwa-take-control`   | Take control of a read-only session; requests it when a live client holds the lease. |
+| `niwa-release-control`| Hand the lease back and keep watching the session read-only.        |
+| `niwa-toggle-follow`  | Toggle whether a non-owner view follows the owner's published turns. |
+| `niwa-refresh-session`| Re-read the owner's newest published state now.                     |
+| `niwa-save-session`   | Force a save; with prefix arg, save a copy under a fresh id.        |
+| `niwa-rename-session` | Rename the current session without changing its ID or directory.              |
+| `niwa-retry-session-naming` | Request a new automatic title, e.g. after a failed one; prefix arg asks for a description. |
+| `niwa-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
 
 | Custom Variable                          | Variable Description                                  |
 |------------------------------------------|-------------------------------------------------------|
-| `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
-| `mevedel-session-max-age-days`           | Auto-cleanup age, in days; swept at most daily. `nil` disables. |
-| `mevedel-session-checkpoint-interval`    | Seconds between checkpoints while a request runs.      |
-| `mevedel-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
-| `mevedel-view-input-history-size`        | Size of the workspace input history ring.              |
+| `niwa-sessions-directory`             | Directory for sessions (default `.niwa/sessions/`). |
+| `niwa-session-max-age-days`           | Auto-cleanup age, in days; swept at most daily. `nil` disables. |
+| `niwa-session-checkpoint-interval`    | Seconds between checkpoints while a request runs.      |
+| `niwa-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
+| `niwa-view-input-history-size`        | Size of the workspace input history ring.              |
 
 The chat view provides comint-style input history: `M-p` / `M-n` cycle previous
 and next inputs, `M-r` searches, `C-c C-l` browses the ring. History persists
-per workspace as `.mevedel/input-history.el`.
+per workspace as `.niwa/input-history.el`.
 
 ### Chat View
 
-mevedel runs gptel in an internal Org data buffer, but presents a compact
-`mevedel-view-mode` transcript and a separate composer for day-to-day use.
+niwa runs gptel in an internal Org data buffer, but presents a compact
+`niwa-view-mode` transcript and a separate composer for day-to-day use.
 The view renders tools and agent activity as collapsible rows; the raw data
-buffer owns persistence and gptel state. mevedel data buffers are
+buffer owns persistence and gptel state. niwa data buffers are
 kept linear: `gptel-org-branching-context` is set buffer-locally to `nil`, so Org
 headings in transcripts do not change the request context.
 
-`M-x mevedel-menu` opens the session controls from either paired buffer.
+`M-x niwa-menu` opens the session controls from either paired buffer.
 Cockpit tables and information panels are temporary: `q` restores the window
 layout and buffers from before they opened, without undoing buffer switches,
 window changes, or navigation made elsewhere while they were open. A table
@@ -695,36 +695,36 @@ to visit a pending card in the transcript, or `C-c RET` to send the draft.
 
 | Command                              | Command Description                                      |
 |--------------------------------------|----------------------------------------------------------|
-| `mevedel-view-send`                  | Send the current composer draft to the backing data buffer. |
-| `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
-| `mevedel-view-retract-pending`       | Withdraw the newest pending entry into an empty composer (`C-c C-w`). |
-| `mevedel-view-resume-pending`        | Resume leftover steering in one turn, then queued follow-ups (`C-c C-r`). |
-| `mevedel-pending-inputs-drop-at-point` | Delete the pending summary row under point (`d` / `DEL`), without opening the cockpit. |
-| `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
-| `mevedel-view-arm-conversation-fork` | Arm a Conversation Fork at the assistant turn at point.  |
-| `mevedel-view-arm-worktree-fork`     | Arm a Worktree Fork at the assistant turn at point.      |
-| `mevedel-view-rewind-at-point`       | Rewind in place to the assistant turn at point.          |
-| `mevedel-view-switch-conversation-variant-at-point` | Switch variants at the fork point under point. |
-| `mevedel-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
-| `mevedel-pending-inputs-open`       | Open Pending Inputs (`C-c C-e`), then select an entry to manage. |
-| `mevedel-pending-inputs-edit`       | Edit the selected Pending Inputs entry in the composer; save updates it, cancel restores the prior draft. |
-| `mevedel-pending-inputs-clear`      | Confirm and clear all pending steering and follow-ups (`C-c C-q`). |
-| `mevedel-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
+| `niwa-view-send`                  | Send the current composer draft to the backing data buffer. |
+| `niwa-view-abort`                 | Abort the active request from the view buffer.           |
+| `niwa-view-retract-pending`       | Withdraw the newest pending entry into an empty composer (`C-c C-w`). |
+| `niwa-view-resume-pending`        | Resume leftover steering in one turn, then queued follow-ups (`C-c C-r`). |
+| `niwa-pending-inputs-drop-at-point` | Delete the pending summary row under point (`d` / `DEL`), without opening the cockpit. |
+| `niwa-view-toggle-section`        | Expand or collapse the section or turn at point.         |
+| `niwa-view-arm-conversation-fork` | Arm a Conversation Fork at the assistant turn at point.  |
+| `niwa-view-arm-worktree-fork`     | Arm a Worktree Fork at the assistant turn at point.      |
+| `niwa-view-rewind-at-point`       | Rewind in place to the assistant turn at point.          |
+| `niwa-view-switch-conversation-variant-at-point` | Switch variants at the fork point under point. |
+| `niwa-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
+| `niwa-pending-inputs-open`       | Open Pending Inputs (`C-c C-e`), then select an entry to manage. |
+| `niwa-pending-inputs-edit`       | Edit the selected Pending Inputs entry in the composer; save updates it, cancel restores the prior draft. |
+| `niwa-pending-inputs-clear`      | Confirm and clear all pending steering and follow-ups (`C-c C-q`). |
+| `niwa-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
 
 | Custom Variable                                | Variable Description                                               |
 |------------------------------------------------|--------------------------------------------------------------------|
-| `mevedel-view-fontify-responses`               | Fontify assistant response bodies using Org-style faces.           |
-| `mevedel-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
-| `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
-| `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
-| `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and running-tool indicators. |
-| `mevedel-present-enabled`                      | Make PGTK/Wayland frames present only what changed, through GL (default t; affects all of Emacs). |
-| `mevedel-view-native-enabled`                  | Use low-CPU native animation on PGTK/Wayland when available (default t). |
-| `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
-| `mevedel-view-tool-spinner-style`              | Running-tool indicator: `shimmer` (default; sweeps the tool name or a group's running count with the label), `braille`, `ascii`, `dots`, or `static`. |
-| `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 30).          |
-| `mevedel-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 15); 0 freezes decorative motion. |
-| `mevedel-view-spinner-power-policy`            | `auto` (default), `full`, or `save`; see below.                      |
+| `niwa-view-fontify-responses`               | Fontify assistant response bodies using Org-style faces.           |
+| `niwa-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
+| `niwa-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
+| `niwa-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
+| `niwa-view-spinner-animate`                 | Global reduced-motion switch for request and running-tool indicators. |
+| `niwa-present-enabled`                      | Make PGTK/Wayland frames present only what changed, through GL (default t; affects all of Emacs). |
+| `niwa-view-native-enabled`                  | Use low-CPU native animation on PGTK/Wayland when available (default t). |
+| `niwa-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
+| `niwa-view-tool-spinner-style`              | Running-tool indicator: `shimmer` (default; sweeps the tool name or a group's running count with the label), `braille`, `ascii`, `dots`, or `static`. |
+| `niwa-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 30).          |
+| `niwa-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 15); 0 freezes decorative motion. |
+| `niwa-view-spinner-power-policy`            | `auto` (default), `full`, or `save`; see below.                      |
 
 `auto` uses the Emacs host's detected power source: external power uses the
 normal ceiling, while battery/backup power and unknown or stale readings use
@@ -740,24 +740,24 @@ styles; Braille and dots indicators use same-speed ASCII substitutes when
 their glyphs cannot be rendered. Motion
 settings can be changed through Customize during an active request. Elapsed
 time and status updates continue even with `static`, a zero saving ceiling,
-or `mevedel-view-spinner-animate` set to nil.
+or `niwa-view-spinner-animate` set to nil.
 
 On Linux with PGTK/Wayland, stock Emacs repaints and presents the whole frame
 after every redisplay, and GTK 3 copies the whole window into a new buffer
 each time: on a large HiDPI frame that is about 11 ms of CPU per frame,
-whatever changed. mevedel's optional native module fixes this for all of
-Emacs, not only mevedel's buffers: frames present through GL, only what Emacs
+whatever changed. niwa's optional native module fixes this for all of
+Emacs, not only niwa's buffers: frames present through GL, only what Emacs
 drew is repainted, and redisplays that drew nothing present nothing. Typing,
 streaming and animation then cost a fraction of the CPU (a 10 Hz timer: 15%
-to 0.3% of a core). It is enabled at the first mevedel view on such a frame
-and lasts until Emacs exits; set `mevedel-present-enabled` to nil to keep
+to 0.3% of a core). It is enabled at the first niwa view on such a frame
+and lasts until Emacs exits; set `niwa-present-enabled` to nil to keep
 Emacs's own presentation. It works by redirecting the Emacs executable's own
 calls into GTK, Cairo and GLib, and refuses to act on an executable whose
 drawing calls it does not recognize.
 
 The same module can present animation samples on small independent surfaces,
 avoiding a repaint per frame even without the presentation fix. Set
-`mevedel-view-native-enabled` to nil to disable it. It also lets the telemetry
+`niwa-view-native-enabled` to nil to disable it. It also lets the telemetry
 heartbeat wait without waking the editor's display loop, preserving 100 ms
 stall sampling with less CPU use. This works independently of native
 presentation; without the module, sampling uses a main-thread timer.
@@ -765,11 +765,11 @@ presentation; without the module, sampling uses a main-thread timer.
 The module builds automatically at first use; it requires Emacs module
 support, a C compiler (`cc`), `pkg-config`, and the Emacs, GTK 3 and Wayland
 client development headers. The compiled module is cached under
-`mevedel-user-dir/native/`. Without those build tools, `M-x
-mevedel-native-install` downloads a prebuilt module for x86_64 or aarch64
+`niwa-user-dir/native/`. Without those build tools, `M-x
+niwa-native-install` downloads a prebuilt module for x86_64 or aarch64
 Linux from the project's GitHub releases; it is loaded only when its SHA-256
 matches the checksum pinned in `native/prebuilt.eld`. When neither is available,
-mevedel says so once per session. Other displays, unavailable modules and
+niwa says so once per session. Other displays, unavailable modules and
 unsuitable label geometry use ordinary text animation, at several times the
 CPU. Native breathe/bounce use the configured frame-rate ceiling, and so does
 ordinary text animation while frames present only what changed; otherwise it
@@ -777,16 +777,16 @@ retains the accepted 8-fps compromise. No Emacs patch or rebuild is required.
 
 ```emacs-lisp
 ;; Automatic 30 fps on external power, 15 fps on battery or unknown power.
-(setopt mevedel-view-spinner-power-policy 'auto
-        mevedel-view-spinner-framerate 30
-        mevedel-view-spinner-battery-framerate 15)
+(setopt niwa-view-spinner-power-policy 'auto
+        niwa-view-spinner-framerate 30
+        niwa-view-spinner-battery-framerate 15)
 
 ;; Always use the normal ceiling, regardless of power source.
-(setopt mevedel-view-spinner-power-policy 'full)
+(setopt niwa-view-spinner-power-policy 'full)
 
 ;; Keep automatic detection, but stop decorative motion on battery/unknown.
-(setopt mevedel-view-spinner-power-policy 'auto
-        mevedel-view-spinner-battery-framerate 0)
+(setopt niwa-view-spinner-power-policy 'auto
+        niwa-view-spinner-battery-framerate 0)
 ```
 
 The transcript and composer share one visible mode line: the composer's
@@ -804,28 +804,28 @@ hide the mode line, set it to `nil` for the composer after mode setup:
 ```emacs-lisp
 (add-hook 'after-change-major-mode-hook
           (lambda ()
-            (when (derived-mode-p 'mevedel-composer-mode)
+            (when (derived-mode-p 'niwa-composer-mode)
               (setq-local mode-line-format nil)))
           90)
 ```
 
-A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
+A recommended `.gitignore` line is `.niwa/sessions/` (or just `.niwa/`).
 
 ### Saving & Loading
 
 | Command                     | Command Description                                    |
 |-----------------------------|--------------------------------------------------------|
-| `mevedel-save-instructions` | Export current notes to a specified file.              |
-| `mevedel-load-instructions` | Import notes from a specified file.                    |
-| `mevedel-instruction-count` | Return the number of notes currently loaded.           |
+| `niwa-save-instructions` | Export current notes to a specified file.              |
+| `niwa-load-instructions` | Import notes from a specified file.                    |
+| `niwa-instruction-count` | Return the number of notes currently loaded.           |
 
 | Custom Variable                       | Variable Description                                             |
 |---------------------------------------|------------------------------------------------------------------|
-| `mevedel-patch-outdated-instructions` | Automatically patch instructions when the save file is outdated. |
-| `mevedel-instruction-anchor-context-chars` | Surrounding context stored with instruction anchors.       |
-| `mevedel-instruction-anchor-text-max-chars` | Maximum selected text stored directly in anchors.         |
+| `niwa-patch-outdated-instructions` | Automatically patch instructions when the save file is outdated. |
+| `niwa-instruction-anchor-context-chars` | Surrounding context stored with instruction anchors.       |
+| `niwa-instruction-anchor-text-max-chars` | Maximum selected text stored directly in anchors.         |
 
-The variable `mevedel-patch-outdated-instructions` controls the automatic
+The variable `niwa-patch-outdated-instructions` controls the automatic
 patching of instructions during loading when the save file is outdated. The
 process is not perfect (word-wise diff), so you should always try and maintain a
 separate instruction file per branch.
@@ -834,14 +834,14 @@ separate instruction file per branch.
 
 | Command                               | Command Description                                               |
 |---------------------------------------|-------------------------------------------------------------------|
-| `mevedel-note-edit`                   | Edit the note text at point.                                      |
-| `mevedel-note-set-tags`               | Set the tags of the note at point; an empty answer removes all.   |
-| `mevedel-link-instructions`           | Link instruction IDs; links do not attach notes to prompts.       |
-| `mevedel-unlink-instructions`         | Remove links between instruction IDs.                            |
+| `niwa-note-edit`                   | Edit the note text at point.                                      |
+| `niwa-note-set-tags`               | Set the tags of the note at point; an empty answer removes all.   |
+| `niwa-link-instructions`           | Link instruction IDs; links do not attach notes to prompts.       |
+| `niwa-unlink-instructions`         | Remove links between instruction IDs.                            |
 
 #### Categorization
 
-Tags label and organize notes. Set them with `mevedel-note-set-tags` (or `t` in
+Tags label and organize notes. Set them with `niwa-note-set-tags` (or `t` in
 the notes list). A tag query uses infix notation with the operators `and`, `or`
 and `not`, and parentheses. Notes are selected by tag in a chat with
 `@note:{signature and function and doc}` or `@ref:{query}` mentions, which
@@ -851,13 +851,13 @@ match open notes only. An empty or malformed query matches nothing.
 
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
-| `mevedel-note-send`               | Send or reopen a note's isolated conversation.                               |
-| `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
-| `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
+| `niwa-note-send`               | Send or reopen a note's isolated conversation.                               |
+| `niwa-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
+| `niwa-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
 
 | Custom Variable                     | Variable Description                                       |
 |-------------------------------------|------------------------------------------------------------|
-| `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
+| `niwa-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
 
 Commands are also available via overlay actions. For example, you can preview
 the patch before applying it.
@@ -866,33 +866,33 @@ the patch before applying it.
 
 | Command                               | Command Description                                         |
 |---------------------------------------|-------------------------------------------------------------|
-| `mevedel-next-instruction`            | Cycle through notes in the forward direction.               |
-| `mevedel-previous-instruction`        | Cycle through notes in the backward direction.              |
-| `mevedel-cycle-instructions-at-point` | Cycle through notes at point, highlighting them.            |
+| `niwa-next-instruction`            | Cycle through notes in the forward direction.               |
+| `niwa-previous-instruction`        | Cycle through notes in the backward direction.              |
+| `niwa-cycle-instructions-at-point` | Cycle through notes at point, highlighting them.            |
 
 ### Command index
 
-- `mevedel-note-create` / `mevedel-notes-list`
-- `mevedel-save-instructions` / `mevedel-load-instructions`
-- `mevedel`
-- `mevedel-rewind` / `mevedel-redo` / `mevedel-save-session` /
-  `mevedel-rename-session` / `mevedel-retry-session-naming`
-- `mevedel-take-control` / `mevedel-release-control` /
-  `mevedel-toggle-follow` / `mevedel-refresh-session`
-- `mevedel-next/previous-instruction`
-- `mevedel-diff-apply-buffer`
-- `mevedel-compact`
-- `mevedel-review` / `mevedel-verify`
-- `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`
+- `niwa-note-create` / `niwa-notes-list`
+- `niwa-save-instructions` / `niwa-load-instructions`
+- `niwa`
+- `niwa-rewind` / `niwa-redo` / `niwa-save-session` /
+  `niwa-rename-session` / `niwa-retry-session-naming`
+- `niwa-take-control` / `niwa-release-control` /
+  `niwa-toggle-follow` / `niwa-refresh-session`
+- `niwa-next/previous-instruction`
+- `niwa-diff-apply-buffer`
+- `niwa-compact`
+- `niwa-review` / `niwa-verify`
+- `/plan` / `/plan PROMPT` / `niwa-retry-plan-implementation`
 - `/btw` / `/btw PROMPT`
-- `mevedel-add/remove/list-project-roots`
-- `mevedel-toggle-tasks`
-- `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
-  `mevedel-buddy-review` / `mevedel-buddy-guide`
+- `niwa-add/remove/list-project-roots`
+- `niwa-toggle-tasks`
+- `niwa-buddy-mode` / `niwa-buddy-global-mode` /
+  `niwa-buddy-review` / `niwa-buddy-guide`
 - `/buddy` / `/buddy BRIEF` / `/buddy off`
-- `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes` /
-  `mevedel-buddy-abort`
-- `mevedel-retry-plan-implementation`
+- `niwa-buddy-dismiss-note` / `niwa-buddy-dismiss-notes` /
+  `niwa-buddy-abort`
+- `niwa-retry-plan-implementation`
 
 The chat's top **compact on/off** control toggles automatic compaction for
 that open session without moving the cursor or changing other chats. It does
@@ -904,7 +904,7 @@ To carry out an accepted plan yourself, cycle **Execution** (`e`) in its approva
 card to **Buddy — Implement myself with notes**, then accept. The assistant reads
 the plan and code and creates one unsent note per step, anchored beside the
 relevant code, in one NoteWrite batch. It does not edit code or prepare changes.
-Its reply lists the note numbers and steps; open `M-x mevedel-notes-list` to
+Its reply lists the note numbers and steps; open `M-x niwa-notes-list` to
 take, send, edit or delete each note. Taking a note invites Buddy to watch while
 you implement it. As with Direct, acceptance exits Plan without changing the
 session's stored permission mode; the selected Mode applies only to this turn.
@@ -913,7 +913,7 @@ behavior. `/buddy` remains a separate way to share a brief without accepting a
 plan or creating step notes.
 
 Use `/btw [QUESTION]` for an independent, multi-turn aside with the current
-context. On Claude Code, finish the parent turn first: mevedel forks the native
+context. On Claude Code, finish the parent turn first: niwa forks the native
 history rather than copying the visible transcript. The adapter must advertise
 session fork, resume and delete; otherwise the command explains the refusal.
 Close the side with `C-c C-z`. Closing, aborting or failing a native side deletes
@@ -922,7 +922,7 @@ Other gptel backends still allow `/btw` during streaming and follow-ups after ab
 
 ## Tools & Agents
 
-mevedel comes with its own set of tools which are used by the LLM to process the
+niwa comes with its own set of tools which are used by the LLM to process the
 user's request. Each tool flows through a single pipeline that handles
 permissions, validation, file snapshots, oversized-result persistence, and
 display rendering.
@@ -941,7 +941,7 @@ navigation)
 **Tasks:** `TaskWrite` (create or update tasks in one batch and set owner status
 notes) and `TaskList` (list tasks or read one in full): a structured task list
 with statuses, dependencies, owner status notes, and an optional task status
-fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the fragment to show or
+fragment; use `niwa-toggle-tasks` or `TAB`/`RET` on the fragment to show or
 hide completed tasks
 
 **Sub-agents:** `Agent` (start a retained asynchronous child, optionally with
@@ -975,7 +975,7 @@ them through `ToolCall` and uses `ToolSearch` for full contracts.
 
 ### Agents
 
-Mevedel’s retained sub-agents support delegated work through gptel requests.
+Niwa’s retained sub-agents support delegated work through gptel requests.
 The model-facing `Agent` tool takes a lowercase `task_name`, a complete
 `message`, and an optional named `role`. It starts one retained child
 asynchronously and immediately returns its canonical path (for example
@@ -1002,7 +1002,7 @@ and role references, while `ListAgents` discovers the complete retained tree.
 
 Agent handles in the view are clickable. Running agents can open a live
 transcript; settled agents open their saved transcript when session persistence
-has materialized it. `mevedel-view-close-agent-transcript` closes the selected
+has materialized it. `niwa-view-close-agent-transcript` closes the selected
 transcript side window. Each asynchronous child sends one bounded terminal
 RESULT to its spawn parent and then releases its active-turn slot.
 
@@ -1016,12 +1016,12 @@ prompt generates a descriptive title in the background through the `naming`
 workload (`fast` tier by default). Explicit names are preserved; failed title
 requests leave the ID displayed and a notice naming the provider and cause. An
 unavailable naming provider (for example an expired login) falls back once to
-the session's own model. `M-x mevedel-retry-session-naming` tries again from the
-recorded prompt, and `M-x mevedel-rename-session` changes the name without
+the session's own model. `M-x niwa-retry-session-naming` tries again from the
+recorded prompt, and `M-x niwa-rename-session` changes the name without
 moving the session directory. Forks receive their own IDs and titles.
 
 Named model tiers and workload assignments live in the current session preset.
-The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the
+The global `niwa-model-tiers` and `niwa-model-workloads` values are the
 defaults for presets that omit them. A workload selects a tier or exact gptel
 provider and may override reasoning effort; an `Agent` call or a skill that
 owns a future request can override policy for that invocation. Skill workload
@@ -1029,9 +1029,9 @@ keys are `$skill-name` symbols.
 
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
-| `mevedel-agent-extra-tool-specs`          | Add active or deferred tool specs to built-in agent definitions.  |
-| `mevedel-agent-conversation-save-debounce` | Delay before a changed retained conversation is flushed to disk.  |
-| `mevedel-agent-view-display-action`       | Display action used for rendered agent transcript views.          |
+| `niwa-agent-extra-tool-specs`          | Add active or deferred tool specs to built-in agent definitions.  |
+| `niwa-agent-conversation-save-debounce` | Delay before a changed retained conversation is flushed to disk.  |
+| `niwa-agent-view-display-action`       | Display action used for rendered agent transcript views.          |
 
 ### Goals
 
@@ -1056,7 +1056,7 @@ filesystem changes.
 
 ### Review and Verify Commands
 
-`M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run
+`M-x niwa-review` / `/review` and `M-x niwa-verify` / `/verify` run
 dedicated awaited asynchronous validation tasks. The commands share a target picker:
 uncommitted changes, a base branch, a specific commit, the last commit, or
 custom instructions. Base-branch targets pre-resolve the merge-base SHA and pass
@@ -1064,7 +1064,7 @@ that concrete diff target to the agent. The path is first-class rather than
 normal skill resolution, so project/user skills named `review` do not override
 the review command.
 
-`/review` uses the `reviewer` agent and returns strict JSON findings. mevedel
+`/review` uses the `reviewer` agent and returns strict JSON findings. niwa
 renders those findings as a normal assistant summary and also stores a hidden
 synthetic review action in the parent transcript so follow-up prompts like "fix
 finding 2" have the full review context available.
@@ -1105,7 +1105,7 @@ validation and transaction run without the interactive review.
 
 A single decision chain governs every tool dispatch — file reads/writes, Bash
 commands, web fetches, sub-agent spawns. Permission rules live on the unified
-`mevedel-permission-rules` alist with the form
+`niwa-permission-rules` alist with the form
 `(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. One specifier per rule:
 
 | Key        | Matches                | Used by                            |
@@ -1116,13 +1116,13 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 | `:name`    | free-form name (glob)  | `Agent` (`task_name`)              |
 
 Precedence: specifier rules outrank generic; within a group `deny > ask >
-allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
+allow`. `niwa-protected-paths` maps globs to `read-only` or `inaccessible`.
 The defaults keep `.git/` readable but immutable and hide `~/.ssh/` and
 `~/.gnupg/` plus common AWS, Azure, Google Cloud, and Kubernetes credential
 directories. These protections apply in Ask and Edits; Full Access removes
 these defaults while retaining explicit hard denies.
 
-**Permission modes** (`mevedel-permission-mode`):
+**Permission modes** (`niwa-permission-mode`):
 
 - `ask` — allow recognized inspection and prompt for edits and uncertain Bash
   or Eval execution.
@@ -1143,7 +1143,7 @@ When set inside a chat buffer, the mode is scoped to that session; set from any
 other buffer it updates the global default.
 
 ```emacs-lisp
-(setopt mevedel-permission-rules
+(setopt niwa-permission-rules
         '(("Bash" :pattern "echo"     :action allow) ; bare command
           ("Bash" :pattern "echo *"   :action allow) ; with args
           ("Bash" :pattern "ls"       :action allow)
@@ -1157,7 +1157,7 @@ other buffer it updates the global default.
 Use space-boundary patterns (`"ls"` + `"ls *"`) rather than unbounded globs
 like `"ls*"` to avoid accidentally matching unrelated commands such as `lsof`.
 
-**Bash analysis**: mevedel classifies each request as `read-only`, `dangerous`,
+**Bash analysis**: niwa classifies each request as `read-only`, `dangerous`,
 `complex`, or `unknown`.  It uses the Bash Tree-sitter grammar when available
 through normal Emacs configuration and otherwise uses a conservative scanner.
 Dynamic shell syntax always classifies as complex.  Direct user-authored
@@ -1168,16 +1168,16 @@ of find, ripgrep, base64, sed, and awk; output options, mutation, and
 helper execution remain unknown and therefore prompt in `ask`. Edits relies on
 required confinement rather than syntax classification for automatic execution.
 
-**Dangerous commands** (`mevedel-bash-dangerous-commands`): command names that
+**Dangerous commands** (`niwa-bash-dangerous-commands`): command names that
 contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
 
-**Child confinement** (`mevedel-sandbox-mode`): Edits requires Bubblewrap;
+**Child confinement** (`niwa-sandbox-mode`): Edits requires Bubblewrap;
 Full Access disables confinement. Ask uses this configured preference without
 changing it when the permission mode changes. Bash and fresh Eval use
-Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
+Bubblewrap on Linux when available. Niwa finds `bwrap` through the current
 executable path and probes the real namespace profile before first use. Each
 probe attempt is time-bounded and retains at most 64 KiB of diagnostics. If the
-host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
+host rejects only a fresh `/proc` mount, Niwa retains filesystem, process,
 and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
@@ -1198,15 +1198,15 @@ immutable, inaccessible paths are hidden, Git directory pointer targets follow
 the same alist shape, for example `(("~/public-metadata/**" . read-only)
           ("~/.credentials/**" . inaccessible))`.
 
-**Approval reviewer** (`mevedel-permission-reviewer`): `user` displays ordinary
+**Approval reviewer** (`niwa-permission-reviewer`): `user` displays ordinary
 permission cards; `auto` first asks the `guardian` model workload to approve one
 invocation, deny it, or defer. It receives actual root user intent and the complete
 requested authority. It never creates persistent grants. Errors, uncertainty
-and `mevedel-permission-review-timeout` (20 seconds) fall back to the user.
+and `niwa-permission-review-timeout` (20 seconds) fall back to the user.
 Full Access bypasses review. See [the reviewer contract](docs/guardian-prompts.md).
 
 Persistent rules accepted via the prompt's "always" choices are saved to
-`.mevedel/permissions.el` per workspace.
+`.niwa/permissions.el` per workspace.
 
 Add `:network t` to a Bash or fresh-Eval rule to authorize network access
 together with the matching operation. An unqualified operation rule leaves
@@ -1229,17 +1229,17 @@ agent spawn that violates project policy.
 
 Hook config can be written as Lisp data or JSON:
 
-- `mevedel-hook-rules`: trusted user configuration.
-- `~/.mevedel/hooks.el` and `~/.mevedel/hooks.json`: trusted user files.
-- `<workspace>/.mevedel/hooks.el` and
-  `<workspace>/.mevedel/hooks.json`: project files. By default, these must be
-  trusted with `mevedel-hooks-trust-project` before command hooks run.
+- `niwa-hook-rules`: trusted user configuration.
+- `~/.niwa/hooks.el` and `~/.niwa/hooks.json`: trusted user files.
+- `<workspace>/.niwa/hooks.el` and
+  `<workspace>/.niwa/hooks.json`: project files. By default, these must be
+  trusted with `niwa-hooks-trust-project` before command hooks run.
 - Skill frontmatter `hooks`: active only while that skill is preparing or
   running.
 - Agent definition `:hooks`: active only for invocations of that registered
   agent.
 
-If both `.el` and `.json` exist in the same layer, mevedel merges them
+If both `.el` and `.json` exist in the same layer, niwa merges them
 additively. Command hooks run with JSON on stdin and may print a JSON decision
 on stdout. Elisp hooks receive a plist and return a plist.
 
@@ -1279,23 +1279,23 @@ Common decision fields:
 | `:updated-input` / `"updatedInput"`             | Replace a prompt or, for `PreToolUse`, tool arguments.   |
 | `:updated-result` / `"updatedResult"`           | Replace a post-tool result.                              |
 
-Example project `.mevedel/hooks.el`:
+Example project `.niwa/hooks.el`:
 
 ```emacs-lisp
 ((PreToolUse
   ((:matcher "Bash"
     :hooks ((:type command
-             :command ".mevedel/hooks/block-rm.sh"
+             :command ".niwa/hooks/block-rm.sh"
              :timeout 5
              :fail-closed t)))))
  (PostToolUse
   ((:matcher "ApplyPatch"
     :hooks ((:type command
-             :command ".mevedel/hooks/format-changed-file.sh"
+             :command ".niwa/hooks/format-changed-file.sh"
              :timeout 30))))))
 ```
 
-Example project `.mevedel/hooks.json`:
+Example project `.niwa/hooks.json`:
 
 ```json
 {
@@ -1306,7 +1306,7 @@ Example project `.mevedel/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": ".mevedel/hooks/allow-safe-git.sh",
+            "command": ".niwa/hooks/allow-safe-git.sh",
             "timeout": 5
           }
         ]
@@ -1318,7 +1318,7 @@ Example project `.mevedel/hooks.json`:
         "hooks": [
           {
             "type": "command",
-            "command": ".mevedel/hooks/keep-test-summary.sh"
+            "command": ".niwa/hooks/keep-test-summary.sh"
           }
         ]
       }
@@ -1356,7 +1356,7 @@ esac
 Example user-level Elisp hook:
 
 ```emacs-lisp
-(add-hook 'mevedel-user-prompt-submit-functions
+(add-hook 'niwa-user-prompt-submit-functions
           (lambda (_event)
             '(:additional-context
               "Project policy: before reporting completion, mention which tests ran.")))
@@ -1365,7 +1365,7 @@ Example user-level Elisp hook:
 Example expansion hook for user-invoked skills:
 
 ```emacs-lisp
-(add-hook 'mevedel-user-prompt-expansion-functions
+(add-hook 'niwa-user-prompt-expansion-functions
           (lambda (event)
             (when (equal (plist-get event :skill-name) "review")
               '(:additional-context
@@ -1375,7 +1375,7 @@ Example expansion hook for user-invoked skills:
 Example agent-local hook:
 
 ```emacs-lisp
-(mevedel-define-agent verifier
+(niwa-define-agent verifier
   :description "Read-only verification"
   :tools (read)
   :hooks ((Stop
@@ -1393,9 +1393,9 @@ Useful commands:
 
 | Command                       | Description                                              |
 |-------------------------------|----------------------------------------------------------|
-| `mevedel-hooks-list`          | Show effective hooks for the current session.            |
-| `mevedel-hooks-run-dry`       | Preview which hooks match an event without running them. |
-| `mevedel-hooks-trust-project` | Trust the current project's hook files by hash.          |
+| `niwa-hooks-list`          | Show effective hooks for the current session.            |
+| `niwa-hooks-run-dry`       | Preview which hooks match an event without running them. |
+| `niwa-hooks-trust-project` | Trust the current project's hook files by hash.          |
 
 ### Examples
 
@@ -1412,36 +1412,36 @@ Useful commands:
 
 | Custom Variable                            | Variable Description                                                     |
 |--------------------------------------------|--------------------------------------------------------------------------|
-| `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
-| `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
-| `mevedel-permission-mode`                  | Default permission mode (`ask` / `edits` / `full-auto`).                  |
-| `mevedel-sandbox-mode`                     | Child confinement (`best-effort` / `required` / `off`).                   |
-| `mevedel-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
-| `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
-| `mevedel-permission-reviewer`              | Permission decisions: `user`, or `auto` review before a human card. |
-| `mevedel-permission-review-timeout`         | Seconds before automatic review falls back to a human card. |
-| `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
-| `mevedel-model-tiers`                      | Default named provider/effort tier map inherited by session presets.     |
-| `mevedel-model-workloads`                  | Default tier/provider/effort policy per model workload.                  |
-| `mevedel-model-context-limit`              | Fallback context window in tokens when model metadata is absent.         |
-| `mevedel-model-reserve-tokens`             | Token headroom reserved below the model context window.                  |
-| `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
-| `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
-| `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
-| `mevedel-hooks-command-timeout`            | Default timeout for command hooks.                                       |
-| `mevedel-hooks-command-timeout-max`        | Maximum per-hook command timeout.                                        |
-| `mevedel-hooks-command-output-max-chars`   | Maximum captured stdout/stderr bytes per command hook.                   |
-| `mevedel-hooks-log-limit`                  | Number of hook log entries kept in memory per session.                   |
-| `mevedel-hooks-persist-log`                | Append hook logs to persisted session directories.                       |
-| `mevedel-hooks-slow-threshold`             | Seconds before a slow hook run is surfaced to the user.                  |
-| `mevedel-reminders-edited-file-max-diff-lines` | Maximum diff lines per externally edited file reminder.              |
+| `niwa-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
+| `niwa-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
+| `niwa-permission-mode`                  | Default permission mode (`ask` / `edits` / `full-auto`).                  |
+| `niwa-sandbox-mode`                     | Child confinement (`best-effort` / `required` / `off`).                   |
+| `niwa-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
+| `niwa-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
+| `niwa-permission-reviewer`              | Permission decisions: `user`, or `auto` review before a human card. |
+| `niwa-permission-review-timeout`         | Seconds before automatic review falls back to a human card. |
+| `niwa-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
+| `niwa-model-tiers`                      | Default named provider/effort tier map inherited by session presets.     |
+| `niwa-model-workloads`                  | Default tier/provider/effort policy per model workload.                  |
+| `niwa-model-context-limit`              | Fallback context window in tokens when model metadata is absent.         |
+| `niwa-model-reserve-tokens`             | Token headroom reserved below the model context window.                  |
+| `niwa-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
+| `niwa-hook-rules`                       | Trusted user-level declarative hook rules.                               |
+| `niwa-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
+| `niwa-hooks-command-timeout`            | Default timeout for command hooks.                                       |
+| `niwa-hooks-command-timeout-max`        | Maximum per-hook command timeout.                                        |
+| `niwa-hooks-command-output-max-chars`   | Maximum captured stdout/stderr bytes per command hook.                   |
+| `niwa-hooks-log-limit`                  | Number of hook log entries kept in memory per session.                   |
+| `niwa-hooks-persist-log`                | Append hook logs to persisted session directories.                       |
+| `niwa-hooks-slow-threshold`             | Seconds before a slow hook run is surfaced to the user.                  |
+| `niwa-reminders-edited-file-max-diff-lines` | Maximum diff lines per externally edited file reminder.              |
 
 ## Skills
 
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
-discovered from `.mevedel/skills/`, `.agents/skills/`,
-`skills/` under `mevedel-user-dir` (default `~/.mevedel/`), `~/.agents/skills/`, and from the directories listed in
-`mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
+discovered from `.niwa/skills/`, `.agents/skills/`,
+`skills/` under `niwa-user-dir` (default `~/.niwa/`), `~/.agents/skills/`, and from the directories listed in
+`niwa-skill-dirs`. niwa ships a few bundled skills under `skills/`
 (for example `review`, `analyze-log`, `learn`, `clean-work`, and `schedule`); name conflicts are exposed with
 deterministic visible prefixes.
 
@@ -1467,7 +1467,7 @@ Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/usage`, `/
 subscription quotas for the session's Codex OAuth or Claude Code backend.
 The read-only report fetches on opening and on `g`; `q` cancels any pending
 retrieval and returns to the session. `/tokens` still estimates conversation
-context size. Quotas include activity outside mevedel.
+context size. Quotas include activity outside niwa.
 The model reads the same quotas as plain data through `SubscriptionUsage`.
 
 Project and user skills add `$<skill-name>` invocations by name.
@@ -1475,23 +1475,23 @@ Project and user skills add `$<skill-name>` invocations by name.
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model
 and effort policy, and whether a skill runs inline or in a forked agent.
 Presets can override external skill policy through `$skill-name` entries in
-`mevedel-model-workloads`. Skill bodies support argument placeholders and
+`niwa-model-workloads`. Skill bodies support argument placeholders and
 shell/Elisp insertions; see
 [`docs/skills.md`](docs/skills.md) for the full format.
 
 | Custom Variable                   | Variable Description                                            |
 |-----------------------------------|-----------------------------------------------------------------|
-| `mevedel-skill-dirs`              | Directories scanned for `SKILL.md` files.                       |
-| `mevedel-skills-include-bundled`  | Whether to scan mevedel's bundled `skills/` directory.          |
-| `mevedel-skills-check-for-modifications` | When non-nil, hot-reload skills on file changes.         |
-| `mevedel-skills-listing-budget` | Context fraction reserved for the model-visible skill list.       |
-| `mevedel-skills-listing-max-entry-chars` | Maximum characters per skill entry in that listing.      |
+| `niwa-skill-dirs`              | Directories scanned for `SKILL.md` files.                       |
+| `niwa-skills-include-bundled`  | Whether to scan niwa's bundled `skills/` directory.          |
+| `niwa-skills-check-for-modifications` | When non-nil, hot-reload skills on file changes.         |
+| `niwa-skills-listing-budget` | Context fraction reserved for the model-visible skill list.       |
+| `niwa-skills-listing-max-entry-chars` | Maximum characters per skill entry in that listing.      |
 
 ## Conversation Compaction
 
 ![Compact 1](.assets/images/compaction-tool-2.png)
 
-Long chat sessions can accumulate significant token usage. The `mevedel-compact`
+Long chat sessions can accumulate significant token usage. The `niwa-compact`
 command summarizes old conversation history via an LLM call. Persisted sessions
 also auto-compact before a request when the estimated context crosses the
 configured threshold. During auto-compaction the view spinner shows
@@ -1501,39 +1501,39 @@ When the session is persisted, compaction rotates segments rather than rewriting
 the live buffer: the current segment is finalized on disk, the counter advances
 to a new `segment-NNNN.chat.org`, and the new segment starts with an anchored
 summary followed by a preserved recent tail. Older segments stay browsable via
-`mevedel-rewind`.
+`niwa-rewind`.
 
 ![Compact 2](.assets/images/compaction-tool-1.png)
 
-The threshold can be absolute or proportional to usable context. mevedel uses a
+The threshold can be absolute or proportional to usable context. niwa uses a
 local chars/4 estimate before sending requests, then corrects future estimates
 from gptel's API-reported token usage when available.
 
 | Command           | Command Description                                        |
 |-------------------|------------------------------------------------------------|
-| `mevedel-compact` | Summarize old conversation and reduce effective token use. |
-| `mevedel-buddy-mode` | Let a model comment on the edits you make in this buffer. |
-| `mevedel-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
-| `mevedel-buddy-set-level` | Set the workspace dial: Quiet, Watching or Active (default). |
-| `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
-| `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
+| `niwa-compact` | Summarize old conversation and reduce effective token use. |
+| `niwa-buddy-mode` | Let a model comment on the edits you make in this buffer. |
+| `niwa-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
+| `niwa-buddy-set-level` | Set the workspace dial: Quiet, Watching or Active (default). |
+| `niwa-buddy-review` | Review recent edits now, without waiting for the idle timer. |
+| `niwa-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
 | `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |
-| `mevedel-buddy-dismiss-note` | Dismiss the Buddy remark at point. |
-| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy remark in this workspace. |
+| `niwa-buddy-dismiss-note` | Dismiss the Buddy remark at point. |
+| `niwa-buddy-dismiss-notes` | Dismiss every Buddy remark in this workspace. |
 
 See [`docs/compaction.md`](docs/compaction.md) for the full auto-compaction,
 summary prompt, and segment-rotation contract.
 
 | Custom Variable                   | Variable Description                                      |
 |-----------------------------------|-----------------------------------------------------------|
-| `mevedel-compact-auto`            | Whether persisted sessions auto-compact before requests.  |
-| `mevedel-compact-estimation-token-threshold` | Fraction of usable context that triggers compaction.       |
-| `mevedel-compact-evidence-tail-turns`      | Target recent complete turns to preserve verbatim.        |
-| `mevedel-compact-evidence-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
-| `mevedel-compact-evidence-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
-| `mevedel-compact-evidence-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
-| `mevedel-compact-target-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |
-| `mevedel-compact-run-warn-on-completion` | Show a one-shot accuracy warning after compaction.    |
+| `niwa-compact-auto`            | Whether persisted sessions auto-compact before requests.  |
+| `niwa-compact-estimation-token-threshold` | Fraction of usable context that triggers compaction.       |
+| `niwa-compact-evidence-tail-turns`      | Target recent complete turns to preserve verbatim.        |
+| `niwa-compact-evidence-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
+| `niwa-compact-evidence-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
+| `niwa-compact-evidence-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
+| `niwa-compact-target-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |
+| `niwa-compact-run-warn-on-completion` | Show a one-shot accuracy warning after compaction.    |
 
 ## Project Instructions and Memory
 
@@ -1546,14 +1546,14 @@ that can be checked into version control. `AGENTS.local.md` is loaded after
 When a prompt profile selects memory, the first 200 lines of each configured
 memory index are included. Main and worker profiles select it;
 Explorer, verifier, reviewer, guardian, and context-summary requests do not. The default
-memory roots are `.mevedel/memory/`,
-`.agents/memory/`, `memory/` under `mevedel-user-dir` (default
-`~/.mevedel/`), and `~/.agents/memory/`.
+memory roots are `.niwa/memory/`,
+`.agents/memory/`, `memory/` under `niwa-user-dir` (default
+`~/.niwa/`), and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with
 frontmatter that classifies them as user, feedback, project, or reference
 memories. The native `/remember [focus]` command reviews journal evidence and
 memory, then presents proposals for cleanup or promotion in the memory cockpit.
-Use `/remember drain`, `M-x mevedel-remember-drain`, or `D` in that cockpit to
+Use `/remember drain`, `M-x niwa-remember-drain`, or `D` in that cockpit to
 review a backlog in successive bounded batches; `k` stops it. Automatic review
 admits one daily finite cohort of age-ready shared-note versions and services it
 in bounded batches. Later arrivals and changed versions wait for the next cohort.
@@ -1565,11 +1565,11 @@ for automatic review modes, proposal decisions, and journal recovery.
 
 | Custom Variable | Variable Description |
 |-----------------|----------------------|
-| `mevedel-memory-dirs` | Directories scanned for persistent memory indexes. |
+| `niwa-memory-dirs` | Directories scanned for persistent memory indexes. |
 
 ## @-Mentions
 
-In chat buffers, mevedel expands `@`-prefixed mentions before sending the
+In chat buffers, niwa expands `@`-prefixed mentions before sending the
 prompt to the LLM. Each mention becomes a compact `[kind:KEY -- STATUS]`
 placeholder, with the full content injected as a `<system-reminder>` block
 above the user prompt.
@@ -1590,25 +1590,25 @@ MCP servers/resources.
 
 | Custom Variable                              | Variable Description                                      |
 |----------------------------------------------|-----------------------------------------------------------|
-| `mevedel-file-mention-directory-max-entries` | Maximum entries included in an `@file` directory listing. |
+| `niwa-file-mention-directory-max-entries` | Maximum entries included in an `@file` directory listing. |
 
 ## Where data is stored
 
-mevedel writes workspace-local state under `.mevedel/` by default. These files
+niwa writes workspace-local state under `.niwa/` by default. These files
 may contain prompts, responses, tool results, file snapshots, memory, and local
-workflow configuration. Add `.mevedel/` to `.gitignore` unless you intentionally
-want to version a specific project file such as `.mevedel/hooks.json` or a
+workflow configuration. Add `.niwa/` to `.gitignore` unless you intentionally
+want to version a specific project file such as `.niwa/hooks.json` or a
 project skill. Persisted sessions and memory are plaintext unless your filesystem
 or external setup encrypts them.
 
 | Path | Purpose |
 |------|---------|
-| `.mevedel/sessions/` | Persisted chat sessions, segments, sidecars, snapshots, permission logs, hook logs, and agent transcripts. |
-| `.mevedel/input-history.el` | Workspace chat input history. |
-| `.mevedel/memory/`, `.agents/memory/` | Memory index and topic files. |
-| `.mevedel/permissions.el` | Persistent permission decisions. |
+| `.niwa/sessions/` | Persisted chat sessions, segments, sidecars, snapshots, permission logs, hook logs, and agent transcripts. |
+| `.niwa/input-history.el` | Workspace chat input history. |
+| `.niwa/memory/`, `.agents/memory/` | Memory index and topic files. |
+| `.niwa/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
-| `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
+| `.niwa/hooks.el`, `.niwa/hooks.json` | Project hook configuration. |
 | `<session>/session.meta.el` | Session sidecar, including the current durable Goal record. |
 | `<session>/local/plans/` | Session-owned plan proposals and immutable accepted Plan artifacts. |
 
@@ -1657,7 +1657,7 @@ Use Eask for tests and byte compilation. Clear stale bytecode before tests so ol
 ```bash
 npx @emacs-eask/cli clean elc
 npx @emacs-eask/cli test ert test/test-*.el
-npx @emacs-eask/cli test ert test/test-mevedel-compact.el
+npx @emacs-eask/cli test ert test/test-niwa-compact.el
 npx @emacs-eask/cli compile
 npx @emacs-eask/cli clean elc
 ```
@@ -1668,13 +1668,13 @@ With a local Eask install:
 eask test ert test/test-*.el
 ```
 
-Test files mirror modules as `test/test-mevedel-MODULE.el`. Keep byte
+Test files mirror modules as `test/test-niwa-MODULE.el`. Keep byte
 compilation silent: no free-variable or unknown-function warnings.
 
 ## About the use of LLMs
 
 This package was created with the help of AI coding tools such as Claude Code
-and later, mevedel itself. Given the focus of this package, this looks like a
+and later, niwa itself. Given the focus of this package, this looks like a
 natural choice.
 
 Furthermore, the author was interested in the question, if a package like this

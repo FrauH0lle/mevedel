@@ -44,7 +44,7 @@ agent with your effective instructions and capabilities.
   follow-ups. Roles with Agent can create children; the complete session tree
   shares one active-turn limit.
 - For name normalization, context-copy details, or lifecycle recovery, read
-  `mevedel://agents.md`. Discovery and directory selection grant no authority.
+  `niwa://agents.md`. Discovery and directory selection grant no authority.
 
 ### Examples of good usage
 

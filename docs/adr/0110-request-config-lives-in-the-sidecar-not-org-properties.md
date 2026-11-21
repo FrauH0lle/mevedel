@@ -4,31 +4,31 @@ Status: accepted
 
 ## Current decision
 
-The only top-level gptel Org property mevedel transcripts may carry is
+The only top-level gptel Org property niwa transcripts may carry is
 `GPTEL_BOUNDS`; a transcript with no persisted bounds carries none.
 Every other `GPTEL_*` property — backend, model, reasoning effort, preset,
 system prompt, tools, temperature, token limits — is stripped from the
 top-level drawer at save time, at chat-buffer init, and at agent hydration
-(`mevedel-session-artifacts-strip-gptel-config-properties`). The session
+(`niwa-session-artifacts-strip-gptel-config-properties`). The session
 sidecar (`:model-provider`, `:reasoning-effort`, `:preset-name`) and the
-retained-agent registry are the only mevedel-managed durable sources of
+retained-agent registry are the only niwa-managed durable sources of
 request configuration, and the buffer-locals rebuilt from them are the
 canonical live source.
 
 ## Rationale and consequences
 
 The alternative — keeping the drawer in sync by writing it from
-`mevedel-model-set-session-provider` and every other config mutation —
+`niwa-model-set-session-provider` and every other config mutation —
 was rejected: it preserves two sources of truth whose divergence is
 silent and only observable as a wrong provider on the wire. Removing one
 source is strictly smaller. Storing config once, in the sidecar, was
-already the design (`mevedel-model-apply-session-policy` and
-`mevedel-preset-restore-session` rebuild buffer-locals on init); the
+already the design (`niwa-model-apply-session-policy` and
+`niwa-preset-restore-session` rebuild buffer-locals on init); the
 drawer copies were redundant the whole time.
 
 Consequences: gptel's top-level persisted request configuration is absent,
 so it cannot override the live buffer-locals. Resume paths enable
-`gptel-mode` with `gptel--restore-state` disabled — mevedel restores
+`gptel-mode` with `gptel--restore-state` disabled — niwa restores
 `GPTEL_BOUNDS` itself — which avoids duplicate bounds restoration and the
 "Could not activate gptel backend" noise a config-free drawer would produce.
 The strip
@@ -40,7 +40,7 @@ instead of reintroducing the override. The strip applies to every initialized or
 
 ADR 0110 addressed the following failure: gptel advises `gptel-send` with
 `gptel-org--send-with-props`, which in an org buffer prefers the drawer's
-properties over the buffer-local values for the request. Mevedel's
+properties over the buffer-local values for the request. Niwa's
 failed-turn autosave wrote those properties from the buffer-locals current
 at save time, so a 401 turn pinned the failing backend into the drawer;
 the user then switched models through the cockpit — which correctly

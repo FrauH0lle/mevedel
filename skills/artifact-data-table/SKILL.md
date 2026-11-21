@@ -25,7 +25,7 @@ be mistaken for the whole dataset.
 1. Read the template:
 
    ```
-   ${MEVEDEL_SKILL_DIR}template.html
+   ${NIWA_SKILL_DIR}template.html
    ```
 
 2. Copy it as your starting point and replace each `<!-- SLOT: ... -->` marker

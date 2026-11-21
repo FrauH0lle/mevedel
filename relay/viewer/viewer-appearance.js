@@ -1,8 +1,8 @@
 /* Room preferences; shared editors receive them over their bound item port. */
 'use strict';
-window.mevedelAppearance = (() => {
+window.niwaAppearance = (() => {
   const choices = {palette: ['cool', 'warm'], theme: ['system', 'light', 'dark'], accents: ['selective', 'minimal']};
-  const storageKey = 'mevedel-appearance';
+  const storageKey = 'niwa-appearance';
   function normalize(value) {
     return Object.fromEntries(Object.entries(choices).map(([key, values]) =>
       [key, values.includes(value?.[key]) ? value[key] : values[0]]));

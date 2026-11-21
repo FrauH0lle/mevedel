@@ -19,7 +19,7 @@ or fresh-context investigation returning compact results. The task message owns
 the assignment, file ownership, and expected result even when dialogue is copied.
 The contract keeps these decisions and authority limits inline; name
 normalization and lifecycle reference details live here behind its
-`mevedel://agents.md` pointer.
+`niwa://agents.md` pointer.
 
 Delegation and result guidance asks for labeled measurement lists rather than
 compressed numeric strings. Each item names its scenario/configuration, metric,
@@ -136,7 +136,7 @@ initial task. Archived raw segments are never reconstructed. The initial task
 is appended after this immutable snapshot; parent turns added later are not
 synchronized into the child.
 
-Before provider dispatch, after task preparation, mevedel materializes the
+Before provider dispatch, after task preparation, niwa materializes the
 role's dynamic instructions and effective tools, then captures the exact
 request backend, model, reasoning effort,
 system prompt, tools, context settings, request parameters, and model policy
@@ -161,7 +161,7 @@ Each turn's effective metadata is retained on the agent record and in the
 session sidecar, so idle and cold agents report the provider that last served
 them.
 
-Children on every mevedel-admitted native gptel backend use the
+Children on every niwa-admitted native gptel backend use the
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery)
 controller, with an independent allowance of 10 retries plus the initial
 attempt for each model sample. Backoff keeps the child active and its capacity
@@ -192,7 +192,7 @@ native user-message echo before tools continue. A lost turn restores as
 uncertain and requires acknowledged reconciliation before more tools.
 
 When a child's native history is unavailable, the user can select its canonical
-path with `M-x mevedel-claude-code-recover-history` in the session. Recovery
+path with `M-x niwa-claude-code-recover-history` in the session. Recovery
 requires all turns to be idle and any active Goal paused. It preserves the
 retained agent record, frozen configuration and private transcript, and marks
 the next follow-up for an explicitly labelled excerpt continuation into a new
@@ -232,7 +232,7 @@ waiting activity, without cancelling the surrounding turn or a later wait.
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
 The user can do the same from the view's background-work panel or cockpit
-(`mevedel-agent-control-interrupt-user`); the interrupted turn records the
+(`niwa-agent-control-interrupt-user`); the interrupted turn records the
 reason `interrupted by user`. For an idle agent it cancels any pending mail wake
 without discarding the unread mail.
 
@@ -273,7 +273,7 @@ The built-in role configurations are:
 - **reviewer**: retained leaf code-review agent used by `/review`. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
 
-Child request defaults come from the parent, the selected role and mevedel’s
+Child request defaults come from the parent, the selected role and niwa’s
 model policy. There is no separate global child-agent preset layer.
 
 The verifier's verdict-line contract does not apply to routine main-assistant or
@@ -309,8 +309,8 @@ Each active root turn receives current Goal facts through retained context deliv
 agent tree, capacity, and permission rules remain unchanged. Queued user
 messages steer the Goal before its next automatic continuation.
 
-Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
-invocation time. Registered buffer-locally via `mevedel-agents--specs` per
+Each agent's `:tools` resolved via `niwa-tool-resolve-gptel` at
+invocation time. Registered buffer-locally via `niwa-agents--specs` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
 
@@ -331,7 +331,7 @@ through the producer shared with gptel. A compaction that must wait for a
 continuation prompt has already spent a sample on the denied tool attempt or
 text-only response, so continuation reserves another within the same cap and
 delivers its warning; a spent cap ends the invocation without another prompt.
-This uses mevedel's existing sample definition rather than mapping the value to
+This uses niwa's existing sample definition rather than mapping the value to
 the SDK's tool-use-only `maxTurns`. Internal provider retries are not separately
 counted. A normal answer before the cap has no incomplete-result note.
 
@@ -480,7 +480,7 @@ an agent should put its final verdict in its terminal response rather than
 treating `SendMessage` as its completion channel.
 
 Mailbox append is an acknowledged durable mutation. Once the session has a
-storage path, mevedel rolls back a failed append and reports the send as
+storage path, niwa rolls back a failed append and reports the send as
 failed; it releases a matching `WaitAgent` only after the root session snapshot
 has committed. Idle-root wake eligibility likewise follows durable publication.
 
@@ -541,7 +541,7 @@ tool arguments are rejected, and timeout is a successful outcome. Its result
 contains only the wake reason. Over MCP, the server sends progress notifications
 for pending calls whose client supplied a progress token, so clients that abort
 silent calls keep waiting. When the client supplied none, a single wait ends
-before `mevedel-mcp-client-idle-timeout` (default 1800 seconds) and asks the
+before `niwa-mcp-client-idle-timeout` (default 1800 seconds) and asks the
 agent to call `WaitAgent` again. The view renders `Waiting for agents` while the
 tool is pending. Settled waits render `WaitAgent: agents (OUTCOME)`;
 consecutive calls coalesce into the final row with a count while every
@@ -587,7 +587,7 @@ root owns wake-ups; a child agent asks the root to schedule one.
 
 ## Review and verify commands
 
-`mevedel-review` / `/review` and `mevedel-verify` / `/verify` run
+`niwa-review` / `/review` and `niwa-verify` / `/verify` run
 dedicated asynchronous leaf-agent turns. They share a target picker for
 uncommitted changes, diff against a base branch merge-base, a specific
 commit, the last commit, or custom instructions. Unlike ordinary user
@@ -617,7 +617,7 @@ follow-up.
 `/review` dispatches the `reviewer` agent and parses its Codex-style JSON
 finding shape: `findings`, `overall_correctness`, `overall_explanation`,
 and `overall_confidence_score`. Finding priority accepts integers 0–3 or
-JSON null; null and omission both mean unspecified. mevedel renders a readable
+JSON null; null and omission both mean unspecified. niwa renders a readable
 summary as the assistant reply and stores a synthetic review `<user_action>` in the
 parent transcript so later turns can refer to numbered findings. The view
 buffer strips that synthetic block from normal display. Schema-invalid JSON
@@ -653,7 +653,7 @@ paths, role and frozen configuration, activity, unread mailbox, pending
 conversation-local hook context, conversation location, and internal storage
 identity, plus the latest settled payload and terminal outcome when present.
 
-Cold restore resolves missing mevedel built-in tools through their owning
+Cold restore resolves missing niwa built-in tools through their owning
 registrars before decoding the frozen roster. This does not substitute unknown
 tools or search other categories. Claude root and retained-child conversations
 resume their separate native references after an editor restart; restored child
@@ -704,19 +704,19 @@ publication and verify its digest; a materialized fixed-path cache is never
 read as authority. The conversation buffer still visits the qualified logical
 path, so immutable publication filenames never reach tools, prompts, or views.
 
-`mevedel-agent-conversation.el` owns conversation creation and hydration,
+`niwa-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,
 and transcript saves. Native Emacs auto-save also checkpoints modified retained
 conversations, as does the in-flight checkpoint timer while any request runs,
 so an unattended agent turn reaches disk before it settles. Emacs exit flushes their text and pending transcript timers
-before root session ownership is released. `mevedel-agent-exec.el` is the provider
+before root session ownership is released. `niwa-agent-exec.el` is the provider
 adapter: it owns
 the gptel request FSM, prompt dispatch, and streaming callback contract. It
 consumes its exactly-once terminal latch only after runtime settlement accepts
 the handoff; transformer or transcript-extraction failures become structured
 terminal errors, while a rejected runtime handoff remains pending for retry.
 Frozen request locals use one closed symbol schema owned by
-`mevedel-agents.el`. Durable configurations contain every schema entry exactly
+`niwa-agents.el`. Durable configurations contain every schema entry exactly
 once, and hydration rejects unknown, duplicate, or missing keys before it
 changes a conversation buffer.
 
@@ -740,7 +740,7 @@ collaboration roster, and their former canonical task names are immediately
 available to the child. Rewind creates no child: it clears the current
 session's live agent ownership.
 
-`mevedel-view-agent.el` owns transcript lookup and inspection views plus the
+`niwa-view-agent.el` owns transcript lookup and inspection views plus the
 live-agent status rows and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.
 Handles show canonical path, role, status, call count, and transcript
@@ -877,7 +877,7 @@ visible.
 
 ## Model tiers
 
-`mevedel-models.el` resolves the current session's preset-local named tiers and
+`niwa-models.el` resolves the current session's preset-local named tiers and
 workload map. A tier can select a concrete gptel provider and reasoning effort;
 a workload can select a tier or exact provider and override effort. Resolution
 starts from the session backend/model/effort, then applies tier and workload
@@ -892,7 +892,7 @@ description lists each tier's provider and effort with a usage hint for `fast`,
 `balanced` and `strong`, the specialist listing and `ToolSearch` summary name
 the tier models, and the `role` enum lists the buffer's roster. Tools declare
 such buffer-specific text through a `:contextualize` function, resolved in the
-owner's buffer by `mevedel-tool-contextual-contract`, so presets and agent
+owner's buffer by `niwa-tool-contextual-contract`, so presets and agent
 snapshots show their own tiers. When every tier is the session model the guide
 says so. A tier whose provider is unavailable shows the configured fallback
 model, or `unavailable` when there is none.

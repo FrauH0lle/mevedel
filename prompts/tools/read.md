@@ -6,7 +6,7 @@ Read does not expand wildcards or read directories.
 
 - Relative paths start at the session working directory. Resource families:
   `work://`, `artifact://`, `skill://`, `agent://`, `history://`, `memory://`,
-  `memory://journal/`, `mcp://`, `shared://`, `notes://`, and `mevedel://`. Read bare roots for available entries;
+  `memory://journal/`, `mcp://`, `shared://`, `notes://`, and `niwa://`. Read bare roots for available entries;
   the memory index is `memory://root`.
 - Text returns numbered lines starting at 1, by default up to 2000 lines.
   Use `offset` and `limit` for a focused range; files over 512 KB require a
@@ -19,7 +19,7 @@ Read does not expand wildcards or read directories.
   document delivery also depends on backend support. An envelope alone does
   not mean the media was delivered; do not infer visual content from it.
 - For PDF page rendering/resizing, media fallback, resource aliases, or JSON
-  selection, read `mevedel://tools/files.md` before using those features.
+  selection, read `niwa://tools/files.md` before using those features.
 - Missing, unreadable, or unsupported targets return an error. If a manual
   cannot be read, use the known ordinary contract or report missing guidance.
 

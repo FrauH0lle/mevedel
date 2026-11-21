@@ -1,7 +1,7 @@
 # Pending Plugin Hook Consent Interrupts Interactive Startup
 
 Executable plugin hook consent is part of the plugin trust boundary, not just
-plugin metadata. When an enabled plugin's hook surface changes, mevedel keeps
+plugin metadata. When an enabled plugin's hook surface changes, niwa keeps
 plugin skills active but withholds executable hooks until the user reviews the
 changed surface.
 
@@ -11,9 +11,9 @@ the prior consent even when the handler itself is unchanged.
 
 Interactive session startup or resume actively notifies the user when any
 enabled plugin has pending hook consent. Because withheld hooks can make an
-enabled plugin behave incorrectly, mevedel reports this as a warning/message
+enabled plugin behave incorrectly, niwa reports this as a warning/message
 and routes review through the plugin cockpit. Consent is reviewed one plugin
-at a time; mevedel does not offer a blanket approve-all action for multiple
+at a time; niwa does not offer a blanket approve-all action for multiple
 executable hook surfaces.
 
 Until the user approves the changed hook surface, the session continues with

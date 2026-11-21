@@ -1,0 +1,1702 @@
+;;; test-niwa-tool-task.el --- Tests for niwa-tool-task.el -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'niwa-structs)
+(require 'niwa-agents)
+(require 'niwa-agent-control)
+(require 'gptel-request)
+(require 'niwa-tool-task)
+(require 'niwa-view)
+(require 'niwa-view-agent)
+(require 'niwa-view-composer)
+(require 'niwa-view-disclosure)
+(require 'niwa-view-render)
+(require 'niwa-view-stream)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+
+(defvar gptel--fsm-last)
+
+
+;;
+;;; Helpers
+
+(defun test-niwa-tool-task--make-session ()
+  "Return a fresh session struct for task-tool cases."
+  (let ((ws (niwa-workspace--create
+             :type 'project
+             :id "/tmp/tasktest/"
+             :root "/tmp/tasktest/"
+             :name "tasktest")))
+    (niwa-session-create "main" ws)))
+
+(defun test-niwa-tool-task--register-agent (session path)
+  "Register a retained agent at PATH in SESSION."
+  (let ((record (niwa-agent-record--create :path path)))
+    (setf (niwa-session-agent-registry session)
+          (cons (cons path record)
+                (niwa-session-agent-registry session)))
+    record))
+
+(defmacro test-niwa-tool-task--with-session (session-var &rest body)
+  "Bind SESSION-VAR to a fresh session, install it buffer-locally, run BODY."
+  (declare (indent 1))
+  `(let ((,session-var (test-niwa-tool-task--make-session)))
+     (with-temp-buffer
+       (setq-local niwa--session ,session-var)
+       ,@body)))
+
+(defmacro test-niwa-tool-task--with-view (session-var data-var view-var
+                                                         &rest body)
+  "Bind SESSION-VAR, DATA-VAR, and VIEW-VAR, then run BODY."
+  (declare (indent 3))
+  `(let* ((,session-var (test-niwa-tool-task--make-session))
+          (,data-var (generate-new-buffer " *task-data-test*"))
+          (,view-var (generate-new-buffer " *task-view-test*")))
+     (unwind-protect
+         (with-current-buffer ,data-var
+           (setq-local niwa--session ,session-var)
+           (setq-local niwa--view-buffer ,view-var)
+           (insert "assistant text")
+           (let ((tracking (copy-marker (point) t)))
+             (with-current-buffer ,view-var
+               (setq-local niwa--session ,session-var)
+               (setq-local niwa--data-buffer ,data-var)
+               (setq-local niwa-view--agent-transcript-p nil)
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert "header\n")
+                 (let ((prompt-start (niwa-view-transcript-tail-initialize)))
+                   (setq-local niwa-view--status-marker
+                               (copy-marker prompt-start t))
+                   (setq-local niwa-view--interaction-marker
+                               (copy-marker prompt-start t)))))
+             (let ((gptel--fsm-last
+                    (gptel-make-fsm
+                     :info (list :tracking-marker tracking))))
+               ,@body)))
+       (when (buffer-live-p ,data-var)
+         (kill-buffer ,data-var))
+       (when (buffer-live-p ,view-var)
+         (with-current-buffer ,view-var (niwa-view-composer-kill))
+         (kill-buffer ,view-var)))))
+
+
+;;
+;;; Status parsing
+
+(niwa-deftest niwa-tool-task--parse-status
+  (:doc "`niwa-tool-task--parse-status' maps strings and symbols to status symbols")
+  ,test
+  (test)
+  :doc "maps absent, string, and symbol forms to canonical statuses"
+  (dolist (entry '((nil . pending) ("" . pending) (:json-false . pending)
+                   ("pending" . pending) ("in_progress" . in-progress)
+                   ("in-progress" . in-progress) ("completed" . completed)
+                   (pending . pending) (in-progress . in-progress)
+                   (completed . completed)))
+    (should (eq (cdr entry) (niwa-tool-task--parse-status (car entry)))))
+
+  :doc "unknown strings and symbols signal an error"
+  (progn
+    (should-error (niwa-tool-task--parse-status "done"))
+    (should-error (niwa-tool-task--parse-status 'blocked))
+    (should-error (niwa-tool-task--parse-status 42))))
+
+;;
+;;; Task creation
+
+(niwa-deftest niwa-tool-task--handle-write
+  (:doc "`niwa-tool-task--handle-write' creates and stores tasks")
+  ,test
+  (test)
+  :doc "creates a batch of tasks with incrementing IDs"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 4)
+    (let ((result
+           (plist-get
+            (niwa-tool-task--handle-write
+             (list :tasks
+                   (vector
+                    (list :subject "first" :status "completed")
+                    (list :subject "second" :status "in_progress")
+                    (list :subject "third"))))
+            :result)))
+      (should (stringp result))
+      (let ((tasks (niwa-session-tasks session)))
+        (should (= 3 (length tasks)))
+        (should (equal '(1 2 3) (mapcar #'niwa-task-id tasks)))
+        (should (equal '("first" "second" "third")
+                       (mapcar #'niwa-task-subject tasks)))
+        (should (equal '(completed in-progress pending)
+                       (mapcar #'niwa-task-status tasks)))
+        (should (= 5 (niwa-session-last-task-write-turn session))))))
+
+  :doc "creates a single task from a one-element array"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "only"))))
+    (let ((tasks (niwa-session-tasks session)))
+      (should (= 1 (length tasks)))
+      (should (equal "only" (niwa-task-subject (car tasks))))
+      (should (eq 'pending (niwa-task-status (car tasks))))))
+
+  :doc "accepts a Lisp list of task plists as a batch"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (list (list :subject "A")
+                        (list :subject "B"))))
+    (let ((tasks (niwa-session-tasks session)))
+      (should (= 2 (length tasks)))
+      (should (equal '("A" "B")
+                     (mapcar #'niwa-task-subject tasks)))))
+
+  :doc "accepts a top-level status note for the current owner"
+  (test-niwa-tool-task--with-session session
+    (let ((result
+           (plist-get
+            (niwa-tool-task--handle-write
+             (list :tasks (vector (list :subject "active"))
+                   :note "Implementing task notes"))
+            :result)))
+      (should (string-match-p "Status note for Main"
+                              result))
+      (should (equal "Implementing task notes"
+                     (niwa-tool-task--status-note session nil)))
+      (should (string-prefix-p
+               "Implementing task notes\n"
+               (substring-no-properties
+                (niwa-tool-task--format-groups session))))))
+
+  :doc "ignores nil and json-false optional note placeholders"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "active"))
+           :note "Keep this note"))
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "another"))
+           :note nil :noteOwner nil))
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "third"))
+           :note :json-false :noteOwner :json-false))
+    (should (equal "Keep this note"
+                   (niwa-tool-task--status-note session nil))))
+
+  :doc "completed task creation records completed-turn and expands on request"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 4)
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "already done"
+                                :status "completed"))))
+    (let ((task (car (niwa-session-tasks session))))
+      (should (= 5 (niwa-task-completed-turn task)))
+      (should-not (string-match-p
+                   "already done"
+                   (substring-no-properties
+                    (niwa-tool-task--format-groups session))))
+      (should (string-match-p
+               "already done"
+               (substring-no-properties
+                (niwa-tool-task--format-groups session t))))))
+
+  :doc "drops a blockedBy edge to an already-completed task"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "groundwork"))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "follow-up" :blockedBy (vector 1)))))
+    (let ((follow-up (cadr (niwa-session-tasks session))))
+      ;; Nothing else would ever clear it: unblocking only fires on a
+      ;; task's transition to completed, and #1 completed before #2 existed.
+      (should (equal "follow-up" (niwa-task-subject follow-up)))
+      (should-not (niwa-task-blocked-by follow-up))
+      (should-not (string-match-p
+                   "blocked by"
+                   (substring-no-properties
+                    (niwa-tool-task--format-groups session))))))
+
+  :doc "preserves blockedBy and owner fields"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks
+           (vector
+            (list :subject "A" :owner "worker-1")
+            (list :subject "B" :owner "worker-2" :blockedBy (vector 1)))))
+    (let* ((tasks (niwa-session-tasks session))
+           (a (car tasks))
+           (b (cadr tasks)))
+      (should (equal "worker-1" (niwa-task-owner a)))
+      (should (equal "worker-2" (niwa-task-owner b)))
+      (should (equal '(1) (niwa-task-blocked-by b)))))
+
+  :doc "uses the current canonical agent path when owner is omitted"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "main task"))))
+    (let ((inv (niwa-agent-invocation--create
+                :path "/root/explorer"
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
+      (test-niwa-tool-task--register-agent session "/root/explorer")
+      (let ((niwa--agent-invocation inv))
+        (niwa-tool-task--handle-write
+         (list :tasks (vector (list :subject "agent task"))))))
+    (let* ((tasks (niwa-session-tasks session))
+           (agent-task (cadr tasks))
+           (display (substring-no-properties
+                     (niwa-tool-task--format-groups session))))
+              (should (equal "/root/explorer"
+                             (niwa-task-owner agent-task)))
+              (should (string-match-p "#1 main task" display))
+              (should (string-match-p "#2 explorer · agent task" display))))
+
+  :doc "shows agent paths without opaque IDs, shortened for display"
+  (test-niwa-tool-task--with-session session
+    (test-niwa-tool-task--register-agent
+     session "/root/worker/explorer")
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "agent task" :status 'pending
+                 :owner "/root/worker/explorer")))
+    (let ((display (substring-no-properties
+                    (niwa-tool-task--format-groups session))))
+      ;; The `/root/' every agent shares is dropped; the rest of the
+      ;; canonical path stays, and no opaque ID reaches the panel.
+      (should (string-match-p "#1 worker/explorer · agent task" display))
+      (should-not (string-match-p "/root/" display))))
+
+  :doc "explicit empty owner still creates a Main task in an agent"
+  (test-niwa-tool-task--with-session session
+    (let ((inv (niwa-agent-invocation--create
+                :path "/root/explorer"
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
+      (test-niwa-tool-task--register-agent session "/root/explorer")
+      (let ((niwa--agent-invocation inv))
+        (niwa-tool-task--handle-write
+         (list :tasks (vector (list :subject "main task"
+                                    :owner ""))))))
+    (let ((task (car (niwa-session-tasks session))))
+      (should (null (niwa-task-owner task)))))
+
+  :doc "rejects unknown canonical owners at the TaskCreate boundary"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks
+            (vector (list :subject "orphan" :owner "/root/ghost")))))
+    (should-not (niwa-session-tasks session)))
+
+  :doc "rejects tasks with a missing subject"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks (vector (list :status "pending"))))))
+
+  :doc "rejects a bad batch without partially creating tasks"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks (vector (list :subject "valid")
+                           (list :subject "bad" :status "bogus")))))
+    (should (null (niwa-session-tasks session)))
+    (should (null (niwa-session-last-task-write-turn session))))
+
+  :doc "rejects a subject that is blank once its whitespace is collapsed"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks (vector (list :subject "\n\n")))))
+    (should (null (niwa-session-tasks session)))
+    (should (null (niwa-session-last-task-write-turn session))))
+
+  :doc "stores a subject as the one display line the status fragment budgets"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "one\ntwo\tthree"))))
+    (should
+     (equal "one two three"
+            (niwa-task-subject (car (niwa-session-tasks session))))))
+
+  :doc "an unknown noteOwner creates no task and no note"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks (vector (list :subject "first"))
+            :note "progress" :noteOwner "/root/ghost")))
+    (should (null (niwa-session-tasks session)))
+    (should (null (niwa-session-task-status-notes session)))
+    (should (null (niwa-session-last-task-write-turn session)))))
+
+
+;;
+;;; Task update
+
+(niwa-deftest niwa-tool-task--check-owner
+  (:doc "canonical owners protect agent tasks without isolating shared buckets")
+  (test-niwa-tool-task--with-session session
+    (dolist (path '("/root/worker" "/root/worker/child" "/root/worker-other"))
+      (test-niwa-tool-task--register-agent session path))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/worker")))
+      (dolist (owner '(nil "shared bucket" "/root/worker" "/root/worker/child"))
+        (should-not (niwa-tool-task--check-owner session owner)))
+      (should-error
+       (niwa-tool-task--check-owner session "/root/worker-other")))
+    (let ((niwa--agent-invocation nil))
+      (should-not (niwa-tool-task--check-owner session "/root/worker-other")))))
+
+(niwa-deftest niwa-tool-task--handle-write/ownership
+  ()
+  ,test
+  (test)
+  :doc "a later agent cannot reopen a completed sibling's IDs or mutate a batch"
+  (test-niwa-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-niwa-tool-task--register-agent session path))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/first")))
+      (niwa-tool-task--handle-write
+       '(:tasks [(:subject "First investigation")
+                 (:subject "First implementation")
+                 (:subject "First verification")]
+         :note "Checking")))
+    (niwa-tool-task-finalize-owner session "/root/first" 'completed)
+    (let* ((before (copy-tree (mapcar #'copy-niwa-task
+                                    (niwa-session-tasks session))))
+           (last-write (niwa-session-last-task-write-turn session))
+           (niwa--agent-invocation
+            (niwa-agent-invocation--create :path "/root/second")))
+      (should-error
+       (niwa-tool-task--handle-write
+        '(:tasks [(:id 1 :subject "Second investigation" :status "in_progress")])))
+      (let ((err (should-error
+                  (niwa-tool-task--handle-write
+                   '(:tasks [(:subject "Must not be created")
+                             (:id 1 :subject "Second investigation"
+                              :status "in_progress" :owner "/root/second")]
+                     :note "Must not be stored")))))
+        (should (string-match-p "owned by /root/first" (error-message-string err)))
+        (should (string-match-p "omit id" (error-message-string err))))
+      (should (equal before (niwa-session-tasks session)))
+      (should-not (niwa-session-task-status-notes session))
+      (should (= last-write (niwa-session-last-task-write-turn session)))
+      (niwa-tool-task--handle-write '(:tasks [(:subject "Second investigation")]))
+      (let ((task (car (last (niwa-session-tasks session)))))
+        (should (= 4 (niwa-task-id task)))
+        (should (equal "/root/second" (niwa-task-owner task))))))
+
+  :doc "a sibling cannot overwrite another agent's status note"
+  (test-niwa-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-niwa-tool-task--register-agent session path))
+    (niwa-tool-task--handle-write
+     '(:tasks [(:subject "First work" :owner "/root/first")]
+       :note "Original note" :noteOwner "/root/first"))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/second")))
+      (should-error
+       (niwa-tool-task--handle-write
+        '(:tasks [(:subject "Must not be created")]
+          :note "Hijacked" :noteOwner "/root/first")))
+      (should-error
+       (niwa-tool-task--handle-write '(:note "" :noteOwner "/root/first"))))
+    (should (= 1 (length (niwa-session-tasks session))))
+    (should (equal "Original note"
+                   (niwa-tool-task--status-note session "/root/first"))))
+
+  :doc "explicit assignment and transfer stay allowed but protect the new owner"
+  (test-niwa-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-niwa-tool-task--register-agent session path))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/first")))
+      (niwa-tool-task--handle-write
+       '(:tasks [(:subject "For sibling" :owner "/root/second")
+                 (:subject "Own work")
+                 (:subject "Main work" :owner "")]))
+      (niwa-tool-task--handle-write
+       '(:tasks [(:id 2 :owner "/root/second")
+                 (:id 3 :status "in_progress")]))
+      (dolist (id '(1 2))
+        (should-error
+         (niwa-tool-task--handle-write
+          (list :tasks (vector (list :id id :status "completed")))))))
+    (should (equal '("/root/second" "/root/second" nil)
+                   (mapcar #'niwa-task-owner (niwa-session-tasks session)))))
+
+  :doc "root and ancestors can explicitly manage descendant tasks and notes"
+  (test-niwa-tool-task--with-session session
+    (dolist (path '("/root/parent" "/root/parent/child"))
+      (test-niwa-tool-task--register-agent session path))
+    (niwa-tool-task--handle-write
+     '(:tasks [(:subject "Child work" :owner "/root/parent/child")]))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/parent")))
+      (niwa-tool-task--handle-write
+       '(:tasks [(:id 1 :status "in_progress")]
+         :note "Followed up" :noteOwner "/root/parent/child")))
+    (should (equal "Followed up"
+                   (niwa-tool-task--status-note session "/root/parent/child")))
+    (niwa-tool-task--handle-write '(:tasks [(:id 1 :owner "/root/parent")]))
+    (let ((niwa--agent-invocation
+           (niwa-agent-invocation--create :path "/root/parent")))
+      (niwa-tool-task--handle-write '(:tasks [(:id 1 :status "completed")])))
+    (should (eq 'completed
+                (niwa-task-status (car (niwa-session-tasks session)))))))
+
+(niwa-deftest niwa-tool-task--handle-write/update
+  (:doc "`niwa-tool-task--handle-write' entries with an id modify stored tasks")
+  ,test
+  (test)
+  :doc "updates status and propagates completion to unblock dependents"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 6)
+    (niwa-tool-task--handle-write
+     (list :tasks
+           (vector (list :subject "A")
+                   (list :subject "B" :blockedBy (vector 1)))))
+    (let ((tasks (niwa-session-tasks session)))
+      (should (equal '(1) (niwa-task-blocked-by (cadr tasks)))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
+    (let ((tasks (niwa-session-tasks session)))
+      (should (eq 'completed (niwa-task-status (car tasks))))
+      (should (= 7 (niwa-task-completed-turn (car tasks))))
+      (should (= 7 (niwa-session-last-task-write-turn session)))
+      (should (null (niwa-task-blocked-by (cadr tasks))))))
+
+  :doc "updates owner and subject without touching other fields"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "Original"
+                                :description "desc"
+                                :owner "old"))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "Renamed" :owner "new"))))
+    (let ((task (car (niwa-session-tasks session))))
+      (should (equal "Renamed" (niwa-task-subject task)))
+      (should (equal "new" (niwa-task-owner task)))
+      (should (equal "desc" (niwa-task-description task)))))
+
+  :doc "empty owner means Main/unassigned"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "owned"
+                                :owner "worker"))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :owner ""))))
+    (should (null (niwa-task-owner
+                   (car (niwa-session-tasks session))))))
+
+  :doc "keeps status notes until an owner has no open tasks"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B"))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "in_progress")) :note "Working on A"))
+    (should (equal "Working on A"
+                   (niwa-tool-task--status-note session nil)))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
+    (should (equal "Working on A"
+                   (niwa-tool-task--status-note session nil)))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 2)) :note nil))
+    (should (equal "Working on A"
+                   (niwa-tool-task--status-note session nil)))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 2)) :note :json-false))
+    (should (equal "Working on A"
+                   (niwa-tool-task--status-note session nil)))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 2 :status "completed"))))
+    (should (null (niwa-tool-task--status-note session nil))))
+
+  :doc "clears status notes on an explicit empty update note"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B"))))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 1)) :note "Working through the task list"))
+    (niwa-tool-task--handle-write (list :tasks (vector (list :id 2)) :note ""))
+    (should (null (niwa-tool-task--status-note session nil))))
+
+  :doc "errors on unknown task id"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 2)
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A"))))
+    (let ((last-write (niwa-session-last-task-write-turn session)))
+      (should (= 3 last-write))
+      (should-error
+       (niwa-tool-task--handle-write (list :tasks (vector (list :id 99 :status "completed")))))
+      (should (= last-write
+                 (niwa-session-last-task-write-turn session)))))
+
+  :doc "rejects malformed updates without partial mutation"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "Original"
+                                :status "pending"))))
+    (let* ((task (car (niwa-session-tasks session)))
+           (last-write (niwa-session-last-task-write-turn session)))
+      (should-error
+       (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "Mutated" :status "bogus")))))
+      (should (equal "Original" (niwa-task-subject task)))
+      (should (eq 'pending (niwa-task-status task)))
+      (should (= last-write
+                 (niwa-session-last-task-write-turn session)))))
+
+  :doc "preserves completion turn when completed status is unchanged"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A" :status "completed"))))
+    (should-error
+     (niwa-tool-task--handle-write (list :tasks (vector (list :id 99 :status "completed")))))
+    (let ((task (car (niwa-session-tasks session))))
+      (should (= 1 (niwa-task-completed-turn task)))
+      (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
+      (should (= 1 (niwa-task-completed-turn task)))))
+
+  :doc "an entry without an id creates a task and so needs a subject"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write (list :tasks (vector (list :status "completed")))))
+    (should-not (niwa-session-tasks session)))
+
+  :doc "rejects a non-integer id"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write (list :tasks (vector (list :subject "A"))))
+    (should-error
+     (niwa-tool-task--handle-write
+      (list :tasks (vector (list :id "1" :status "completed")))))
+    (should (eq 'pending (niwa-task-status (car (niwa-session-tasks session))))))
+
+  :doc "applies several updates and creations in one call"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A") (list :subject "B"))))
+    (let ((result (plist-get
+                   (niwa-tool-task--handle-write
+                    (list :tasks (vector (list :id 1 :status "completed")
+                                         (list :id 2 :status "in_progress")
+                                         (list :subject "C"))))
+                   :result)))
+      (should (string-match-p "^Created 1 task:\n#3 " result))
+      (should (string-match-p "^Updated 2 tasks:\n#1 .*\n#2 " result))
+      (should (equal '(completed in-progress pending)
+                     (mapcar #'niwa-task-status (niwa-session-tasks session))))))
+
+  :doc "a failing entry leaves earlier updates in the batch unapplied"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A"))))
+    (let ((task (car (niwa-session-tasks session)))
+          (last-write (niwa-session-last-task-write-turn session)))
+      (should-error
+       (niwa-tool-task--handle-write
+        (list :tasks (vector (list :id 1 :status "completed")
+                             (list :subject "bad" :status "bogus")))))
+      (should (eq 'pending (niwa-task-status task)))
+      (should (= 1 (length (niwa-session-tasks session))))
+      (should (= last-write (niwa-session-last-task-write-turn session)))))
+
+  :doc "rejects a blank or multiline subject and keeps the stored one"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "Original"))))
+    (let ((task (car (niwa-session-tasks session))))
+      (should-error
+       (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "")))))
+      (should (equal "Original" (niwa-task-subject task)))
+      (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "one\ntwo"))))
+      (should (equal "one two" (niwa-task-subject task)))))
+
+  :doc "an unknown noteOwner leaves the task and its dependents untouched"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B" :blockedBy (vector 1)))))
+    (let* ((tasks (niwa-session-tasks session))
+           (first (car tasks))
+           (second (cadr tasks))
+           (last-write (niwa-session-last-task-write-turn session)))
+      (should-error
+       (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed")) :note "progress" :noteOwner "/root/ghost")))
+      (should (eq 'pending (niwa-task-status first)))
+      (should (null (niwa-task-completed-turn first)))
+      (should (equal '(1) (niwa-task-blocked-by second)))
+      (should (null (niwa-session-task-status-notes session)))
+      (should (= last-write
+                 (niwa-session-last-task-write-turn session))))))
+
+
+;;
+;;; Agent owner lifecycle
+
+(niwa-deftest niwa-tool-task-finalize-owner
+  (:doc "`niwa-tool-task-finalize-owner' reconciles completed sub-agent tasks")
+  ,test
+  (test)
+  :doc "completed agents complete only tasks owned by their canonical path"
+  (test-niwa-tool-task--with-session session
+    (test-niwa-tool-task--register-agent
+     session "/root/worker/explorer")
+    (setf (niwa-session-turn-count session) 8)
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main open" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "agent open" :status 'in-progress
+                 :owner "/root/worker/explorer")
+                (niwa-task--create
+                 :id 3 :subject "agent pending" :status 'pending
+                 :owner "/root/worker/explorer")
+                (niwa-task--create
+                 :id 4 :subject "proxy owner" :status 'pending
+                 :owner "explorer-niwa")
+                (niwa-task--create
+                 :id 5 :subject "blocked" :status 'pending
+                 :blocked-by '(2))))
+    (niwa-tool-task--set-status-note
+     session "/root/worker/explorer" "Inspecting")
+    (should (niwa-tool-task-finalize-owner
+             session "/root/worker/explorer" 'completed))
+    (let ((tasks (niwa-session-tasks session)))
+      (should (eq 'pending (niwa-task-status (nth 0 tasks))))
+      (should (eq 'completed (niwa-task-status (nth 1 tasks))))
+      (should (= 9 (niwa-task-completed-turn (nth 1 tasks))))
+      (should (eq 'completed (niwa-task-status (nth 2 tasks))))
+      (should (= 9 (niwa-task-completed-turn (nth 2 tasks))))
+      (should (eq 'pending (niwa-task-status (nth 3 tasks))))
+      (should (null (niwa-task-blocked-by (nth 4 tasks)))))
+    (should (= 9 (niwa-session-last-task-write-turn session)))
+    (should-not (niwa-tool-task--status-note
+                 session "/root/worker/explorer")))
+
+  :doc "non-completed terminal statuses leave owned tasks open"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "agent open" :status 'pending
+                 :owner "/root/worker/explorer")))
+    (should-not (niwa-tool-task-finalize-owner
+                 session "/root/worker/explorer" 'error))
+    (should (eq 'pending (niwa-task-status
+                          (car (niwa-session-tasks session))))))
+
+  :doc "non-canonical owner labels are not auto-completed"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "proxy owner" :status 'pending
+                 :owner "explorer-niwa")
+                (niwa-task--create
+                 :id 2 :subject "double dash owner" :status 'pending
+                 :owner "explorer--workstream")))
+    (should-not (niwa-tool-task-finalize-owner
+                 session "explorer-niwa" 'completed))
+    (should-not (niwa-tool-task-finalize-owner
+                 session "explorer--workstream" 'completed))
+    (dolist (task (niwa-session-tasks session))
+      (should (eq 'pending (niwa-task-status task))))))
+
+
+;;
+;;; Grouped display
+
+(niwa-deftest niwa-tool-task--sort-active-tasks
+  (:doc "orders priority then ID, keeping equal keys and input order stable")
+  (let* ((tasks (mapcar (lambda (spec) (apply #'niwa-task--create spec))
+                        '((:id 1 :status pending :blocked-by (9))
+                          (:id 2 :status pending)
+                          (:id 3 :status in-progress)
+                          (:id 2 :status pending)
+                          (:id 1 :status pending))))
+         (original (copy-sequence tasks))
+         (sorted (niwa-tool-task--sort-active-tasks tasks)))
+    (should (equal (mapcar (lambda (task) (cl-position task original :test #'eq))
+                           sorted)
+                   '(2 4 1 3 0)))
+    (should (equal tasks original))))
+
+(niwa-deftest niwa-tool-task--sort-completed-tasks
+  (:doc "orders by ID without reversing ties or modifying the input list")
+  (let* ((tasks (mapcar (lambda (id)
+                         (niwa-task--create :id id :status 'completed))
+                        '(3 1 2 1)))
+         (original (copy-sequence tasks))
+         (sorted (niwa-tool-task--sort-completed-tasks tasks)))
+    (should (equal (mapcar (lambda (task) (cl-position task original :test #'eq))
+                           sorted)
+                   '(1 3 2 0)))
+    (should (equal tasks original))))
+
+(niwa-deftest niwa-tool-task--format-groups
+  (:doc "`niwa-tool-task--format-groups' orders, groups, and caps rows")
+  ,test
+  (test)
+  :doc "orders open tasks globally and renders lone owners inline"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 10)
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main active" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "z owned" :status 'in-progress
+                 :owner "zeta")
+                (niwa-task--create
+                 :id 3 :subject "a owned" :status 'pending
+                 :owner "alpha")))
+    (let* ((text (substring-no-properties
+                  (niwa-tool-task--format-groups session)))
+           (zeta-pos (string-match "#2 zeta · z owned" text))
+           (main-pos (string-match "#1 main active" text))
+           (alpha-pos (string-match "#3 alpha · a owned" text)))
+      ;; In progress first, then pending by id: the owner label no
+      ;; longer decides where a task appears.
+      (should zeta-pos)
+      (should main-pos)
+      (should alpha-pos)
+      (should (< zeta-pos main-pos))
+      (should (< main-pos alpha-pos))
+      ;; One line per task; a header would only repeat the row.
+      (should (= 3 (length (split-string text "\n" t))))
+      (should-not (string-match-p "open · " text))
+      ;; A subject may well contain the word; only a label matters.
+      (let ((case-fold-search nil))
+        (should-not (string-match-p "Main" text)))))
+
+  :doc "hides completed tasks by default and expands all completed tasks"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 10)
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "active" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "recent done" :status 'completed
+                 :completed-turn 11)
+                (niwa-task--create
+                 :id 3 :subject "old done 1" :status 'completed
+                 :completed-turn 5)
+                (niwa-task--create
+                 :id 4 :subject "old done 2" :status 'completed)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (string-match-p "active" text))
+      (should-not (string-match-p "recent done" text))
+      (should-not (string-match-p "old done 1" text))
+      (should-not (string-match-p "old done 2" text))
+      (should-not (string-match-p "completed hidden" text)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session t))))
+      (should (string-match-p "active" text))
+      (should (string-match-p "recent done" text))
+      (should (string-match-p "old done 1" text))
+      (should (string-match-p "old done 2" text))
+      (should-not (string-match-p "completed hidden" text))))
+
+  :doc "keeps active ordering stable when completed rows are expanded"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 6 :subject "done C" :status 'completed)
+                (niwa-task--create
+                 :id 5 :subject "done B" :status 'completed)
+                (niwa-task--create
+                 :id 4 :subject "done A" :status 'completed)
+                (niwa-task--create
+                 :id 3 :subject "open C" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "open B" :status 'pending)
+                (niwa-task--create
+                 :id 1 :subject "open A" :status 'pending)))
+    (dolist (show-completed '(nil t))
+      (let ((text (substring-no-properties
+                   (niwa-tool-task--format-groups
+                    session show-completed 12))))
+        (should (< (string-match "#1 open A" text)
+                   (string-match "#2 open B" text)))
+        (should (< (string-match "#2 open B" text)
+                   (string-match "#3 open C" text))))))
+
+  :doc "an owner with several open tasks keeps its rows under one header"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "worker first" :status 'in-progress
+                 :owner "worker")
+                (niwa-task--create
+                 :id 2 :subject "main between" :status 'in-progress)
+                (niwa-task--create
+                 :id 3 :subject "worker second" :status 'pending
+                 :owner "worker")))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      ;; The group sits at its best-ordered task and pulls the rest of
+      ;; its rows up, so the main row no longer splits them.
+      (should (string-match-p
+               "^worker\n  → #1 worker first\n  ○ #3 worker second"
+               text))
+      (should (string-match-p "^→ #2 main between" text))
+      (should (< (string-match "worker second" text)
+                 (string-match "main between" text)))))
+
+  :doc "completed rows share one done section keeping owner attribution"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main open" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "main done" :status 'completed)
+                (niwa-task--create
+                 :id 3 :subject "worker open" :status 'pending
+                 :owner "worker")
+                (niwa-task--create
+                 :id 4 :subject "worker done" :status 'completed
+                 :owner "worker")))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session t))))
+      (should (string-match-p "^done$" text))
+      ;; No completed row hangs under an open owner's header.
+      (should (< (string-match "worker open" text)
+                 (string-match "^done$" text)))
+      (should (string-match-p "  ✔ #2 main done" text))
+      (should-not (string-match-p "Main · ✔" text))
+      (should (string-match-p "  ✔ #4 worker · worker done" text))))
+
+  :doc "default display keeps open tasks visible without a header"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "hidden body" :status 'pending)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (equal "○ #1 hidden body" text))))
+
+  :doc "a completed-only task list renders no open rows"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "done only" :status 'completed)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (equal "No open tasks." text))
+      (should-not (string-match-p "done only" text))))
+
+  :doc "shows agent activity in place of the subject it restates"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-agent-registry session)
+          '(("/root/explorer" . retained)))
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "inspect ui" :status 'in-progress
+                 :owner "/root/explorer"
+                 :metadata '(:activity "reading TaskListV2"))
+                (niwa-task--create
+                 :id 2 :subject "verify overlay" :status 'pending
+                 :owner "worker"
+                 :blocked-by '(1 7))))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (string-match-p
+               "→ #1 explorer · reading TaskListV2" text))
+      (should-not (string-match-p "inspect ui" text))
+      (should (string-match-p
+               "○ #2 worker · verify overlay · blocked by #1, #7" text))
+      (should-not (string-match-p "@explorer" text))))
+
+  :doc "keeps bucket subjects even when their metadata names an activity"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "bucket subject" :status 'in-progress
+                 :owner "workstream"
+                 :metadata '(:activeForm "bucket activity"))))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (string-match-p "workstream · bucket subject" text))
+      (should-not (string-match-p "bucket activity" text))))
+
+  :doc "collapses blockers only when several of them are all running"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "runner one" :status 'in-progress)
+                (niwa-task--create
+                 :id 2 :subject "runner two" :status 'in-progress)
+                (niwa-task--create
+                 :id 3 :subject "waiter" :status 'pending)
+                (niwa-task--create
+                 :id 4 :subject "all running" :status 'pending
+                 :blocked-by '(1 2))
+                (niwa-task--create
+                 :id 5 :subject "just one" :status 'pending
+                 :blocked-by '(1))
+                (niwa-task--create
+                 :id 6 :subject "mixed" :status 'pending
+                 :blocked-by '(1 3))))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (string-match-p "all running · blocked by 2 running" text))
+      ;; One blocker reads worse as a count than as the id it replaces.
+      (should (string-match-p "just one · blocked by #1" text))
+      (should (string-match-p "mixed · blocked by #1, #3" text))))
+
+  :doc "bounds a very long single-line subject like the activity summary"
+  (let* ((subject (make-string 300 ?x))
+         (line (substring-no-properties
+                (niwa-tool-task--format-one
+                 (niwa-task--create
+                  :id 9 :subject subject :status 'pending)))))
+    (should (< (length line) 90))
+    (should (string-match-p "…" line)))
+
+  :doc "uses requested status glyphs and task faces"
+  (let* ((done (niwa-task--create
+                :id 1 :subject "done" :status 'completed))
+         (running (niwa-task--create
+                   :id 2 :subject "running" :status 'in-progress))
+         (pending (niwa-task--create
+                   :id 3 :subject "pending" :status 'pending))
+         (done-line (niwa-tool-task--format-one done))
+         (running-line (niwa-tool-task--format-one running))
+         (pending-line (niwa-tool-task--format-one pending)))
+    (should (string-prefix-p "✔ #1 done"
+                             (substring-no-properties done-line)))
+    (should (string-prefix-p "→ #2 running"
+                             (substring-no-properties running-line)))
+    (should (string-prefix-p "○ #3 pending"
+                             (substring-no-properties pending-line)))
+    (should (eq 'niwa-tool-task-completed
+                (get-text-property
+                 (string-match "done"
+                               (substring-no-properties done-line))
+                 'face done-line)))
+    (should (eq 'niwa-tool-task-completed
+                (get-text-property
+                 (string-match "done"
+                               (substring-no-properties done-line))
+                 'font-lock-face done-line)))
+    (should (eq 'niwa-tool-task-in-progress
+                (get-text-property
+                 (string-match "running"
+                               (substring-no-properties running-line))
+                 'face running-line)))
+    (should (eq 'niwa-tool-task-in-progress
+                (get-text-property
+                 (string-match "running"
+                               (substring-no-properties running-line))
+                 'font-lock-face running-line)))
+    (should (eq 'default
+                (get-text-property
+                 (string-match "pending"
+                               (substring-no-properties pending-line))
+                 'face pending-line))))
+
+  :doc "renders the main note standalone and owner notes anchored"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main active" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "agent active" :status 'pending
+                 :owner "worker")
+                (niwa-task--create
+                 :id 3 :subject "done only" :status 'completed
+                 :owner "done-owner")))
+    (niwa-tool-task--set-status-note session nil "Main note")
+    (niwa-tool-task--set-status-note session "worker" "Worker note")
+    (niwa-tool-task--set-status-note session "done-owner" "Hidden note")
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      ;; The main note opens the panel with nothing above to hang from.
+      (should (string-prefix-p "Main note\n" text))
+      (should (string-match-p "#2 worker · agent active\n  └ Worker note"
+                              text))
+      (should-not (string-match-p "Hidden note" text))))
+
+  :doc "line cap counts rendered note rows"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main active" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "agent active" :status 'pending
+                 :owner "worker")))
+    (niwa-tool-task--set-status-note session nil "Main note")
+    (niwa-tool-task--set-status-note session "worker" "Worker note")
+    (let* ((text (substring-no-properties
+                  (niwa-tool-task--format-groups session nil 3)))
+           (lines (split-string text "\n" t)))
+      (should (= 3 (length lines)))
+      (should (string-match-p "Main note" text))
+      (should (string-match-p "… 1 more open" text))
+      (should-not (string-match-p "Worker note" text))))
+
+  :doc "line cap prioritizes open rows and summarizes completed rows"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "blocked active" :status 'pending
+                 :blocked-by '(9))
+                (niwa-task--create
+                 :id 2 :subject "done one" :status 'completed)
+                (niwa-task--create
+                 :id 3 :subject "running active" :status 'in-progress)
+                (niwa-task--create
+                 :id 4 :subject "plain active" :status 'pending)
+                (niwa-task--create
+                 :id 5 :subject "done two" :status 'completed)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session t 5))))
+      (should (< (string-match "running active" text)
+                 (string-match "plain active" text)))
+      (should (< (string-match "plain active" text)
+                 (string-match "blocked active" text)))
+      (should (string-match-p "… 2 completed" text))
+      ;; The cut landed on the done header; it carries no rows now.
+      (should-not (string-match-p "^done$" text))
+      (should-not (string-match-p "done one" text))
+      (should-not (string-match-p "done two" text))))
+
+  :doc "line cap summarizes omitted open rows"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "plain zero" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "plain one" :status 'pending)
+                (niwa-task--create
+                 :id 3 :subject "plain two" :status 'pending)
+                (niwa-task--create
+                 :id 4 :subject "plain three" :status 'pending)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session nil 3))))
+      (should (string-match-p "plain zero" text))
+      (should (string-match-p "plain one" text))
+      (should (string-match-p "… 2 more open" text))
+      (should-not (string-match-p "plain two" text))
+      (should-not (string-match-p "plain three" text))))
+
+  :doc "line cap takes a stable prefix and combines omitted counts"
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "main pending one" :status 'pending)
+                (niwa-task--create
+                 :id 2 :subject "main pending two" :status 'pending)
+                (niwa-task--create
+                 :id 3 :subject "main pending three" :status 'pending)
+                (niwa-task--create
+                 :id 4 :subject "worker running" :status 'in-progress
+                 :owner "worker")
+                (niwa-task--create
+                 :id 5 :subject "main done" :status 'completed)))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session t 4))))
+      ;; The running row now leads regardless of its owner.
+      (should (string-match-p "worker running" text))
+      (should (string-match-p "main pending one" text))
+      (should (string-match-p "… 1 more open · 1 completed" text))
+      (should-not (string-match-p "main pending three" text))
+      (should-not (string-match-p "main done" text)))))
+
+(niwa-deftest niwa-tool-task--render-list
+  (:doc "`niwa-tool-task--render-list' names the filter it actually used")
+  ,test
+  (test)
+  :doc "counts tasks without a filter clause when none was given"
+  (let ((result "#1 [pending] first\n#2 [completed] second"))
+    (dolist (args (list nil (list :status "") (list :status :json-false)))
+      (let ((rendering
+             (niwa-tool-task--render-list "TaskList" args result nil)))
+        ;; A blank status used to render as `TaskList: , 2 tasks'.
+        (should (equal "TaskList: 2 tasks"
+                       (plist-get rendering :header)))
+        (should (equal result (plist-get rendering :body)))
+        (should (plist-get rendering :initially-collapsed-p)))))
+
+  :doc "names the filter and agrees in number with one task"
+  (let* ((result "Tasks with status completed:\n#2 [completed] second")
+         (rendering
+          (niwa-tool-task--render-list
+           "TaskList" (list :status "completed") result nil)))
+    (should (equal "TaskList: completed, 1 task"
+                   (plist-get rendering :header)))
+    (should-not (plist-get rendering :status)))
+
+  :doc "reports an error result with error status"
+  (let* ((result "Error: Invalid task status: \"done\"")
+         (rendering
+          (niwa-tool-task--render-list
+           "TaskList" (list :status "done") result nil)))
+    (should (eq 'error (plist-get rendering :status))))
+
+  :doc "names the task a detail read returned"
+  (let ((rendering (niwa-tool-task--render-list
+                    "TaskList" (list :id 4) "#4 [pending] sample\n" nil)))
+    (should (equal "TaskList: #4" (plist-get rendering :header)))
+    (should (plist-get rendering :initially-collapsed-p))))
+
+(niwa-deftest niwa-tool-task--status-line-budget
+  (:doc "`niwa-tool-task--status-line-budget' always widens when expanded")
+  ,test
+  (test)
+  :doc "expanding never budgets fewer lines than collapsing"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (let ((collapsed (niwa-tool-task--status-line-budget))
+                  (expanded (niwa-tool-task--status-line-budget t)))
+              (should (integerp collapsed))
+              (should (integerp expanded))
+              ;; A truncation reserves one line for its summary, so an
+              ;; equal budget would drop an open row on expand.
+              (should (> expanded collapsed)))))
+      (kill-buffer buffer)))
+
+  :doc "a frame too short to widen still gains a line when expanded"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (cl-letf (((symbol-function 'frame-height)
+                       (lambda (&rest _) 8)))
+              (should (= (1+ (niwa-tool-task--status-line-budget))
+                         (niwa-tool-task--status-line-budget t))))))
+      (kill-buffer buffer)))
+
+  :doc "a popup split does not change the budget"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (let ((before (list (niwa-tool-task--status-line-budget)
+                                (niwa-tool-task--status-line-budget t))))
+              (split-window-below (- (/ (window-body-height) 2)))
+              (should (equal before (list (niwa-tool-task--status-line-budget)
+                                          (niwa-tool-task--status-line-budget t)))))))
+      (kill-buffer buffer)))
+
+  :doc "returns nil when no window shows the buffer"
+  (with-temp-buffer
+    (should-not (niwa-tool-task--status-line-budget))
+    (should-not (niwa-tool-task--status-line-budget t))))
+
+(niwa-deftest niwa-tool-task-display-string
+  (:doc "every task line fits one screen row of the narrowest window showing the view")
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-turn-count session) 10)
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :status 'in-progress :owner "a_long_owner_name"
+                 :subject (concat "Rewrite the status zone so every row fits "
+                                  "exactly one screen row of the narrowest window"))
+                (niwa-task--create :id 2 :subject "short" :status 'pending
+                                      :owner "a_long_owner_name")))
+    (let ((buffer (generate-new-buffer " *task-width-test*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (set-window-buffer (selected-window) buffer)
+            (set-window-buffer (split-window-right 40) buffer)
+            (with-current-buffer buffer
+              (let ((text (niwa-tool-task-display-string session nil)))
+                (should (< (niwa-view-zone-width) 40))
+                (should (string-search "#2" text))
+                (dolist (line (split-string text "\n"))
+                  (should (< (string-width line) (niwa-view-zone-width)))))))
+        (kill-buffer buffer)))))
+
+(niwa-deftest niwa-tool-task--render-rows
+  (:doc "`niwa-tool-task--render-rows' caps rows without dangling chrome")
+  ,test
+  (test)
+  :doc "reports an empty body as having no open tasks"
+  (should (equal "No open tasks."
+                 (substring-no-properties
+                  (niwa-tool-task--render-rows nil nil))))
+
+  :doc "joins every row when it fits the cap"
+  (should (equal "a\nb"
+                 (substring-no-properties
+                  (niwa-tool-task--render-rows
+                   '(("a" 1 0) ("b" 0 1)) 2))))
+
+  :doc "drops a trailing header left with nothing under it"
+  (let ((text (substring-no-properties
+               (niwa-tool-task--render-rows
+                '(("row" 1 0) ("header" 0 0) ("under" 1 0)) 2))))
+    (should (equal "row\n  … 1 more open" text)))
+
+  :doc "omits the summary when the dropped rows carry no tasks"
+  (let ((text (substring-no-properties
+               (niwa-tool-task--render-rows
+                '(("row" 1 0) ("header" 0 0) ("note" 0 0)) 2))))
+    (should (equal "row" text))))
+
+(niwa-deftest niwa-tool-task-format-active-for-llm
+  (:doc "`niwa-tool-task-format-active-for-llm' uses the TaskList shape")
+  ,test
+  (test)
+  (test-niwa-tool-task--with-session session
+    (setf (niwa-session-tasks session)
+          (list (niwa-task--create
+                 :id 1 :subject "active" :status 'pending
+                 :owner "/root/worker")
+                (niwa-task--create
+                 :id 2 :subject "finished" :status 'completed)))
+    (should (equal "#1 [pending] active owner=/root/worker"
+                   (niwa-tool-task-format-active-for-llm session)))))
+
+
+;;
+;;; Tool result renderers
+
+(niwa-deftest niwa-tool-task--render-mutation
+  (:doc "`niwa-tool-task--render-mutation' renders task writes as collapsed cards")
+  ,test
+  (test)
+  :doc "renders multi-task creates with a count and id range"
+  (let* ((result "Created 3 tasks:\n#1 [pending] first\n#2 [in_progress] second\n#3 [pending] third")
+         (rendering
+          (niwa-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 3 created · #1–#3"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should-not (plist-get rendering :body-mode))
+    (should-not (plist-get rendering :status))
+    (should (plist-get rendering :initially-collapsed-p))
+    (should-not (plist-member rendering :expandable-p)))
+
+  :doc "renders single-task creates with the created task id"
+  (let* ((result "Created 1 task:\n#7 [pending] only")
+         (rendering
+          (niwa-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 1 created · #7"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p)))
+
+  :doc "renders a mixed batch with both counts"
+  (let* ((result "Created 1 task:\n#5 [pending] new\nUpdated 2 tasks:\n#2 [completed] a\n#4 [in_progress] b\nStatus note for Main: busy")
+         (rendering
+          (niwa-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 1 created · #5 · 2 updated · #2–#4"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p)))
+
+  :doc "renders a note-only write as a compact event"
+  (let ((rendering (niwa-tool-task--render-mutation
+                    "TaskWrite" nil "Status note for Main: busy" nil)))
+    (should (equal "TaskWrite: Status note for Main: busy"
+                   (plist-get rendering :header)))
+    (should (eq nil (plist-get rendering :expandable-p))))
+
+  :doc "uses the first result line and error status for errors"
+  (let* ((result "Error: No task with id 99")
+         (rendering
+          (niwa-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: Error: No task with id 99"
+                   (plist-get rendering :header)))
+    (should (eq 'error (plist-get rendering :status)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p))))
+
+(niwa-deftest niwa-tool-task--section-ids
+  (:doc "reads the task IDs listed under one result heading")
+  (let ((result "Created 2 tasks:\n#3 [pending] a\n#4 [pending] b\nUpdated 1 task:\n#1 [completed] c"))
+    (should (equal '(3 4) (niwa-tool-task--section-ids result "Created")))
+    (should (equal '(1) (niwa-tool-task--section-ids result "Updated")))
+    (should-not (niwa-tool-task--section-ids "Status note for Main: x" "Created"))))
+
+(niwa-deftest niwa-tool-task--id-range
+  (:doc "labels one ID or the span of several")
+  (progn
+    (should (equal "#7" (niwa-tool-task--id-range '(7))))
+    (should (equal "#2–#9" (niwa-tool-task--id-range '(9 2 5))))))
+
+
+;;
+;;; View rendering
+
+(niwa-deftest niwa-tool-task-refresh-display
+  (:doc "`niwa-tool-task-refresh-display' renders status-zone fragments")
+  ,test
+  (test)
+  :doc "inserts read-only task fragment text in the live view buffer"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "rendered task")))))
+    (with-current-buffer view
+      (should (string-match-p "rendered task" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "rendered task")
+      (should (get-text-property (1- (point)) 'read-only))
+      (should (eq 'status (get-text-property
+                           (1- (point))
+                           'niwa-view-zone-namespace)))
+      (should (eq 'tasks (get-text-property
+                          (1- (point)) 'niwa-view-zone-id)))))
+
+  :doc "re-rendering replaces the previous task fragment region"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "one"))))
+      (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "two")))))
+    (with-current-buffer view
+      (should-not (string-match-p "#1 one" (buffer-string)))
+      (should (string-match-p "two" (buffer-string)))
+      (should (= 1 (how-many "tasks" (point-min) (point-max))))))
+
+  :doc "compact task fragment hides completed-only groups until expanded"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks
+             (vector (list :subject "main done" :status "completed")
+                     (list :subject "worker active" :owner "worker")))))
+    (with-current-buffer view
+      (should (string-match-p "worker active" (buffer-string)))
+      (should-not (string-match-p "main done" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "worker active")
+      (niwa-toggle-tasks)
+      (should (string-match-p "^done$" (buffer-string)))
+      (should (string-match-p "main done" (buffer-string)))))
+
+  :doc "fragment-backed task render suppresses modification hooks"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((changes 0))
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (with-current-buffer data
+          (niwa-tool-task--handle-write
+           (list :tasks (vector (list :subject "quiet task"))))
+          (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "still quiet")))))
+        (should (= 0 changes))
+        (should (string-match-p "still quiet" (buffer-string))))))
+
+  :doc "re-rendering preserves multiline composer text starting with >"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((draft "> quoted\nsecond line"))
+        (niwa-view-composer-create)
+        (niwa-view-test--insert-composer-draft draft 4)
+        (with-current-buffer data
+          (niwa-tool-task--handle-write
+           (list :tasks (vector (list :subject "one"))))
+          (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "two")))))
+        (should (string= draft (niwa-view-composer-draft-text nil t)))
+        (should (= 4 (niwa-view-test--composer-point-offset)))
+        (should-not (with-current-buffer (niwa-view-composer-buffer)
+                      (get-text-property (niwa-view-composer-draft-start)
+                                         'read-only)))
+        (save-excursion
+          (let ((display (buffer-substring-no-properties
+                          (point-min) (niwa-view-transcript-tail))))
+            (should-not (string-match-p "#1 one" display))
+            (should (string-match-p "two" display))
+            (goto-char (point-min))
+            (search-forward "two" (niwa-view-transcript-tail))
+            (should (get-text-property (match-beginning 0) 'read-only)))))))
+
+  :doc "task updates stay in the transcript and outside the separate draft"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((draft "> quoted\nsecond line"))
+        (niwa-view-composer-create)
+        (niwa-view-test--insert-composer-draft draft 4)
+        (should-not (eq (niwa-view-composer-buffer) view))
+        (with-current-buffer data
+          (niwa-tool-task--handle-write
+           (list :tasks (vector (list :subject "transcript task")))))
+        (should (string= draft (niwa-view-composer-draft-text nil t)))
+        (should (= 4 (niwa-view-test--composer-point-offset)))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "transcript task" (niwa-view-transcript-tail))
+          (should (eq 'tasks (get-text-property (match-beginning 0)
+                                               'niwa-view-zone-id)))))))
+
+  :doc "completed-only tasks do not render a status fragment"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "done only"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "done only" (buffer-string)))))
+
+  :doc "stale status notes alone do not render a status fragment"
+  (test-niwa-tool-task--with-view session data view
+    (setf (niwa-session-task-status-notes session)
+          '((nil :note "stale note" :updated-turn 1)))
+    (with-current-buffer data
+      (niwa-tool-task-refresh-display))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "stale note" (buffer-string)))))
+
+  :doc "completing the last open task removes the fragment"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "last active")))))
+    (with-current-buffer view
+      (should (string-match-p "last active" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "last active")
+      (should (eq 'tasks (get-text-property
+                          (1- (point)) 'niwa-view-zone-id))))
+    (with-current-buffer data
+      (niwa-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed")))))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "last active" (buffer-string)))))
+
+  :doc "TAB toggle hides and shows completed task detail"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "active body"
+                                  :status "in_progress")
+                            (list :subject "done body"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (goto-char (point-min))
+      (search-forward "active body")
+      (should (eq 'niwa-tool-task-in-progress
+                  (get-text-property (1- (point)) 'font-lock-face)))
+      (should-not (string-match-p "done body" (buffer-string)))
+      (niwa-toggle-tasks)
+      (should (string-match-p "1 running · 1 done" (buffer-string)))
+      (should (string-match-p "active body" (buffer-string)))
+      (should (string-match-p "done body" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "done body")
+      (should (eq 'niwa-tool-task-completed
+                  (get-text-property (1- (point)) 'font-lock-face)))
+      (goto-char (point-min))
+      (search-forward "active body")
+      (niwa-toggle-tasks)
+      (should (string-match-p "active body" (buffer-string)))
+      (should-not (string-match-p "done body" (buffer-string)))))
+
+  :doc "task fragment keyboard bindings toggle but mouse clicks only place point"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "active body")
+                            (list :subject "done body" :status "completed")))))
+    (save-window-excursion
+      (set-window-buffer (selected-window) view)
+      (with-current-buffer view
+        (goto-char (point-min))
+        (search-forward "active body")
+        (let* ((pos (match-beginning 0))
+               (map (get-text-property pos 'keymap)))
+          (dolist (kind '(mouse-1 mouse-2))
+            (goto-char (point-min))
+            (funcall (lookup-key map (vector kind))
+                     (list kind (list (selected-window) pos '(0 . 0) 0)))
+            (should (= pos (point)))
+            (should-not (string-match-p "done body" (buffer-string))))
+          (dolist (key '("TAB" "RET"))
+            (goto-char (point-min))
+            (search-forward "active body")
+            (goto-char (match-beginning 0))
+            (call-interactively
+             (lookup-key (get-text-property (point) 'keymap) (kbd key)))
+            (should (string-match-p "done body" (buffer-string)))
+            (goto-char (point-min))
+            (search-forward "active body")
+            (goto-char (match-beginning 0))
+            (call-interactively
+             (lookup-key (get-text-property (point) 'keymap) (kbd key)))
+            (should-not (string-match-p "done body" (buffer-string))))))))
+
+  :doc "shared fragment activation toggles completed task detail"
+  (test-niwa-tool-task--with-view session data view
+    (with-current-buffer data
+      (niwa-tool-task--handle-write
+       (list :tasks (vector (list :subject "active body"
+                                  :status "in_progress")
+                            (list :subject "done body"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (goto-char (point-min))
+      (search-forward "active body")
+      (goto-char (match-beginning 0))
+      (should (eq 'tasks (get-text-property
+                          (point) 'niwa-view-zone-id)))
+      (niwa-view-activate-at-point)
+      (should (string-match-p "done body" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "active body")
+      (goto-char (match-beginning 0))
+      (niwa-view-activate-at-point)
+      (should-not (string-match-p "done body" (buffer-string))))))
+
+
+;;
+;;; Task notes
+
+(niwa-deftest niwa-tool-task--handle-write/note
+  (:doc "`niwa-tool-task--handle-write' notes update owner-scoped status")
+  ,test
+  (test)
+  :doc "sets and clears the main status note"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "main active"))))
+    (let ((result (plist-get
+                   (niwa-tool-task--handle-write (list :note "Finishing task status polish"))
+                   :result)))
+      (should (string-match-p "Status note for Main" result))
+      (should (equal "Finishing task status polish"
+                     (niwa-tool-task--status-note session nil))))
+    (niwa-tool-task--handle-write (list :note ""))
+    (should (null (niwa-tool-task--status-note session nil))))
+
+  :doc "defaults agent notes to the current agent owner"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "main active"))))
+    (test-niwa-tool-task--register-agent session "/root/explorer")
+    (let ((inv (niwa-agent-invocation--create
+                :path "/root/explorer"
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
+      (let ((niwa--agent-invocation inv))
+        (niwa-tool-task--handle-write
+         (list :tasks (vector (list :subject "agent active"))))
+        (niwa-tool-task--handle-write (list :note "Checking the agent-owned path" :noteOwner nil))))
+    (niwa-tool-task--handle-write (list :note "Checking the main path"))
+    (let ((text (substring-no-properties
+                 (niwa-tool-task--format-groups session))))
+      (should (string-prefix-p "Checking the main path\n" text))
+      (should (string-match-p
+               "explorer · agent active\n  └ Checking the agent-owned path"
+               text))))
+
+  :doc "can target another owner explicitly"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "worker active"
+                                :owner "worker-2"))))
+    (niwa-tool-task--handle-write (list :noteOwner "worker-2"
+           :note "Waiting on the dependency result"))
+    (should (equal "Waiting on the dependency result"
+                   (niwa-tool-task--status-note session "worker-2"))))
+
+  :doc "does not store notes for owners without open tasks"
+  (test-niwa-tool-task--with-session session
+    (let ((result (plist-get
+                   (niwa-tool-task--handle-write (list :note "No open task"))
+                   :result)))
+      (should (string-match-p "not shown" result))
+      (should (null (niwa-session-task-status-notes session)))))
+
+  :doc "requires tasks or a note"
+  (test-niwa-tool-task--with-session session
+    (should-error
+     (niwa-tool-task--handle-write nil))
+    (should-error
+     (niwa-tool-task--handle-write (list :tasks [])))))
+
+
+;;
+;;; Task list and get
+
+(niwa-deftest niwa-tool-task--handle-list
+  (:doc "`niwa-tool-task--handle-list' lists all tasks and filters by status")
+  ,test
+  (test)
+  :doc "returns a no-task message on empty session"
+  (test-niwa-tool-task--with-session session
+    (let ((result (plist-get (niwa-tool-task--handle-list nil) :result)))
+      (should (stringp result))
+      (should (string-match-p "No tasks" result))))
+
+  :doc "returns all tasks when no filter is given"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "one" :status "completed")
+                          (list :subject "two" :status "pending"))))
+    (let ((result (plist-get (niwa-tool-task--handle-list nil) :result)))
+      (should (string-match-p "one" result))
+      (should (string-match-p "two" result))))
+
+  :doc "treats a blank or placeholder status as no filter at all"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "done1" :status "completed")
+                          (list :subject "pending1" :status "pending"))))
+    ;; An empty string used to reach `--parse-status', which reads it as
+    ;; `pending' -- so the model asked for every task and silently got a
+    ;; subset under a "Tasks with status pending" heading.
+    (dolist (placeholder (list "" :json-false nil))
+      (let ((result (plist-get
+                     (niwa-tool-task--handle-list
+                      (list :status placeholder))
+                     :result)))
+        (should (string-match-p "done1" result))
+        (should (string-match-p "pending1" result))
+        (should-not (string-match-p "Tasks with status" result)))))
+
+  :doc "filters by status"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "done1" :status "completed")
+                          (list :subject "pending1" :status "pending")
+                          (list :subject "done2" :status "completed"))))
+    (let ((result (plist-get
+                   (niwa-tool-task--handle-list
+                    (list :status "completed"))
+                   :result)))
+      (should (string-match-p "done1" result))
+      (should (string-match-p "done2" result))
+      (should-not (string-match-p "pending1" result)))))
+
+(niwa-deftest niwa-tool-task--handle-list/id
+  (:doc "`niwa-tool-task--handle-list' with an id returns task details")
+  ,test
+  (test)
+  :doc "returns subject, owner and description for a known id"
+  (test-niwa-tool-task--with-session session
+    (niwa-tool-task--handle-write
+     (list :tasks (vector (list :subject "sample"
+                                :description "details here"
+                                :owner "agent-x"))))
+    (let ((result (plist-get
+                   (niwa-tool-task--handle-list (list :id 1))
+                   :result)))
+      (should (string-match-p "sample" result))
+      (should (string-match-p "details here" result))
+      (should (string-match-p "agent-x" result))))
+
+  :doc "errors on unknown id"
+  (test-niwa-tool-task--with-session session
+    (should-error (niwa-tool-task--handle-list (list :id 1))))
+
+  :doc "requires an integer id"
+  (test-niwa-tool-task--with-session session
+    (should-error (niwa-tool-task--handle-list (list :id "one")))))
+
+
+(provide 'test-niwa-tool-task)
+;;; test-niwa-tool-task.el ends here

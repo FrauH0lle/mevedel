@@ -36,7 +36,7 @@ load('relay/viewer/renderer.js', context);
 load('relay/viewer/viewer-pinned-prompt.js', context);
 load('relay/viewer/viewer-agent.js', context);
 const href = navigation(context);
-const controller = window.mevedelAgentView.create({
+const controller = window.niwaAgentView.create({
   href,
   send(frame) { sent.push(frame); return Promise.resolve(connected); },
   el: (tag, className, text) => element(document, tag, className, text),
@@ -141,7 +141,7 @@ nodes['agent-close'].dispatch('click');
 // A host-located but unprojected source fails visibly once, rather than
 // retaining a hidden auto-scroll request across later live polls.
 let revealAttempts = 0;
-window.mevedelTranscriptRenderer = {...window.mevedelTranscriptRenderer,
+window.niwaTranscriptRenderer = {...window.niwaTranscriptRenderer,
   revealTool() { revealAttempts++; return false; }};
 controller.open({path: '/root/model-check', revealTool: 'omitted-source'});
 controller.handle({reqId: sent.at(-1).reqId, digest: 'omitted-one', final: true, records: []});

@@ -68,7 +68,7 @@ Supported `type` values:
 
 - `user`: stable details about the user's role, goals, expertise, or
   durable preferences.
-- `feedback`: reusable guidance about how mevedel should approach work,
+- `feedback`: reusable guidance about how niwa should approach work,
   including corrections and explicitly confirmed non-obvious approaches.
 - `project`: enduring context or motivation not otherwise recoverable from
   code, Git history, project instructions, or maintained documentation.
@@ -112,7 +112,7 @@ Update existing memories in place. For new memories, use global memory
 for cross-project user preferences or broad feedback, and local memory
 for project-specific feedback, project context, or local references.
 Prefer `.agents/memory/` for portable memories that other agent tools
-can share. Use `.mevedel/memory/` for mevedel-specific behavior or
+can share. Use `.niwa/memory/` for niwa-specific behavior or
 schema. Record known dates absolutely so relative wording does not drift.
 
 When the user asks to remember something, save it within their selected scope
@@ -127,7 +127,7 @@ actual approval boundary.
 The stable `memory-policy` owns relevance, authority, and freshness. The short
 `memory-save-policy` requires reading this manual before any memory mutation,
 including model-initiated saves. The manual owns format, routing, index updates,
-and forget semantics; Read retrieves it as `mevedel://memory.md`.
+and forget semantics; Read retrieves it as `niwa://memory.md`.
 
 Main and worker receive current configured roots and index contents as retained
 context updates. Changed or removed indexes replace earlier observations for

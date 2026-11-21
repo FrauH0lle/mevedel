@@ -10,7 +10,7 @@ The requirement changed from showing model-produced artifacts to people and
 the model editing the same sketch or document simultaneously. Republishing
 whole HTML pages cannot preserve concurrent typing, participant undo, or
 precise model edits against older reads. Two inspected template variants
-supplied design references, but neither supplied mevedel's collaboration or
+supplied design references, but neither supplied niwa's collaboration or
 durability contract.
 
 Use Yjs shared state with a Tiptap document editor. A packaged Node helper

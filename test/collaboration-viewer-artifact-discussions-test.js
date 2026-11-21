@@ -49,7 +49,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 // The sidebar's interface as the controller uses it.
 const sidebar = {updates: [], shown: []};
 const window = {
-  mevedelDiscussionSidebar: {create(options) {
+  niwaDiscussionSidebar: {create(options) {
     sidebar.options = options;
     return {
       // Each render reports back, as the sidebar does.
@@ -61,7 +61,7 @@ const window = {
       notice(text) { sidebar.notice = text; }, focus() {},
     };
   }},
-  mevedelTranscriptRenderer: {
+  niwaTranscriptRenderer: {
     formatBytes: size => `${size} B`,
     renderMarkdown: text => element(document, 'article', 'prose', text),
   },
@@ -80,7 +80,7 @@ const revealed = [];
 const sentFrames = [];
 const pages = [];
 let busy = false;
-const controller = window.mevedelArtifactView.create({
+const controller = window.niwaArtifactView.create({
   href,
   send: frame => { sentFrames.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
@@ -97,7 +97,7 @@ controller.handle({reqId: 1, mime: 'text/html', size: html.length,
                    data: Buffer.from(html).toString('base64'), final: true});
 const frame = nodes['artifact-body'].children[0];
 // Only the panel frame carries the picker, ahead of the artifact.
-assert.match(frame.srcdoc, /mevedelArtifactDiscussionRuntime[^]*<p id="lead">Hello<\/p>$/);
+assert.match(frame.srcdoc, /niwaArtifactDiscussionRuntime[^]*<p id="lead">Hello<\/p>$/);
 assert.equal(nodes['artifact-discussion'].hidden, false);
 const posted = [];
 frame.contentWindow = {postMessage: data => posted.push(data)};
@@ -184,12 +184,12 @@ controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}])
 
 // A marker message from any other window opens nothing.
 const message = data => listeners.message.forEach(listener => listener(data));
-message({source: {}, data: {mevedelDiscussion: 'open', id: 'c1',
+message({source: {}, data: {niwaDiscussion: 'open', id: 'c1',
                             rect: {left: 1, top: 1, width: 1, height: 1}}});
 assert.equal(sidebar.shown.length, 0);
 assert.equal(nodes['artifact-side'].hidden, true);
 message({source: frame.contentWindow,
-         data: {mevedelDiscussion: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
+         data: {niwaDiscussion: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
 assert.deepEqual(plain(sidebar.shown.at(-1)), {kind: 'thread', id: 'c1'});
 assert.equal(nodes['artifact-side'].hidden, false, 'a marker opens its discussion in the sidebar');
 assert.equal(listed('c1').assistantState, 'answered');
@@ -275,7 +275,7 @@ for (const ordering of ['before-open', 'before-bytes', 'after-bytes']) {
   assert.equal(pages.at(-1), canonical.store, 'presence observes recovered page identity');
   assert.equal(nodes['artifact-discussion'].hidden, false, ordering);
   const hydratedFrame = nodes['artifact-body'].children[0];
-  assert.match(hydratedFrame.srcdoc, /mevedelArtifactDiscussionRuntime/);
+  assert.match(hydratedFrame.srcdoc, /niwaArtifactDiscussionRuntime/);
   hydratedFrame.localDraft = 'keep my draft';
   const pageReports = pages.length;
   controller.render([canonical]);

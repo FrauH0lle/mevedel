@@ -1,6 +1,6 @@
 # ApplyPatch review
 
-Entry point: `mevedel-patch-review-start` (`mevedel-patch-review.el`, over the patch engine in `mevedel-tool-patch.el`). The model submits one Codex-style
+Entry point: `niwa-patch-review-start` (`niwa-patch-review.el`, over the patch engine in `niwa-tool-patch.el`). The model submits one Codex-style
 `ApplyPatch` payload containing any number of Add, Update, Delete, and Move
 operations. The pipeline authorizes and snapshots every affected path before
 the proposal reaches this UI. An allowed-root patch in `ask` mode goes directly
@@ -12,13 +12,13 @@ In `ask` mode, the view interaction zone shows one aggregate review:
 ```
 ApplyPatch · 5 files · 6/9 changes · +69 −26 · 1 comment
 
-▼ ◐ M mevedel-tool-fs.el · 2/3 · +7 −3
-    ✓ @@ mevedel-tool-fs--edit-handler · +5 −2
-      620   │           (or (mevedel-session-plan-mode session)
-      622 - │               (and mevedel--current-request
-      622 + │               (and (boundp 'mevedel--current-request)
+▼ ◐ M niwa-tool-fs.el · 2/3 · +7 −3
+    ✓ @@ niwa-tool-fs--edit-handler · +5 −2
+      620   │           (or (niwa-session-plan-mode session)
+      622 - │               (and niwa--current-request
+      622 + │               (and (boundp 'niwa--current-request)
     ✗ @@ legacy helper · +2 −1
-▶ ✓ A mevedel-tool-patch.el · +412
+▶ ✓ A niwa-tool-patch.el · +412
 ▶ ✗ R old.el → new.el · +6 −0
 
 Keys: TAB fold · SPC select · RET visit · e edit · f feedback · ...
@@ -31,8 +31,8 @@ context, falling back to a diff-style section heuristic (the closest
 unindented baseline line at or above the hunk), then `~N`, the baseline
 match line. Diff lines carry a gutter — old-file line numbers for context
 and `-` lines, new-file numbers for `+` lines, computed per review by
-`mevedel-tool-patch-annotate-line-numbers` against the captured baseline —
-plus whole-line background tints (`mevedel-patch-review-added/-removed`,
+`niwa-tool-patch-annotate-line-numbers` against the captured baseline —
+plus whole-line background tints (`niwa-patch-review-added/-removed`,
 which inherit `diff-added`/`diff-removed`, or magit's diff faces once
 `magit-diff` is loaded). Deselected changes render dimmed without tint.
 Every tally (header, file rows, primary button) counts selected changes
@@ -56,7 +56,7 @@ the remaining actions are available across the review body:
   to adopt the edits once, and only when the right buffer actually
   changed; declining, or an untouched buffer, stages nothing. Adopting
   re-derives an Update or Move's hunks from the edited result with
-  `mevedel-tool-patch-hunks-from-content` (a three-line-context diff
+  `niwa-tool-patch-hunks-from-content` (a three-line-context diff
   against the baseline, parsed by the engine's own payload parser), so a
   derived hunk matches by construction and its context is never
   hand-written. An Add's proposed content is replaced; a Delete with
@@ -206,7 +206,7 @@ which colors the count group — and renders its selected changes as per-file di
 blocks with aggregate counts followed by the notes, so a revision-only
 settlement stays expandable. The body is self-fontified with the review's
 faces (no `:body-mode`), keeping status letters, counts, and diff lines
-colored in the transcript; diff lines are stamped `mevedel-view-no-linkify`
+colored in the transcript; diff lines are stamped `niwa-view-no-linkify`
 so the view's Markdown pass never buttonizes paths or rewrites links inside
 verbatim patch content, while the per-file header lines stay clickable. Its
 model-visible text reports every applied, rejected, modified, and

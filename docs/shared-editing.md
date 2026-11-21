@@ -62,7 +62,7 @@ item's own conversation, its dedicated session, and the lobby's **Artifacts**
 tab does the same: a whiteboard or document opens in its editor there.
 
 `n` in the artifacts cockpit or the session menu, or
-`M-x mevedel-artifacts-new-shared-item`, creates one: it asks for Document
+`M-x niwa-artifacts-new-shared-item`, creates one: it asks for Document
 or Whiteboard and a title, then opens the new item the same way. The sharing
 question comes before anything is created, so declining or cancelling a prompt
 leaves no item and no room; a creation that fails starts no room either. From
@@ -118,7 +118,7 @@ stay as authored.
 ## Runtime and build
 
 Shared editing requires Node 22.4 or newer on the Emacs host. Set
-`mevedel-shared-editing-node-program` if it is not on PATH. Node stays local
+`niwa-shared-editing-node-program` if it is not on PATH. Node stays local
 when the session's execution target is remote; Emacs owns every durable
 read and write on that target. Ordinary chat, static artifacts, and browser
 viewing do not need Node; browser guests never install it.
@@ -130,7 +130,7 @@ or item. If startup or resource loading fails, creation, import, and opening
 items are disabled with an explanation. Existing items stay listed; open editors
 and locally stored recovery copies remain accessible.
 
-After installing Node, changing `mevedel-shared-editing-node-program`, or repairing
+After installing Node, changing `niwa-shared-editing-node-program`, or repairing
 helper resources, use **Recheck availability** in Shared work. The host
 starts a fresh helper between queued operations, so repaired resources take
 effect without cancelling an edit or discarding drafts. A successful check
@@ -339,7 +339,7 @@ geometry; a binding to a deleted element is drawn unbound.
 
 **Library** opens the sidebar's Library tab, beside Discussions; each toggle
 closes its own tab. It offers the libraries kept on the session host: **My library**,
-installed libraries, and mevedel's **Built-in** library. Each library is a
+installed libraries, and niwa's **Built-in** library. Each library is a
 collapsible section; My library starts open, the others closed, and the
 editor remembers which sections a participant opened while it stays loaded.
 The search field matches item names and library names across every library,
@@ -349,8 +349,8 @@ moving; groups, labels and bindings within the item are kept. The sidebar
 stays open beside the board; on a phone, where it covers the board, it closes
 to show the inserted item. The libraries load when the tab first shows.
 
-Each library is an `.excalidrawlib` file in `mevedel-shared-library-directory`,
-by default `~/.mevedel/whiteboard-libraries/`, named after the file. **Add
+Each library is an `.excalidrawlib` file in `niwa-shared-library-directory`,
+by default `~/.niwa/whiteboard-libraries/`, named after the file. **Add
 selection** stores the selected objects and their labels in **My library**;
 **Import file…** adds the items of an `.excalidrawlib` file there;
 **Download** saves it. Items are removed with ×. Copying any Excalidraw
@@ -372,7 +372,7 @@ section, which names the library, removes it. Installed libraries are removed
 whole: they mirror a published file, so useful items are kept by inserting
 them and adding them to My library. The editor has no network
 access, so Emacs fetches the index, download counts and library files from
-`mevedel-shared-library-catalog-url`, and only library files listed there.
+`niwa-shared-library-catalog-url`, and only library files listed there.
 The built-in **Database** item replaces the former cylinder shape: a group of
 an ellipse and lines, as Excalidraw has no cylinder element.
 
@@ -726,22 +726,22 @@ typing, posting without **Ask assistant**, and synchronization never start model
 
 ## Durability and recovery
 
-An item is `<workspace>/.mevedel/artifacts/.state/ID/state.json`, with `meta.el`
+An item is `<workspace>/.niwa/artifacts/.state/ID/state.json`, with `meta.el`
 naming its kind, title and revision, and `versions/`. Catalogs read these small
 metadata records without parsing the item's CRDT state or history.
 
 Every content path reaches items through one artifact-backend interface
-(`mevedel-artifact-backend.el`): the model's tools, `shared://` Read and Grep,
+(`niwa-artifact-backend.el`): the model's tools, `shared://` Read and Grep,
 browser rooms, version previews and a turn's versions. Listings come from
 its catalog: the model's resource roster and bare `shared://` listing, Project
 artifacts, the cockpit count and the browser's store listing. Each request goes
 to the adapter serving its artifact id. The local adapter is the workspace
 store with the queue, lease and helper described here; an id registered with
 another adapter is never read from or written to the store. The other adapter
-today serves [remote artifacts](collaboration.md#remote-artifacts-in-mevedel)
+today serves [remote artifacts](collaboration.md#remote-artifacts-in-niwa)
 from their origin; their registrations are restored on the first lookup of a
 workspace. Commits are announced through
-`mevedel-artifact-backend-change-hook`. A turn that edited a registered
+`niwa-artifact-backend-change-hook`. A turn that edited a registered
 artifact records no version of it, since its origin keeps its own versions.
 Discussions, deleting an item and restoring a saved version stay with the
 local store.
@@ -766,19 +766,19 @@ their continuations until the transport is idle, so TRAMP's temporary timer
 lists cannot strand the workspace queue.
 
 Across Emacs instances, an item lease decides who may commit
-(`mevedel-artifact-lease.el`). It lives outside the store, under
-`.mevedel/leases/artifacts/ID/`, so the store stays safe to commit. It uses
+(`niwa-artifact-lease.el`). It lives outside the store, under
+`.niwa/leases/artifacts/ID/`, so the store stays safe to commit. It uses
 the session lease's generation records, target clock and expiry
-(`mevedel-session-lease-seconds`): the first edit in an Emacs acquires it,
+(`niwa-session-lease-seconds`): the first edit in an Emacs acquires it,
 a timer renews it, and every state write proves ownership and expiry in the
 same target program. Lease transitions, state and metadata writes, and item
 deletion share a target-side `flock` on the stable
-`.mevedel/leases/artifacts/` directory, so a takeover cannot interleave with a
+`.niwa/leases/artifacts/` directory, so a takeover cannot interleave with a
 commit. The execution target must provide `flock`.
 These file operations are serialized, but are not a crash-atomic multi-file
 transaction. A failed program reports a save failure and can leave an incomplete
 new item or state and catalog metadata at different revisions until retried.
-After `mevedel-artifact-lease-idle-seconds` without edits, or when Emacs
+After `niwa-artifact-lease-idle-seconds` without edits, or when Emacs
 exits, the lease is released. Another Emacs that tries to edit a held item
 gets a read-only refusal and asks the holder to hand it over; the holder
 releases it to that Emacs at its next renewal once its queue for the item is
@@ -888,7 +888,7 @@ values take Excalidraw's defaults. Images in formats other than PNG, JPEG and
 WebP are drawn as placeholders, and the room reports them after import.
 Library files are imported in the editor's **Library**. Uploaded HTML,
 JavaScript, external image URLs, and unsupported formats are rejected. There
-are no legacy readers or migrations; whiteboards saved in mevedel's former
+are no legacy readers or migrations; whiteboards saved in niwa's former
 shape format no longer open.
 
 Bounds are explicit: 16 MiB canonical state/native input, 4,000 elements and
@@ -919,9 +919,9 @@ records the change from model-only authorship to direct shared editing.
 npm test --prefix shared-editing
 npm run test:browser --prefix shared-editing
 npx @emacs-eask/cli clean elc
-npx @emacs-eask/cli test ert test/test-mevedel-shared-editing*.el test/test-mevedel-shared-library.el test/test-mevedel-tool-editing.el test/test-mevedel-collaboration-editing.el
-npx @emacs-eask/cli test ert test/test-mevedel-tool-permission-read-access.el test/test-mevedel-pipeline-read-access.el
-MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
+npx @emacs-eask/cli test ert test/test-niwa-shared-editing*.el test/test-niwa-shared-library.el test/test-niwa-tool-editing.el test/test-niwa-collaboration-editing.el
+npx @emacs-eask/cli test ert test/test-niwa-tool-permission-read-access.el test/test-niwa-pipeline-read-access.el
+NIWA_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 ```
 
 The focused editor checks reproduce interior selection, inline text, cursor
@@ -933,13 +933,13 @@ keyboard-sized viewport. The editor fixture stands in for Emacs's discussion
 actions and records what the assistant would be asked.
 `test/board-tools.browser.mjs` covers shape recognition, the library (with a
 stand-in for the host's library requests), groups, locking, duplicates,
-arrowheads and fonts; `test/test-mevedel-shared-library.el` covers the library
+arrowheads and fonts; `test/test-niwa-shared-library.el` covers the library
 file and public collection through a local HTTP server.
 The room scenario also checks new-discussion draft recovery across repeated reloads. Set
-`MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
+`NIWA_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
 preview screenshots under `.scratch/shared-collaborative-editing/`.
 The focused room design and navigation checks also run with
-`MEVEDEL_BROWSER=firefox` after installing Playwright Firefox with
+`NIWA_BROWSER=firefox` after installing Playwright Firefox with
 `shared-editing/node_modules/.bin/playwright install firefox`.
 
 The room browser scenario checks the separate tab and preserved drafts,

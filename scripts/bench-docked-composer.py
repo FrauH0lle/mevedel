@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BENCH = "mevedel-docked-composer-bench"
+BENCH = "niwa-docked-composer-bench"
 BUILDS = ("baseline", "candidate")
 STEADY = ("typing", "wrapped-deletion", "stream", "idle-request", "idle-quiet", "scrolling")
 LAYOUT = ("checkpoint", "split", "switch-away", "switch-back", "popup-open", "popup-close", "resume")
@@ -40,7 +40,7 @@ def compile_build(temporary, revision):
     compiled.mkdir()
     # The native loader looks for its C sources beside the loaded bytecode.
     (compiled / "native").symlink_to("../native", target_is_directory=True)
-    files = sorted(str(p) for p in temporary.glob("mevedel*.el"))
+    files = sorted(str(p) for p in temporary.glob("niwa*.el"))
     files.append(str(ROOT / "benchmark" / f"{BENCH}.el"))
     load_path = temporary / "load-path.eld"
     expression = f"""
@@ -67,7 +67,7 @@ def compile_build(temporary, revision):
 def emacs_command(load_path, grammars, require_native, form):
     """Return a graphical Emacs command evaluating FORM with compiled code."""
     bootstrap = (f"(progn (setq load-path '{load_path} native-comp-jit-compilation nil "
-                 f" mevedel-dc-bench--require-native {'t' if require_native else 'nil'}"
+                 f" niwa-dc-bench--require-native {'t' if require_native else 'nil'}"
                  f" treesit-extra-load-path '({' '.join(map(json.dumps, grammars))}))"
                  f" (condition-case err (progn (require '{BENCH}) {form} (kill-emacs 0))"
                  " (error (princ (format \"bench error: %S\\n\" err) #'external-debugging-output)"
@@ -85,12 +85,12 @@ def run_session(temporary, revisions, grammars, rounds, smoke, require_native):
         for build in BUILDS if index % 2 else reversed(BUILDS):
             if index in (0, rounds + 1):
                 log = temporary / f"probe-{index}-{build}.log"
-                command = emacs_command(paths[build], grammars, require_native, "(mevedel-dc-bench-probe)")
+                command = emacs_command(paths[build], grammars, require_native, "(niwa-dc-bench-probe)")
                 steps.append(f"WAYLAND_DEBUG=client {shlex.join(command)} 2> {shlex.quote(str(log))}")
                 probes.append((build, "before" if index == 0 else "after", log))
             else:
                 output = temporary / f"round-{index}-{build}.json"
-                form = f"(mevedel-dc-bench-run {json.dumps(str(output))} {'t' if smoke else 'nil'})"
+                form = f"(niwa-dc-bench-run {json.dumps(str(output))} {'t' if smoke else 'nil'})"
                 command = emacs_command(paths[build], grammars, require_native, form)
                 steps.append(f"printf '%s\\n' 'round {index}: {build}' && {shlex.join(command)}")
                 runs.append((index, build, output))
@@ -215,7 +215,7 @@ def main():
     assert callbacks("wl_display#1.sync(new id wl_callback#2) wl_callback#2.done(0) "
                      "wl_surface#3.frame(new id wl_callback#2) wl_callback#2.done(1) "
                      "wl_surface#3.frame(new id wl_callback#2)") == (2, 1)
-    with tempfile.TemporaryDirectory(prefix="mevedel-dc-bench-") as directory:
+    with tempfile.TemporaryDirectory(prefix="niwa-dc-bench-") as directory:
         data = run_session(Path(directory), revisions, grammars, args.rounds, args.smoke,
                            args.require_native)
         with args.output.open("x") as raw:

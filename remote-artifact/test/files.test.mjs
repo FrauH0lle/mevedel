@@ -13,7 +13,7 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 /*
  * An origin's HTML files, answering the requests no fixture covers as the
- * origin does (mevedel-collaboration-artifact-room.el and the store's file
+ * origin does (niwa-collaboration-artifact-room.el and the store's file
  * operations), with its messages: FILES maps names to their content, and
  * index.html is the primary file.  Requests a fixture covers (index.html
  * as the fixtures have it) are answered from it.

@@ -1,0 +1,1862 @@
+;;; niwa-collaboration-projection.el --- canonical collaboration projection -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Reconstructs the allowlisted collaboration records from the authoritative
+;; data buffer and tracks live tool records until canonical settlement.  A
+;; room retains each segment's records between publishes and reprojects only
+;; the segments whose source or live inputs changed.
+
+;;; Code:
+
+;; `niwa-agent-control'
+(declare-function niwa-agent-record-conversation-buffer
+                  "niwa-agent-control" (record))
+
+;; `niwa-collaboration-artifact-projection'
+(declare-function niwa-collaboration--artifact-fields
+                  "niwa-collaboration-artifact-projection" (render-data))
+
+;; `niwa-execution'
+(declare-function niwa-execution-list-user
+                  "niwa-execution" (session))
+
+;; `niwa-execution-transcript'
+(declare-function niwa-execution-transcript-pending-render-data
+                  "niwa-execution-transcript" (data-buffer tool-use-id))
+
+;; `niwa-session-artifacts'
+(declare-function niwa-session-artifacts-read-transcript-segment
+                  "niwa-session-artifacts" (session descriptor))
+(declare-function niwa-session-artifacts-transcript-segments
+                  "niwa-session-artifacts" (session live-buffer))
+(autoload 'niwa-session-artifacts-read-transcript-segment "niwa-session-artifacts")
+(autoload 'niwa-session-artifacts-transcript-segments "niwa-session-artifacts")
+(declare-function niwa-session-artifacts-fork-point-spans
+                  "niwa-session-artifacts" (buffer))
+(autoload 'niwa-session-artifacts-fork-point-spans "niwa-session-artifacts")
+
+;; `niwa-session-durability'
+(declare-function niwa-session-durability-lease-owned-p
+                  "niwa-session-durability" (session))
+
+;; `niwa-gptel-retry'
+(declare-function niwa-gptel-retry-available-p
+                  "niwa-gptel-retry" (buffer &optional failure-id))
+(autoload 'niwa-gptel-retry-available-p "niwa-gptel-retry")
+
+;; `niwa-session-publication'
+(declare-function niwa-session-publication-read
+                  "niwa-session-publication" (session-dir &optional head names))
+(declare-function niwa-session-publication-uncommitted-artifact
+                  "niwa-session-publication" (session logical))
+
+;; `niwa-structs'
+(defvar niwa--session)
+
+;; `niwa-tool-registry'
+(declare-function niwa-tool-for-call "niwa-tool-registry" (name))
+
+;; `niwa-tool-exec'
+;; `niwa-view-render' autoloads it before this library loads.
+(declare-function niwa-tool-exec-completion "niwa-tool-exec"
+                  (termination outcome))
+
+;; `niwa-tool-render-data'
+(declare-function niwa-tool-render-data-direct-call
+                  "niwa-tool-render-data" (name data))
+(declare-function niwa-tool-render-data-extract
+                  "niwa-tool-render-data"
+                  (result-string &optional session expected-tool-use-id allow-payload-tool-use-id))
+
+;; `niwa-transcript'
+(declare-function niwa-transcript--mailbox-any-block-at-point
+                  "niwa-transcript" (limit))
+(declare-function niwa-transcript-segments
+                  "niwa-transcript" (start end))
+(declare-function niwa-transcript-summary-source
+                  "niwa-transcript" (scan-start &optional agent-p))
+(declare-function niwa-transcript-summary-body
+                  "niwa-transcript" (source))
+(declare-function niwa-transcript--skip-leading-properties-drawer
+                  "niwa-transcript" (pos))
+
+;; `niwa-transcript-audit'
+(declare-function niwa--strip-hook-audit-blocks
+                  "niwa-transcript-audit" (text))
+(declare-function niwa-transcript-audit-buffer-only-p
+                  "niwa-transcript-audit" (start end))
+(declare-function niwa-transcript-audit-buffer-spans
+                  "niwa-transcript-audit" (&optional type start end))
+(declare-function niwa-transcript-audit-turn-attributions
+                  "niwa-transcript-audit" ())
+
+;; `niwa-utilities'
+(declare-function niwa--trim-tool-result "niwa-utilities" (text))
+
+;; `niwa-view-render'
+(declare-function niwa-view--blank-segment-p
+                  "niwa-view-render" (data-buf seg-start seg-end))
+(declare-function niwa-view--clean-reasoning-text
+                  "niwa-view-render" (text))
+(declare-function niwa-view--generic-tool-rendering
+                  "niwa-view-render" (name args result &optional collapsed-only render-data))
+(declare-function niwa-view--invoke-renderer
+                  "niwa-view-render" (tool render-data args result))
+(declare-function niwa-view--mail-attribute
+                  "niwa-view-render" (open-tag attribute))
+(declare-function niwa-view--rendering-status
+                  "niwa-view-render" (rendering &optional render-data))
+(declare-function niwa-view--request-summary-details
+                  "niwa-view-render" (render-data))
+(declare-function niwa-view--request-summary-line
+                  "niwa-view-render" (render-data))
+(declare-function niwa-view--request-summary-render-data-from-text
+                  "niwa-view-render" (text))
+(declare-function niwa-view--sandbox-summary-line
+                  "niwa-view-render" (summary))
+(declare-function niwa-view--scaffolding-only-p
+                  "niwa-view-render" (data-buf seg-start seg-end))
+(declare-function niwa-view--tool-block-bounds
+                  "niwa-view-render" (seg-start seg-end))
+(declare-function niwa-view--tool-call-parse
+                  "niwa-view-render" (data-buf start end &optional raw))
+(declare-function niwa-view--tool-group-entry-p
+                  "niwa-view-render" (entry))
+(declare-function niwa-view--user-turn-text
+                  "niwa-view-render" (segments data-buf))
+(declare-function niwa-view--visible-response-text
+                  "niwa-view-render" (text))
+(defvar niwa-view-tool-group-collapse-threshold)
+
+;; `niwa-view-audit'
+(declare-function niwa-view-audit-displayed-p "niwa-view-audit" (record))
+(autoload 'niwa-view-audit-displayed-p "niwa-view-audit")
+
+(require 'niwa-activity-group)
+(require 'niwa-collaboration-artifact-projection)
+(require 'xml)
+(require 'niwa-shared-conversation)
+(require 'niwa-tool-registry)
+(require 'niwa-transcript)
+(require 'niwa-transcript-audit)
+(require 'niwa-utilities)
+(require 'niwa-view-render)
+
+(defvar-local niwa-collaboration--execution-prior-cache nil
+  "Derived archive identity cache for this live transcript only.
+The source descriptor signature is checked before each use; this is never
+used to authorize a guest result fetch or persisted as execution state.")
+
+(defconst niwa-collaboration--max-record-text-bytes
+  (/ (- (* 1 1024 1024) 4096) 6)
+  "Raw text bytes one projected record carries.
+The wire bound applies to the encoded frame, where escaping expands one byte
+at most six-fold, so bounding the raw text keeps every record sendable
+without measuring an encoding that would only be rejected later.  The
+reserve covers the record's own keys and the frame around it, which the
+six-fold worst case alone does not.")
+(defconst niwa-collaboration--max-tool-result-bytes 50000)
+(defconst niwa-collaboration--tool-error-regexp
+  "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
+  "Result text marking a settled tool call as failed.")
+
+
+;;
+;;; Canonical records
+
+
+(defun niwa-collaboration--truncate-bytes (string limit)
+  "Return STRING no longer than LIMIT bytes, with a truncation marker."
+  (if (<= (string-bytes string) limit)
+      string
+    (let ((marker "\n[truncated]")
+          (max (max 0 (- limit (string-bytes "\n[truncated]"))))
+          (low 0)
+          (high (length string)))
+      ;; Search by character index so a multibyte character is never split.
+      ;; Each candidate is measured in encoded bytes, keeping large rejected
+      ;; HTTP and transcript payloads linearithmic instead of quadratic.
+      (while (< low high)
+        (let ((mid (ceiling (+ low high) 2)))
+          (if (<= (string-bytes (substring string 0 mid)) max)
+              (setq low mid)
+            (setq high (1- mid)))))
+      (concat (substring string 0 low) marker))))
+
+(defun niwa-collaboration--clean-response (text)
+  "Return the visible, text-only form of assistant TEXT.
+Audit blocks are stripped defensively: a hidden record swallowed into a
+response span must never reach the wire as visible text."
+  (let ((visible (niwa-view--visible-response-text
+                  (niwa--strip-hook-audit-blocks text))))
+    (unless (stringp visible)
+      (error "Canonical response projection failed"))
+    (string-trim visible)))
+
+(defun niwa-collaboration--clean-user (segment data-buffer)
+  "Return visible user text for SEGMENT from DATA-BUFFER."
+  (let ((visible (niwa-view--user-turn-text (list segment) data-buffer)))
+    (unless (stringp visible)
+      (error "Canonical user projection failed"))
+    (string-trim visible)))
+
+(defun niwa-collaboration--reasoning-context-p (segment &optional live)
+  "Return non-nil if SEGMENT is inside completed or live native thinking.
+The parser recognizes closed reasoning blocks.  While a block is open,
+gptel leaves its opener unpropertized and marks its body as ignored or as
+a response, depending on `gptel-include-reasoning'.  Require that producer
+property and an adjacent opener, not a marker quoted inside hidden data.
+LIVE means an earlier segment established an unfinished reasoning block.
+A native tool result can establish that context after an empty opener;
+it interrupts thinking without closing it and is still projected as a tool."
+  (or (eq (car segment) 'reasoning)
+      (and (memq (car segment) '(ignored response tool))
+           (or live
+               (save-excursion
+                 (goto-char (cadr segment))
+                 (skip-chars-forward " \t\r\n" (caddr segment))
+                 (or (and (bolp) (looking-at "#\\+begin_reasoning\\b")
+                          (<= (match-end 0) (caddr segment)))
+                     (progn
+                       (goto-char (cadr segment))
+                       (skip-chars-backward " \t\r\n")
+                       (beginning-of-line)
+                       (looking-at "[ \t]*#\\+begin_reasoning\\b[^\n]*$")))))
+           (if (eq (car segment) 'tool)
+               ;; Tool opener lines are unpropertized; its body carries
+               ;; gptel's producer identity.  Search property runs only.
+               (let ((position (cadr segment)) found)
+                 (while (and (< position (caddr segment)) (not found))
+                   (setq found (eq (car-safe (get-text-property position 'gptel)) 'tool)
+                         position (next-single-property-change
+                                   position 'gptel nil (caddr segment))))
+                 found)
+             (memq (get-text-property (cadr segment) 'gptel) '(ignore response))))))
+
+(defun niwa-collaboration--record (id kind &rest fields)
+  "Build a projection record with ID, KIND, and FIELDS."
+  (append (list :id id :kind kind) fields))
+
+(defun niwa-collaboration--stable-record-id (kind text &optional occurrence)
+  "Return a content identity for KIND and TEXT.
+
+Transcript segments do not carry durable positions for user or response
+turns.  A digest gives newly opened rooms an ID independent of buffer
+positions; OCCURRENCE distinguishes repeated identical records.  Publication
+reconciliation below keeps the identity stable while an assistant response
+grows in the existing room."
+  (format "%s-%s" kind
+          (substring (secure-hash
+                      'sha256
+                      (format "%s\0%s\0%d" kind text (or occurrence 0)))
+                     0 24)))
+
+(defun niwa-collaboration--reuse-record-ids (old new)
+  "Reuse room-local IDs from OLD for the ordered records in NEW.
+
+The canonical transcript parser exposes no stable hook identity for a growing
+response.  Matching the ordered role streams lets a replacement retain its
+room-local ID without using a numeric buffer position or a guessed tool-call
+key."
+  (let ((by-kind (make-hash-table :test #'equal))
+        (fixed (make-hash-table :test #'equal))
+        (canonical-ids (make-hash-table :test #'equal)))
+    (dolist (record old)
+      ;; Pending-to-canonical identity transfers must survive later publishes.
+      ;; Derive aliases from the previous snapshot instead of retaining a registry.
+      (when-let* ((canonical-id (plist-get record :canonical-id)))
+        (puthash canonical-id (plist-get record :id) canonical-ids)))
+    (dolist (record new)
+      (when (plist-get record :identity-fixed)
+        (puthash (plist-get record :id) t fixed)))
+    (dolist (record (reverse old))
+      (unless (or (plist-get record :pending)
+                  (gethash (plist-get record :id) fixed)
+                  (gethash (plist-get record :canonical-id) fixed))
+        (push record (gethash (plist-get record :kind) by-kind))))
+    (mapcar
+     (lambda (record)
+       (if (plist-get record :identity-fixed)
+           (if-let* ((id (gethash (plist-get record :id) canonical-ids)))
+               (plist-put (plist-put (copy-sequence record)
+                                     :canonical-id (plist-get record :id))
+                          :id id)
+             record)
+         (let* ((kind (plist-get record :kind))
+                (candidates (gethash kind by-kind))
+                (previous (car candidates)))
+           (when previous
+             (puthash kind (cdr candidates) by-kind)
+             (setq record (plist-put record :id
+                                     (plist-get previous :id))))
+           record)))
+     new)))
+
+(defun niwa-collaboration--record-without-revision (record)
+  "Return RECORD without its transport-local revision."
+  (let ((copy (copy-sequence record)))
+    (setq copy (plist-put copy :revision nil))
+    copy))
+
+(defun niwa-collaboration--json-record (record)
+  "Return JSON-safe alist representation of RECORD.
+An artifact record's `:artifact-path' stays host-side: guests address
+an artifact only by its record id, never by a filesystem path."
+  (let (out)
+    (dolist (key '(:id :kind :revision :text :name :status :summary :result
+                       :truncated :guest :item :detail :details :diff
+                       :artifact :title :store :size :artifactRevision :missing
+                       :presentation :shared
+                       :verb
+                       :execution :description :number :firstSegment :lastSegment
+                       :sender :mailType :outcome :activity :toolUseId :forkPoint :forkTurn
+                       :retryId :retryExternal))
+      (when (plist-member record key)
+        (push (cons (substring (symbol-name key) 1)
+                    (plist-get record key))
+              out)))
+    (nreverse out)))
+
+
+;;
+;;; Retained projection
+
+(cl-defstruct (niwa-collaboration--projection-cache
+               (:constructor niwa-collaboration--projection-cache-create)
+               (:copier nil))
+  "Per-segment records retained between projections of one live transcript.
+An entry is reused only while its source characters and text properties,
+the projection context, and every live lookup it made are unchanged, so a
+retained projection equals a full one.  A segment's projection may
+therefore read only its source text, that context and observed lookups."
+  context tick bounds segments
+  (transcript (niwa-transcript-cache-create))
+  (entries (make-hash-table :test #'equal)))
+
+(defvar niwa-collaboration--observed nil
+  "Cell whose car collects one segment's live lookups, or nil.")
+
+(defun niwa-collaboration--observe (function &rest args)
+  "Return FUNCTION applied to ARGS, recorded as a live projection input.
+A retained segment is reprojected once a recorded lookup returns a value
+that is not `equal' to the one it was projected from."
+  (let ((value (apply function args)))
+    (when niwa-collaboration--observed
+      (push (list function args value) (car niwa-collaboration--observed)))
+    value))
+
+(defun niwa-collaboration--projection-context ()
+  "Return the current buffer's non-text inputs shared by all records."
+  (let ((session (bound-and-true-p niwa--session)))
+    (list session (and session (niwa-session-save-path session))
+          major-mode default-directory
+          ;; Plan mode hides an unclosed proposed plan in a response.
+          (and session (niwa-session-plan-mode session) t))))
+
+(defun niwa-collaboration--source (from to)
+  "Return the buffer's FROM..TO with snapshots of its property values."
+  (let* ((source (buffer-substring from to))
+         (end (length source))
+         (pos 0))
+    (while (< pos end)
+      (let ((next (next-property-change pos source end)))
+        (set-text-properties
+         pos next (copy-tree (text-properties-at pos source)) source)
+        (setq pos next)))
+    source))
+
+(defun niwa-collaboration--source-unchanged-p (from source)
+  "Return non-nil when the buffer at FROM still holds SOURCE.
+Its characters and text properties, compared by value, must match."
+  (let ((to (+ from (length source))))
+    (and (<= (point-min) from) (<= to (point-max))
+         (equal-including-properties source (buffer-substring from to)))))
+
+(defun niwa-collaboration--projection-entry (cache key unchanged)
+  "Return CACHE's entry for segment KEY while it remains valid.
+UNCHANGED means the buffer was not modified since CACHE was last filled."
+  (when-let* ((entry (and cache
+                          (gethash key (niwa-collaboration--projection-cache-entries
+                                        cache))))
+              ((or unchanged
+                   (niwa-collaboration--source-unchanged-p
+                    (plist-get entry :from) (plist-get entry :source))))
+              ((cl-every (lambda (lookup)
+                           (equal (apply (car lookup) (cadr lookup))
+                                  (nth 2 lookup)))
+                         (plist-get entry :live))))
+    entry))
+
+
+;;
+;;; Canonical projection
+
+(defun niwa-collaboration--tool-detail (args)
+  "Return a bounded one-line viewer summary of tool ARGS, or nil.
+The detail is the tool's primary operand -- a command, path, pattern, or
+query -- so a collapsed tool row says what the call did."
+  (let ((value (and (listp args)
+                    (cl-loop for key in '(:command :file_path :pattern
+                                          :query :url :path :name)
+                             for found = (plist-get args key)
+                             when (stringp found) return found))))
+    (when value
+      (niwa-collaboration--truncate-bytes
+       (car (split-string value "\n")) 200))))
+
+(defun niwa-collaboration--tool-extras (name args)
+  "Return the optional :detail and :diff record fields for NAME with ARGS.
+Shared by the canonical tool record and the live pending record so both
+carry the same operand summary and, for ApplyPatch, the authored patch."
+  (append
+   (when-let* ((detail (niwa-collaboration--tool-detail args)))
+     (list :detail detail))
+   (when-let* (((equal (format "%s" name) "ApplyPatch"))
+              (patch (plist-get args :patch))
+              ((stringp patch)))
+     (list :diff (niwa-collaboration--truncate-bytes
+                  patch niwa-collaboration--max-tool-result-bytes)))))
+
+(defun niwa-collaboration--routine-poll-p (name args data status)
+  "Return non-nil for a successful, empty-input WriteStdin observation.
+Do not discard failed control operations, even when the requested input was
+empty.  A process exiting unsuccessfully is not a failed control operation."
+  (and (equal name "WriteStdin")
+       (equal (or (plist-get args :chars) "") "")
+       (or (eq (plist-get data :control-succeeded-p) t)
+           (and (not (plist-member data :control-succeeded-p))
+                (not (memq status '(error denied cancelled blocked failed)))
+                (not (memq (plist-get data :status)
+                           '(error denied cancelled blocked failed)))))))
+
+(defun niwa-collaboration--execution-output (data)
+  "Return retained whole execution output from DATA when available.
+An empty string is meaningful: a completed command may produce no output."
+  (when (and (plist-member data :execution-output)
+             (stringp (plist-get data :execution-output)))
+    (plist-get data :execution-output)))
+
+(defun niwa-collaboration--live-execution (id)
+  "Return the current session's execution record for ID, or nil."
+  (and niwa--session
+       (fboundp 'niwa-execution-list-user)
+       (cl-find id (niwa-execution-list-user niwa--session)
+                :key (lambda (record) (plist-get record :execution-id))
+                :test #'equal)))
+
+(defun niwa-collaboration--live-bash-data (parsed)
+  "Return PARSED with the owner's live Bash tail when its process is running.
+The snapshot includes cumulative preview truncation, distinct from per-poll
+omissions.  Terminal render data replaces it once the command settles.  No
+polling row becomes a second output owner."
+  (let* ((data (plist-get parsed :render-data))
+         (id (plist-get data :execution-id))
+         (live (and id (niwa-collaboration--observe
+                        #'niwa-collaboration--live-execution id))))
+    (if (and live (eq (plist-get live :state) 'running))
+        (let ((copy (copy-sequence parsed))
+              (data (copy-sequence data)))
+          (setq data (plist-put data :status 'running))
+          (when (plist-member live :permission-approvals)
+            (setq data (plist-put data :permission-approvals
+                                  (copy-tree (plist-get live :permission-approvals)))))
+          (setq data (plist-put data :execution-output
+                                (or (plist-get live :output-tail) "")))
+          (setq data (plist-put data :output-preview-truncated-p
+                                (plist-get live :output-preview-truncated-p)))
+          (plist-put copy :render-data data))
+      parsed)))
+
+(defun niwa-collaboration--missing-bash-data (data completions)
+  "Mark archived running DATA unknown if later evidence has a gap.
+COMPLETIONS records a missing later segment under :gap.  Do not infer a
+terminal outcome while the execution owner still reports a running process."
+  (if (and (hash-table-p completions)
+           (gethash :gap completions)
+           (eq (plist-get data :state) 'running)
+           (not (and (plist-get data :execution-id)
+                     niwa--session
+                     (fboundp 'niwa-execution-list-user)
+                     (cl-find-if
+                      (lambda (execution)
+                        (and (equal (plist-get execution :execution-id)
+                                    (plist-get data :execution-id))
+                             (eq (plist-get execution :state) 'running)))
+                      (niwa-execution-list-user niwa--session)))))
+      (plist-put (plist-put (copy-sequence data) :state 'unknown)
+                 :status 'warning)
+    data))
+
+(defun niwa-collaboration--direct-facts (data direct)
+  "Return DIRECT's authoritative child facts rather than a stale wrapper status.
+The direct-call helper copies the child's result status into render data; a
+terminal Bash event or failed control operation may have newer facts."
+  (let ((child-facts (plist-get (car (plist-get data :calls)) :render-data)))
+    (if (or (memq (plist-get child-facts :status)
+                  '(error denied cancelled blocked failed))
+            (and (equal (plist-get direct :tool) "Bash")
+                 (memq (plist-get child-facts :state)
+                       '(completed interrupted lost unknown))))
+        child-facts
+      (plist-get direct :render-data))))
+
+(defun niwa-collaboration--reconcile-ptc-children
+    (data-buffer parsed &optional completion-buffer completions)
+  "Return PARSED with pending terminal facts for its nested Bash children.
+PTC children use their own tool-use ids, but have no separate gptel segment;
+their completion may therefore be retained in the execution transcript's
+pending table rather than patched into the outer ToolCall render data.
+COMPLETION-BUFFER and COMPLETIONS supply later facts for an archived segment.
+Keep the raw parsed model value and transcript metadata unchanged."
+  (cl-labels
+      ((reconcile (data depth)
+         (if (or (> depth 16) (not (eq (plist-get data :kind) 'ptc)))
+             data
+           (let* ((changed nil)
+                  (children
+                  (mapcar
+                   (lambda (child)
+                     (let* ((prior (plist-get child :render-data))
+                            (nested (and (equal (plist-get child :tool) "ToolCall")
+                                         (reconcile prior (1+ depth))))
+                            (terminal
+                             (and (equal (plist-get child :tool) "Bash")
+                                  (stringp (plist-get child :id))
+                                  (or (and (hash-table-p completions)
+                                           (gethash (plist-get child :id) completions))
+                                      (and (buffer-live-p completion-buffer)
+                                           (niwa-collaboration--observe
+                                            #'niwa-execution-transcript-pending-render-data
+                                            completion-buffer (plist-get child :id)))
+                                      (niwa-collaboration--observe
+                                       #'niwa-execution-transcript-pending-render-data
+                                       data-buffer (plist-get child :id)))))
+                            (missing (and (equal (plist-get child :tool) "Bash")
+                                          (not terminal)
+                                          (niwa-collaboration--missing-bash-data
+                                           prior completions))))
+                       (if (or terminal (and missing (not (eq prior missing)))
+                               (and nested (not (eq prior nested))))
+                           (progn
+                             (setq changed t)
+                             (let ((copy (plist-put
+                                          (copy-sequence child) :render-data
+                                          (or terminal missing nested))))
+                               (if (or terminal (and missing (not (eq prior missing))))
+                                   (plist-put copy :status
+                                              (plist-get (or terminal missing) :status))
+                                 copy)))
+                         child)))
+                   (plist-get data :calls))))
+             (if changed
+                 (plist-put (copy-sequence data) :calls children)
+               data)))))
+    (let* ((data (plist-get parsed :render-data))
+           (updated (and (equal (plist-get parsed :name) "ToolCall")
+                         (reconcile data 0))))
+      (if (and updated (not (eq data updated)))
+          (plist-put (copy-sequence parsed) :render-data updated)
+        parsed))))
+
+
+(defun niwa-collaboration-tool-presentation (parsed)
+  "Return a bounded browser presentation tree for PARSED.
+Execution identity and provider results remain unchanged.  Only display fields
+are exported, with one shared text/structure budget across the entire tree."
+  (let ((remaining niwa-collaboration--max-tool-result-bytes)
+        truncated)
+    (cl-labels
+        ((text (value &optional limit)
+           (when (stringp value)
+             (let* ((size (min remaining (or limit remaining)))
+                    (bounded (if (< size 16) ""
+                               (niwa-collaboration--truncate-bytes value size))))
+               (when (< (length bounded) (length value)) (setq truncated t))
+               (setq remaining (- remaining (string-bytes bounded)))
+               bounded)))
+         (node (name args result data id depth &optional batch status)
+           (if (or (niwa-collaboration--routine-poll-p name args data status)
+                   (when-let* ((direct
+                                (niwa-tool-render-data-direct-call name data)))
+                     (niwa-collaboration--routine-poll-p
+                      (plist-get direct :tool) (plist-get direct :args)
+                      (niwa-collaboration--direct-facts data direct)
+                      (plist-get direct :status))))
+               nil
+             (if (or (< remaining 512) (> depth 16))
+               (progn (setq truncated t) nil)
+             ;; Reserve structural JSON keys per node as well as its strings.
+             (setq remaining (- remaining 256))
+             (let* ((direct (niwa-tool-render-data-direct-call name data))
+                    (name (if direct (plist-get direct :tool) name))
+                    (args (if direct (plist-get direct :args) args))
+                    (data (if direct
+                              (niwa-collaboration--direct-facts data direct)
+                            data))
+                    (data (if (equal name "Bash")
+                              (plist-get
+                               (niwa-collaboration--live-bash-data
+                                (list :render-data data))
+                               :render-data)
+                            data))
+                    (result (or (and (equal name "Bash")
+                                     (niwa-collaboration--execution-output data))
+                                (and direct (equal name "Bash")
+                                     (eq (plist-get data :state) 'unknown)
+                                     (plist-get direct :result))
+                                result))
+                    (tool (and (stringp name)
+                               (niwa-collaboration--observe
+                                #'niwa-tool-for-call name)))
+                    (rendering
+                     (or (and tool (niwa-view--invoke-renderer tool data args result))
+                         (niwa-view--generic-tool-rendering name args result nil data)))
+                    (child-calls (if (and (eq (plist-get data :kind) 'ptc)
+                                          (plist-get data :live-p))
+                                     (plist-get data :calls)
+                                   (plist-get rendering :child-calls)))
+                    (sandbox-line
+                     (when-let* ((summary (or (plist-get rendering :sandbox-summary)
+                                              (plist-get data :sandbox-summary)))
+                                 (line (niwa-view--sandbox-summary-line summary)))
+                       (niwa-collaboration--truncate-bytes
+                        (string-trim (substring-no-properties line)) 280)))
+                    (header (plist-get rendering :header))
+                    (header (if sandbox-line
+                                (concat (niwa-collaboration--truncate-bytes
+                                         header 700)
+                                        " · " sandbox-line)
+                              header))
+                    (status
+                     (pcase (or (and (memq (plist-get data :status) '(denied cancelled running warning))
+                                     (plist-get data :status))
+                                (niwa-view--rendering-status rendering data))
+                       ('error "failed") ('denied "denied") ('cancelled "cancelled")
+                       ('running "running") ('warning "warning") (_ "completed")))
+                    (row (list :id (text id 200) :name (text name 200)
+                               :sourceId (text (if direct (plist-get direct :id) id) 200)
+                               :groupable (if (and (not (plist-get rendering :coalesce-key))
+                                                    (niwa-view--tool-group-entry-p
+                                                     (list :kind 'tool :count 1 :rendering rendering)))
+                                              t :json-false)
+                               :detail (text (niwa-collaboration--tool-detail args) 200)
+                               :header (text header 1000)
+                               :status status
+                               :approval (text (plist-get rendering :permission-approval-reason)
+                                               2048)
+                               :collapsed (if (plist-get rendering :initially-collapsed-p)
+                                              t :json-false)
+                               :format (pcase (plist-get rendering :body-mode)
+                                         ((or 'markdown-mode 'gfm-mode 'org-mode) "markdown")
+                                         ('diff-mode "diff") (_ "text"))
+                               :body (text (plist-get rendering :body))))
+                    children attachments)
+               (when batch (setq row (plist-put row :batch (text (format "%s" batch) 200))))
+               (when-let* ((diff (plist-get (niwa-collaboration--tool-extras name args) :diff)))
+                 (setq row (plist-put row :diff (text diff))))
+               (cl-loop for attachment in (plist-get data :attachments)
+                        while (>= remaining 512) do
+                        (let ((body (cdr (assoc attachment (plist-get data :attachment-bodies)))))
+                          (push (node "Skill dependency" (list :name attachment)
+                                      (or body "Delivered dependency body unavailable in this transcript.")
+                                      (list :status 'success)
+                                      (concat "attachment:" attachment) (1+ depth))
+                                attachments)
+                          (when (car attachments)
+                            (setf (plist-get (car attachments) :format) "markdown"))))
+               (cl-loop for child in child-calls
+                        while (>= remaining 512) do
+                        (push (node (plist-get child :tool) (plist-get child :args)
+                                    (plist-get child :result)
+                                    (let ((facts (copy-sequence
+                                                  (plist-get child :render-data))))
+                                      (if (and (equal (plist-get child :tool) "Bash")
+                                               (memq (plist-get facts :state)
+                                               '(completed interrupted lost unknown)))
+                                          facts
+                                        (plist-put facts :status
+                                                   (plist-get child :status))))
+                                    (plist-get child :id) (1+ depth)
+                                    (plist-get child :batch) (plist-get child :status))
+                              children))
+               (when (or (< (length attachments) (length (plist-get data :attachments)))
+                         (< (length children) (length child-calls)))
+                 (setq truncated t))
+               (when attachments (setq row (plist-put row :attachments (vconcat (delq nil (nreverse attachments))))))
+               (when children (setq row (plist-put row :children (vconcat (delq nil (nreverse children))))))
+               row)))))
+      (condition-case nil
+          (let ((row (node (plist-get parsed :name) (plist-get parsed :args)
+                           (plist-get parsed :result) (plist-get parsed :render-data)
+                           "root" 0)))
+            (when truncated (setq row (plist-put row :truncated t)))
+            row)
+        (error nil)))))
+
+(defun niwa-collaboration--tool-record (parsed raw &optional occurrence)
+  "Return an allowlisted tool record from PARSED and transcript RAW text."
+  (let* ((name (plist-get parsed :name))
+         (result (or (plist-get parsed :result) ""))
+         (tool-use-id (plist-get parsed :tool-use-id)))
+    (unless (stringp name)
+      (error "Canonical tool projection failed"))
+    (unless (or (niwa-collaboration--routine-poll-p
+                 name (plist-get parsed :args) (plist-get parsed :render-data)
+                 (or (plist-get (plist-get parsed :render-data) :status)
+                     (and (string-match-p niwa-collaboration--tool-error-regexp
+                                          result)
+                          'error)))
+                (when-let* ((direct (niwa-tool-render-data-direct-call
+                                     name (plist-get parsed :render-data))))
+                  (niwa-collaboration--routine-poll-p
+                   (plist-get direct :tool) (plist-get direct :args)
+                   (niwa-collaboration--direct-facts
+                    (plist-get parsed :render-data) direct)
+                   (plist-get direct :status))))
+      (let* ((id (if tool-use-id
+                   (format "tool-%s" tool-use-id)
+                 (niwa-collaboration--stable-record-id
+                  "tool" raw occurrence)))
+           (result (niwa--trim-tool-result
+                    (if (stringp result) result "")))
+           (presentation (niwa-collaboration-tool-presentation parsed))
+           (status (or (plist-get presentation :status)
+                       (if (string-match-p niwa-collaboration--tool-error-regexp result)
+                           "failed" "completed")))
+           (result (niwa-collaboration--truncate-bytes
+                    (or (and (equal name "Bash")
+                             (niwa-collaboration--execution-output
+                              (plist-get parsed :render-data)))
+                        result)
+                    niwa-collaboration--max-tool-result-bytes))
+           (truncated (string-suffix-p "\n[truncated]" result)))
+      (apply #'niwa-collaboration--record
+             id "tool"
+             :revision 0
+             :name (format "%s" name)
+             :toolUseId tool-use-id
+             :status status
+             :summary (format "%s" name)
+             :result result
+             :truncated (and truncated t)
+             :identity-fixed (and tool-use-id t)
+             :presentation presentation
+             (niwa-collaboration--tool-extras
+              name (plist-get parsed :args)))))))
+
+(defun niwa-collaboration--tool-segment-records
+    (data-buffer segment &optional occurrence completion-buffer render-end completions)
+  "Return canonical records for tool SEGMENT in DATA-BUFFER.
+A settled ApplyPatch may produce several artifact cards.  A patch touching
+only artifact destinations reuses its ordinary tool record as the first card;
+a mixed patch retains the ordinary row and adds child cards.
+COMPLETION-BUFFER may contain later completion evidence for archived Bash.
+RENDER-END includes a following, separately classified hidden metadata block."
+  (with-current-buffer data-buffer
+    (let* ((start (cadr segment))
+           (end (caddr segment))
+           (parsed (niwa-view--tool-call-parse
+                    data-buffer start (or render-end end)))
+           (terminal (and (equal (plist-get parsed :name) "Bash")
+                          (plist-get parsed :tool-use-id)
+                          (or (and (hash-table-p completions)
+                                   (gethash (plist-get parsed :tool-use-id)
+                                            completions))
+                              (and (buffer-live-p completion-buffer)
+                                   (niwa-collaboration--observe
+                                    #'niwa-execution-transcript-pending-render-data
+                                    completion-buffer (plist-get parsed :tool-use-id)))
+                              (niwa-collaboration--observe
+                               #'niwa-execution-transcript-pending-render-data
+                               data-buffer (plist-get parsed :tool-use-id)))))
+           (parsed (if terminal
+                       (plist-put (copy-sequence parsed) :render-data terminal)
+                     (if (equal (plist-get parsed :name) "Bash")
+                         (let ((live (niwa-collaboration--live-bash-data parsed)))
+                           (plist-put (copy-sequence live) :render-data
+                                      (niwa-collaboration--missing-bash-data
+                                       (plist-get live :render-data) completions)))
+                       parsed)))
+           (parsed (niwa-collaboration--reconcile-ptc-children
+                    data-buffer parsed completion-buffer completions))
+           (base (niwa-collaboration--tool-record
+                  parsed (buffer-substring-no-properties start end)
+                  occurrence))
+           (direct (niwa-tool-render-data-direct-call
+                    (plist-get parsed :name) (plist-get parsed :render-data)))
+           (effective-name (if direct (plist-get direct :tool)
+                             (plist-get parsed :name)))
+           (effective-data (if direct (plist-get direct :render-data)
+                             (plist-get parsed :render-data)))
+           (files (and (equal effective-name "ApplyPatch")
+                       (equal (plist-get base :status) "completed")
+                       ;; File sizes and presence are live inputs.
+                       (niwa-collaboration--observe
+                        #'niwa-collaboration--artifact-fields
+                        effective-data)))
+           (all-files (and (eq (plist-get effective-data :kind)
+                               'patch)
+                           (plist-get effective-data :files)))
+           (pure (and files (= (length files) (length all-files))))
+           cards)
+      (dolist (fields files)
+        (let* ((relative (plist-get fields :artifact))
+               (first (null cards))
+               (record (if (and pure first)
+                           (copy-sequence base)
+                         (list :id (format "%s-artifact-%s"
+                                           (plist-get base :id)
+                                           (substring
+                                            (secure-hash 'sha256 relative)
+                                            0 12))
+                               :kind "tool"
+                               :revision 0
+                               :name "Artifact"
+                               :status "completed"
+                               :summary "Artifact"
+                               :result ""
+                               :truncated nil
+                               :identity-fixed t
+                               :artifact-child t))))
+          (setq record (append record fields))
+          (push record cards)))
+      (setq cards (nreverse cards))
+      (if pure cards (delq nil (cons base cards))))))
+
+(defun niwa-collaboration--scope-at (items position)
+  "Return the discussion fields for a record starting at POSITION.
+ITEMS are shared-item turn ranges.  The result is (:item ID), or nil for
+the main conversation, so a viewer can filter and reply per discussion."
+  (cl-loop for range in items
+           when (and (<= (plist-get range :start) position)
+                     (< position (plist-get range :end)))
+           return (list :item (plist-get (plist-get range :shared) :itemId))))
+
+(defun niwa-collaboration--scoped (record fields)
+  "Return RECORD carrying discussion FIELDS from `niwa-collaboration--scope-at'."
+  (while fields
+    (setq record (plist-put record (car fields) (cadr fields))
+          fields (cddr fields)))
+  record)
+
+(defun niwa-collaboration--attribute-guest-prompts (user-starts)
+  "Attach guest names and return background user records to omit.
+USER-STARTS is an ordered list of (SEGMENT-START . RECORD).  Each guest
+attribution record names the last user turn starting at or before it.
+Starts are the stable anchor: segment repair can grow a user turn's end
+over the audit blocks that follow it, or reclassify trailing text, but
+the turn always begins before its own attribution block."
+  (let (background)
+    (dolist (attribution (niwa-transcript-audit-turn-attributions))
+      (let (owner)
+        (dolist (entry user-starts)
+          (when (<= (car entry) (car attribution))
+            (setq owner (cdr entry))))
+        (when owner
+          (if (eq (plist-get (cdr attribution) :type) 'background-event)
+              (push owner background)
+            (plist-put owner :guest (plist-get (cdr attribution) :name))
+            (when-let* ((shared (plist-get (cdr attribution) :shared)))
+              (plist-put owner :shared shared))))))
+    background))
+
+(defun niwa-collaboration--attribute-fork-points (response-starts)
+  "Name each settled turn's fork point on its last assistant record.
+RESPONSE-STARTS is an ordered list of (SEGMENT-START . RECORD) for the
+current buffer's assistant records.  A fork-point audit closes the turn
+it follows, so it belongs to the last assistant record starting after
+the previous fork point and before it; a turn without one gets none.
+Both lists are in source order, so one pass pairs them."
+  (let ((floor 0))
+    (dolist (point (niwa-session-artifacts-fork-point-spans
+                    (current-buffer)))
+      (let ((start (plist-get point :record-start))
+            (id (plist-get point :fork-point-id))
+            owner)
+        (while (and response-starts (< (caar response-starts) start))
+          (when (>= (caar response-starts) floor)
+            (setq owner (cdar response-starts)))
+          (setq response-starts (cdr response-starts)))
+        (when (and owner (stringp id))
+          (plist-put owner :forkPoint id)
+          (when (integerp (plist-get point :cum-turn))
+            (plist-put owner :forkTurn (plist-get point :cum-turn))))
+        (setq floor start)))))
+
+(defun niwa-collaboration--execution-ids-in-buffer (buffer ids)
+  "Add trusted execution identities in BUFFER to hash table IDS."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (dolist (span (niwa-transcript-audit-buffer-spans
+                     'execution-breadcrumb))
+        (when-let* ((record (plist-get span :record))
+                    (owner (plist-get record :owner))
+                    (id (plist-get record :execution-id))
+                    ((stringp owner)) ((stringp id)))
+          (puthash (plist-get
+                    (niwa-collaboration--forwarded-execution-record
+                     record) :id)
+                   t ids)))
+      (dolist (segment (niwa-transcript-segments (point-min) (point-max)))
+        (when (eq (car segment) 'mailbox)
+          (when-let* ((completion
+                       (niwa-collaboration--forwarded-execution segment))
+                      (owner (plist-get completion :owner))
+                      (id (plist-get completion :execution-id))
+                      ((stringp owner)) ((stringp id)))
+            (puthash (plist-get
+                      (niwa-collaboration--forwarded-execution-record
+                       completion) :id)
+                     t ids))))))
+  ids)
+
+(defun niwa-collaboration--execution-archive-signature (session descriptor)
+  "Return source fingerprint for archived DESCRIPTOR in SESSION."
+  (let* ((number (plist-get descriptor :number))
+         (logical (or (plist-get descriptor :logical)
+                      (format "segment-%04d.chat.org" number)))
+         (portable (niwa-session-codec-portable-authority-p session))
+         (source (and portable
+                      (niwa-session-durability-lease-owned-p session)
+                      (niwa-session-publication-uncommitted-artifact
+                       session logical)))
+         (publication (and portable
+                           (or (niwa-session-publication session)
+                               (niwa-session-publication-read
+                                (niwa-session-save-path session)))))
+         (published (and publication
+                         (cdr (assoc logical
+                                     (plist-get publication :artifacts)))))
+         (attributes (and source (file-attributes source 'string))))
+    (list number logical (plist-get descriptor :status)
+          (if source
+              ;; Do not include atime: reading an archive can change it and
+              ;; would immediately invalidate the memo on every publication.
+              (list source
+                    (and attributes
+                         (list (file-attribute-modification-time attributes)
+                               (file-attribute-status-change-time attributes)
+                               (file-attribute-size attributes)
+                               (file-attribute-inode-number attributes))))
+            (and published (plist-get published :sha256))))))
+
+(defun niwa-collaboration--prior-execution-ids
+    (session live-buffer &optional target-number)
+  "Return execution identities before TARGET-NUMBER in SESSION.
+When TARGET-NUMBER is nil, scan readable history preceding LIVE-BUFFER.
+Unreadable archives do not suppress later source-backed breadcrumbs."
+  (let* ((descriptors
+          (when (and session (buffer-live-p live-buffer))
+            (cl-loop for descriptor in
+                     (niwa-session-artifacts-transcript-segments
+                      session live-buffer)
+                     until (or (plist-get descriptor :current-p)
+                               (and target-number
+                                    (equal target-number
+                                           (plist-get descriptor :number))))
+                     collect descriptor)))
+         (signature (mapcar (lambda (descriptor)
+                              (niwa-collaboration--execution-archive-signature
+                               session descriptor))
+                            descriptors))
+         (cache (and (not target-number) (buffer-live-p live-buffer)
+                     (buffer-local-value
+                      'niwa-collaboration--execution-prior-cache live-buffer)))
+         (prior (if (and cache (eq session (plist-get cache :session))
+                         (equal signature (plist-get cache :signature)))
+                    (plist-get cache :ids)
+                  (let ((ids (make-hash-table :test #'equal))
+                        (read-ok t))
+                    (dolist (descriptor descriptors)
+                      (when (eq (plist-get descriptor :status) 'readable)
+                        (let ((buffer
+                               (condition-case nil
+                                   (niwa-session-artifacts-read-transcript-segment
+                                    session descriptor)
+                                 (error nil))))
+                          (if (not (buffer-live-p buffer))
+                              (setq read-ok nil)
+                            (unwind-protect
+                                (niwa-collaboration--execution-ids-in-buffer
+                                 buffer ids)
+                              (kill-buffer buffer))))))
+                    (when (and read-ok (not target-number))
+                      (with-current-buffer live-buffer
+                        (setq niwa-collaboration--execution-prior-cache
+                              (list :session session :signature signature
+                                    :ids ids))))
+                    ids))))
+    prior))
+
+(defun niwa-collaboration--session-bash-completions
+    (session live-buffer target-number)
+  "Return terminal facts after TARGET-NUMBER in SESSION.
+Read later source-backed segments chronologically, including LIVE-BUFFER.
+Flag missing or unreadable later segments under :gap so a stale running
+row does not imply success.  This table lives only for one history fetch."
+  (let ((completions (make-hash-table :test #'equal))
+        (later nil))
+    (puthash :prior-executions
+             (niwa-collaboration--prior-execution-ids
+              session live-buffer target-number)
+             completions)
+    (when (and session (buffer-live-p live-buffer))
+      (dolist (descriptor (niwa-session-artifacts-transcript-segments
+                           session live-buffer))
+        (if (equal target-number (plist-get descriptor :number))
+            (setq later t)
+          (when later
+            (unless (eq (plist-get descriptor :status) 'readable)
+              (puthash :gap t completions))
+            (when (eq (plist-get descriptor :status) 'readable)
+              (let ((buffer
+                     (if (plist-get descriptor :current-p)
+                         live-buffer
+                       (condition-case nil
+                           (niwa-session-artifacts-read-transcript-segment
+                            session descriptor)
+                         (error (puthash :gap t completions) nil)))))
+                (when (buffer-live-p buffer)
+                  (unwind-protect
+                      (with-current-buffer buffer
+                        (save-restriction
+                          (widen)
+                          (dolist (audit (niwa-transcript-audit-records
+                                          (buffer-substring (point-min) (point-max))
+                                          'execution-completion))
+                            (when-let* ((id (plist-get audit :tool-use-id))
+                                        (facts (plist-get audit :render-data)))
+                              (puthash id facts completions)))))
+                    (unless (eq buffer live-buffer)
+                      (kill-buffer buffer))))))))))
+    completions))
+
+(defun niwa-collaboration--agent-mailbox (segment)
+  "Return ordinary agent mail in structural SEGMENT, or nil.
+The envelope alone supplies sender and result outcome.  Execution mail is
+handled separately, and incomplete envelopes are never guessed from prose."
+  (save-excursion
+    (goto-char (cadr segment))
+    (when (search-forward "<" (caddr segment) t)
+      (backward-char)
+      (when-let* ((block (niwa-transcript--mailbox-any-block-at-point
+                          (caddr segment)))
+                  (kind (plist-get block :kind))
+                  (open (buffer-substring-no-properties
+                         (plist-get block :open-start) (plist-get block :open-end)))
+                  (type (or (niwa-view--mail-attribute open "type") ""))
+                  ((or (eq kind 'agent-result)
+                       (and (eq kind 'agent-message)
+                            (not (member type '("EXECUTION" "MONITOR" "MONITOR_TERMINAL")))))))
+        (let ((outcome (niwa-view--mail-attribute open "outcome")))
+          (list :type 'agent-notice :sender (plist-get block :id)
+                :mailType (if (eq kind 'agent-result) "result" "message")
+                :outcome (if (member outcome '("completed" "errored" "interrupted"))
+                             outcome "incomplete")
+                :text (niwa-collaboration--truncate-bytes
+                       (string-trim (buffer-substring-no-properties
+                                     (plist-get block :body-start)
+                                     (plist-get block :body-end)))
+                       niwa-collaboration--max-record-text-bytes)))))))
+
+(defun niwa-collaboration--forwarded-execution (segment &optional events)
+  "Return structured background evidence for mailbox SEGMENT, or nil.
+With EVENTS, include nonterminal monitor event previews.
+The structural mailbox parser supplies its bounds; malformed or ordinary
+mailboxes are not guest completion records."
+  (save-excursion
+    (goto-char (cadr segment))
+    (when (search-forward "<" (caddr segment) t)
+      (backward-char)
+      (when-let* ((block (niwa-transcript--mailbox-any-block-at-point
+                          (caddr segment)))
+                  ((eq (plist-get block :kind) 'agent-message))
+                  (open (buffer-substring-no-properties
+                         (plist-get block :open-start)
+                         (plist-get block :open-end)))
+                  (attributes
+                   (condition-case nil
+                       (with-temp-buffer
+                         (insert open "</agent-message>")
+                         (cadr (car (xml-parse-region (point-min) (point-max)))))
+                     (error nil)))
+                  (type (alist-get 'type attributes))
+                  (id (alist-get 'execution_id attributes))
+                  ((not (string-empty-p id))))
+        (let ((description (alist-get 'description attributes)))
+          (cond
+           ((and events (equal type "MONITOR"))
+            (list :type 'monitor-event :execution-id id
+                  :description (or description "monitor")
+                  :text (car (split-string
+                              (string-trim
+                               (buffer-substring-no-properties
+                                (plist-get block :body-start)
+                                (plist-get block :body-end))) "\n"))))
+           ((member type '("EXECUTION" "MONITOR_TERMINAL"))
+            (let ((code (alist-get 'exit_code attributes))
+                  (count (alist-get 'event_count attributes))
+                  (termination (alist-get 'termination attributes))
+                  (outcome (alist-get 'outcome attributes)))
+              (list :type 'execution-breadcrumb :execution-id id
+                    :owner (plist-get block :id)
+                    :command (alist-get 'command attributes)
+                    :facts (list :description description
+                                 :kind (if (equal type "MONITOR_TERMINAL")
+                                           'monitor 'bash)
+                                 :event-count (and count (string-to-number count))
+                                 :termination (and termination (intern termination))
+                                 :outcome (and outcome (intern outcome))
+                                 :output-path (alist-get 'output_path attributes)
+                                 :output-bytes (when-let* ((n (alist-get 'output_bytes attributes)))
+                                                 (string-to-number n))
+                                 :omitted-output-bytes
+                                 (when-let* ((n (alist-get 'omitted_output_bytes attributes)))
+                                   (string-to-number n))
+                                 :execution-output
+                                 (buffer-substring-no-properties
+                                  (plist-get block :body-start) (plist-get block :body-end))
+                                 :exit-code (and code (string-to-number code))))))))))))
+
+(defun niwa-collaboration--forwarded-execution-record (completion &optional own-path)
+  "Project trusted COMPLETION as a linked breadcrumb in transcript OWN-PATH."
+  (let* ((owner (plist-get completion :owner))
+         (id (plist-get completion :execution-id))
+         (facts (plist-get completion :facts))
+         (outcome (plist-get facts :outcome))
+         (termination (plist-get facts :termination))
+         (class (niwa-tool-exec-completion termination outcome))
+         (status (pcase (car class)
+                   ('stopped "cancelled")
+                   ('timed-out "timed-out")
+                   ('completed "completed")
+                   ((or 'ended 'lost) "warning")
+                   (_ "failed")))
+         (command (niwa-collaboration--truncate-bytes
+                   (car (split-string (or (plist-get completion :command)
+                                          (plist-get facts :command) "Bash") "\n")) 200)))
+    (niwa-collaboration--record
+     (concat "forwarded-execution-"
+             (substring (secure-hash 'sha256 (concat owner "\0" id)) 0 24))
+     "execution" :revision 0 :identity-fixed t :status status
+     :verb (cdr class)
+     :execution (list :owner owner :ownPath (or own-path "/root")
+                      :id id :command command
+                      :description (plist-get facts :description)
+                      :kind (if (eq (plist-get facts :kind) 'monitor) "monitor" "bash")
+                      :eventCount (plist-get facts :event-count)
+                      :exitCode (unless (memq termination '(signaled interrupted))
+                                  (plist-get facts :exit-code))))))
+
+(defun niwa-collaboration--request-summary (text)
+  "Return (FAILURE LINE DETAILS REQUEST-ID EXTERNAL) from summary TEXT, or nil.
+FAILURE is the failed-request notice, LINE the host's closing line without
+text properties, and DETAILS its timing tooltip; each may be nil.  Nothing
+else from the saved summary, such as raw error data, is carried.
+REQUEST-ID and EXTERNAL identify an explicitly retryable failure."
+  (when-let* ((summary (niwa-view--request-summary-render-data-from-text text))
+              (value (list (and (eq (plist-get summary :outcome) 'error)
+                                (concat "Assistant request failed. "
+                                        (or (plist-get summary :message)
+                                            "Retry from the host or send a follow-up.")))
+                           (when-let* ((line (niwa-view--request-summary-line
+                                              summary)))
+                             (substring-no-properties line))
+                           (niwa-view--request-summary-details summary)
+                           (plist-get summary :request-id)
+                           (and (plist-get summary :external-history) t)))
+              ((or (car value) (cadr value))))
+    value))
+
+(defun niwa-collaboration--request-summary-key (value)
+  "Return the occurrence key of projected request-summary VALUE.
+A failure keeps its failure-text key so its record identity does not depend
+on the timing footer that follows it."
+  (cond ((car value) (list "failure" (car value)))
+        (value (list "request-summary" (list (nth 1 value) (nth 2 value))))))
+
+(defun niwa-collaboration--request-summary-records (value occurrence)
+  "Return the failure and closing-line records for VALUE at OCCURRENCE.
+The closing line of a failure derives its identity from the failure record,
+which is already unique, so it stays stable with it."
+  (pcase-let* ((`(,failure ,line ,details ,request-id ,external) value)
+               (failed (and failure
+                            (niwa-collaboration--record
+                             (niwa-collaboration--stable-record-id
+                              "failure" failure occurrence)
+                             "assistant" :revision 0 :status "failed"
+                             :text (niwa-collaboration--truncate-bytes
+                                    failure 2000)
+                             :failure-id request-id :retryExternal external))))
+    (delq nil
+          (list failed
+                (and line
+                     (apply #'niwa-collaboration--record
+                            (if failed
+                                (niwa-collaboration--stable-record-id
+                                 "request-summary"
+                                 (concat (plist-get failed :id) "\0" line))
+                              (niwa-collaboration--stable-record-id
+                               "request-summary"
+                               (concat line "\0" (or details ""))
+                               occurrence))
+                            "request-summary" :revision 0 :text line
+                            (and details (list :details details))))))))
+
+(defun niwa-collaboration--canonical-records
+    (data-buffer &optional completion-buffer completions cache own-path)
+  "Return allowlisted records reconstructed from DATA-BUFFER.
+Records inside a shared-item turn carry that item's id, so a viewer can
+filter the transcript to one discussion client-side; user records
+attributed to a collaboration guest carry that guest's name.
+COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
+segments.  CACHE, a `niwa-collaboration--projection-cache' for a live
+transcript, retains each segment's records between calls; a segment is
+reprojected only when its source, the shared context, or a live lookup it
+made has changed.  The result is the same as without CACHE, and its records
+are fresh copies the caller may modify.  OWN-PATH identifies the transcript
+owner; omitted means the root transcript."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (when (and cache (not (equal (niwa-collaboration--projection-context)
+                                   (niwa-collaboration--projection-cache-context
+                                    cache))))
+        (setf (niwa-collaboration--projection-cache-context cache)
+              (niwa-collaboration--projection-context)
+              (niwa-collaboration--projection-cache-tick cache) nil
+              (niwa-collaboration--projection-cache-entries cache)
+              (make-hash-table :test #'equal)))
+      (let* ((tick (buffer-modified-tick))
+             (bounds (cons (point-min) (point-max)))
+             (unchanged
+              (and cache
+                   (eql tick (niwa-collaboration--projection-cache-tick cache))
+                   (equal bounds
+                          (niwa-collaboration--projection-cache-bounds cache))))
+             (entries (and cache (make-hash-table :test #'equal)))
+             (niwa-transcript--tool-block-index (make-hash-table :test #'eq))
+             ;; A malformed attribution leaves records in the main
+             ;; conversation instead of failing.
+             (items (ignore-errors (niwa-shared-conversation-ranges)))
+             (segments (if unchanged
+                           (niwa-collaboration--projection-cache-segments cache)
+                         (if cache
+                             (niwa-transcript-cached-segments
+                              (niwa-collaboration--projection-cache-transcript cache))
+                           (niwa-transcript-segments (point-min) (point-max)))))
+             (following-render-data (make-hash-table :test #'eql))
+             (breadcrumbs (niwa-transcript-audit-buffer-spans
+                           'execution-breadcrumb))
+             (forwarded-executions (make-hash-table :test #'equal))
+             (prior-executions (and completions
+                                    (gethash :prior-executions completions)))
+             (prior-ready (and completions t))
+             records user-starts response-starts live-reasoning
+             ;; Track audit attachment before splitting breadcrumbs out of their
+             ;; source tool.  Deferred summaries never replace either pointer.
+             activity-tool activity-record activity-scope
+             (occurrences (make-hash-table :test #'equal)))
+        (cl-labels
+            ((enter-activity-scope (scope)
+               (unless (equal scope activity-scope)
+                 (setq activity-scope scope
+                       activity-tool nil
+                       activity-record nil)))
+             (add-execution (completion scope &optional role)
+               (enter-activity-scope scope)
+               (when-let* ((owner (plist-get completion :owner))
+                           (id (plist-get completion :execution-id))
+                           ((stringp owner)) ((stringp id))
+                           (record (niwa-collaboration--forwarded-execution-record
+                                    completion own-path))
+                           (key (plist-get record :id))
+                           ((not (gethash key forwarded-executions)))
+                           (_ (progn
+                                (unless prior-ready
+                                  (setq prior-ready t)
+                                  (when-let* ((session (bound-and-true-p niwa--session))
+                                            ;; Agent fetch projects only the
+                                            ;; current child, not its archives.
+                                            ((not (and (stringp buffer-file-name)
+                                                       (string-match-p
+                                                        "/agents/.*\\.chat\\.org\\'"
+                                                        buffer-file-name))))
+                                            ((not (cl-some
+                                                   (lambda (entry)
+                                                     (eq data-buffer
+                                                         (niwa-agent-record-conversation-buffer
+                                                          (cdr entry))))
+                                                   (niwa-session-agent-registry
+                                                    session)))))
+                                    (setq prior-executions
+                                          (niwa-collaboration--prior-execution-ids
+                                           session data-buffer))))
+                                t))
+                           ((not (and prior-executions
+                                      (gethash key prior-executions)))))
+                 (puthash key t forwarded-executions)
+                 (push (niwa-collaboration--scoped
+                        (if role (plist-put record :activity-role role) record)
+                        scope)
+                       records)
+                 ;; A breadcrumb retains ACTIVITY-TOOL as its source owner.
+                 ;; Mailbox callers clear that owner before adding a delivery.
+                 (setq activity-record (car records))))
+             (project-segment (segment render-end compute-value occurrence-key
+                                       compute-records)
+               ;; Return (VALUE . RECORDS) for SEGMENT.  COMPUTE-VALUE reads
+               ;; only buffer text and returns (VALUE FROM . TO), the source
+               ;; range it depends on, with a nil FROM when that range is
+               ;; open-ended.  OCCURRENCE-KEY names repeated identical
+               ;; values; COMPUTE-RECORDS builds records from the value and
+               ;; its occurrence, recording its live lookups.
+               (let* ((key (list (car segment) (cadr segment) (caddr segment)
+                                 render-end))
+                      (old (niwa-collaboration--projection-entry
+                            cache key unchanged))
+                      (computed (unless old (funcall compute-value)))
+                      (value (if old (plist-get old :value) (car computed)))
+                      (occurrence-key (funcall occurrence-key value))
+                      (occurrence (when occurrence-key
+                                    (let ((count (gethash occurrence-key
+                                                          occurrences 0)))
+                                      (puthash occurrence-key (1+ count)
+                                               occurrences)
+                                      count)))
+                      (reuse (and old (eql occurrence
+                                           (plist-get old :occurrence))))
+                      (observed (list nil))
+                      (result (if reuse
+                                  (plist-get old :records)
+                                (let ((niwa-collaboration--observed
+                                       (and cache observed)))
+                                  (funcall compute-records value occurrence))))
+                      (from (if old (plist-get old :from) (cadr computed))))
+                 (when (and entries from)
+                   (puthash key
+                            (list :value value :from from
+                                  :source (if old
+                                              (plist-get old :source)
+                                            (niwa-collaboration--source
+                                             from (cddr computed)))
+                                  :occurrence occurrence :records result
+                                  :live (if reuse (plist-get old :live)
+                                          (car observed)))
+                            entries))
+                 (cons value result))))
+        ;; On reload gptel classifies the hidden render-data block separately
+        ;; from its preceding tool row.  Include it when parsing the row, but
+        ;; leave the raw model-visible result and transcript segments intact.
+        (dolist (segment segments)
+          (when (eq (car segment) 'render-data)
+            (puthash (cadr segment) (caddr segment) following-render-data)))
+        ;; A compacted segment starts with the summary the model received.
+        ;; The segmenter skips that block, so project it here, ahead of the
+        ;; segment's own records.  It is bounded like any record's text.
+        (when-let* ((source (car (niwa-transcript-summary-source
+                                  (niwa-transcript--skip-leading-properties-drawer
+                                   (point-min))
+                                  ;; An owner path marks an agent transcript.
+                                  (and own-path t))))
+                    (text (niwa-transcript-summary-body source))
+                    ((not (string-empty-p text))))
+          (push (niwa-collaboration--scoped
+                 (niwa-collaboration--record
+                  (niwa-collaboration--stable-record-id "compaction" text)
+                  "compaction" :revision 0
+                  :text (niwa-collaboration--truncate-bytes
+                         text niwa-collaboration--max-record-text-bytes))
+                 (niwa-collaboration--scope-at items (car source)))
+                records))
+        (dolist (segment segments)
+          (while (and breadcrumbs (< (plist-get (car breadcrumbs) :start)
+                                     (cadr segment)))
+            (let* ((span (pop breadcrumbs))
+                   (record (plist-get span :record)))
+              (add-execution record
+                             (niwa-collaboration--scope-at
+                              items (plist-get span :start)))))
+          (let* ((scope (niwa-collaboration--scope-at
+                         items (cadr segment)))
+                 (start (cadr segment))
+                 (end (caddr segment))
+                 (in-reasoning (niwa-collaboration--reasoning-context-p
+                                segment live-reasoning))
+                 (type (if (and in-reasoning (not (eq (car segment) 'tool)))
+                           'reasoning
+                         (car segment))))
+            (enter-activity-scope scope)
+            (cond
+             ((eq (car segment) 'reasoning)
+              ;; Structural reasoning is already closed and classified by
+              ;; the parser, including spans on both sides of nested tools.
+              (setq live-reasoning nil))
+             (in-reasoning (setq live-reasoning t))
+             ((and live-reasoning (eq type 'user)
+                   (not (niwa-view--blank-segment-p data-buffer start end)))
+              (setq live-reasoning nil)))
+            (cond
+             ((memq type '(user response reasoning))
+              (setq activity-tool nil)
+              (let* ((userp (eq type 'user))
+                     (kind (pcase type
+                             ('user "user")
+                             ('reasoning "thinking")
+                             (_ "assistant"))))
+                (dolist (record
+                         (cdr (project-segment
+                               (list type start end) nil
+                               (lambda ()
+                                 (cons (pcase type
+                                         ('user
+                                          (niwa-collaboration--clean-user
+                                           segment data-buffer))
+                                         ('reasoning
+                                          (string-trim
+                                           (niwa-view--clean-reasoning-text
+                                            (buffer-substring start end))))
+                                         (_
+                                          (niwa-collaboration--clean-response
+                                           (buffer-substring start end))))
+                                       (cons start end)))
+                               (lambda (text)
+                                 (unless (string-empty-p text) (list kind text)))
+                               (lambda (text occurrence)
+                                 (unless (string-empty-p text)
+                                   (list (niwa-collaboration--record
+                                          (niwa-collaboration--stable-record-id
+                                           kind text occurrence)
+                                          kind
+                                          :revision 0
+                                          :text (niwa-collaboration--truncate-bytes
+                                                 text
+                                                 niwa-collaboration--max-record-text-bytes))))))))
+                  (push (niwa-collaboration--scoped
+                         (copy-sequence record) scope)
+                        records)
+                  (setq activity-record (car records))
+                  (when userp
+                    (push (cons start (car records)) user-starts))
+                  (when (eq type 'response)
+                    (push (cons start (car records)) response-starts)))))
+             ((memq (car segment) '(ignored render-data))
+              (let ((summary (project-segment
+                              segment nil
+                              (lambda ()
+                                (cons (niwa-collaboration--request-summary
+                                       (buffer-substring start end))
+                                      (cons start end)))
+                              #'niwa-collaboration--request-summary-key
+                              #'niwa-collaboration--request-summary-records)))
+                (dolist (record (cdr summary))
+                  ;; The view shows request summaries after the activity they
+                  ;; close, so they neither join nor split it.
+                  (push (niwa-collaboration--scoped
+                         (plist-put (copy-sequence record)
+                                    :activity-role 'transparent)
+                         scope)
+                        records))
+                ;; Substantive ignored text ends source attachment, unlike audit
+                ;; side channels, deferred summaries and tool metadata/glue.
+                (when (and (eq (car segment) 'ignored)
+                           (not (car summary))
+                           (not (niwa-transcript-audit-buffer-only-p start end))
+                           (not (niwa-view--scaffolding-only-p data-buffer start end)))
+                  (setq activity-tool nil))
+                ;; Use the source owner, not the latest projected record: splitting
+                ;; a completion out of a tool cannot hide that tool from an audit.
+                (when-let* (((eq (car segment) 'ignored))
+                            ((niwa-collaboration--activity-separator-p start end))
+                            (previous (or activity-tool activity-record)))
+                  (plist-put previous
+                             (if activity-tool :activity-role :activity-break-after)
+                             (if activity-tool 'boundary t)))))
+             ((eq (car segment) 'mailbox)
+              ;; Even hidden or deduplicated mail is a source boundary: the
+              ;; view cannot merge its following audit into the preceding tool.
+              (setq activity-tool nil)
+              (when-let* ((completion
+                           (car (project-segment
+                                 segment nil
+                                 (lambda ()
+                                   (cons (or (niwa-collaboration--forwarded-execution
+                                              segment t)
+                                             (niwa-collaboration--agent-mailbox segment))
+                                         (cons start end)))
+                                 #'ignore #'ignore))))
+                (cond
+                 ((eq (plist-get completion :type) 'agent-notice)
+                  (let* ((key (list "agent-notice" completion))
+                         (occurrence (gethash key occurrences 0)))
+                    (puthash key (1+ occurrence) occurrences)
+                    (push (niwa-collaboration--scoped
+                           (apply #'niwa-collaboration--record
+                                  (niwa-collaboration--stable-record-id
+                                   "agent-notice" (prin1-to-string completion) occurrence)
+                                  "agent-notice" :revision 0 (cddr completion))
+                           scope) records)
+                    (setq activity-record (car records))))
+                 ((eq (plist-get completion :type) 'monitor-event)
+                    (let* ((text (plist-get completion :text))
+                           (key (list "monitor-event" completion))
+                           (occurrence (gethash key occurrences 0)))
+                      (puthash key (1+ occurrence) occurrences)
+                      (push (niwa-collaboration--scoped
+                             (niwa-collaboration--record
+                              (niwa-collaboration--stable-record-id
+                               "monitor-event" (prin1-to-string completion) occurrence)
+                              "monitor-event" :revision 0
+                              :text (niwa-collaboration--truncate-bytes text 2000)
+                              :description (plist-get completion :description))
+                             scope)
+                            records)
+                      (setq activity-record (car records))))
+                 ;; The transcript's own completion mail renders nothing in
+                 ;; the view; its breadcrumb is the completion line.
+                 (t (add-execution
+                     completion scope
+                     (and (equal (plist-get completion :owner) own-path)
+                          'transparent))))))
+             ((eq (car segment) 'tool)
+              (setq activity-tool nil)
+              (let ((render-end (gethash end following-render-data)))
+                (dolist (record
+                         (cdr (project-segment
+                               segment render-end
+                               (lambda ()
+                                 ;; The parse also reads the enclosing tool
+                                 ;; block; an unclosed one may grow later.
+                                 (let ((block (niwa-view--tool-block-bounds
+                                               start (or render-end end))))
+                                   (cons (buffer-substring-no-properties start end)
+                                         (and block
+                                              (cons (min start (car block))
+                                                    (max (or render-end end)
+                                                         (cdr block)))))))
+                               (lambda (raw) (list "tool" raw))
+                               (lambda (_raw occurrence)
+                                 (niwa-collaboration--tool-segment-records
+                                  data-buffer segment occurrence completion-buffer
+                                  render-end completions)))))
+                  (push (niwa-collaboration--scoped
+                         (copy-sequence record) scope)
+                        records)
+                  (setq activity-tool (or activity-tool (car records))
+                        activity-record (car records))))))))
+        (dolist (span breadcrumbs)
+          (add-execution (plist-get span :record)
+                         (niwa-collaboration--scope-at
+                          items (plist-get span :start))))
+        (let ((background
+               (niwa-collaboration--attribute-guest-prompts (nreverse user-starts))))
+          (setq records (cl-delete-if (lambda (record) (memq record background)) records)))
+        (niwa-collaboration--attribute-fork-points (nreverse response-starts))
+        (when cache
+          ;; Projection does not edit the transcript; if anything did, the
+          ;; retained sources describe no single state, so start over.
+          (let ((current (eql tick (buffer-modified-tick))))
+            (setf (niwa-collaboration--projection-cache-tick cache)
+                  (and current tick)
+                  (niwa-collaboration--projection-cache-bounds cache) bounds
+                  (niwa-collaboration--projection-cache-segments cache) segments
+                  (niwa-collaboration--projection-cache-entries cache)
+                  (if current entries (make-hash-table :test #'equal)))))
+        (niwa-collaboration--activity-records (nreverse records)))))))
+
+(defun niwa-collaboration--activity-separator-p (start end)
+  "Return non-nil when START..END holds only audits and one is displayed.
+Execution breadcrumbs are activity members, so they do not separate
+activity."
+  (and (niwa-transcript-audit-buffer-only-p start end)
+       (cl-some (lambda (span)
+                  (let ((record (plist-get span :record)))
+                    (and (not (eq (plist-get record :type) 'execution-breadcrumb))
+                         (niwa-view-audit-displayed-p record))))
+                (niwa-transcript-audit-buffer-spans nil start end))))
+
+(defun niwa-collaboration--activity-entries (record)
+  "Return the activity-group entries for projected RECORD.
+A pending call without a presentation yet runs as a groupable tool.  Host
+tags from the segment pass decide merged audits, separators and
+transparent rows."
+  (let* ((kind (plist-get record :kind))
+         (role (plist-get record :activity-role))
+         (entry
+          (pcase kind
+            ("tool"
+             (let ((presentation (plist-get record :presentation)))
+               (list :role (cond (role)
+                                 ((plist-get record :artifact) 'boundary)
+                                 ((null presentation)
+                                  (if (plist-get record :pending) 'member 'boundary))
+                                 ((eq t (plist-get presentation :groupable)) 'member)
+                                 (t 'boundary))
+                     :kind 'tool
+                     :name (or (plist-get presentation :name) (plist-get record :name))
+                     :status (pcase (plist-get record :status)
+                               ((or "failed" "denied") 'failed)
+                               ("running" 'running)
+                               ("warning" 'warning)
+                               (_ 'completed)))))
+            ("agent-notice"
+             (list :role (if (equal (plist-get record :mailType) "message")
+                             'member 'boundary)
+                   :kind 'message))
+            ("execution"
+             (let ((facts (plist-get record :execution)))
+               (if (equal (plist-get facts :owner) (plist-get facts :ownPath))
+                   (list :role (or role 'member) :kind 'completion
+                         :completion
+                         (cons (list (plist-get facts :id) (plist-get facts :owner))
+                               (plist-get record :verb)))
+                 (list :role 'boundary))))
+            (_ (list :role (or role 'boundary))))))
+    (cons (nconc entry (list :id (plist-get record :id) :record record
+                             :scope (plist-get record :item)))
+          (and (plist-get record :activity-break-after)
+               (list (list :role 'boundary))))))
+
+(defun niwa-collaboration--activity-records (records)
+  "Annotate the activity groups among RECORDS with their summaries.
+Keep each original record and ID independently addressable; the browser
+owns only grouping disclosures.  `niwa-activity-group-partition' decides
+the groups, as it does for the Emacs view: non-tool entries before a run's
+first tool retain their standalone presentation."
+  (dolist (record records)
+    (when (plist-member record :activity)
+      (setf (plist-get record :activity) nil)))
+  (dolist (item (niwa-activity-group-partition
+                 (mapcan #'niwa-collaboration--activity-entries records)
+                 (max 0 niwa-view-tool-group-collapse-threshold)))
+    (when (plist-get item :group)
+      (let ((activity
+             (list :id (car (plist-get item :ids))
+                   :summary (niwa-collaboration--truncate-bytes
+                             (substring-no-properties (plist-get item :summary))
+                             600)
+                   :running (plist-get item :running)
+                   :status (symbol-name (plist-get item :status)))))
+        ;; The browser shows this total only when its label cuts the
+        ;; summary's own failure counts off.
+        (when (> (plist-get item :failed) 0)
+          (setq activity (nconc activity (list :failed (plist-get item :failed)))))
+        (dolist (entry (plist-get item :entries))
+          (let ((record (plist-get entry :record)))
+            (if (plist-member record :activity)
+                (setf (plist-get record :activity) activity)
+              (nconc record (list :activity activity))))))))
+  records)
+
+(defun niwa-collaboration--tool-records (records)
+  "Return the tool records in RECORDS, preserving their order."
+  (let (tools)
+    (dolist (record records)
+      (when (and (equal (plist-get record :kind) "tool")
+                 (not (plist-get record :artifact-child)))
+        (push record tools)))
+    (nreverse tools)))
+
+(defun niwa-collaboration--tool-call-key (info)
+  "Return the structural matching key for a gptel tool-call INFO plist.
+Without an explicit ID, compare normalized args with `equal'; gptel hook
+plists omit optional nils that pipeline positional conversion inserts."
+  (or (and (plist-get info :id)
+           (format "id:%s" (plist-get info :id)))
+      (and (plist-get info :call-id)
+           (format "id:%s" (plist-get info :call-id)))
+      (and (plist-get info :tool-call-id)
+           (format "id:%s" (plist-get info :tool-call-id)))
+      (and (plist-get info :tool_call_id)
+           (format "id:%s" (plist-get info :tool_call_id)))
+      (list 'call (plist-get info :name)
+            (niwa-tool-args-key (plist-get info :args)))))
+
+(defun niwa-collaboration--tool-result-fields (result)
+  "Return status, bounded RESULT, and truncation for tool RESULT."
+  (let* ((result (if (stringp result) result (format "%s" (or result ""))))
+         (result (niwa--trim-tool-result result))
+         (status (if (string-match-p
+                      niwa-collaboration--tool-error-regexp result)
+                     "failed"
+                   "completed"))
+         (bounded (niwa-collaboration--truncate-bytes
+                   result niwa-collaboration--max-tool-result-bytes)))
+    (list :status status
+          :result bounded
+          :truncated (and (string-suffix-p "\n[truncated]" bounded) t))))
+
+(defun niwa-collaboration--pending-tool-match (info pending)
+  "Return non-nil when INFO matches pending tool record PENDING."
+  (and (equal (plist-get pending :tool-use-id) (plist-get info :tool-use-id))
+       (equal (plist-get pending :call-key)
+              (niwa-collaboration--tool-call-key info))
+       (equal (plist-get pending :name)
+              (format "%s" (plist-get info :name)))))
+
+(defun niwa-collaboration--suppressed-tool-landed-p (data-buffer entry)
+  "Return non-nil when a hidden canonical poll has settled ENTRY.
+Only consider tool segments inserted after ENTRY began, and require the same
+call key; a previous identical poll must not consume a later pending call."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (cl-some
+       (lambda (segment)
+         (when (and (eq (car segment) 'tool)
+                    (>= (cadr segment)
+                        (or (plist-get entry :baseline-buffer-end)
+                            (point-min))))
+           (let ((parsed (niwa-view--tool-call-parse
+                          data-buffer (cadr segment) (caddr segment))))
+             (and parsed
+                  (equal (plist-get entry :call-key)
+                         (niwa-collaboration--tool-call-key parsed))
+                  (null (niwa-collaboration--tool-record
+                         parsed
+                         (buffer-substring-no-properties
+                          (cadr segment) (caddr segment))))))))
+       (niwa-transcript-segments (point-min) (point-max))))))
+
+(defun niwa-collaboration--room-canonical-records (room)
+  "Return the canonical records of ROOM's live transcript.
+ROOM retains the per-segment projection between calls, so a publish while a
+reply streams reprojects only the segments that changed."
+  (niwa-collaboration--canonical-records
+   (plist-get room :data-buffer) nil nil
+   (or (plist-get room :projection-cache)
+       (let ((cache (niwa-collaboration--projection-cache-create)))
+         ;; A room plist is never empty, so this mutates it in place.
+         (plist-put room :projection-cache cache)
+         cache))))
+
+(defun niwa-collaboration--refresh-pipeline-presentation (entry)
+  "Refresh ENTRY's dirty invocation tree at a projection boundary."
+  (when (plist-get entry :pipeline-dirty)
+    (let ((calls (plist-get entry :pipeline-calls))
+          (children-by-parent (make-hash-table :test #'equal)))
+      (dolist (node calls)
+        (push node (gethash (plist-get node :parent-tool-use-id) children-by-parent)))
+      (cl-labels
+          ((tree (node depth)
+             (when (< depth 16)
+               (let* ((children
+                       (delq nil (mapcar
+                                  (lambda (child) (tree child (1+ depth)))
+                                  (reverse (gethash (plist-get node :tool-use-id)
+                                                    children-by-parent)))))
+                      (facts (list :status (plist-get node :status)
+                                   :permission-approvals (plist-get node :permission-approvals))))
+                 (when children
+                   (setq facts
+                         (append facts
+                                 (list :kind 'ptc :calls children
+                                       :live-p (eq (plist-get node :status) 'running)
+                                       :outcome (pcase (plist-get node :status)
+                                                  ('success 'completed)
+                                                  ('cancelled 'interrupted)
+                                                  (_ 'tool-error))
+                                       :completed-count
+                                       (cl-count-if
+                                        (lambda (child)
+                                          (not (eq (plist-get child :status) 'running)))
+                                        children)))))
+                 (list :id (plist-get node :tool-use-id) :tool (plist-get node :name)
+                       :args (plist-get node :args) :result ""
+                       :status (plist-get node :status) :render-data facts)))))
+        (let* ((root (tree (car calls) 0))
+               (presentation
+                (niwa-collaboration-tool-presentation
+                 (list :name (plist-get root :tool) :args (plist-get root :args)
+                       :result "" :render-data (plist-get root :render-data)))))
+          (setf (plist-get entry :presentation) presentation
+                (plist-get entry :status) (plist-get presentation :status)
+                (plist-get entry :pipeline-dirty) nil))))))
+
+(defun niwa-collaboration--project-records (room)
+  "Return the current semantic projection for ROOM.
+
+Pending tool records are a live-only projection until their settled
+canonical transcript record appears.  A pending record's identity is copied
+onto that canonical record, so a viewer updates one card from running through
+completion instead of seeing a duplicate tool card."
+  (let* ((canonical (niwa-collaboration--room-canonical-records room))
+         (retry-id (niwa-gptel-retry-available-p
+                    (plist-get room :data-buffer)))
+         (pending (plist-get room :pending-tools))
+         (canonical-tools (niwa-collaboration--tool-records canonical))
+         (claimed nil)
+         (remaining nil))
+    (when retry-id
+      (dolist (record canonical)
+        (when (equal retry-id (plist-get record :failure-id))
+          (plist-put record :retryId retry-id))))
+    (dolist (entry pending)
+      (when (plist-get entry :pipeline-dirty)
+        (with-current-buffer (plist-get room :data-buffer)
+          (niwa-collaboration--refresh-pipeline-presentation entry)))
+      (let* ((status (plist-get entry :status))
+             (baseline (min (length canonical-tools)
+                            (max 0 (or (plist-get entry :baseline-tool-count)
+                                       0))))
+             (candidates (nthcdr baseline canonical-tools))
+             exact candidate)
+        ;; Bound invocations require the exact canonical tool-use ID.
+        ;; For ID-less hooks, prefer the settled twin, then the first
+        ;; unclaimed same-name record at or after this entry's baseline:
+        ;; the canonical transcript is authoritative once a record lands
+        ;; there, and an unmatched pending would otherwise duplicate it
+        ;; forever -- as a stuck "running" card when the settlement info
+        ;; missed the pending entry, or as a completed twin when the
+        ;; transcript-formatted result text diverges from the raw result.
+        (dolist (record candidates)
+          (unless (memq record claimed)
+            (when (if-let* ((id (plist-get entry :tool-use-id)))
+                      (equal (plist-get record :id) (format "tool-%s" id))
+                    (equal (plist-get record :name) (plist-get entry :name)))
+              (unless candidate (setq candidate record))
+              (when (and (null exact)
+                         (equal (plist-get record :status) status)
+                         (equal (plist-get record :result)
+                                (plist-get entry :result)))
+                (setq exact record)))))
+        (setq candidate (or exact candidate))
+        (if candidate
+            (let ((index (cl-position candidate canonical :test #'eq)))
+              (push candidate claimed)
+              (setf (nth index canonical)
+                    (plist-put
+                     (plist-put (plist-put candidate :canonical-id
+                                           (plist-get candidate :id))
+                                :id (plist-get entry :id))
+                     :identity-fixed t)))
+          (unless (and (not (equal status "running"))
+                       (niwa-collaboration--suppressed-tool-landed-p
+                        (plist-get room :data-buffer) entry))
+            (push entry remaining)))))
+    (setq remaining (nreverse remaining))
+    ;; A room plist is never empty, so this mutates in place and the
+    ;; room registry keeps pointing at the same object.
+    (setq room (plist-put room :pending-tools remaining))
+    (let ((pending-at nil)
+          (length (length canonical))
+          output)
+      (dolist (entry remaining)
+        (let* ((baseline (min length
+                              (max 0 (or (plist-get entry
+                                                    :baseline-record-count)
+                                         length))))
+               (cell (assq baseline pending-at)))
+          (if cell
+              (setcdr cell (append (cdr cell) (list entry)))
+            (push (cons baseline (list entry)) pending-at))))
+      (dotimes (index (1+ length))
+        (dolist (entry (cdr (assq index pending-at)))
+          (push (copy-sequence entry) output))
+        (when (< index length)
+          (push (pop canonical) output)))
+      (niwa-collaboration--activity-records (nreverse output)))))
+
+
+(provide 'niwa-collaboration-projection)
+;;; niwa-collaboration-projection.el ends here

@@ -1,7 +1,7 @@
 # System reminders
 
 System reminders are model-visible guidance injected into the request
-stream as `<system-reminder>` blocks. `mevedel-reminders.el` owns the
+stream as `<system-reminder>` blocks. `niwa-reminders.el` owns the
 reminder struct, firing policy, session and agent scoped reminder
 lists, the staging seam other modules deliver through, request-time
 injection, and the hidden injection record the view renders. The base
@@ -63,19 +63,19 @@ payload that is actually dispatched.
 
 ### Staging seams
 
-- `mevedel-reminders-stage-entry` appends one typed entry (plus an
+- `niwa-reminders-stage-entry` appends one typed entry (plus an
   optional deferred commit) to the request's fsm info. Callable from
   any prompt transform and from WAIT-time handlers that run before the
   final provider dispatch: mentions (depth -90) and skills-input (-89) stage before
   the reminders transform (-80) collects session reminders;
   auto-compaction (-70) and the steering WAIT handler stage after.
-- `mevedel-reminders-stage-commit` defers a commit thunk alone, for
+- `niwa-reminders-stage-commit` defers a commit thunk alone, for
   consumable state whose payload rides the prompt text or the staged
   entries of the same request.
-- `mevedel-reminders-queue-turn-event` queues an owner-bound,
+- `niwa-reminders-queue-turn-event` queues an owner-bound,
   key-coalesced observation for the current turn, delivered at the
   next WAIT after the tool results.
-- `mevedel-session-enqueue-pending-reminder` appends to the session's
+- `niwa-session-enqueue-pending-reminder` appends to the session's
   transient pending FIFO, consumed by the `pending-events` reminder on
   the next request. Survives a request boundary but not a restart.
 
@@ -138,10 +138,10 @@ markers or recording failures prevent
 committing delivery; injection failures retain pending state. A Claude record
 states delivered guidance, not that a gptel payload exists; mail delivered in
 the same batch follows it as ordinary mailbox blocks. The Claude wire
-correlation marker (`<!-- mevedel-delivery:... -->`) never enters the
+correlation marker (`<!-- niwa-delivery:... -->`) never enters the
 transcript, so the view, excerpts and engine transfer never see it.
 
-The encoded record stays out of provider text. `mevedel-history.el` decodes it
+The encoded record stays out of provider text. `niwa-history.el` decodes it
 as a separate message during prompt preparation, including fresh-process
 restore. Compaction evidence includes its instruction bodies, and local token
 estimates count the decoded guidance instead of encoded metadata. The record
@@ -157,7 +157,7 @@ per-entry bodies. Inline `<system-reminder>` text (fork disclosures and the btw 
 ## Agent requests
 
 Agent invocations carry their own reminder roster (configured reminders and
-max-turns warning), cloned at spawn. `mevedel-reminders--agent-transform` runs in every agent
+max-turns warning), cloned at spawn. `niwa-reminders--agent-transform` runs in every agent
 request's transform list and collects that roster with the invocation
 as firing context; delivery, commits, and the injection record ride
 the shared WAIT injector. The max-turns warning is instead evaluated at
@@ -189,7 +189,7 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
   full-auto entry/exit reminders.
 - **Fork provenance:** the sparse (interval 20) `fork-provenance`
   reminder regenerates a fork's provenance from durable session slots
-  via `mevedel-session-fork-provenance-body`: source session and, for
+  via `niwa-session-fork-provenance-body`: source session and, for
   worktree forks, worktree directory, branch, and base commit. The
   one-time worktree restore report (restored count, unrestored files,
   external shared paths, dropped state) is enqueued on the pending
@@ -199,7 +199,7 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
 - **Plan-file reference:** the one-shot `plan-reference` reminder
   surfaces bounded contents of the approved plan on later turns when
   it may still be relevant. Main-session compaction resets its fired
-  mark (`mevedel-reminders-rearm-plan-reference`), because the summarized
+  mark (`niwa-reminders-rearm-plan-reference`), because the summarized
   prefix may have carried both its earlier delivery and the
   implementation prompt's full plan text; the reference then re-fires
   once with the plan address. The trigger suppresses it when an active Goal
@@ -305,18 +305,18 @@ or restore. If all selected sections are absent, all are delivered again. Explic
   snapshots and deltas, each regenerated from session or invocation
   state.
 - **Hook outcome:** hooks record blocking outcomes through
-  `mevedel-hooks-record-session-reminder` as turn events; additional
+  `niwa-hooks-record-session-reminder` as turn events; additional
   hook context still rides the prompt text as `<hook-context>`.
 
 ### What the edited-file reminder watches
 
 The `edited-file` reminder reports every file in the workspace file cache
-whose content moved outside mevedel's tools. Two boundaries keep that from
+whose content moved outside niwa's tools. Two boundaries keep that from
 turning into per-turn noise and per-turn cost.
 
-mevedel's own session bookkeeping never enters the cache. A session
+niwa's own session bookkeeping never enters the cache. A session
 directory holds append-only logs, transcript segments, and sidecars that
-mevedel rewrites every turn, so caching one would report mevedel's own
+niwa rewrites every turn, so caching one would report niwa's own
 writes back as external edits for the rest of the session, and let a
 multi-megabyte telemetry log evict every cache entry describing real work.
 Sibling sessions under the same sessions root are excluded too — reading a
@@ -327,13 +327,13 @@ deliverables, and an outside edit to one is worth reporting. The interaction
 record is still written for an excluded path.
 
 Content is bounded twice. A file the filesystem reports as larger than
-`mevedel-file-cache-max-file-bytes` is cached as a fingerprint — timestamps
+`niwa-file-cache-max-file-bytes` is cached as a fingerprint — timestamps
 and reported size, no content — so it is still seen to move but claims none
-of the `mevedel-file-cache-max-bytes` budget. Content past
-`mevedel-reminders-edited-file-max-diff-bytes` is not diffed at all:
-`mevedel-generate-diff` spools both sides to temporary files and forks
+of the `niwa-file-cache-max-bytes` budget. Content past
+`niwa-reminders-edited-file-max-diff-bytes` is not diffed at all:
+`niwa-generate-diff` spools both sides to temporary files and forks
 `diff`, which is not worth paying every turn for the
-`mevedel-reminders-edited-file-max-diff-lines` lines that survive. Both cases
+`niwa-reminders-edited-file-max-diff-lines` lines that survive. Both cases
 report the change and its size and tell the model to re-read the file.
 
 The diffs are prepared before the request is dispatched: the provider-wait
@@ -359,11 +359,11 @@ as part of the mention's staged entry.
 ### Edit diagnostics
 
 The edit-diagnostics state machine is its own owner,
-`mevedel-edit-diagnostics.el`: the patch tool drives it, and the
+`niwa-edit-diagnostics.el`: the patch tool drives it, and the
 reminder module only delivers what it queues through the generic
 turn-event channel. Diagnostics are observed only after a successful
 `ApplyPatch`. Before the first edit of a visited file in a request,
-mevedel captures that file's current Flymake and Flycheck diagnostics
+niwa captures that file's current Flymake and Flycheck diagnostics
 as its baseline. After the edit, an unmodified stale buffer is safely
 reverted, active checkers are started, and the tool callback waits on
 Flymake report callbacks and Flycheck's completion hook, with a fixed
@@ -383,6 +383,6 @@ omitted count. Telemetry records counts and outcomes, never diagnostic
 text or file paths.
 
 Default session reminders are installed idempotently through
-`mevedel-reminders-install-defaults`. Lifecycle events use the session
+`niwa-reminders-install-defaults`. Lifecycle events use the session
 pending-reminder FIFO and `pending-events`; observations use the
 owner-bound turn queue.

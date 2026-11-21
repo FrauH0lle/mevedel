@@ -1,0 +1,632 @@
+;;; test-niwa-memory-list.el -- Memory proposal cockpit -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Exercise persisted proposals through the real table and decision commands.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'niwa-memory-list)
+(require 'niwa-memory-notes)
+(require 'niwa-memory-scope)
+(require 'niwa-models)
+(require 'niwa-workspace-identity)
+(require 'niwa-memory-list-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name)) "niwa-memory-list-test-support"))
+(require 'niwa-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "niwa-report-test-support"))
+(require 'niwa-menu)
+(require 'niwa-skills-ui)
+(require 'gptel-openai)
+(require 'niwa-view)
+(require 'niwa-system)
+
+(niwa-deftest niwa-memory-list--finished/attribution ()
+  ,test
+  (test)
+  :doc "both terminal failures retain the originating workspace after its buffer dies"
+  (let* ((workspace (niwa-workspace--create :root "/tmp/origin project/"))
+         (origin (generate-new-buffer " *memory-origin*"))
+         messages)
+    (kill-buffer origin)
+    (with-temp-buffer
+      (setq-local niwa--workspace (niwa-workspace--create :root "/tmp/other/"))
+      (niwa-test--with-captured-messages messages
+        (niwa-memory-list--finished workspace '(:outcome failed :error "Invalid bundle"))
+        (niwa-memory-list--finished workspace '(:outcome restart-required :error "Retry review"))))
+    (should (= 2 (length (split-string messages "\n" t))))
+    (dolist (text (split-string messages "\n" t))
+      (should (string-prefix-p "niwa [/tmp/origin project/]: " text)))))
+
+(niwa-deftest niwa-memory-list--terminal-p
+    (:doc "decided and completed rows are terminal; undecided and unreadable rows are not")
+  (should (equal ,expected (and (niwa-memory-list--terminal-p (list :status ,status)) t)))
+  (status expected)
+  'applied t 'rejected t 'reversed t 'completed t
+  'pending nil 'stale nil 'unavailable nil)
+
+(niwa-deftest niwa-memory-list--details
+    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "memory-note-report-" t))))
+             (workspace (niwa-workspace--create :root root))
+             (context (list :workspace workspace))
+             (memory (file-name-concat root "memory"))
+             (shared (file-name-concat root ".niwa" "shared"))
+             (niwa-memory-dirs (list memory))
+             (niwa-journal-cleanup--inhibit-scheduling t)
+             claim accepted pass)
+     :quiet t
+     :after-each ((when claim (niwa-journal-claim-settle claim 'cancelled ""))
+                  (delete-directory root t)))
+  (progn
+    (niwa-workspace-identity-ensure root)
+    (make-directory memory t)
+    (write-region "" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (make-directory (file-name-concat shared "empty") t)
+    (dolist (name '("note.md" "attachment.txt"))
+      (write-region "Temporary material.\n" nil (file-name-concat shared name) nil 'silent))
+    (dolist (name '("note.md" "attachment.txt" "empty"))
+      (set-file-times (file-name-concat shared name) (seconds-to-time (- (float-time) (* 15 86400)))))
+    (let* ((scope (niwa-memory-scope-capture workspace))
+           (root-id (caar (plist-get scope :roots)))
+           (notes (niwa-memory-notes-capture workspace nil)))
+      (should (= 1 (plist-get notes :notes)))
+      (push (plist-get notes :root) (plist-get scope :roots))
+      (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180))
+      (let* ((prepared (niwa-memory-store-prepare workspace claim scope nil ""))
+             (reply (format (concat "## Promote\n````proposal\nroot: %S\nfile: \"guide.md\"\n"
+                                    "type: \"project\"\ntitle: \"Guide\"\nhook: \"Context\"\n"
+                                    "reason: \"Qualifying guide\"\nevidence: []\n---\nDurable guide.\n````\n"
+                                    "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
+                                    "## No action\n- none") root-id)))
+        (setq accepted (niwa-memory-store-accept workspace prepared reply nil "test:model" nil
+                                                   '("work://shared/note.md"))
+              pass (plist-get prepared :id))))
+    (cl-labels ((report (proposal)
+                  (niwa-memory-list--details
+                   (list :kind 'proposal :pass pass :id (plist-get proposal :id) :status 'pending) context))
+                (decision-text (proposal)
+                  (let* ((details (report proposal))
+                         (section (seq-find (lambda (section) (eq 'decision (plist-get section :id)))
+                                            (plist-get details :sections))))
+                    (niwa-report-test-text (list :title "Decision" :sections (list section))))))
+      ,test))
+  (test)
+  :doc "internal note disposal omits model Reason from the rendered report but retains current and decision diagnostics"
+  (let* ((proposal (seq-find (lambda (proposal) (plist-get proposal :note)) (plist-get accepted :proposals)))
+         (text (decision-text proposal)))
+    (should proposal)
+    (should-not (plist-member proposal :reason))
+    (should-not (plist-member proposal :disposition))
+    (should-not (string-search "Reason" text))
+    (should-not (string-search "nil" text))
+    (should (string-search "Current check" text))
+    (should (string-search "Ready to apply" text))
+    (should (string-search "Pending" text))
+    (niwa-memory-decision-reject workspace pass (plist-get proposal :id) :reason "Manual refusal")
+    (should (string-search "Manual refusal" (decision-text proposal))))
+  :doc "ordinary memory and generated attachment and directory housekeeping retain their genuine rendered reasons"
+  (should (= 4 (length (plist-get accepted :proposals))))
+  (dolist (proposal (plist-get accepted :proposals))
+    (unless (plist-get proposal :note)
+      (should (stringp (plist-get proposal :reason)))
+      (let ((text (decision-text proposal)))
+        (should (string-search "Reason" text))
+        (should (string-search (plist-get proposal :reason) text))
+        (should (string-search "Current check" text))
+        (should (string-search "Pending" text))))))
+
+(niwa-deftest niwa-memory-list-open
+    (:vars* ((root (make-temp-file "niwa-memory-cockpit-" t))
+             (memory (file-name-concat root "memory"))
+             (workspace (niwa-workspace--create :root root :type 'project))
+             (session (niwa-session-create "memory-test" workspace))
+             (data (generate-new-buffer " *memory-test-data*"))
+             (view (generate-new-buffer " *memory-test-view*"))
+             (niwa-memory-dirs (list memory))
+             (niwa-memory-decision--inhibit-recovery nil) context claim id)
+     :quiet t
+     :after-each ((when claim (niwa-journal-claim-settle claim 'cancelled ""))
+                  (when-let* ((buffer (get-buffer "*niwa memory*"))) (kill-buffer buffer))
+                  (when (buffer-live-p view) (kill-buffer view))
+                  (when (buffer-live-p data) (kill-buffer data))
+                  (niwa-memory-decision-stop-recovery)
+                  (delete-directory root t)))
+  (progn
+    (make-directory memory)
+    (write-region "Original topic.\n" nil (file-name-concat memory "topic.md") nil 'silent)
+    (write-region "- [Topic](topic.md) - Original\n" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (niwa-workspace-identity-ensure root)
+    (with-current-buffer data
+      (setq-local niwa--session session default-directory (file-name-as-directory root)))
+    (niwa-view--setup view data)
+    (with-current-buffer view (setq context (niwa-cockpit-current-context)))
+    (let* ((scope (niwa-memory-scope-capture workspace))
+           (root-id (caar (plist-get scope :roots)))
+           (_ (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180)))
+           (prepared (niwa-memory-store-prepare workspace claim scope nil ""))
+           (reply (format (concat "## Promote\n- none\n## Update\n```proposal\nroot: %S\nfile: \"topic.md\"\n"
+                                  "type: \"project\"\ntitle: \"Topic\"\nhook: \"Current\"\nreason: \"New evidence\"\nevidence: []\n"
+                                  "---\nUpdated topic.\n```\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none") root-id))
+           (accepted (niwa-memory-store-accept workspace prepared reply nil "test:model" nil)))
+      (setq id (plist-get (car (plist-get accepted :proposals)) :id))
+      (niwa-memory-store-publish workspace (plist-get prepared :id)))
+    (cl-labels ((await-display ()
+                  ;; Recovery may correctly wait on a running pass. Display
+                  ;; readiness must not depend on that owner's completion.
+                  (with-timeout (15 (ert-fail "Committed memory display did not become ready"))
+                    (while (or niwa-memory-list--job (not niwa-memory-list--snapshot))
+                      (accept-process-output nil .01)))
+                  (should-not niwa-memory-list--error))
+                (open-for-inspection ()
+                  ;; Inspection needs rows; commands must retain native
+                  ;; nonblocking open so their owners can finish or cancel.
+                  (let ((buffer (niwa-memory-list-open context)))
+                    (niwa-test-memory-list-await buffer)
+                    ;; Without earlier counts the table opens on Memories and
+                    ;; only signals candidates; these cases inspect proposals.
+                    (with-current-buffer buffer (niwa-memory-list-candidates))
+                    buffer)))
+      ,test))
+  (test)
+  :doc "the main cockpit reports cached and refreshed pending counts without disturbing a draft"
+  (let ((draft "> quoted\nsecond line"))
+    (with-current-buffer view (niwa-view-test--insert-composer-draft draft 4))
+    (cl-letf (((symbol-function 'transient-setup) #'ignore))
+      (with-current-buffer view (niwa-menu-open 'top)))
+    (niwa-memory-list--collect context)
+    (should (= 1 (plist-get (niwa-workspace-memory-observation workspace) :pending)))
+    (with-current-buffer view
+      (should (string-search "1 pending" (niwa-menu--memory-description))))
+    (niwa-memory-decision-reject workspace (plist-get (car (niwa-memory-list--collect context)) :pass) id)
+    (should (= 1 (plist-get (niwa-workspace-memory-observation workspace) :pending)))
+    (setf (plist-get (niwa-workspace-memory-observation workspace) :at) 0)
+    (with-current-buffer view
+      (should (string-search "cached" (niwa-menu--memory-description))))
+    (niwa-memory-list--collect context)
+    (should (= 0 (plist-get (niwa-workspace-memory-observation workspace) :pending)))
+    (with-current-buffer view
+      (should-not (string-search "1 recovery" (niwa-menu--memory-description)))
+      (should (equal draft (niwa-view-composer-draft-text)))
+      (should (= 4 (niwa-view-test--composer-point-offset)))))
+  :doc "shows captured evidence and applies a proposal without disturbing a composer draft"
+  (let ((draft "> quoted\nsecond line"))
+    (with-current-buffer view (niwa-view-test--insert-composer-draft draft 4))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
+      (should (derived-mode-p 'tabulated-list-mode))
+      (niwa-cockpit-goto-id id)
+      (should (eq 'pending (plist-get (niwa-cockpit-surface-selected) :status)))
+		     (save-window-excursion
+		       (unwind-protect
+			   (progn
+			     (niwa-cockpit-surface-details)
+			     (with-current-buffer "*niwa memory proposal*"
+			       (should (string-search "Updated topic." (buffer-string)))
+			       (should-not (string-search "Original topic." (buffer-string)))
+			       (niwa-report-select-section '(change . "topic.md"))
+			       (should (string-search "Original topic." (buffer-string)))
+			       (should (string-search "Updated topic." (buffer-string)))
+			       (search-forward "+Updated topic.")
+			       (should (eq 'diff-added (get-text-property (1- (point)) 'face)))
+			       (niwa-report-select-section '(change . "MEMORY.md"))
+			       (search-forward "+- [Topic](topic.md) - Current")
+			       (should (eq 'diff-added (get-text-property (1- (point)) 'face)))
+			       (niwa-report-select-section 'decision)
+			       (should (string-search "New evidence" (buffer-string)))))
+			 (when (get-buffer "*niwa memory proposal*")
+			   (kill-buffer "*niwa memory proposal*"))))
+      (niwa-memory-list-accept)
+      (niwa-test-memory-list-await)
+      (should-not (niwa-cockpit-surface-items))
+      (should (eq 'candidates niwa-memory-list--view))
+      (niwa-memory-list-history)
+      (niwa-cockpit-goto-id id)
+      (should (eq 'applied (plist-get (niwa-cockpit-surface-selected) :status)))
+      (let* ((details (niwa-memory-list--details (niwa-cockpit-surface-selected) context))
+             (decision (car (plist-get details :sections))))
+        (should-not (string-search "Current check" (plist-get decision :body))))
+      (niwa-memory-list-reverse)
+      (niwa-test-memory-list-await)
+      (should (eq 'reversed (plist-get (niwa-cockpit-surface-selected) :status)))
+      (niwa-cockpit-surface-refresh))
+    (with-current-buffer view
+      (should (equal draft (niwa-view-composer-draft-text)))
+      (should (= 4 (niwa-view-test--composer-point-offset)))))
+  :doc "accept all composes independent reviews, retries stale candidates and preserves the draft"
+  (let* ((index (file-name-concat memory "MEMORY.md"))
+         (first (car (niwa-memory-list--collect context)))
+         (scope (niwa-memory-scope-capture workspace))
+         (root-id (caar (plist-get scope :roots)))
+         (draft "> quoted\nsecond line"))
+    (write-region "- [Topic](topic.md) - Conflicting edit\n" nil index nil 'silent)
+    (should (eq 'stale (plist-get (niwa-memory-decision-apply workspace (plist-get first :pass) id) :status)))
+    (write-region "# Manual notes\n- [Topic](topic.md) - Original\n" nil index nil 'silent)
+    (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180))
+    (let* ((prepared (niwa-memory-store-prepare workspace claim scope nil ""))
+           (accepted (niwa-memory-store-accept-proposals
+                      workspace prepared
+                      (list :proposals (list (list :action 'promote :root root-id :file "new.md"
+                                                  :type "project" :title "New" :hook "Context"
+                                                  :reason "New evidence" :body "New guide.")))
+                      nil "test:model" nil))
+           (new-id (plist-get (car (plist-get accepted :proposals)) :id)))
+      (niwa-memory-store-publish workspace (plist-get prepared :id))
+      (with-current-buffer view (niwa-view-test--insert-composer-draft draft 4))
+      (with-current-buffer (save-window-excursion (open-for-inspection))
+        (should (= 2 (length (niwa-cockpit-surface-items))))
+        (niwa-memory-list-accept-all)
+        (niwa-test-memory-list-await)
+        (should-not (niwa-cockpit-surface-items))
+        (niwa-memory-list-history)
+        (dolist (proposal-id (list id new-id))
+          (niwa-cockpit-goto-id proposal-id)
+          (should (eq 'applied (plist-get (niwa-cockpit-surface-selected) :status)))))
+      (should (equal "# Manual notes\n- [Topic](topic.md) - Current\n- [New](new.md) - Context\n"
+                     (niwa-session-control-fs-read-file index)))
+      (with-current-buffer view
+        (should (equal draft (niwa-view-composer-draft-text)))
+        (should (= 4 (niwa-view-test--composer-point-offset))))))
+  :doc "candidate rows label stale and pending proposals by what acceptance would do now"
+  (let ((index (file-name-concat memory "MEMORY.md"))
+        (label (lambda () (aref (cadr (niwa-memory-list--entry (car (niwa-memory-list--collect context)) nil)) 3))))
+    (should (equal "pending" (funcall label)))
+    (write-region "- [Topic](topic.md) - Conflicting edit\n" nil index nil 'silent)
+    (should (equal "superseded" (funcall label)))
+    (should (eq 'stale (plist-get (niwa-memory-decision-apply
+                                   workspace (plist-get (car (niwa-memory-list--collect context)) :pass) id)
+                                  :status)))
+    (should (equal "superseded" (funcall label)))
+    (write-region "- [Topic](topic.md) - Original\n" nil index nil 'silent)
+    (should (eq 'stale (plist-get (car (niwa-memory-list--collect context)) :status)))
+    (should (equal "ready" (funcall label))))
+  :doc "inspection shows an effective index diff and keeps captured evidence for conflicts"
+  (let* ((row (car (niwa-memory-list--collect context)))
+         (index (file-name-concat memory "MEMORY.md")))
+    (dolist (conflict '(nil t))
+      (write-region (concat "# Manual heading\n- [Topic](topic.md) - "
+                            (if conflict "Foreign edit" "Original") "\n") nil index nil 'silent)
+      (let* ((details (niwa-memory-list--details row context))
+             (sections (plist-get details :sections))
+             (decision (seq-find (lambda (section) (eq (plist-get section :id) 'decision)) sections))
+             (diff (seq-find (lambda (section) (equal (plist-get section :id) '(change . "MEMORY.md"))) sections)))
+        (if conflict
+            (progn
+              (should (string-search "MEMORY.md entries changed since capture: topic.md" (plist-get decision :body)))
+              (should (string-search "Original" (plist-get diff :body)))
+              (should-not (string-search "Foreign edit" (plist-get diff :body))))
+          (should (string-search "Ready to apply" (plist-get decision :body)))
+          (should (string-search " Manual heading" (plist-get diff :body)))
+          (should-not (string-search "-# Manual heading" (plist-get diff :body)))))))
+  :doc "display snapshots cannot authorize an acceptance after an index edit"
+  (with-current-buffer (save-window-excursion (open-for-inspection))
+    (niwa-cockpit-goto-id id)
+    (should-not (plist-member (niwa-cockpit-surface-selected) :accepted))
+    (write-region "- [Topic](topic.md) - Foreign edit\n" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (niwa-memory-list-accept)
+    (niwa-test-memory-list-await)
+    (niwa-cockpit-goto-id id)
+    (should (eq 'stale (plist-get (niwa-cockpit-surface-selected) :status)))
+    (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md")))))
+  :doc "inspection and acceptance reauthenticate private bytes after a display snapshot"
+  (with-current-buffer (save-window-excursion (open-for-inspection))
+    (niwa-cockpit-goto-id id)
+    (let* ((row (niwa-cockpit-surface-selected))
+           (file (file-name-concat (niwa-memory-store--directory workspace (plist-get row :pass)) "accepted.el")))
+      (write-region "Corrupted acceptance.\n" nil file nil 'silent)
+      (should-error (niwa-memory-list--details row context))
+      (should-error (niwa-memory-list-accept))
+      (niwa-test-memory-list-await)
+      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
+  :doc "report refresh reauthenticates current status independently of the table snapshot"
+  (save-window-excursion
+    (unwind-protect
+        (with-current-buffer (open-for-inspection)
+          (niwa-cockpit-goto-id id)
+          (let ((pass (plist-get (niwa-cockpit-surface-selected) :pass)))
+            (niwa-cockpit-surface-details)
+            (niwa-memory-decision-reject workspace pass id :reason "Later rejection")
+            (with-current-buffer "*niwa memory proposal*"
+              (niwa-report-refresh)
+              (niwa-report-select-section 'decision)
+              (should (string-search "rejected" (buffer-string)))
+              (should (string-search "Later rejection" (buffer-string))))))
+      (when (get-buffer "*niwa memory proposal*") (kill-buffer "*niwa memory proposal*"))))
+  :doc "stored memories can be deleted with their index entry and restored from History"
+  (save-window-excursion
+    (with-current-buffer (open-for-inspection)
+      (call-interactively (key-binding (kbd "2")))
+      (should (eq 'memories niwa-memory-list--view))
+      (niwa-test-memory-list-await-memories)
+      (should (= 1 (length (niwa-cockpit-surface-items))))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (call-interactively (key-binding (kbd "d"))))
+      (niwa-test-memory-list-await)
+      (should-not (file-exists-p (file-name-concat memory "topic.md")))
+      (should-not (string-search "topic.md" (niwa-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))
+      (should-not (niwa-cockpit-surface-items))
+      (call-interactively (key-binding (kbd "3")))
+      ;; Deletion refreshed Memories only; History loads on demand.
+      (niwa-test-memory-list-await)
+      (goto-char (point-min))
+      (should (equal "user" (plist-get (plist-get (niwa-memory-store-accepted
+                                                  workspace (plist-get (niwa-cockpit-surface-selected) :pass)) :review) :model)))
+      (call-interactively (key-binding (kbd "u")))
+      (niwa-test-memory-list-await)
+      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))
+      (should (equal "- [Topic](topic.md) - Original\n" (niwa-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))))
+  :doc "manual unindexed memories are visible, inspectable, and open as their actual files"
+  (let ((file (file-name-concat memory "manual.md")))
+    (write-region "---\nname: Manual lesson\ntype: feedback\n---\n\nKeep this exact body.\n" nil file nil 'silent)
+    (save-window-excursion
+      (unwind-protect
+          (with-current-buffer (open-for-inspection)
+            (call-interactively (key-binding (kbd "2")))
+            (niwa-test-memory-list-await-memories)
+            (let ((row (seq-find (lambda (item) (equal file (plist-get item :target))) (niwa-cockpit-surface-items))))
+              (should (equal "Manual lesson" (plist-get row :title)))
+              (should (equal "feedback" (plist-get row :type)))
+              (should (eq 'unindexed (plist-get row :status)))
+              (should (equal tab-line-format '(:eval (niwa-cockpit-surface-header-line))))
+              (let* ((header (niwa-cockpit-surface-header-line))
+                     (map (get-text-property 0 'local-map header)))
+                (should (string-match-p "\\`Candidates\\(?: ([0-9]+)\\)? | Memories | History" header))
+                (should (commandp (lookup-key map [tab-line mouse-1]))))
+              (niwa-cockpit-goto-id (plist-get row :id))
+              (niwa-cockpit-surface-details)
+              (with-current-buffer "*niwa memory proposal*"
+                (should (string-search "Keep this exact body." (buffer-string))))
+              (set-buffer "*niwa memory*")
+              (niwa-memory-list-open-file)
+              (should (equal file buffer-file-name))))
+        (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
+        (when (get-buffer "*niwa memory proposal*") (kill-buffer "*niwa memory proposal*")))))
+  :doc "declining deletion preserves the memory, index, and selected view"
+  (save-window-excursion
+    (with-current-buffer (open-for-inspection)
+      (niwa-memory-list-memories)
+      (niwa-test-memory-list-await-memories)
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+        (niwa-memory-list-delete))
+      (should (eq 'memories niwa-memory-list--view))
+      (should (file-exists-p (file-name-concat memory "topic.md")))
+      (should (equal "- [Topic](topic.md) - Original\n"
+                     (niwa-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))))
+  :doc "deletion refuses a changed index and leaves the topic and foreign edit intact"
+  (save-window-excursion
+    (with-current-buffer (open-for-inspection)
+      (niwa-memory-list-memories)
+      (niwa-test-memory-list-await-memories)
+      (goto-char (point-min))
+      (let ((capture (symbol-function 'niwa-memory-scope-capture)))
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  ((symbol-function 'niwa-memory-scope-capture)
+                   (lambda (&rest args)
+                     (prog1 (apply capture args)
+                       (write-region "Foreign index edit\n" nil (file-name-concat memory "MEMORY.md") nil 'silent)))))
+          (should-error (niwa-memory-list-delete) :type 'user-error)))
+      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))
+      (should (equal "Foreign index edit\n" (niwa-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))))
+  :doc "deletion refuses a configured root retargeted during fresh capture"
+  (let* ((link (file-name-concat root "linked-memory"))
+         (other (file-name-concat root "other-memory"))
+         (capture (symbol-function 'niwa-memory-scope-capture)))
+    (make-directory other)
+    (write-region "Other memory\n" nil (file-name-concat other "topic.md") nil 'silent)
+    (make-symbolic-link memory link)
+    (let ((niwa-memory-dirs (list link)))
+      (save-window-excursion
+        (with-current-buffer (open-for-inspection)
+          (niwa-memory-list-memories)
+          (niwa-test-memory-list-await-memories)
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                    ((symbol-function 'niwa-memory-scope-capture)
+                     (lambda (&rest args)
+                       (delete-file link)
+                       (make-symbolic-link other link)
+                       (apply capture args))))
+            (should-error (niwa-memory-list-delete) :type 'user-error)))))
+    (should (equal "Other memory\n" (niwa-session-control-fs-read-file (file-name-concat other "topic.md"))))
+    (should (file-exists-p (file-name-concat memory "topic.md"))))
+  :doc "History includes complete no-candidate review results"
+  (progn
+    (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180))
+    (let ((prepared (niwa-memory-store-prepare workspace claim (niwa-memory-scope-capture workspace) nil "")))
+      (niwa-memory-store-accept-proposals workspace prepared
+                                           '(:proposals nil :no-action "- Nothing else to retain.") nil "test:model" nil)
+      (niwa-memory-store-publish workspace (plist-get prepared :id))
+      (save-window-excursion
+        (unwind-protect
+            (with-current-buffer (open-for-inspection)
+              (niwa-memory-list-history)
+              (niwa-cockpit-goto-id (plist-get prepared :id))
+              (niwa-cockpit-surface-details)
+              (with-current-buffer "*niwa memory proposal*"
+                (should (string-search "Nothing else to retain." (buffer-string)))
+                (should (string-search "History eligible" (buffer-string)))))
+          (when (get-buffer "*niwa memory proposal*") (kill-buffer "*niwa memory proposal*"))))))
+  :doc "rejects the selected proposal with a retained reason and no target writes"
+  (with-current-buffer (save-window-excursion (with-current-buffer view (niwa-menu-open 'memory)))
+    (niwa-test-memory-list-await)
+    (niwa-memory-list-candidates)
+    (niwa-cockpit-goto-id id)
+    (niwa-memory-list-reject "This is already documented.")
+    (niwa-test-memory-list-await)
+    (should-not (niwa-cockpit-surface-items))
+    (niwa-memory-list-history)
+    (niwa-cockpit-goto-id id)
+    (should (eq 'rejected (plist-get (niwa-cockpit-surface-selected) :status)))
+    (should (string-search "This is already documented."
+					  (niwa-report-test-text (niwa-memory-list--details (niwa-cockpit-surface-selected) context))))
+    (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md")))))
+  :doc "another active pass does not prevent inspection or a decision, or lose its ownership"
+  (progn
+    (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
+      (niwa-cockpit-goto-id id)
+      (should (eq 'pending (plist-get (niwa-cockpit-surface-selected) :status)))
+      (niwa-memory-list-accept)
+      (should (eq 'applied (plist-get (niwa-memory-decision-status workspace id) :status))))
+    (should-not (niwa-journal-claim-outcome claim))
+    (should (equal claim (niwa-journal-claim-current (niwa-memory-store--claim-directory workspace)))))
+  :doc "accepted proposals remain inspectable when their public review cannot be republished"
+  (let* ((entry (seq-find (lambda (entry) (eq (plist-get entry :kind) 'consolidation)) (niwa-journal-store-entries root)))
+         (path (file-name-concat (niwa-journal-store-directory root) (plist-get entry :file))))
+    (write-region "Damaged public review.\n" nil path nil 'silent)
+    (with-current-buffer (save-window-excursion (open-for-inspection))
+      (niwa-cockpit-goto-id id)
+      (should (equal id (plist-get (niwa-cockpit-surface-selected) :id)))
+		     (should (string-search "Updated topic." (niwa-report-test-text (niwa-memory-list--details (niwa-cockpit-surface-selected) context))))
+      (should-error (niwa-memory-list-accept))
+      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
+  :doc "inspection includes retained digest evidence even when its public entry is unavailable"
+  (let* ((digest (niwa-journal-store-publish-digest
+                  root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                             :workspace (niwa-workspace-identity-read root) :trigger 'session-end :segment 1
+                             :source-revision (make-string 64 ?b) :turns '(1) :turn-ids (list (make-string 64 ?c))
+                             :created "2026-09-07T12:00:00Z" :model "test:model")
+                  "## Done\n- Observed: Frozen lesson.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
+         (scope (niwa-memory-scope-capture workspace))
+         (_ (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180)))
+         (prepared (niwa-memory-store-prepare workspace claim scope (list digest) ""))
+         (reply (format (concat "## Promote\n- none\n## Update\n```proposal\nroot: %S\nfile: \"topic.md\"\n"
+                                "type: \"project\"\ntitle: \"Topic\"\nhook: \"Current\"\nreason: \"Retain evidence\"\nevidence: [%S]\n"
+                                "---\nUpdated topic.\n```\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                        (caar (plist-get scope :roots)) (plist-get digest :id)))
+         (accepted (niwa-memory-store-accept workspace prepared reply (list digest) "test:model" nil))
+         (proposal (car (plist-get accepted :proposals))))
+    (niwa-memory-store-publish workspace (plist-get prepared :id))
+    (delete-file (file-name-concat (niwa-journal-store-directory root) (plist-get digest :file)))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
+      (niwa-cockpit-goto-id (plist-get proposal :id))
+		     (let ((details (niwa-report-test-text (niwa-memory-list--details (niwa-cockpit-surface-selected) context))))
+        (should (string-search "Observed: Frozen lesson." details))
+        (should (string-search (concat "memory://journal/" (plist-get digest :file)) details)))))
+  :doc "the remember command starts a focused sessionless pass and preserves the draft on completion"
+  (let* ((gptel--known-backends nil)
+         (model (make-symbol "memory-command-model"))
+         (backend (gptel-make-openai "memory-command-test" :key "test-only" :models (list model)))
+         (real-request (symbol-function 'gptel-request))
+         (draft "> retained draft\nsecond line") request provider)
+    (put model :context-window 128)
+    (put model :capabilities '(tool-use))
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-model-resolve-workload) (lambda (&rest _) (list :backend backend :model model)))
+                  ((symbol-function 'gptel-request)
+                   (lambda (prompt &rest args)
+                     (let ((fsm (apply real-request prompt (plist-put (copy-sequence args) :dry-run t))))
+                       (unless (plist-get args :dry-run) (setq request fsm provider (plist-get args :callback))) fsm))))
+          (with-current-buffer view
+            (niwa-view-test--insert-composer-draft draft 4)
+            (save-window-excursion (niwa-cmd--remember "maintenance")))
+          (should (eq 'niwa-cmd--remember (cdr (assoc "remember" niwa-slash-commands))))
+          (let ((state (niwa-memory-pass-running workspace)))
+            (should state)
+            (with-timeout (15 (ert-fail "Consolidation preparation did not finish"))
+              (while (not (plist-get state :request)) (accept-process-output nil .01)))
+            (should (equal "maintenance" (plist-get (plist-get state :prepared) :focus)))
+            (with-current-buffer (plist-get (plist-get state :request) :buffer) (should-not niwa--session))
+            (with-current-buffer "*niwa memory*"
+              (await-display)
+              (niwa-memory-list-candidates)
+              (niwa-cockpit-goto-id id)
+              (should (eq 'pending (plist-get (niwa-cockpit-surface-selected) :status)))
+              (should-not (plist-member (niwa-cockpit-surface-selected) :accepted))
+              (should (string-search "recovery pending" (niwa-memory-list--header nil context)))
+              (should (eq #'niwa-memory-list-kill (key-binding "k")))
+              (should (eq #'niwa-memory-list-running (key-binding "v")))
+              (let ((snapshot niwa-memory-list--snapshot)
+                    (watcher niwa-memory-list--recovery))
+                (should watcher)
+                ;; Bound only the display watch, never the active native owner.
+                (plist-put watcher :expires 0)
+                (niwa-memory-list--observe-recovery (current-buffer) watcher)
+                (should (eq snapshot niwa-memory-list--snapshot))
+                (should-not niwa-memory-list--recovery)
+                (should-not (memq (plist-get watcher :timer) timer-list))
+                (should (string-search "Recovery observation timed out" (niwa-memory-list--header nil context)))
+                (let ((warning niwa-memory-list--recovery-warning))
+                  (should (stringp warning))
+                  (call-interactively (key-binding "g"))
+                  (await-display)
+                  (should (equal warning niwa-memory-list--recovery-warning))
+                  (should (string-search "completion not observed" (niwa-memory-list--header nil context)))
+                  (niwa-cockpit-goto-id id)
+                  (should (eq 'pending (plist-get (niwa-cockpit-surface-selected) :status)))))
+              (should (niwa-memory-decision-recovering-p workspace))
+              (should (eq state (niwa-memory-pass-running workspace)))
+              (should (niwa-journal-claim-owned-p (plist-get state :claim)))))
+          (niwa-test--with-captured-diagnostics nil
+            (funcall provider "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No changes." (gptel-fsm-info request))
+            (gptel--fsm-transition request 'DONE)
+            (with-timeout (15 (ert-fail "Consolidation publication did not finish"))
+              (while (niwa-memory-pass-running workspace) (accept-process-output nil .01))))
+          (should-not (niwa-memory-pass-running workspace))
+          (should (seq-some (lambda (entry) (equal "maintenance" (plist-get entry :focus))) (niwa-journal-store-entries root)))
+          (with-timeout (45 (ert-fail "Memory recovery did not finish before the next pass"))
+            (while (niwa-memory-decision-recovering-p workspace)
+              (accept-process-output nil .01)))
+          (save-window-excursion (niwa-remember "" context))
+          (with-timeout (15 (ert-fail "Second consolidation preparation did not finish"))
+            (while (not (plist-get (niwa-memory-pass-running workspace) :request))
+              (accept-process-output nil .01)))
+          (let ((running-buffer (plist-get (plist-get (niwa-memory-pass-running workspace) :request) :buffer)))
+            (save-window-excursion
+              (with-current-buffer (get-buffer "*niwa memory*")
+                (niwa-memory-list-running)
+			       (should (derived-mode-p 'niwa-report-mode))
+			       (should-not (eq running-buffer (current-buffer)))
+			       (should (buffer-live-p running-buffer))
+			       (should (string-search "Model response" (buffer-string)))))
+            (with-current-buffer (get-buffer "*niwa memory*")
+              (niwa-test--with-captured-diagnostics nil (niwa-memory-list-kill))))
+          (should-not (niwa-memory-pass-running workspace))
+          (should (= 2 (seq-count (lambda (entry) (eq (plist-get entry :kind) 'consolidation)) (niwa-journal-store-entries root))))
+          (with-current-buffer view
+            (should (equal draft (niwa-view-composer-draft-text)))
+            (should (= 4 (niwa-view-test--composer-point-offset)))))
+		     (niwa-test--with-captured-diagnostics nil (niwa-memory-pass-cancel workspace))
+		     (when (get-buffer "*niwa running consolidation*")
+		       (kill-buffer "*niwa running consolidation*"))))
+  :doc "foreign client roots remain visible but private details and writes are unavailable"
+  (cl-letf (((symbol-function 'niwa-workspace-identity-client) (lambda () (make-string 64 ?f))))
+    (with-current-buffer (save-window-excursion (open-for-inspection))
+      (niwa-cockpit-goto-id id)
+      (should (eq 'unavailable (plist-get (niwa-cockpit-surface-selected) :status)))
+		     (should-error (niwa-report-test-text (niwa-memory-list--details (niwa-cockpit-surface-selected) context)))
+      (should-error (niwa-memory-list-accept))
+      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
+  :doc "slash drain, M-x and the cockpit key reach the same cancellable owner without changing the draft"
+  (let ((draft "> retained draft\nsecond line") state)
+    (unwind-protect
+        (niwa-test--with-captured-diagnostics nil
+          (with-current-buffer view
+            (niwa-view-test--insert-composer-draft draft 4)
+            (save-window-excursion (niwa-cmd--remember "drain")))
+          (setq state (niwa-memory-pass-drain-status workspace))
+          (should state)
+          (with-current-buffer (get-buffer "*niwa memory*")
+            (should (eq (key-binding "D") #'niwa-remember-drain))
+            (should (string-search "drain batch 1" (niwa-memory-list--header nil context)))
+            (niwa-memory-list-kill))
+          (should-not (niwa-memory-pass-drain-status workspace))
+          (should (eq 'cancelled (plist-get state :status)))
+          (with-current-buffer view
+            (save-window-excursion (niwa-remember-drain context)))
+          (with-timeout (15 (ert-fail "Empty drain did not settle"))
+            (while (niwa-memory-pass-drain-status workspace) (accept-process-output nil .01)))
+          (should-not (niwa-memory-pass-running workspace))
+          (with-current-buffer view
+            (should (equal draft (niwa-view-composer-draft-text)))
+            (should (= 4 (niwa-view-test--composer-point-offset)))))
+      (niwa-test--with-captured-diagnostics nil (niwa-memory-pass-cancel workspace)))))
+
+(provide 'test-niwa-memory-list)
+;;; test-niwa-memory-list.el ends here

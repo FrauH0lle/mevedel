@@ -1,0 +1,2585 @@
+;;; test-niwa-mentions.el --- Tests for niwa-mentions.el -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'gptel)
+(require 'mcp)
+(require 'mcp-hub)
+(require 'niwa-structs)
+(require 'niwa-agents)
+(require 'niwa-execution-target)
+(require 'niwa-file-state)
+(require 'niwa-overlays)
+(require 'niwa-permissions)
+(require 'niwa-persistence)
+(require 'niwa-mentions)
+(require 'niwa-resource)
+(require 'niwa-transcript)
+(require 'niwa-tool-fs-read)
+(require 'niwa-workspace)
+(require 'niwa-permission-rules)
+(require 'niwa-session-artifacts)
+(require 'niwa-session-durability)
+(require 'niwa-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "niwa-instruction-test-support"))
+
+;; Declared in gptel; declared here so `let' binds it dynamically in
+;; tests that do not load gptel.
+(defvar gptel-default-mode)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+
+
+;;
+;;; Helper
+
+(niwa-deftest niwa-mentions-replace-with-placeholder ()
+  ,test
+  (test)
+  :doc "preserves the replaced region's gptel property"
+  (with-temp-buffer
+    (insert (propertize "Use @ref:1 here" 'gptel 'prompt))
+    (goto-char (point-min))
+    (search-forward "@ref:1")
+    (niwa-mentions-replace-with-placeholder
+     (match-beginning 0) (match-end 0) "[ref:1]")
+    (goto-char (point-min))
+    (search-forward "[ref:1]")
+    (should (eq 'prompt
+                (get-text-property (match-beginning 0) 'gptel)))))
+
+(defun niwa-test--make-note-buffer (content text &optional workspace)
+  "Create a live file-visiting buffer with CONTENT and a note on TEXT.
+Associate the buffer with WORKSPACE or a registered test workspace.
+Returns (buffer . overlay)."
+  (let* ((workspace (or workspace
+                        (niwa-workspace-get-or-create
+                         'file "mentions" temporary-file-directory "mentions")))
+         (tmp (make-temp-file "niwa-mention-" nil ".txt" content))
+         (buf (find-file-noselect tmp))
+         ov)
+    (puthash (cons (niwa-workspace-type workspace)
+                   (niwa-workspace-id workspace))
+             workspace niwa-workspace--registry)
+    (with-current-buffer buf
+      (fundamental-mode)
+      (setq-local niwa--workspace workspace)
+      (set-buffer-modified-p nil)
+      (goto-char (point-min))
+      (re-search-forward (regexp-quote text))
+      (setq ov (niwa-instruction-test--create-note-in
+                buf (match-beginning 0) (match-end 0))))
+    (cons buf ov)))
+
+(defun niwa-test--reset-instructions ()
+  "Reset global and workspace-scoped instruction state for mentions."
+  (let (buffers)
+    (maphash
+     (lambda (_key state)
+       (dolist (entry (plist-get state :instructions))
+         (when (bufferp (car entry))
+           (push (car entry) buffers))))
+     niwa--instruction-states)
+    (dolist (buffer (delete-dups buffers))
+      (when (buffer-live-p buffer)
+        (let ((file (buffer-file-name buffer)))
+          (with-current-buffer buffer
+            (setq-local kill-buffer-hook nil)
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (when (and file
+                     (file-exists-p file)
+                     (string-prefix-p (file-truename temporary-file-directory)
+                                      (file-truename file)))
+            (delete-file file))))))
+  (setq niwa--instruction-states (make-hash-table :test #'equal))
+  (setq niwa--instruction-current-state-key :global)
+  (niwa-workspace-clear-registry))
+
+
+;;
+;;; Resolution
+
+(niwa-deftest niwa-mentions--bind-user-input-matches
+  (:doc "the shared scanner binds live matches and rejects invalid boundaries")
+  ,test
+  (test)
+  (let ((text (copy-sequence "@file:a.txt x@file:b.txt")))
+    (niwa-mentions--bind-user-input-matches
+     text niwa-mention-bindings-file-regexp 'file
+     (lambda (captures)
+       (list :path (expand-file-name (car captures) "/tmp"))))
+    (should
+     (equal (list :kind 'file :token "@file:a.txt"
+                  :path (expand-file-name "a.txt" "/tmp"))
+            (get-text-property 0 'niwa-mention-binding text)))
+    (should-not
+     (get-text-property
+      (string-match "@file:b" text) 'niwa-mention-binding text)))
+  (let ((text (copy-sequence "@ref:1x")))
+    (niwa-mentions--bind-user-input-matches
+     text "@ref:\\([0-9]+\\)" 'ref
+     (lambda (_captures) '(:reference-uuid "uuid-1")))
+    (should-not
+     (text-property-not-all
+      0 (length text) 'niwa-mention-binding nil text))))
+
+(niwa-deftest niwa-mentions-prepare-user-input
+  (:before-each
+   (niwa-test--reset-instructions)
+   :after-each
+   (niwa-test--reset-instructions))
+  ,test
+  (test)
+  :doc "binds direct ref tokens to notes while leaving queries and misses live"
+  (let* ((cell (niwa-test--make-note-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buf)))
+         (ref (cdr cell))
+         (id (niwa--instruction-id ref))
+         (uuid (overlay-get ref 'niwa-uuid))
+         (input (format "Use @ref:%d, @ref:{tag}, and @ref:99999" id))
+         (prepared (niwa-mentions-prepare-user-input input session))
+         (start (string-match (format "@ref:%d" id) prepared))
+         (binding (get-text-property start 'niwa-mention-binding prepared)))
+    (unwind-protect
+        (progn
+          (should (equal 'ref (plist-get binding :kind)))
+          (should (equal (format "@ref:%d" id) (plist-get binding :token)))
+          (should (equal uuid (plist-get binding :reference-uuid)))
+          (should-not (get-text-property
+                       (string-match "@ref:{" prepared)
+                       'niwa-mention-binding prepared))
+          (should-not (get-text-property
+                       (string-match "@ref:99999" prepared)
+                       'niwa-mention-binding prepared))
+          (should-not (text-property-not-all
+                       0 (length input) 'niwa-mention-binding nil input)))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (file-exists-p file) (delete-file file)))))
+
+  :doc "binds from the session workspace rather than the current buffer"
+  (let* ((workspace-a (niwa-workspace--create
+                       :type 'file :id "prepare-a" :root "/tmp"
+                       :name "prepare-a"))
+         (workspace-b (niwa-workspace--create
+                       :type 'file :id "prepare-b" :root "/tmp"
+                       :name "prepare-b"))
+         (first (niwa-test--make-note-buffer
+                 "first body\n" "first body" workspace-a))
+         (second (niwa-test--make-note-buffer
+                  "second body\n" "second body" workspace-b))
+         (first-reference (cdr first))
+         (second-reference (cdr second))
+         (id (niwa--instruction-id first-reference))
+         (session (niwa-session-create "prepare-a" workspace-a)))
+    (should (= id (niwa--instruction-id second-reference)))
+    (with-current-buffer (car second)
+      (let* ((prepared (niwa-mentions-prepare-user-input
+                        (format "Use @ref:%d" id) session))
+             (binding (get-text-property
+                       (string-match "@ref:" prepared)
+                       'niwa-mention-binding prepared)))
+        (should (equal (overlay-get first-reference 'niwa-uuid)
+                       (plist-get binding :reference-uuid))))))
+
+  :doc "binds file locators relative to the session working directory at send"
+  (let* ((root (make-temp-file "niwa-file-binding-" t))
+         (working-directory (file-name-concat root "package"))
+         (elsewhere (make-temp-file "niwa-file-binding-cwd-" t))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "file-binding"))
+         (session (niwa-session-create
+                   "main" workspace working-directory))
+         (default-directory elsewhere)
+         (token "@file:notes.txt#L2")
+         (prepared (niwa-mentions-prepare-user-input
+                    (concat "Read " token) session))
+         (start (string-match (regexp-quote token) prepared))
+         (binding (get-text-property
+                   start 'niwa-mention-binding prepared)))
+    (unwind-protect
+        (progn
+          (should (equal 'file (plist-get binding :kind)))
+          (should (equal token (plist-get binding :token)))
+          (should (equal (expand-file-name "notes.txt" working-directory)
+                         (plist-get binding :path))))
+      (delete-directory elsewhere t)
+      (delete-directory root t)))
+
+  :doc "normalizes ordinary file locators through the resource seam"
+  (let* ((root (make-temp-file "niwa-file-resource-locator-" t))
+         (workspace (niwa-workspace--create
+                     :type 'test :id root :root root :name "file-locator"))
+         (session (niwa-session-create "main" workspace root))
+         (process-environment
+          (cons (concat "NIWA_MENTION_ROOT=" root) process-environment))
+         (token "@file:$NIWA_MENTION_ROOT/notes.txt")
+         (prepared (niwa-mentions-prepare-user-input token session))
+         (binding (get-text-property
+                   (string-match (regexp-quote token) prepared)
+                   'niwa-mention-binding prepared)))
+    (unwind-protect
+        (should (equal (file-name-concat root "notes.txt")
+                       (plist-get binding :path)))
+      (delete-directory root t)))
+
+  :doc "binds self-delimited file mentions before prose punctuation"
+  (let* ((root (make-temp-file "niwa-file-punctuation-" t))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "punctuation"))
+         (session (niwa-session-create "main" workspace))
+         (braced "@file:{notes file.txt}")
+         (ranged "@file:notes.txt#L2")
+         (prepared (niwa-mentions-prepare-user-input
+                    (format "Read %s. Then %s." braced ranged)
+                    session)))
+    (unwind-protect
+        (dolist (token (list braced ranged))
+          (let ((binding
+                 (get-text-property
+                  (string-match (regexp-quote token) prepared)
+                  'niwa-mention-binding prepared)))
+            (should (equal token (plist-get binding :token)))
+            (should (equal
+                     (expand-file-name
+                      (if (equal token braced)
+                          "notes file.txt"
+                        "notes.txt")
+                      root)
+                     (plist-get binding :path)))))
+      (delete-directory root t)))
+
+  :doc "complete MCP mentions bind their locator even while unavailable"
+  (let* ((token "@mcp:docs:file:///guide")
+         (prepared (niwa-mentions-prepare-user-input
+                    (concat "Use " token)))
+         (start (string-match (regexp-quote token) prepared)))
+    (should
+     (equal (list :kind 'mcp :token token
+                  :server "docs" :uri "file:///guide")
+            (get-text-property
+             start 'niwa-mention-binding prepared))))
+
+  :doc "reference queries and agent mentions intentionally stay unbound"
+  (let* ((input "Ask @ref:{tag} and @agent:explorer")
+         (prepared (niwa-mentions-prepare-user-input input)))
+    (should (equal input prepared))
+    (should-not (text-property-not-all
+                 0 (length prepared) 'niwa-mention-binding nil prepared)))
+
+  :doc "rejects malformed existing mention bindings"
+  (let ((input (copy-sequence "Use @ref:1")))
+    (put-text-property 4 10 'niwa-mention-binding
+                       '(:kind ref :token "@ref:1") input)
+    (should-error (niwa-mentions-prepare-user-input input)
+                  :type 'user-error)))
+
+
+;;
+;;; Font-lock matchers
+
+(niwa-deftest niwa--fontify-ref-id-keyword
+  (:doc "`niwa--fontify-ref-id-keyword' matches @ref:ID at BOB or after whitespace")
+  ,test
+  (test)
+  :doc "matches mention at beginning of buffer"
+  (with-temp-buffer
+    (insert "@ref:7 text")
+    (goto-char (point-min))
+    (should (niwa--fontify-ref-id-keyword (point-max)))
+    (should (equal "7" (match-string 1))))
+
+  :doc "matches mention after whitespace"
+  (with-temp-buffer
+    (insert "some text @ref:42 here")
+    (goto-char (point-min))
+    (should (niwa--fontify-ref-id-keyword (point-max)))
+    (should (equal "42" (match-string 1)))))
+
+(niwa-deftest niwa--fontify-ref-tag-keyword
+  (:doc "`niwa--fontify-ref-tag-keyword' matches @ref:{query}")
+  ,test
+  (test)
+  :doc "matches tag query at beginning of buffer"
+  (with-temp-buffer
+    (insert "@ref:{core} extra")
+    (goto-char (point-min))
+    (should (niwa--fontify-ref-tag-keyword (point-max)))
+    (should (equal "core" (match-string 1))))
+
+  :doc "matches tag query after whitespace"
+  (with-temp-buffer
+    (insert "pre @ref:{core or utils} post")
+    (goto-char (point-min))
+    (should (niwa--fontify-ref-tag-keyword (point-max)))
+    (should (equal "core or utils" (match-string 1)))))
+
+(niwa-deftest niwa--fontify-file-keyword
+  (:doc "`niwa--fontify-file-keyword' matches @file:path tokens")
+  ,test
+  (test)
+  :doc "matches file mention with slashes"
+  (with-temp-buffer
+    (insert "see @file:/tmp/foo.el here")
+    (goto-char (point-min))
+    (should (niwa--fontify-file-keyword (point-max)))
+    (should (equal "/tmp/foo.el" (match-string 1))))
+
+  :doc "captures path after @file:"
+  (with-temp-buffer
+    (insert "before @file:lib/core.el after")
+    (goto-char (point-min))
+    (should (niwa--fontify-file-keyword (point-max)))
+    (should (equal "lib/core.el" (match-string 1))))
+
+  :doc "matches @file:path#L<start>-<end> line range"
+  (with-temp-buffer
+    (insert "see @file:/tmp/foo.el#L10-20 here")
+    (goto-char (point-min))
+    (should (niwa--fontify-file-keyword (point-max)))
+    (should (equal "/tmp/foo.el" (match-string 1))))
+
+  :doc "matches @file:path#L<n> single-line range"
+  (with-temp-buffer
+    (insert "see @file:/tmp/foo.el#L42 here")
+    (goto-char (point-min))
+    (should (niwa--fontify-file-keyword (point-max)))
+    (should (equal "/tmp/foo.el" (match-string 1))))
+
+  :doc "matches braced @file:{path with spaces} form"
+  (with-temp-buffer
+    (insert "see @file:{/tmp/foo bar.el} here")
+    (goto-char (point-min))
+    (should (niwa--fontify-file-keyword (point-max)))
+    (should (equal "{/tmp/foo bar.el}" (match-string 1)))
+    (should (equal "/tmp/foo bar.el"
+                   (niwa-mention-bindings-file-token-path
+                    (match-string 1))))))
+
+(niwa-deftest niwa--fontify-agent-keyword
+  (:doc "`niwa--fontify-agent-keyword' matches @agent:name tokens")
+  ,test
+  (test)
+  :doc "matches agent mention at beginning of buffer"
+  (with-temp-buffer
+    (insert "@agent:explorer please")
+    (goto-char (point-min))
+    (should (niwa--fontify-agent-keyword (point-max)))
+    (should (equal "explorer" (match-string 1))))
+
+  :doc "matches agent mention after whitespace"
+  (with-temp-buffer
+    (insert "ask @agent:verifier to help")
+    (goto-char (point-min))
+    (should (niwa--fontify-agent-keyword (point-max)))
+    (should (equal "verifier" (match-string 1))))
+
+  :doc "matches unknown agent name (highlighting decides face)"
+  (with-temp-buffer
+    (insert "invoke @agent:nosuch_agent now")
+    (goto-char (point-min))
+    (should (niwa--fontify-agent-keyword (point-max)))
+    (should (equal "nosuch_agent" (match-string 1)))))
+
+(niwa-deftest niwa--fontify-mcp-keyword
+  (:doc "`niwa--fontify-mcp-keyword' matches @mcp:server:uri tokens")
+  ,test
+  (test)
+  :doc "matches mcp mention after whitespace"
+  (with-temp-buffer
+    (insert "ask @mcp:foo:bar/baz for data")
+    (goto-char (point-min))
+    (should (niwa--fontify-mcp-keyword (point-max)))
+    (should (equal "foo" (match-string 1)))
+    (should (equal "bar/baz" (match-string 2))))
+
+  :doc "captures uri with internal colons (file:// style)"
+  (with-temp-buffer
+    (insert "see @mcp:srv:file:///etc/hosts here")
+    (goto-char (point-min))
+    (should (niwa--fontify-mcp-keyword (point-max)))
+    (should (equal "srv" (match-string 1)))
+    (should (equal "file:///etc/hosts" (match-string 2)))))
+
+
+;;
+;;; Mention handlers
+
+(niwa-deftest niwa--handle-file-mention
+  (:doc "`niwa--handle-file-mention' handles files, dirs, missing, and readable")
+  ;; In-memory fixtures have no root buffer or save path for lease admission.
+  (cl-letf (((symbol-function 'niwa-session-artifacts-assert-mutation-authority)
+             #'ignore)
+            ((symbol-function 'niwa-session-durability-lease-owned-p)
+             (lambda (&rest _) t)))
+    ,test)
+  (test)
+  :doc "missing file yields graceful placeholder with explanatory reminder"
+  (let* ((directory (make-temp-file "niwa-missing-file-" t))
+         (path (file-name-concat directory "missing.txt")))
+    (unwind-protect
+        (let ((result
+               (cl-letf (((symbol-function 'niwa-check-permission)
+                          (lambda (&rest _) 'allow)))
+                 (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" path)
+                        :capture path)))))
+          (should (string-match-p "does not exist"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (string-match-p "system annotation"
+                                  (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-directory directory t)))
+
+  :doc "directory yields listing placeholder and reminder with entries"
+  (let* ((dir (make-temp-file "niwa-dir-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "alpha.txt" dir) (insert "a"))
+          (with-temp-file (expand-file-name "beta.txt" dir) (insert "b"))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" dir)
+                               :capture dir
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "directory listing attached"
+                                    (plist-get result :placeholder)))
+            (should (stringp (plist-get result :reminder)))
+            (should (string-match-p "alpha.txt" (plist-get result :reminder)))
+            (should (string-match-p "beta.txt" (plist-get result :reminder)))
+            (should (equal (cons 'file (cons dir ""))
+                           (plist-get result :key)))))
+      (delete-directory dir t)))
+
+  :doc "a line range on a directory mention is refused, not mislabeled"
+  ;; The placeholder used to claim "lines 1-3 of" a listing.
+  (let ((dir (make-temp-file "niwa-mention-dir-range-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "alpha.txt" dir) (insert "a"))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" dir "#L1-3")
+                               :capture dir
+                               :captures (list dir nil "1" "3")
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "is a directory"
+                                    (plist-get result :placeholder)))
+            (should-not (string-match-p "listing attached"
+                                        (plist-get result :placeholder)))))
+      (delete-directory dir t)))
+
+  :doc "directory listing is truncated when it exceeds the max cap"
+  (let* ((dir (make-temp-file "niwa-dir-" t))
+         (niwa-file-mention-directory-max-entries 3))
+    (unwind-protect
+        (progn
+          (dotimes (i 5)
+            (with-temp-file (expand-file-name (format "f%d.txt" i) dir)
+              (insert "x")))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" dir)
+                               :capture dir
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "truncated at 3"
+                                    (plist-get result :reminder)))))
+      (delete-directory dir t)))
+
+  :doc "directory listing respects permission denial"
+  (let* ((ws-root (make-temp-file "niwa-ws-" t))
+         (outside-dir (make-temp-file "niwa-outside-" t))
+         (ws (niwa-workspace--create :type 'project :id "dir-deny"
+                                        :root ws-root :name "dir-deny"))
+         (session (niwa-session-create "main" ws))
+         (niwa-permission-rules nil))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text (concat "@file:" outside-dir)
+                             :capture outside-dir
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder))))
+      (delete-directory outside-dir t)
+      (delete-directory ws-root t)))
+
+  :doc "permission denial precedes local and remote availability probes"
+  (let* ((existing (make-temp-file "niwa-denied-file-"))
+         (missing (concat existing ".missing"))
+         (remote-root "/niwamock:denied:/project/")
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id "denied-probes"
+           :root remote-root :name "denied-probes"))
+         (session (niwa-session-create "main" workspace))
+         (remote (file-name-concat remote-root "session" "artifact.txt"))
+         (niwa-permission--context-frozen-p t)
+         (niwa-permission--frozen-persistent-rules nil))
+    (unwind-protect
+        (progn
+          (setf (niwa-session-save-path session)
+                (file-name-concat remote-root "session"))
+          (setf (niwa-execution-target-environment
+                 (niwa-session-execution-target session))
+                '(("HOME" . "/home/test")))
+          (dolist (info
+                   (list
+                    (list :match-text (concat "@file:" existing)
+                          :capture existing)
+                    (list :match-text (concat "@file:" missing)
+                          :capture missing)
+                    (list :match-text (concat "@file:" remote)
+                          :capture remote :session session
+                          :workspace-root remote-root)))
+            (let ((target (plist-get info :capture))
+                  (file-exists (symbol-function 'file-exists-p))
+                  (file-readable (symbol-function 'file-readable-p))
+                  probes)
+              (niwa-test--with-captured-diagnostics nil
+                (cl-letf (((symbol-function 'niwa-check-permission)
+                           (lambda (&rest _) 'deny))
+                          ((symbol-function 'file-exists-p)
+                           (lambda (path)
+                             (if (equal path target)
+                                 (progn (push 'exists probes) nil)
+                               (funcall file-exists path))))
+                          ((symbol-function 'file-readable-p)
+                           (lambda (path)
+                             (if (equal path target)
+                                 (progn (push 'readable probes) nil)
+                               (funcall file-readable path))))
+                          ((symbol-function
+                            'niwa-session-artifacts-artifact-present-p)
+                           (lambda (&rest _) (push 'artifact probes) nil)))
+                  (let ((result (niwa--handle-file-mention info)))
+                    (should (string-match-p
+                             "permission denied"
+                             (plist-get result :placeholder))))))
+              (should-not probes))))
+      (delete-file existing)))
+
+  :doc "readable file yields placeholder, reminder, and content hash"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt" "hello world\n"))
+         (result (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" tmp)
+                        :capture tmp
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (progn
+          (should (equal (format "[file:%s -- contents attached above]" tmp)
+                         (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (string-match-p "hello world" (plist-get result :reminder)))
+          (should (string-match-p "Do not call Read"
+                                  (plist-get result :reminder)))
+          (should (equal (cons 'file (cons tmp "")) (plist-get result :key)))
+          (should (stringp (plist-get result :hash))))
+      (delete-file tmp)))
+
+  :doc "remote session artifacts use only resolver-verified publication bytes"
+  (let* ((host (system-name))
+         (local-root (file-name-as-directory
+                      (make-temp-file "niwa-mention-artifact-" t)))
+         (remote-root (format "/niwamock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (logical "plans/current.md")
+         (fixed (file-name-concat save-path logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (content "committed artifact\n")
+         (range-logical "plans/range.md")
+         (range-fixed (file-name-concat save-path range-logical))
+         (range-published (file-name-concat
+                           save-path ".publications" "generation"
+                           "000002.data"))
+         (range-content "one\ncommitted range\nthree\n")
+         (unpublished-logical "plans/unpublished.md")
+         (unpublished-fixed
+          (file-name-concat save-path unpublished-logical))
+         (media-logical "tool-results/image.png")
+         (media-fixed (file-name-concat save-path media-logical))
+         (media-published (file-name-concat
+                           save-path ".publications" "generation"
+                           "000003.data"))
+         (media-content "committed png bytes\n")
+         (niwa-permission--context-frozen-p t)
+         (niwa-permission--frozen-persistent-rules nil)
+         session)
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp (list host)
+          (let ((workspace
+                 (niwa-workspace--create
+                  :type 'project :id "mention-artifact"
+                  :root remote-root :name "mention-artifact")))
+            (setq session (niwa-session-create "main" workspace)))
+          (setf (niwa-execution-target-environment
+                 (niwa-session-execution-target session))
+                '(("HOME" . "/home/test")))
+          (setf (niwa-session-save-path session) save-path)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "poisoned fixed cache\n" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (write-region content nil published nil 'silent)
+          (write-region range-content nil range-published nil 'silent)
+          (make-directory (file-name-directory unpublished-fixed) t)
+          (write-region "unpublished fixed cache\n"
+                        nil unpublished-fixed nil 'silent)
+          (make-directory (file-name-directory media-fixed) t)
+          (write-region "poisoned media cache\n" nil media-fixed nil 'silent)
+          (write-region media-content nil media-published nil 'silent)
+          (setf (niwa-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil
+                      :artifacts
+                      (list
+                       (list logical :published published
+                             :sha256 (secure-hash 'sha256 content))
+                       (list range-logical :published range-published
+                             :sha256 (secure-hash 'sha256 range-content))
+                       (list media-logical :published media-published
+                             :sha256 (secure-hash 'sha256 media-content)))))
+          (let ((result
+                 (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" fixed)
+                        :capture fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "committed artifact"
+                                    (plist-get result :reminder)))
+            (should-not (string-match-p "poisoned fixed cache"
+                                        (plist-get result :reminder)))
+            (should (equal (secure-hash
+                            'sha1 "1\tcommitted artifact\n")
+                           (plist-get result :hash))))
+          (delete-file fixed)
+          (let ((result
+                 (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" fixed)
+                        :capture fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "committed artifact"
+                                    (plist-get result :reminder)))
+            (should (stringp (plist-get result :hash))))
+          (let ((result
+                 (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" range-fixed "#L2")
+                        :capture range-fixed
+                        :captures
+                        (list (concat "@file:" range-fixed "#L2")
+                              range-fixed "2" nil)
+                        :session session
+                        :workspace-root remote-root))))
+            (should-not (file-exists-p range-fixed))
+            (should (string-match-p "committed range"
+                                    (plist-get result :reminder)))
+            (should-not (string-match-p "one\\|three"
+                                        (plist-get result :reminder)))
+            (should (stringp (plist-get result :hash))))
+          (let ((result
+                 (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" unpublished-fixed)
+                        :capture unpublished-fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "does not exist"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :hash)))
+          (cl-letf (((symbol-function 'gptel--model-capable-p)
+                     (lambda (cap &optional _model) (eq cap 'media)))
+                    ((symbol-function 'gptel--model-mime-capable-p)
+                     (lambda (mime &optional _model)
+                       (equal mime "image/png"))))
+            (let* ((result
+                    (niwa--handle-file-mention
+                     (list :match-text (concat "@file:" media-fixed)
+                           :capture media-fixed
+                           :session session
+                           :workspace-root remote-root)))
+                   (context (car (plist-get result :media-contexts)))
+                   (request
+                    (niwa-request--create
+                     :id "mention-media" :session session)))
+              (should (string-match-p "media attached"
+                                      (plist-get result :placeholder)))
+              (should (equal (secure-hash 'sha1 media-content)
+                             (plist-get result :hash)))
+              (should-not (equal (secure-hash
+                                  'sha1 "poisoned media cache\n")
+                                 (plist-get result :hash)))
+              (delete-file media-fixed)
+              (should-error
+               (apply #'niwa-mentions--add-media-context context)
+               :type 'error)
+              (with-temp-buffer
+                (setq-local niwa--current-request request)
+                (setq-local gptel-context nil)
+                (setq-local gptel-use-context nil)
+                (apply #'niwa-mentions--add-media-context context)
+                (let ((staged (caar gptel-context)))
+                  (should-not (file-remote-p staged))
+                  (should (file-exists-p staged))
+                  (should
+                   (equal media-content
+                          (with-temp-buffer
+                            (set-buffer-multibyte nil)
+                            (insert-file-contents-literally staged)
+                            (buffer-string))))
+                  (niwa-request-drain-cancellers request)
+                  (should-not (file-exists-p staged))
+                  (should-not gptel-context))))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      ;; All remote checks must stay inside the connection-owning fixture.
+      ;; A surviving shell becomes unusable after another test reloads TRAMP.
+      (should-not (tramp-get-connection-process
+                   (tramp-dissect-file-name remote-root)))))
+
+  :doc "media file on unsupported model yields graceful placeholder"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".png" "not really png\n"))
+         (result (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" tmp)
+                        :capture tmp
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (progn
+          (should (string-match-p "model does not support image/png media"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-file tmp)))
+
+  :doc "PDF mention attaches page images when the model lacks document input"
+  (let ((tmp (make-temp-file "niwa-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model) (equal mime "image/png")))
+                  ((symbol-function 'niwa-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) 25))
+                  ((symbol-function 'niwa-tool-fs-read-pdf-page-images-now)
+                   (lambda (_path page-count)
+                     (should (eql 25 page-count))
+                     (list "page one" "page two"))))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "PDF pages attached as images"
+                                    (plist-get result :placeholder)))
+            (should (equal (list (list (concat tmp ".page-1.png") "image/png"
+                                       "page one")
+                                 (list (concat tmp ".page-2.png") "image/png"
+                                       "page two"))
+                           (plist-get result :media-contexts)))
+            (should (string-match-p "Only pages 1-2 of 25"
+                                    (plist-get result :reminder)))
+            (should (string-match-p (regexp-quote "pages=\"3-\"")
+                                    (plist-get result :reminder)))
+            (should (equal (niwa-mentions--file-content-hash tmp)
+                           (plist-get result :hash)))))
+      (delete-file tmp)))
+
+  :doc "PDF page-image fallback failure yields a graceful placeholder"
+  (let ((tmp (make-temp-file "niwa-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model) (equal mime "image/png")))
+                  ((symbol-function 'niwa-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) nil)))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "Cannot determine the page count"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :media-contexts))))
+      (delete-file tmp)))
+
+  :doc "large PDF media mention emits bounded-page reminder"
+  (let ((tmp (make-temp-file "niwa-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model)
+                     (equal mime "application/pdf")))
+                  ((symbol-function 'niwa-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) 42))
+                  ((symbol-function 'niwa-tool-fs-read-large-pdf-p)
+                   (lambda (_path page-count) (eql 42 page-count)))
+                  ((symbol-function 'niwa-tool-fs-read-format-large-pdf-reminder)
+                   (lambda (_path page-count)
+                     (should (eql 42 page-count))
+                     "large PDF guidance")))
+          (let ((result (niwa--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "media attached"
+                                    (plist-get result :placeholder)))
+            (should (equal (list (list tmp "application/pdf"))
+                           (plist-get result :media-contexts)))
+            (should (string-match-p "large PDF guidance"
+                                    (plist-get result :reminder)))))
+      (delete-file tmp)))
+
+  :doc "oversized PDF media mention includes bounded-page guidance"
+  (let ((tmp (make-temp-file "niwa-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (let ((niwa-tool-fs-read-media-max-bytes 1))
+          (cl-letf (((symbol-function 'gptel--model-capable-p)
+                     (lambda (cap &optional _model) (eq cap 'media)))
+                    ((symbol-function 'gptel--model-mime-capable-p)
+                     (lambda (mime &optional _model)
+                       (equal mime "application/pdf")))
+                    ((symbol-function 'niwa-tool-fs-read-pdf-page-count-now)
+                     (lambda (_path) nil))
+                    ((symbol-function
+                      'niwa-tool-fs-read-format-large-pdf-reminder)
+                     (lambda (_path _page-count) "large PDF guidance")))
+            (let ((result (niwa--handle-file-mention
+                           (list :match-text (concat "@file:" tmp)
+                                 :capture tmp
+                                 :workspace-root temporary-file-directory))))
+              (should (string-match-p "media file is too large"
+                                      (plist-get result :placeholder)))
+              (should (string-match-p "large PDF guidance"
+                                      (plist-get result :reminder)))
+              (should (null (plist-get result :hash))))))
+      (delete-file tmp)))
+
+  :doc "braced path form reads files whose names contain spaces"
+  (let* ((dir (make-temp-file "niwa-file-dir-" t))
+         (tmp (expand-file-name "space name.txt" dir))
+         (token (format "{%s}" tmp))
+         result)
+    (with-temp-file tmp (insert "hello spaced path\n"))
+    (setq result
+          (niwa--handle-file-mention
+           (list :match-text (concat "@file:" token)
+                 :capture token
+                 :captures (list (concat "@file:" token) token nil nil)
+                 :workspace-root temporary-file-directory)))
+    (unwind-protect
+        (progn
+          (should (string-match-p "contents attached"
+                                  (plist-get result :placeholder)))
+          (should (string-match-p "hello spaced path"
+                                  (plist-get result :reminder))))
+      (delete-directory dir t)))
+
+  :doc "records file read on session so Read tool can dedupe"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt" "hello world\n"))
+         (ws (niwa-workspace--create :type 'project :id "mention-dedup"
+                                        :root temporary-file-directory
+                                        :name "mention-dedup"))
+         (session (niwa-session-create "main" ws)))
+    (unwind-protect
+        (progn
+          (niwa--handle-file-mention
+           (list :match-text (concat "@file:" tmp)
+                 :capture tmp
+                 :session session
+                 :workspace-root temporary-file-directory))
+          (let ((entry (gethash (expand-file-name tmp)
+                                (niwa-session-touched-files session))))
+            (should entry)
+            (should (niwa-file-interaction-read-turn entry))))
+      (delete-file tmp)))
+
+  :doc "permission deny yields denial placeholder"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt" "hello world\n"))
+         ;; A session permission rule is durable state, so its authority
+         ;; comes from the workspace category rather than a materialized
+         ;; project session this mention test does not need.
+         (ws (niwa-workspace--create :type 'file :id "mention-deny"
+                                        :root temporary-file-directory
+                                        :name "mention-deny"))
+         (session (niwa-session-create "main" ws))
+         ;; Session deny rule matching the exact path
+         (niwa-permission-rules nil))
+    (niwa-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root temporary-file-directory))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (string-match-p "system annotation"
+                                  (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-file tmp)))
+
+  :doc "path outside workspace without covering rule is rejected"
+  (let* ((ws-root (make-temp-file "niwa-ws-" t))
+         (outside-dir (make-temp-file "niwa-outside-" t))
+         (tmp (expand-file-name "outside.txt" outside-dir))
+         (ws (niwa-workspace--create :type 'project :id "mention-outside"
+                                        :root ws-root
+                                        :name "mention-outside"))
+         (session (niwa-session-create "main" ws))
+         (niwa-permission-rules nil))
+    (with-temp-file tmp (insert "secret\n"))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-file tmp)
+      (delete-directory outside-dir)
+      (delete-directory ws-root)))
+
+  :doc "active dropped-file grant allows exact outside-workspace file"
+  (let* ((ws-root (make-temp-file "niwa-ws-" t))
+         (outside-dir (make-temp-file "niwa-outside-" t))
+         (tmp (expand-file-name "outside.txt" outside-dir))
+         (ws (niwa-workspace--create :type 'project :id "mention-drop"
+                                        :root ws-root
+                                        :name "mention-drop"))
+         (session (niwa-session-create "main" ws))
+         (niwa-permission-rules nil))
+    (with-temp-file tmp (insert "dropped secret\n"))
+    (niwa-session-activate-dropped-file-grants session (list tmp))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "contents attached"
+                                  (plist-get result :placeholder)))
+          (should (string-match-p "dropped secret"
+                                  (plist-get result :reminder))))
+      (delete-file tmp)
+      (delete-directory outside-dir)
+      (delete-directory ws-root)))
+
+  :doc "active dropped-file grant does not override explicit deny rule"
+  (let* ((ws-root (make-temp-file "niwa-ws-" t))
+         (outside-dir (make-temp-file "niwa-outside-" t))
+         (tmp (expand-file-name "outside.txt" outside-dir))
+         (ws (niwa-workspace--create :type 'file :id "mention-drop-deny"
+                                        :root ws-root
+                                        :name "mention-drop-deny"))
+         (session (niwa-session-create "main" ws))
+         (niwa-permission-rules nil))
+    (with-temp-file tmp (insert "dropped secret\n"))
+    (niwa-session-activate-dropped-file-grants session (list tmp))
+    (niwa-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
+          (should (null (plist-get result :hash))))
+      (delete-file tmp)
+      (delete-directory outside-dir)
+      (delete-directory ws-root)))
+
+  :doc "invalid line ranges are rejected rather than relabeled"
+  ;; A typo hands the model content that does not match the label: a zero
+  ;; start silently reads from line 1, and a reversed range reads one line
+  ;; while claiming a span.  Nothing in the payload contradicts the label,
+  ;; so the model cannot tell.
+  (let ((tmp (make-temp-file "niwa-file-" nil ".txt"
+                             "line1\nline2\nline3\n")))
+    (unwind-protect
+        (dolist (spec '(("0" nil) ("0" "2") ("3" "1")))
+          (let* ((suffix (if (cadr spec)
+                             (format "#L%s-%s" (car spec) (cadr spec))
+                           (format "#L%s" (car spec))))
+                 (result (niwa--handle-file-mention
+                          (list :match-text (concat "@file:" tmp suffix)
+                                :capture tmp
+                                :captures (list (concat "@file:" tmp suffix)
+                                                tmp (car spec) (cadr spec))
+                                :workspace-root temporary-file-directory))))
+            (should (string-match-p "invalid line range"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :hash))
+            (should-not (string-match-p
+                         "line1" (or (plist-get result :reminder) "")))))
+      (delete-file tmp)))
+
+  :doc "line-range suffix reads only the requested lines"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt"
+                              "line1\nline2\nline3\nline4\nline5\n"))
+         (result (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" tmp "#L2-3")
+                        :capture tmp
+                        :captures (list (concat "@file:" tmp "#L2-3")
+                                        tmp "2" "3")
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (let ((reminder (plist-get result :reminder))
+              (placeholder (plist-get result :placeholder)))
+          (should (string-match-p (format "\\[file:%s#L2-3 -- contents attached above\\]"
+                                          (regexp-quote tmp))
+                                  placeholder))
+          (should (stringp reminder))
+          (should (string-match-p "line2" reminder))
+          (should (string-match-p "line3" reminder))
+          (should-not (string-match-p "line1" reminder))
+          (should-not (string-match-p "line5" reminder))
+          (should (string-match-p "Lines 2-3 of" reminder)))
+      (delete-file tmp)))
+
+  :doc "single-line suffix reads exactly one line"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt"
+                              "line1\nline2\nline3\n"))
+         (result (niwa--handle-file-mention
+                  (list :match-text (concat "@file:" tmp "#L2")
+                        :capture tmp
+                        :captures (list (concat "@file:" tmp "#L2")
+                                        tmp "2" nil)
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (let ((reminder (plist-get result :reminder)))
+          (should (string-match-p "line2" reminder))
+          (should-not (string-match-p "line1" reminder))
+          (should-not (string-match-p "line3" reminder))
+          (should (string-match-p "Line 2 of" reminder)))
+      (delete-file tmp)))
+
+  :doc "whole-file and range reads have independent dedup keys"
+  (let* ((tmp (make-temp-file "niwa-file-" nil ".txt" "line1\nline2\n"))
+         (whole (niwa--handle-file-mention
+                 (list :match-text (concat "@file:" tmp)
+                       :capture tmp
+                       :captures (list (concat "@file:" tmp) tmp nil nil)
+                       :workspace-root temporary-file-directory)))
+         (range (niwa--handle-file-mention
+                 (list :match-text (concat "@file:" tmp "#L1")
+                       :capture tmp
+                       :captures (list (concat "@file:" tmp "#L1")
+                                       tmp "1" nil)
+                       :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (should-not (equal (plist-get whole :key) (plist-get range :key)))
+      (delete-file tmp)))
+
+  :doc "bound locator overrides the visible path during delayed dispatch"
+  (let* ((tmp (make-temp-file "niwa-bound-file-" nil ".txt"
+                              "bound contents\n"))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path tmp))
+         (elsewhere (make-temp-file "niwa-bound-cwd-" t))
+         (default-directory elsewhere)
+         (result (niwa--handle-file-mention
+                  (list :match-text token
+                        :capture "visible.txt"
+                        :captures (list token "visible.txt" nil nil)
+                        :binding binding
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (progn
+          (should (string-match-p "bound contents"
+                                  (plist-get result :reminder)))
+          (should (equal (cons 'file (cons tmp ""))
+                         (plist-get result :key))))
+      (delete-directory elsewhere t)
+      (delete-file tmp)))
+
+  :doc "bound deletion warns without falling back to the visible path"
+  (let* ((dir (make-temp-file "niwa-bound-delete-" t))
+         (bound (expand-file-name "gone.txt" dir))
+         (visible (expand-file-name "visible.txt" dir))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path bound))
+         result)
+    (with-temp-file visible (insert "must not leak\n"))
+    (let ((default-directory dir))
+      (setq result
+            (niwa--handle-file-mention
+             (list :match-text token
+                   :capture "visible.txt"
+                   :captures (list token "visible.txt" nil nil)
+                   :binding binding
+                   :workspace-root dir))))
+    (unwind-protect
+        (progn
+          (should (string-match-p "does not exist"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :warning)))
+          (should-not (string-match-p "must not leak"
+                                      (plist-get result :reminder))))
+      (delete-directory dir t)))
+
+  :doc "same-path replacement changes the current content hash"
+  (let* ((tmp (make-temp-file "niwa-bound-replace-" nil ".txt" "first\n"))
+         (token "@file:stable.txt")
+         (binding (list :kind 'file :token token :path tmp))
+         (info (list :match-text token
+                     :capture "stable.txt"
+                     :captures (list token "stable.txt" nil nil)
+                     :binding binding
+                     :workspace-root temporary-file-directory))
+         (first (niwa--handle-file-mention info)))
+    (unwind-protect
+        (progn
+          (delete-file tmp)
+          (with-temp-file tmp (insert "second\n"))
+          (let ((second (niwa--handle-file-mention info)))
+            (should (equal (plist-get first :key) (plist-get second :key)))
+            (should-not (equal (plist-get first :hash)
+                               (plist-get second :hash)))
+            (should (string-match-p "second"
+                                    (plist-get second :reminder)))))
+      (delete-file tmp)))
+
+  :doc "current permission denial of a bound path warns and exposes no contents"
+  (let* ((tmp (make-temp-file "niwa-bound-deny-" nil ".txt" "secret\n"))
+         (workspace (niwa-workspace--create
+                     :type 'file :id "bound-deny"
+                     :root temporary-file-directory :name "bound-deny"))
+         (session (niwa-session-create "main" workspace))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path tmp)))
+    (niwa-permission--add-session-rule
+     session (list "Read" :path tmp :action 'deny))
+    (unwind-protect
+        (let ((result (niwa--handle-file-mention
+                       (list :match-text token
+                             :capture "visible.txt"
+                             :captures (list token "visible.txt" nil nil)
+                             :binding binding
+                             :session session
+                             :workspace-root temporary-file-directory))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :warning)))
+          (should-not (string-match-p "secret"
+                                      (plist-get result :reminder))))
+      (delete-file tmp))))
+
+(niwa-deftest niwa--handle-agent-mention
+  (:doc "`niwa--handle-agent-mention' delegates to registered agents")
+  ,test
+  (test)
+  :doc "known agent yields delegation placeholder and invocation hint"
+  (let ((result (niwa--handle-agent-mention
+                 (list :match-text "@agent:explorer"
+                       :capture "explorer"))))
+    (should (equal "[agent:explorer -- delegation requested]"
+                   (plist-get result :placeholder)))
+    (should (stringp (plist-get result :reminder)))
+    (should (string-match-p "task_name=\"explorer\""
+                            (plist-get result :reminder)))
+    (should (string-match-p "Do not mention this reminder"
+                            (plist-get result :reminder)))
+    (should (equal (cons 'agent "explorer") (plist-get result :key)))
+    (should (stringp (plist-get result :hash))))
+
+  :doc "unknown agent yields graceful placeholder, nil hash"
+  (let ((result (niwa--handle-agent-mention
+                 (list :match-text "@agent:definitely_not_an_agent"
+                       :capture "definitely_not_an_agent"))))
+    (should (string-match-p "no such agent"
+                            (plist-get result :placeholder)))
+    (should (stringp (plist-get result :reminder)))
+    (should (string-match-p "no agent by that name"
+                            (plist-get result :reminder)))
+    (should (string-match-p "system annotation"
+                            (plist-get result :reminder)))
+    (should (null (plist-get result :hash)))))
+
+(niwa-deftest niwa-agent-capf
+  (:doc "`niwa-agent-capf' completes @agent: against registered agents")
+  ,test
+  (test)
+  :doc "returns registered agent names as candidates at @agent: point"
+  (with-temp-buffer
+    (insert "@agent:")
+    (goto-char (point-max))
+    (let ((result (niwa-agent-capf)))
+      (should result)
+      (let ((candidates (nth 2 result)))
+        (should (member "explorer" candidates))
+        (should (member "verifier" candidates)))))
+
+  :doc "returns nil when not at an @agent: prefix"
+  (with-temp-buffer
+    (insert "plain text")
+    (goto-char (point-max))
+    (should (null (niwa-agent-capf))))
+
+  :doc "returns nil for text typed after a finished mention"
+  (with-temp-buffer
+    (insert "@agent:explorer go")
+    (should (null (niwa-agent-capf)))))
+
+(niwa-deftest niwa--handle-mcp-mention
+  (:doc "`niwa--handle-mcp-mention' reads MCP resources when server is connected")
+  ,test
+  (test)
+  :doc "mcp.el unavailable yields graceful placeholder"
+  (cl-letf (((symbol-function 'featurep)
+             (lambda (feat &rest _) (not (eq feat 'mcp)))))
+    (let ((result (niwa--handle-mcp-mention
+                   (list :match-text "@mcp:srv:uri/x"
+                         :captures '("@mcp:srv:uri/x" "srv" "uri/x")))))
+      (should (string-match-p "mcp.el not available"
+                              (plist-get result :placeholder)))
+      (should (null (plist-get result :hash)))))
+
+  :doc "unknown server yields graceful placeholder"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () nil)))
+    (let ((result (niwa--handle-mcp-mention
+                   (list :match-text "@mcp:nosuch:uri"
+                         :captures '("@mcp:nosuch:uri" "nosuch" "uri")))))
+      (should (string-match-p "unknown server"
+                              (plist-get result :placeholder)))
+      (should (null (plist-get result :hash)))))
+
+  :doc "disconnected server yields graceful placeholder"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers)
+             (lambda () (list (list :name "srv" :status 'stop)))))
+    (let ((result (niwa--handle-mcp-mention
+                   (list :match-text "@mcp:srv:uri"
+                         :captures '("@mcp:srv:uri" "srv" "uri")))))
+      (should (string-match-p "not connected"
+                              (plist-get result :placeholder)))
+      (should (null (plist-get result :hash)))))
+
+  :doc "bound disconnected server yields a nonblocking warning"
+  (let ((token "@mcp:srv:uri"))
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'stop)))))
+      (let ((result
+             (niwa--handle-mcp-mention
+              (list :match-text token
+                    :captures (list token "srv" "uri")
+                    :binding (list :kind 'mcp :token token
+                                   :server "srv" :uri "uri")))))
+        (should (string-match-p "not connected"
+                                (plist-get result :placeholder)))
+        (should (string-match-p "MCP @mcp:srv:uri is unavailable"
+                                (plist-get result :warning))))))
+
+  :doc "successful read attaches content and computes hash"
+  (let ((fake-conn (make-hash-table))
+        (table (make-hash-table :test #'equal)))
+    (puthash "srv" fake-conn table)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (_conn _uri)
+                 (list :contents (vector (list :type "text"
+                                               :text "hello resource"))))))
+      (let* ((mcp-server-connections table)
+             (result (niwa--handle-mcp-mention
+                      (list :match-text "@mcp:srv:uri/x"
+                            :captures '("@mcp:srv:uri/x" "srv" "uri/x")))))
+        (should (equal "[mcp:srv:uri/x -- contents attached above]"
+                       (plist-get result :placeholder)))
+        (should (string-match-p "hello resource"
+                                (plist-get result :reminder)))
+        (should (equal (cons 'mcp (cons "srv" "uri/x"))
+                       (plist-get result :key)))
+        (should (stringp (plist-get result :hash))))))
+
+  :doc "bound MCP locators use the canonical resource resolver"
+  (let (seen)
+    (cl-letf (((symbol-function 'niwa-resource-prepare)
+               (lambda (operation address context)
+                 (setq seen (list operation address context))
+                 'resource-attempt))
+              ((symbol-function 'niwa-resource-execute)
+               (lambda (attempt)
+                 (should (eq attempt 'resource-attempt))
+                 '(:result "resolver body"))))
+      (let ((result
+             (niwa--handle-mcp-mention
+              (list :match-text "@mcp:srv:file:///guide"
+                    :captures '("@mcp:srv:file:///guide" "srv"
+                                "file:///guide")
+                    :binding (list :kind 'mcp
+                                   :token "@mcp:srv:file:///guide"
+                                   :server "srv"
+                                   :uri "file:///guide")))))
+        (should (string-match-p "resolver body"
+                                (plist-get result :reminder)))
+        (should (equal '(read "mcp://srv/file%3A%2F%2F%2Fguide"
+                              (:session nil))
+                       seen)))))
+
+  :doc "a replacement connection under the same server name is used"
+  (let ((first-connection (make-symbol "first-connection"))
+        (second-connection (make-symbol "second-connection"))
+        (table (make-hash-table :test #'equal))
+        (token "@mcp:srv:uri")
+        first second)
+    (puthash "srv" first-connection table)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (connection _uri)
+                 (list :contents
+                       (vector
+                        (list :type "text"
+                              :text (if (eq connection first-connection)
+                                        "first contents"
+                                      "replacement contents")))))))
+      (let ((mcp-server-connections table)
+            (info (list :match-text token
+                        :captures (list token "srv" "uri")
+                        :binding (list :kind 'mcp :token token
+                                       :server "srv" :uri "uri"))))
+        (setq first (niwa--handle-mcp-mention info))
+        (puthash "srv" second-connection table)
+        (setq second (niwa--handle-mcp-mention info))))
+    (should (string-match-p "first contents" (plist-get first :reminder)))
+    (should (string-match-p "replacement contents"
+                            (plist-get second :reminder)))
+    (should (equal (plist-get first :key) (plist-get second :key)))
+    (should-not (equal (plist-get first :hash) (plist-get second :hash))))
+
+  :doc "bound permission failure warns without exposing contents"
+  (let ((fake-conn (make-hash-table))
+        (table (make-hash-table :test #'equal)))
+    (puthash "srv" fake-conn table)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (_conn _uri) (signal 'error '("Permission denied")))))
+      (let* ((mcp-server-connections table)
+             (token "@mcp:srv:bad")
+             (result (niwa--handle-mcp-mention
+                      (list :match-text token
+                            :captures (list token "srv" "bad")
+                            :binding (list :kind 'mcp :token token
+                                           :server "srv" :uri "bad")))))
+        (should (string-match-p "read failed: Permission denied"
+                                (plist-get result :placeholder)))
+        (should-not (string-match-p "protected contents"
+                                    (plist-get result :reminder)))
+        (should (string-match-p "MCP @mcp:srv:bad is unavailable"
+                                (plist-get result :warning)))
+        (should (null (plist-get result :hash))))))
+
+  :doc "missing bound resource warns and supplies no contents"
+  (let ((connection (make-symbol "connection"))
+        (connections (make-hash-table :test #'equal)))
+    (puthash "srv" connection connections)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (_connection _uri)
+                 (signal 'error '("Resource not found")))))
+      (let* ((mcp-server-connections connections)
+             (token "@mcp:srv:missing")
+             (result (niwa--handle-mcp-mention
+                      (list :match-text token
+                            :captures (list token "srv" "missing")
+                            :binding (list :kind 'mcp :token token
+                                           :server "srv" :uri "missing")))))
+        (should (string-match-p "read failed: Resource not found"
+                                (plist-get result :placeholder)))
+        (should-not (string-match-p "contents attached"
+                                    (plist-get result :reminder)))
+        (should (string-match-p "MCP @mcp:srv:missing is unavailable"
+                                (plist-get result :warning)))
+        (should (null (plist-get result :hash)))))))
+
+(niwa-deftest niwa-note-capf
+  (:before-each
+   (niwa-test--reset-instructions)
+   :after-each
+   (niwa-test--reset-instructions))
+  ,test
+  (test)
+  :doc "both direct spellings bind the selected note UUID immediately"
+  (let* ((cell (niwa-test--make-note-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (id-string (number-to-string (niwa--instruction-id ref)))
+         (uuid (overlay-get ref 'niwa-uuid))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buf))))
+    (unwind-protect
+        (dolist (kind '(note ref))
+          (with-temp-buffer
+            (setq-local niwa--session session)
+            (insert (format "@%s:" kind))
+            (let* ((capf (niwa-note-capf))
+                   (start (nth 0 capf))
+                   (end (nth 1 capf))
+                   (candidate (car (nth 2 capf)))
+                   (exit (plist-get (nthcdr 3 capf) :exit-function)))
+              (should (equal id-string candidate))
+              (should (equal uuid (get-text-property
+                                   0 'niwa-note-uuid candidate)))
+              (should (functionp exit))
+              (delete-region start end)
+              (goto-char start)
+              (insert id-string)
+              (funcall exit id-string 'finished)
+              (let ((binding (get-text-property
+                              (point-min) 'niwa-mention-binding)))
+                (should (eq kind (plist-get binding :kind)))
+                (should (equal (format "@%s:%s" kind id-string)
+                               (plist-get binding :token)))
+                (should (equal uuid (plist-get binding
+                                             (if (eq kind 'note)
+                                                 :note-uuid :reference-uuid))))))))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file)) (delete-file file)))))
+
+  :doc "both query spellings offer note tags and remain unbound"
+  (let* ((cell (niwa-test--make-note-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buf))))
+    (overlay-put ref 'niwa-note-tags '(alpha))
+    (unwind-protect
+        (dolist (kind '(note ref))
+          (with-temp-buffer
+            (setq-local niwa--session session)
+            (insert (format "@%s:{a" kind))
+            (let* ((capf (niwa-note-capf))
+                   (candidate (car (nth 2 capf))))
+              (should (equal "alpha" candidate))
+              (should (= 1 (get-text-property
+                            0 'niwa-match-count candidate)))
+              (should-not (plist-get (nthcdr 3 capf) :exit-function))
+              (should-not (text-property-not-all
+                           (point-min) (point-max)
+                           'niwa-mention-binding nil)))))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file)) (delete-file file))))))
+
+(niwa-deftest niwa-file-capf ()
+  ,test
+  (test)
+  :doc "paths may contain spaces, but text after a completed mention is not completed"
+  (let* ((root (file-name-as-directory (make-temp-file "niwa-capf-space-" t)))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "capf-space")))
+    (make-directory (expand-file-name "My Dir" root))
+    (with-temp-file (expand-file-name "My Dir/a.txt" root) (insert "a\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          (with-temp-buffer
+            (insert "@file:My Dir/")
+            (should (member "My Dir/a.txt" (nth 2 (niwa-file-capf)))))
+          ;; A region spanning the space kept Corfu open showing \"No match\".
+          (with-temp-buffer
+            (insert "@file:My Dir/a.txt")
+            (niwa-mention-bindings-set
+             (point-min) (point)
+             (list :kind 'file :token "@file:My Dir/a.txt"
+                   :path (expand-file-name "My Dir/a.txt" root)))
+            (insert " seems th")
+            (should-not (niwa-file-capf))))
+      (delete-directory root t)))
+
+  :doc "completion stays inside the session's allowed roots"
+  ;; The candidate list is built from whatever the user typed, expanded
+  ;; against the workspace root, with no containment test: `../' walks to the
+  ;; filesystem root and an absolute prefix enumerates anywhere.  On a remote
+  ;; workspace that also drives synchronous TRAMP while the user is typing.
+  (let* ((base (make-temp-file "niwa-capf-base-" t))
+         (root (expand-file-name "ws" base))
+         (temporary-file-directory (file-name-as-directory
+                                    (expand-file-name "tmp" root)))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "capf-root")))
+    (make-directory temporary-file-directory t)
+    (with-temp-file (expand-file-name "sibling.txt" base) (insert "outside\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          ;; No parent candidate at a root boundary.
+          (with-temp-buffer
+            (insert "@file:")
+            (should-not (member "../" (nth 2 (niwa-file-capf)))))
+          ;; An out-of-root prefix yields nothing and probes nothing.
+          (with-temp-buffer
+            (insert (format "@file:%s/" (directory-file-name base)))
+            (cl-letf (((symbol-function 'directory-files)
+                       (lambda (&rest _)
+                         (error "enumerated outside the allowed roots"))))
+              (should-not (niwa-file-capf)))))
+      (delete-directory base t)))
+
+  :doc "completion reaches a root the user added to the session"
+  ;; The additional-roots alist is buffer-local to the data buffer, so a
+  ;; guard resolved in the view buffer sees only the global default and every
+  ;; root added with `niwa-add-project-root' becomes uncompletable.
+  (let* ((base (make-temp-file "niwa-capf-extra-" t))
+         (root (expand-file-name "ws" base))
+         (extra (file-name-as-directory (expand-file-name "extra" base)))
+         ;; Keep the enclosing temp directory out of the allowed set, or the
+         ;; whole fixture is trivially inside a root.
+         (temporary-file-directory (file-name-as-directory
+                                    (expand-file-name "tmp" root)))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "capf-extra"))
+         (data (generate-new-buffer " *capf-extra-data*")))
+    (make-directory root t)
+    (make-directory temporary-file-directory t)
+    (make-directory extra t)
+    (with-temp-file (expand-file-name "found.txt" extra) (insert "in\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          (with-current-buffer data
+            (setq-local niwa--session
+                        (niwa-session--create :name "main"
+                                                 :workspace workspace))
+            ;; Keyed exactly as `niwa-add-project-root' keys it: the
+            ;; workspace root as the struct carries it.
+            (setq-local niwa-workspace-additional-roots
+                        (list (cons root (list extra)))))
+          (with-temp-buffer
+            (setq-local niwa--data-buffer data)
+            (insert (format "@file:%s" extra))
+            (let ((capf (niwa-file-capf)))
+              (should capf)
+              (should (member "found.txt"
+                              (mapcar #'file-name-nondirectory
+                                      (nth 2 capf)))))))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory base t)))
+
+  :doc "`niwa-file-capf' binds a completed file's absolute pathname"
+  (let* ((root (make-temp-file "niwa file capf-" t))
+         (path (expand-file-name "target file.txt" root))
+         (workspace (niwa-workspace--create
+                     :type 'file :id root :root root :name "file-capf")))
+    (with-temp-file path (insert "target\n"))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "@file:tar")
+          (cl-letf (((symbol-function 'niwa-workspace)
+                     (lambda (&optional _buffer) workspace)))
+            (let* ((capf (niwa-file-capf))
+                   (start (nth 0 capf))
+                   (end (nth 1 capf))
+                   (candidate (car (all-completions "tar" (nth 2 capf))))
+                   (exit (plist-get (nthcdr 3 capf) :exit-function)))
+              (delete-region start end)
+              (goto-char start)
+              (insert candidate)
+              (funcall exit candidate 'finished)
+              (should (equal (format "@file:{%s}" path) (buffer-string)))
+              (should
+               (equal (list :kind 'file
+                            :token (format "@file:{%s}" path)
+                            :path path)
+                      (get-text-property
+                       (point-min) 'niwa-mention-binding))))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-mentions-file-token
+  (:doc "`niwa-mentions-file-token' braces paths that need quoting")
+  ,test
+  (test)
+  (should (equal "@file:/tmp/a.el"
+                 (niwa-mentions-file-token "/tmp/a.el")))
+  (should (equal "@file:{/tmp/a b#c.el}"
+                 (niwa-mentions-file-token "/tmp/a b#c.el")))
+  (should (equal "@file:{a\\\\b\\}c}"
+                 (niwa-mentions-file-token "a\\b}c"))))
+
+(niwa-deftest niwa-mentions--file-completion-exit-function
+  (:doc "file completion replaces and binds one exact path atomically")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "@file:target")
+    (let ((candidate
+           (propertize "target"
+                       'niwa-abs-path "/tmp/target file.txt"
+                       'niwa-is-dir nil)))
+      (niwa-mentions--file-completion-exit-function
+       (list candidate) (point-min) (+ (point-min) 6)
+       "target" 'finished)
+      (should (equal "@file:{/tmp/target file.txt}" (buffer-string)))
+      (should
+       (equal '(:kind file
+                :token "@file:{/tmp/target file.txt}"
+                :path "/tmp/target file.txt")
+              (get-text-property
+               (point-min) 'niwa-mention-binding))))))
+
+(niwa-deftest niwa-mentions--mcp-completion-exit-function
+  (:doc "MCP resource completion binds the server and URI atomically")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "@mcp:docs:file:///guide")
+    (niwa-mentions--mcp-completion-exit-function
+     "docs" "file:///guide" 'finished)
+    (should
+     (equal '(:kind mcp :token "@mcp:docs:file:///guide"
+              :server "docs" :uri "file:///guide")
+            (get-text-property
+             (point-min) 'niwa-mention-binding)))))
+
+(niwa-deftest niwa-mention-capf
+  (:doc "`niwa-mention-capf' offers mention prefixes at bare @")
+  ,test
+  (test)
+  :doc "returns all mention-type candidates at bare @"
+  (with-temp-buffer
+    (insert "@")
+    (goto-char (point-max))
+    (let ((result (niwa-mention-capf)))
+      (should result)
+      (let ((candidates (nth 2 result)))
+        (should (member "@ref:" candidates))
+        (should (member "@ref:{}" candidates))
+        (should (member "@file:" candidates))
+        (should (member "@agent:" candidates))
+        (should (member "@mcp:" candidates)))))
+
+  :doc "returns candidates after partial alpha letters"
+  (with-temp-buffer
+    (insert "@fil")
+    (goto-char (point-max))
+    (let ((result (niwa-mention-capf)))
+      (should result)
+      (let ((start (nth 0 result))
+            (end (nth 1 result)))
+        (should (= start 1))
+        (should (= end 5)))))
+
+  :doc "returns nil once prefix is complete (colon seen)"
+  (with-temp-buffer
+    (insert "@ref:")
+    (goto-char (point-max))
+    (should (null (niwa-mention-capf))))
+
+  :doc "returns nil for plain text without @"
+  (with-temp-buffer
+    (insert "plain text")
+    (goto-char (point-max))
+    (should (null (niwa-mention-capf))))
+
+  :doc "exit-function places point between braces after @ref:{} completion"
+  (with-temp-buffer
+    (insert "@")
+    (goto-char (point-max))
+    (let* ((result (niwa-mention-capf))
+           (start (nth 0 result))
+           (end (nth 1 result))
+           (exit-fn (plist-get (nthcdr 3 result) :exit-function)))
+      (should (functionp exit-fn))
+      ;; Simulate completion inserting "@ref:{}" and moving point after it.
+      (delete-region start end)
+      (goto-char start)
+      (insert "@ref:{}")
+      (funcall exit-fn "@ref:{}" 'finished)
+      (should (equal "@ref:{}" (buffer-string)))
+      ;; Point must land between the braces.
+      (should (= (point) (1- (point-max))))
+      (should (eq (char-after) ?}))
+      (should (eq (char-before) ?{)))))
+
+(niwa-deftest niwa-mcp-capf
+  (:doc "`niwa-mcp-capf' completes servers and resources from mcp.el")
+  ,test
+  (test)
+  :doc "returns server name candidates at @mcp: prefix"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers)
+             (lambda ()
+               (list (list :name "alpha" :status 'connected)
+                     (list :name "beta"  :status 'stop)))))
+    (with-temp-buffer
+      (insert "@mcp:")
+      (goto-char (point-max))
+      (let ((result (niwa-mcp-capf)))
+        (should result)
+        (let ((candidates (nth 2 result)))
+          (should (member "alpha" candidates))
+          (should (member "beta" candidates))))))
+
+  :doc "resource completion binds the selected server and URI immediately"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers)
+             (lambda ()
+               (list (list :name "alpha"
+                           :status 'connected
+                           :resources
+                           (list (list :uri "file:///a.txt" :name "A")
+                                 (list :uri "file:///b.txt" :name "B")))))))
+    (with-temp-buffer
+      (insert "@mcp:alpha:file:///a")
+      (goto-char (point-max))
+      (let* ((result (niwa-mcp-capf))
+             (start (nth 0 result))
+             (end (nth 1 result))
+             (candidates (nth 2 result))
+             (candidate (car (all-completions "file:///a" candidates)))
+             (exit (plist-get (nthcdr 3 result) :exit-function)))
+        (should result)
+        (should (member "file:///a.txt" candidates))
+        (should (functionp exit))
+        (delete-region start end)
+        (goto-char start)
+        (insert candidate)
+        (funcall exit candidate 'finished)
+        (should
+         (equal '(:kind mcp :token "@mcp:alpha:file:///a.txt"
+                  :server "alpha" :uri "file:///a.txt")
+                (get-text-property
+                 (point-min) 'niwa-mention-binding))))))
+
+  :doc "returns nil when not at an @mcp: prefix"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () nil)))
+    (with-temp-buffer
+      (insert "plain text")
+      (goto-char (point-max))
+      (should (null (niwa-mcp-capf)))))
+
+  :doc "returns nil for text typed after a finished mention"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers)
+             (lambda () (list (list :name "alpha" :status 'connected)))))
+    (with-temp-buffer
+      (insert "@mcp:alpha more")
+      (should (null (niwa-mcp-capf))))))
+
+
+;;
+;;; Transform
+
+(defun test-niwa-mentions--staged-bodies (fsm &optional commit)
+  "Return and clear reminder bodies staged on FSM.
+When COMMIT is non-nil, run the staged commits first, as the reminder
+injector would once the payload exists."
+  (let* ((info (gptel-fsm-info fsm))
+         (entries (plist-get info :niwa-reminder-entries))
+         (commits (plist-get info :niwa-reminder-commits)))
+    (when commit (mapc #'funcall commits))
+    (setf (gptel-fsm-info fsm)
+          (plist-put (plist-put info :niwa-reminder-entries nil)
+                     :niwa-reminder-commits nil))
+    (mapcar (lambda (entry) (plist-get entry :body)) entries)))
+
+(niwa-deftest niwa-mentions--expand-buffer ()
+  ,test
+  (test)
+  :doc "returns media separately and defers dedup changes"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'file :id "expand-buffer" :root "/tmp"
+                     :name "expand-buffer"))
+         (session (niwa-session-create "main" workspace))
+         (niwa-mention-handlers
+          (list
+           (list "@asset" nil
+                 (lambda (_info)
+                   '(:placeholder "[asset -- attached]"
+                     :media-contexts (("/tmp/asset.png" "image/png"))
+                     :key (asset . "/tmp/asset.png")
+                     :hash "asset-hash")))))
+         expansion)
+    (with-temp-buffer
+      (insert "Use @asset")
+      (setq expansion
+            (niwa-mentions--expand-buffer session nil))
+      (should (equal "Use [asset -- attached]" (buffer-string))))
+    (should (equal '(("/tmp/asset.png" "image/png"))
+                   (plist-get expansion :media-contexts)))
+    (should (equal '(((asset . "/tmp/asset.png") . "asset-hash"))
+                   (plist-get expansion :dedup-updates)))
+    (should-not
+     (gethash '(asset . "/tmp/asset.png")
+              (niwa-session-mentions-shown session))))
+
+  :doc "keeps reminder, media and deferred commit ordering independent"
+  (let* ((session (niwa-session-create
+                   "main" (niwa-workspace--create
+                           :type 'file :id "expansion-order" :root "/tmp"
+                           :name "expansion-order")))
+         (shown (niwa-session-mentions-shown session))
+         (results
+          '((:key text :hash "first" :reminder "text first")
+            (:key text :hash "second" :reminder "text duplicate")
+            (:key prior :hash "known" :reminder "already delivered")
+            (:key media :hash "one" :reminder "media first"
+             :media-contexts (("one.png" "image/png")))
+            (:key media :hash "two" :reminder "media duplicate"
+             :media-contexts (("two.png" "image/png")))
+            (:reminder "anonymous first")
+            (:reminder "anonymous second")
+            (:key denied :reminder "unavailable")
+            (:key empty :hash "nothing delivered")
+            (:key prior :hash "known" :reminder "already delivered"
+             :media-contexts (("known.png" "image/png")))
+            (:key unhashed :media-contexts (("unhashed.png" "image/png")))
+            (:media-contexts (("anonymous.png" "image/png")))))
+         (niwa-mention-handlers
+          (list (list "@item:\\([0-9]+\\)" nil
+                      (lambda (info)
+                        (let ((index (string-to-number
+                                      (plist-get info :capture))))
+                          (append (list :placeholder (format "[%d]" index))
+                                  (nth (1- index) results)))))))
+         expansion)
+    (puthash 'prior '(0 . "known") shown)
+    (with-temp-buffer
+      (insert (propertize
+               (mapconcat (lambda (i) (format "@item:%d" i))
+                          (number-sequence 1 12) " ")
+               'gptel 'prompt))
+      (setq expansion (niwa-mentions--expand-buffer session nil))
+      (should (equal "[1] [2] [3] [4] [5] [6] [7] [8] [9] [10] [11] [12]"
+                     (buffer-string)))
+      (should-not (text-property-not-all
+                   (point-min) (point-max) 'gptel 'prompt)))
+    (should (equal '((:key text :body "text first")
+                     (:key media :body "media first")
+                     (:key nil :body "anonymous first")
+                     (:key nil :body "anonymous second")
+                     (:key denied :body "unavailable"))
+                   (plist-get expansion :reminder-items)))
+    (should (equal '(("one.png" "image/png") ("two.png" "image/png")
+                     ("known.png" "image/png") ("unhashed.png" "image/png")
+                     ("anonymous.png" "image/png"))
+                   (plist-get expansion :media-contexts)))
+    (should (equal '((prior . "known") (media . "two")
+                     (media . "one") (text . "first"))
+                   (plist-get expansion :dedup-updates)))
+    (should (= 1 (hash-table-count shown)))
+    (niwa-mentions-commit-expansion session expansion)
+    (should (= 3 (hash-table-count shown)))
+    (should (equal "first" (cdr (gethash 'text shown))))
+    (should (equal "one" (cdr (gethash 'media shown))))))
+
+(niwa-deftest niwa-mentions-commit-expansion ()
+  ,test
+  (test)
+  :doc "records accepted expansion hashes at the current session turn"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'file :id "commit-expansion" :root "/tmp"
+                     :name "commit-expansion"))
+         (session (niwa-session-create "main" workspace))
+         (key (cons 'ref "uuid")))
+    (niwa-mentions-commit-expansion
+     session (list :dedup-updates (list (cons key "hash"))))
+    (should (equal (cons (niwa-session-turn-count session) "hash")
+                   (gethash key (niwa-session-mentions-shown session))))))
+
+(niwa-deftest niwa-mentions-expand-user-input
+  (:before-each
+   (niwa-test--reset-instructions)
+   :after-each
+   (niwa-test--reset-instructions))
+  ,test
+  (test)
+  :doc "expands a bound ref token into one model-ready note attachment"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'file :id "steering-mention" :root "/tmp"
+                     :name "steering-mention"))
+         (cell (niwa-test--make-note-buffer
+                "steering reference body\n"
+                "steering reference body"
+                workspace))
+         (buffer (car cell))
+         (reference (cdr cell))
+         (id (niwa--instruction-id reference))
+         (session (niwa-session-create "main" workspace))
+         (input (niwa-mentions-prepare-user-input
+                 (format "Use @ref:%d" id) session)))
+    (unwind-protect
+        (let* ((expansion
+                (niwa-mentions-expand-user-input input session))
+               (expanded (plist-get expansion :text))
+               (items (plist-get expansion :reminder-items)))
+          (should-not (string-match-p (format "@ref:%d" id) expanded))
+          (should (string-match-p
+                   (format "\\[note:%d -- contents attached above\\]" id)
+                   expanded))
+          ;; Contents travel as reminder items for the caller to stage,
+          ;; never as inline text.
+          (should-not (string-match-p "steering reference body" expanded))
+          (should-not (string-match-p "<system-reminder>" expanded))
+          (should (= 1 (length items)))
+          (should (string-match-p "steering reference body"
+                                  (plist-get (car items) :body)))
+          (should-not (plist-get expansion :media-contexts))
+          (should (plist-get expansion :dedup-updates)))
+      (let ((file (buffer-file-name buffer)))
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer)
+        (when (file-exists-p file)
+          (delete-file file)))))
+
+  :doc "restores a stashed note by its bound ref UUID at dispatch"
+  (let* ((cell (niwa-test--make-note-buffer "alpha body\n" "alpha body"))
+         (buffer (car cell))
+         (note (cdr cell))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buffer)))
+         (input (niwa-mentions-prepare-user-input
+                 (format "@ref:%d" (niwa--instruction-id note)) session))
+         (file (buffer-file-name buffer)))
+    (unwind-protect
+        (progn
+          (kill-buffer buffer)
+          (should-not (get-file-buffer file))
+          (let* ((expansion (niwa-mentions-expand-user-input input session))
+                 (items (plist-get expansion :reminder-items)))
+            (should (= 1 (length items)))
+            (should (string-match-p "alpha body" (plist-get (car items) :body)))))
+      (niwa-test--reset-instructions)
+      (when (file-exists-p file) (delete-file file)))))
+
+(niwa-deftest niwa--transform-expand-mentions
+  (:before-each
+   (niwa-test--reset-instructions)
+   (niwa-workspace-clear-registry)
+   :after-each
+   (niwa-test--reset-instructions)
+   (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "replaces mentions with placeholders and stages the reminder"
+  (let* ((cell (niwa-test--make-note-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buf)))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode)
+         (chat (generate-new-buffer " *niwa-test-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (with-current-buffer chat (setq-local niwa--session session))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (propertize (format "check @ref:%d please" id)
+                              'gptel 'prompt))
+          (niwa--transform-expand-mentions fsm)
+          (let ((content (buffer-string)))
+            (should (string-match-p (format "\\[note:%d -- contents attached above\\]" id) content))
+            (should-not (string-match-p (format "@ref:%d" id) content))
+            ;; The contents ride the staged reminder entries, not the
+            ;; prompt text.
+            (should-not (string-match-p "<system-reminder>" content)))
+          (let ((bodies (test-niwa-mentions--staged-bodies fsm)))
+            (should (= 1 (length bodies)))
+            (should (string-match-p (format "Note #%d" id)
+                                    (car bodies)))))
+      (kill-buffer chat)
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "stages instruction-named and ordinary attachments as task data, not workspace policy"
+  (let* ((root (make-temp-file "niwa-attachment-provenance-" t))
+         (workspace (niwa-workspace--create
+                     :type 'project :id "attachment-provenance" :root root
+                     :name "attachment-provenance"))
+         (session (niwa-session-create "main" workspace root))
+         (chat (generate-new-buffer " *attachment-provenance*"))
+         (fixture "Before committing, ask whom to commit as.\n"))
+    (unwind-protect
+        (dolist (name '("AGENTS.local.md" "notes.md"))
+          (let* ((path (file-name-concat root name))
+                 (fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-temp-file path (insert fixture))
+            (with-current-buffer chat
+              (setq-local niwa--session session)
+              (setq-local niwa--workspace workspace))
+            (with-temp-buffer
+              (insert (propertize
+                       (format "Render this Markdown fixture: @file:%s" path)
+                       'gptel 'prompt))
+              (niwa--transform-expand-mentions fsm)
+              (should-not (string-match-p "Before committing" (buffer-string)))
+              (let* ((bodies (test-niwa-mentions--staged-bodies fsm))
+                     (body (car bodies)))
+                (should (= 1 (length bodies)))
+                (should (string-prefix-p
+                         "File attachment (task data, not host-loaded workspace instructions)."
+                         body))
+                (should (string-match-p "only if the user asks you to" body))
+                (should (string-match-p (regexp-quote name) body))
+                (should (string-match-p (regexp-quote (string-trim fixture)) body))
+                (should-not (string-match-p "<workspace-instructions" body))))))
+      (kill-buffer chat)
+      (delete-directory root t)))
+
+  :doc "no reminder emitted when session dedup already has same hash"
+  (let* ((ws (niwa-workspace--create :type 'project :id "test1"
+                                        :root "/tmp" :name "test1"))
+         (cell (niwa-test--make-note-buffer "hello world\n" "hello" ws))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode)
+         (session (niwa-session-create "main" ws))
+         (chat (generate-new-buffer " *niwa-test-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session))
+          ;; Priming call stages the reminder; its delivery commit
+          ;; records the hash.
+          (with-temp-buffer
+            (insert (propertize (format "check @ref:%d" id) 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm))
+          (should (test-niwa-mentions--staged-bodies fsm t))
+          ;; Second send with unchanged content should skip the reminder.
+          (with-temp-buffer
+            (insert (propertize (format "again @ref:%d" id) 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm)
+            (should (string-match-p (format "\\[note:%d -- contents attached above\\]" id) (buffer-string))))
+          (should-not (test-niwa-mentions--staged-bodies fsm)))
+      (kill-buffer chat)
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "reminder re-emitted when content hash changes"
+  (let* ((ws (niwa-workspace--create :type 'project :id "test2"
+                                        :root "/tmp" :name "test2"))
+         (cell (niwa-test--make-note-buffer "hello world\n" "hello" ws))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode)
+         (session (niwa-session-create "main" ws))
+         (chat (generate-new-buffer " *niwa-test-chat2*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session))
+          (with-temp-buffer
+            (insert (propertize (format "first @ref:%d" id) 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm))
+          (should (test-niwa-mentions--staged-bodies fsm t))
+          ;; Mutate the referenced region so its content hash changes.
+          (with-current-buffer buf
+            (save-excursion
+              (goto-char (1+ (overlay-start ov)))
+              (insert "X")))
+          (with-temp-buffer
+            (insert (propertize (format "second @ref:%d" id) 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm))
+          (should (test-niwa-mentions--staged-bodies fsm)))
+      (kill-buffer chat)
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf
+          (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "MCP dedup uses locator and current content hash"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'file :id "mcp-dedup" :root "/tmp"
+                     :name "mcp-dedup"))
+         (session (niwa-session-create "main" workspace))
+         (chat (generate-new-buffer " *niwa-mcp-dedup-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         (connections (make-hash-table :test #'equal))
+         (connection (make-symbol "mcp-connection"))
+         (content "first MCP contents")
+         (input (niwa-mentions-prepare-user-input
+                 "Use @mcp:docs:file:///guide" session)))
+    (puthash "docs" connection connections)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session))
+          (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                     (lambda ()
+                       (list (list :name "docs" :status 'connected))))
+                    ((symbol-function 'mcp-read-resource)
+                     (lambda (_connection _uri)
+                       (list :contents
+                             (vector (list :type "text" :text content))))))
+            (let ((mcp-server-connections connections))
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (niwa--transform-expand-mentions fsm))
+              (let ((bodies (test-niwa-mentions--staged-bodies fsm t)))
+                (should (string-match-p "first MCP contents"
+                                        (car bodies))))
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (niwa--transform-expand-mentions fsm))
+              (should-not (test-niwa-mentions--staged-bodies fsm t))
+              (setq content "changed MCP contents")
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (niwa--transform-expand-mentions fsm))
+              (let ((bodies (test-niwa-mentions--staged-bodies fsm)))
+                (should (string-match-p "changed MCP contents"
+                                        (car bodies)))))))
+      (kill-buffer chat)))
+
+  :doc "unavailable bound MCP resource warns without mutating stored input"
+  (let* ((token "@mcp:docs:file:///guide")
+         (input (niwa-mentions-prepare-user-input
+                 (concat "Use " token " and continue")))
+         (start (string-match (regexp-quote token) input))
+         warning transformed)
+    (with-temp-buffer
+      (insert (propertize input 'gptel 'prompt))
+      (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                 (lambda () (list (list :name "docs" :status 'stop))))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq warning (apply #'format format-string args)))))
+        (niwa--transform-expand-mentions nil))
+      (setq transformed (buffer-string)))
+    (should (string-match-p "not connected" transformed))
+    (should (string-match-p (concat (regexp-quote "niwa [workspace unavailable]: ")
+                                   "MCP .* unavailable") warning))
+    (should (equal (concat "Use " token " and continue") input))
+    (should (equal "file:///guide"
+                   (plist-get
+                    (get-text-property
+                     start 'niwa-mention-binding input)
+                    :uri))))
+
+  :doc "reference queries expand only from the session workspace"
+  (let* ((workspace-a (niwa-workspace--create
+                       :type 'file :id "transform-query-a" :root "/tmp"
+                       :name "transform-query-a"))
+         (workspace-b (niwa-workspace--create
+                       :type 'file :id "transform-query-b" :root "/tmp"
+                       :name "transform-query-b"))
+         (first (niwa-test--make-note-buffer
+                 "first query body\n" "first query body" workspace-a))
+         (second (niwa-test--make-note-buffer
+                  "second query body\n" "second query body" workspace-b))
+         (session (niwa-session-create "query-a" workspace-a))
+         (chat (generate-new-buffer " *niwa-query-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (overlay-put (cdr first) 'niwa-note-tags '(shared))
+    (overlay-put (cdr second) 'niwa-note-tags '(shared))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session))
+          (with-temp-buffer
+            (insert (propertize "inspect @ref:{shared}" 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm))
+          (let ((bodies (test-niwa-mentions--staged-bodies fsm)))
+            (should (string-match-p "first query body" (car bodies)))
+            (should-not (string-match-p "second query body"
+                                        (car bodies)))))
+      (kill-buffer chat)))
+
+  :doc "unavailable bound ref never retargets or mutates stored input"
+  (let* ((first (niwa-test--make-note-buffer "alpha body\n" "alpha body"))
+         (first-buf (car first))
+         (workspace (buffer-local-value 'niwa--workspace first-buf))
+         (session (niwa-session-create "main" workspace))
+         (chat (generate-new-buffer " *bound-ref-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         (first-ref (cdr first))
+         (id (niwa--instruction-id first-ref))
+         (uuid (overlay-get first-ref 'niwa-uuid))
+         (token (format "@ref:%d" id))
+         (input (copy-sequence (format "check %s and continue" token)))
+         (start (string-match (regexp-quote token) input))
+         second warning transformed)
+    (niwa-mention-bindings-set
+     start (+ start (length token))
+     (list :kind 'ref :token token :reference-uuid uuid)
+     input)
+    (unwind-protect
+        (progn
+          ;; Retraction reserves the number; inject hostile display-number reuse
+          ;; to prove the stored UUID still cannot redirect to another note.
+          (niwa--delete-instruction first-ref first-buf t)
+          (setq second
+                (niwa-test--make-note-buffer "replacement body\n"
+                                                "replacement body" workspace))
+          (should-not (= id (niwa--instruction-id (cdr second))))
+          (overlay-put (cdr second) 'niwa-id id)
+          (with-current-buffer chat (setq-local niwa--session session))
+          (with-temp-buffer
+            (insert (propertize input 'gptel 'prompt))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (setq warning (apply #'format format-string args)))))
+              (niwa--transform-expand-mentions fsm))
+            (setq transformed (buffer-string)))
+          (should (string-match-p "unavailable" transformed))
+          (should-not (string-match-p "replacement body" transformed))
+          (should (string-match-p "note .*unavailable" warning))
+          (should (string-match-p
+                   "replacement body"
+                   (plist-get
+                    (car (plist-get (niwa-mentions-expand-user-input token session)
+                                    :reminder-items))
+                    :body)))
+          (should (equal (format "check %s and continue" token) input))
+          (should (equal uuid
+                         (plist-get
+                          (get-text-property
+                           start 'niwa-mention-binding input)
+                          :reference-uuid))))
+      (kill-buffer chat)
+      (dolist (buf (delq nil (list first-buf (car-safe second))))
+        (when (buffer-live-p buf)
+          (let ((file (buffer-file-name buf)))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)
+            (when (and file (file-exists-p file))
+              (delete-file file))))))))
+
+(niwa-deftest niwa--transform-expand-mentions-media
+  (:doc "`niwa--transform-expand-mentions' adds gptel media context")
+  ,test
+  (test)
+  (let* ((tmp (make-temp-file "niwa-media-" nil ".png" "fake media\n"))
+         (model (make-symbol "niwa-media-model"))
+         (ws (niwa-workspace--create :type 'project :id "media"
+                                        :root temporary-file-directory
+                                        :name "media"))
+         (session (niwa-session-create "main" ws))
+         (chat (generate-new-buffer " *niwa-test-media-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (put model :capabilities '(media))
+    (put model :mime-types '("image/png"))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session))
+          (with-temp-buffer
+            ;; The expansion makes these buffer-local; let-binding them here
+            ;; would make Emacs warn about exactly that.
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
+              (insert (propertize (format "look @file:%s" tmp)
+                                  'gptel 'prompt))
+              (niwa--transform-expand-mentions fsm)
+              (should (string-match-p "media attached" (buffer-string)))
+              (should-not (string-match-p "<system-reminder>"
+                                          (buffer-string)))
+              (should (equal (list (list tmp :mime "image/png"))
+                             gptel-context))
+              (should (eq gptel-use-context 'system))))
+          (with-temp-buffer
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
+              (insert (propertize (format "again @file:%s" tmp)
+                                  'gptel 'prompt))
+              (niwa--transform-expand-mentions fsm)
+              (should (string-match-p "media attached" (buffer-string)))
+              (should-not (string-match-p "<system-reminder>"
+                                          (buffer-string)))
+              (should (equal (list (list tmp :mime "image/png"))
+                             gptel-context))
+              (should (eq gptel-use-context 'system)))))
+      (kill-buffer chat)
+      (delete-file tmp)))
+  :doc "PDF pages reach gptel in document order and expire with the request"
+  (let* ((tmp (make-temp-file "niwa-media-" nil ".pdf" "%PDF-1.4\n"))
+         (model (make-symbol "niwa-page-model"))
+         (ws (niwa-workspace--create :type 'project :id "pages"
+                                        :root temporary-file-directory
+                                        :name "pages"))
+         (session (niwa-session-create "main" ws))
+         (request (niwa-request--create :id "pages" :session session))
+         (chat (generate-new-buffer " *niwa-test-page-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         staged)
+    (put model :capabilities '(media))
+    (put model :mime-types '("image/png"))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local niwa--session session)
+            (setq-local niwa--current-request request))
+          (with-temp-buffer
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
+              (cl-letf (((symbol-function 'niwa-tool-fs-read-pdf-page-count-now)
+                         (lambda (_path) 2))
+                        ((symbol-function 'niwa-tool-fs-read-pdf-page-images-now)
+                         (lambda (_path _count) '("page one" "page two"))))
+                (insert (propertize (format "Read @file:%s" tmp) 'gptel 'prompt))
+                (niwa--transform-expand-mentions fsm)
+                (setq staged (mapcar #'cadr (gptel-context--collect-media)))
+                (should
+                 (equal '("page one" "page two")
+                        (mapcar (lambda (path)
+                                  (with-temp-buffer
+                                    (insert-file-contents-literally path)
+                                    (buffer-string)))
+                                staged)))
+                (niwa-request-drain-cancellers request)
+                (should-not gptel-context)
+                (should-not (seq-some #'file-exists-p staged))))))
+      (niwa-request-drain-cancellers request)
+      (kill-buffer chat)
+      (delete-file tmp))))
+
+(niwa-deftest niwa-mentions--valid-mention-context-p
+  ()
+  ,test
+  (test)
+  :doc "accepts mention at start of buffer"
+  (with-temp-buffer
+    (insert "@file:foo")
+    (should (niwa-mentions--valid-mention-context-p (point-min))))
+
+  :doc "accepts mention preceded by whitespace"
+  (with-temp-buffer
+    (insert "see @file:foo")
+    (should (niwa-mentions--valid-mention-context-p
+             (save-excursion (search-backward "@"))))
+    ;; Parenthetical prose: `(see @file:foo)' — char-before `@' is a space.
+    (erase-buffer)
+    (insert "(see @file:foo)")
+    (should (niwa-mentions--valid-mention-context-p
+             (save-excursion (search-backward "@")))))
+
+  :doc "rejects mention adjacent to a quoting char"
+  (dolist (prefix '("`" "'" "\"" "{" "["))
+    (with-temp-buffer
+      (insert prefix "@file:foo")
+      (should-not (niwa-mentions--valid-mention-context-p
+                   (save-excursion (search-backward "@")))))))
+
+(niwa-deftest niwa--transform-expand-mentions-boundary
+  (:before-each
+   (niwa-test--reset-instructions)
+   (niwa-workspace-clear-registry)
+   :after-each
+   (niwa-test--reset-instructions)
+   (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "historical replacement leaves the prompt text free of blocks"
+  (dolist (placeholder '("[replacement-much-longer]" "x"))
+    (let ((niwa-mention-handlers
+           (list
+            (list "@old" nil
+                  (lambda (_info)
+                    (list :placeholder placeholder
+                          :reminder "historical reminder")))))
+          (chat (generate-new-buffer " *niwa-test-chat*")))
+      (unwind-protect
+          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-temp-buffer
+              (insert (propertize "Earlier @old\n" 'gptel 'prompt))
+              (insert (propertize "Assistant reply\n" 'gptel 'response))
+              (insert (propertize "Latest prompt" 'gptel 'prompt))
+              (niwa--transform-expand-mentions fsm)
+              (should
+               (equal
+                (concat "Earlier " placeholder "\nAssistant reply\n"
+                        "Latest prompt")
+                (buffer-string))))
+            (should (equal '("historical reminder")
+                           (test-niwa-mentions--staged-bodies fsm))))
+        (kill-buffer chat))))
+
+  :doc "leaves quoted @ref untouched and emits no reminder"
+  (let* ((cell (niwa-test--make-note-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (propertize (format "`@ref:%d`" id) 'gptel 'prompt))
+          (niwa--transform-expand-mentions nil)
+          (let ((content (buffer-string)))
+            (should (string-match-p (format "@ref:%d" id) content))
+            (should-not (string-match-p "<system-reminder>" content))))
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "expands parenthetical (see @ref:N) because char-before @ is a space"
+  (let* ((cell (niwa-test--make-note-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (session (niwa-session-create
+                   "main" (buffer-local-value 'niwa--workspace buf)))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode)
+         (chat (generate-new-buffer " *niwa-test-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (with-current-buffer chat (setq-local niwa--session session))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (insert (propertize (format "(see @ref:%d)" id) 'gptel 'prompt))
+            (niwa--transform-expand-mentions fsm)
+            (should (string-match-p
+                     (format "\\[note:%d -- contents attached above\\]"
+                             id)
+                     (buffer-string))))
+          (should (test-niwa-mentions--staged-bodies fsm)))
+      (kill-buffer chat)
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "skips mentions inside a gptel-marked (prior response) region"
+  (let* ((cell (niwa-test--make-note-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (niwa--instruction-id ov))
+         (gptel-default-mode 'text-mode))
+    (unwind-protect
+        (with-temp-buffer
+          ;; Simulate a prior assistant reply that literally contains
+          ;; `@ref:N' in its text — the transform must not touch it.
+          (insert (propertize (format "prior response mentions @ref:%d here"
+                                      id)
+                              'gptel 'response))
+          (insert (propertize "\nnow the user speaks"
+                              'gptel 'prompt))
+          (niwa--transform-expand-mentions nil)
+          (let ((content (buffer-string)))
+            (should (string-match-p (format "@ref:%d" id) content))
+            (should-not (string-match-p "<system-reminder>" content))))
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file))))))
+
+;; Steering wraps one injected message, never the chat buffer's context.
+(niwa-deftest niwa-mentions-wrap-prompt-media
+  (:vars ((gptel--known-backends (copy-tree gptel--known-backends)))
+   :vars* ((png (make-temp-file "niwa-steer-media-" nil ".png" "fake media\n"))
+           (encoded (base64-encode-string "fake media\n" t))
+           (model (let ((model (make-symbol "niwa-steer-model")))
+                    (put model :capabilities '(media))
+                    (put model :mime-types '("image/png"))
+                    model)))
+   :after-each (delete-file png))
+  ,test
+  (test)
+  :doc "every backend shape gains the image in its own user-message format"
+  (pcase-dolist (`(,backend ,check)
+                 `((,(gptel-make-openai "Wrap openai" :key "unused" :models '(m)
+                                        :host "example.test")
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "image_url" (plist-get (aref content 0) :type)))
+                         (should (string-suffix-p
+                                  encoded (plist-get (plist-get (aref content 0) :image_url) :url)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-openai "Wrap responses" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "input_image" (plist-get (aref content 0) :type)))
+                         (should (string-suffix-p encoded (plist-get (aref content 0) :image_url)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-anthropic "Wrap anthropic" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "image" (plist-get (aref content 0) :type)))
+                         (should (equal encoded (plist-get (plist-get (aref content 0) :source) :data)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-gemini "Wrap gemini" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((parts (plist-get prompt :parts)))
+                         (should (equal encoded (plist-get (plist-get (aref parts 0) :inline_data) :data)))
+                         (should (equal "look" (plist-get (aref parts 1) :text))))))
+                   ;; Ollama's `:images' setter replaces the message cell.
+                   (,(gptel-make-ollama "Wrap ollama" :models '(m))
+                    ,(lambda (prompt)
+                       (should (equal (vector encoded) (plist-get prompt :images)))
+                       (should (equal "look" (plist-get prompt :content)))))))
+    (ert-info ((gptel-backend-name backend))
+      (with-temp-buffer
+        (setq-local gptel-context '(("/chat/context.png" :mime "image/png")))
+        (funcall check
+                 (niwa-mentions-wrap-prompt-media
+                  (car (gptel--parse-list backend (list (cons 'prompt "look"))))
+                  (list (list png "image/png")) backend model nil))
+        (should (equal '(("/chat/context.png" :mime "image/png")) gptel-context)))))
+
+  :doc "verified bytes are encoded from a staged file that expires with the request"
+  (let* ((backend (gptel-make-anthropic "Wrap bytes" :key "unused" :models '(m)))
+         (request (niwa-request--create :id "wrap-bytes"))
+         (staged nil))
+    (unwind-protect
+        (cl-letf* ((original (symbol-function 'gptel--base64-encode))
+                   ((symbol-function 'gptel--base64-encode)
+                    (lambda (path) (push path staged) (funcall original path))))
+          (let ((prompt (niwa-mentions-wrap-prompt-media
+                         (car (gptel--parse-list backend (list (cons 'prompt "look"))))
+                         (list (list "artifact://board.png" "image/png" "artifact bytes"))
+                         backend model request)))
+            (should (equal (base64-encode-string "artifact bytes" t)
+                           (plist-get (plist-get (aref (plist-get prompt :content) 0) :source)
+                                      :data)))
+            (should (= 1 (length staged)))
+            (should (file-exists-p (car staged)))
+            (niwa-request-drain-cancellers request)
+            (should-not (file-exists-p (car staged)))))
+      (niwa-request-drain-cancellers request))))
+
+(niwa-deftest niwa-mentions--add-media-context ()
+  ,test
+  (test)
+  :doc "loads the gptel library that sends a media context, from a fresh Emacs"
+  ;; Other tests load gptel-context, so only a fresh process shows the gap.
+  (let ((emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (should
+       (zerop
+        (call-process
+         emacs nil t nil "--batch" "-Q" "--eval"
+         (prin1-to-string
+          `(progn
+             (setq load-path ',load-path)
+             (require 'niwa-mentions)
+             (when (featurep 'gptel-context) (kill-emacs 3))
+             (with-temp-buffer
+               (niwa-mentions--add-media-context "/tmp/board.png" "image/png")
+               (unless (and gptel-context (fboundp 'gptel-context--wrap))
+                 (kill-emacs 4)))))))))))
+
+(provide 'test-niwa-mentions)
+;;; test-niwa-mentions.el ends here

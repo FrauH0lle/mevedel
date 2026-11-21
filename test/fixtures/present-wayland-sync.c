@@ -86,7 +86,7 @@ static GtkWidget *verified_window(emacs_env *env, emacs_value *args,
   char *frame_id = copy_string(env, args[0]);
   char *target = copy_string(env, args[1]);
   const char *runtime = getenv("XDG_RUNTIME_DIR");
-  const char *configured_target = getenv("MEVEDEL_NATIVE_DISPLAY");
+  const char *configured_target = getenv("NIWA_NATIVE_DISPLAY");
   GdkDisplay *display = NULL;
   char expected[sizeof(((struct sockaddr_un *) 0)->sun_path)];
   int safe_paths = safe_runtime(runtime) && safe_target(configured_target)
@@ -133,7 +133,7 @@ static GtkWidget *verified_window(emacs_env *env, emacs_value *args,
   return matched_window;
 }
 
-static emacs_value mevedel_test_wayland_queue_configure(emacs_env *env,
+static emacs_value niwa_test_wayland_queue_configure(emacs_env *env,
                                                         ptrdiff_t nargs,
                                                         emacs_value *args,
                                                         void *data)
@@ -150,7 +150,7 @@ static emacs_value mevedel_test_wayland_queue_configure(emacs_env *env,
   return env->intern(env, "t");
 }
 
-static emacs_value mevedel_test_wayland_sync(emacs_env *env,
+static emacs_value niwa_test_wayland_sync(emacs_env *env,
                                              ptrdiff_t nargs,
                                              emacs_value *args,
                                              void *data)
@@ -169,17 +169,17 @@ int emacs_module_init(struct emacs_runtime *runtime)
 {
   emacs_env *env = runtime->get_environment(runtime);
   emacs_value function = env->make_function(env, 2, 2,
-                                             mevedel_test_wayland_sync,
+                                             niwa_test_wayland_sync,
                                              "Sync the fixture frame's verified Wayland display.",
                                              NULL);
   emacs_value queue_function = env->make_function(
-    env, 2, 2, mevedel_test_wayland_queue_configure,
+    env, 2, 2, niwa_test_wayland_queue_configure,
     "Queue a configure on the fixture's verified Wayland frame.", NULL);
-  emacs_value arguments[] = {env->intern(env, "mevedel-test-wayland-sync"),
+  emacs_value arguments[] = {env->intern(env, "niwa-test-wayland-sync"),
                              function};
   env->funcall(env, env->intern(env, "fset"), 2, arguments);
   emacs_value queue_arguments[] = {
-    env->intern(env, "mevedel-test-wayland-queue-configure"), queue_function};
+    env->intern(env, "niwa-test-wayland-queue-configure"), queue_function};
   env->funcall(env, env->intern(env, "fset"), 2, queue_arguments);
   return env->non_local_exit_check(env) == emacs_funcall_exit_return ? 0 : 1;
 }

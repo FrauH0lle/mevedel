@@ -4,7 +4,7 @@ Status: accepted
 
 ## Current decision
 
-Mevedel uses one generator to turn frozen model-visible context into context-
+Niwa uses one generator to turn frozen model-visible context into context-
 summary text, while each consuming workflow retains ownership of source selection,
 hooks, retries, persistence, injection, and source mutation. The generator
 supports continuation, handoff, and digest purposes through a shared, validated
@@ -84,7 +84,7 @@ dependency patch omits that field when `thinking.type` is `disabled`, following
 [DeepSeek's API contract](https://api-docs.deepseek.com/api/create-chat-completion/).
 That quality evaluation used the dependency patch; its affected checkout
 required the fix. This historical result does not establish the status of every
-current gptel installation. mevedel adds no provider adapter or
+current gptel installation. niwa adds no provider adapter or
 compatibility advice for it.
 
 The subsequent configured-model comparison recovered the buried lesson with

@@ -9,7 +9,7 @@ nodes['goal-sheet'].close = function() { this.open = false; };
 const document = {getElementById: id => nodes[id], createElement: tag => new Element(tag)};
 const window = {};
 load('relay/viewer/viewer-goal.js', {window, document});
-const controller = window.mevedelGoalView.create({
+const controller = window.niwaGoalView.create({
   el: (tag, cls, text) => element(document, tag, cls, text),
   onChange() { nodes.modeline.replaceChildren(); controller.renderChip(nodes.modeline); },
 });

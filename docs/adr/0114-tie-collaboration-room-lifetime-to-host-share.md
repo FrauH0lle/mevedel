@@ -34,7 +34,7 @@ bookmark that survives restarts, which a share-scoped credential cannot be,
 so its credentials persist in the workspace state directory. Its lifetime is
 the user's intent rather than one Emacs process: a lobby runs until it is
 stopped, its workspace root is recorded in the user directory while it runs,
-and an Emacs exit leaves that record, so the next `mevedel-install` restarts
+and an Emacs exit leaves that record, so the next `niwa-install` restarts
 the lobby on the same relay room. Stopping the lobby removes the record.
 Rotating the credentials, not stopping the lobby, is its revocation
 operation. Full and owner lobby Push subscriptions follow that credential
@@ -56,7 +56,7 @@ separate retention policy.
 
 A lobby link is a long-lived bearer: it stays valid across restarts and
 periods without guests until rotated, and a lobby left running is live again
-whenever mevedel is installed, until it is explicitly stopped. A full or owner lobby link can open,
+whenever niwa is installed, until it is explicitly stopped. A full or owner lobby link can open,
 and an owner link create, sessions in that workspace, and a full link can
 read, upload and remove the project's files
 ([ADR 0122](0122-let-full-links-change-project-files-directly.md)), so it
@@ -89,7 +89,7 @@ recreate the same room, but only when someone ran `/collab lobby` again.
 Nothing did so at startup, so after every restart the bookmark showed "Room
 closed" until the user returned to the keyboard, which defeated the phone
 entry point the lobby exists for. The running state is therefore recorded
-too, as a list of workspace roots under `mevedel-user-dir`, because startup
+too, as a list of workspace roots under `niwa-user-dir`, because startup
 has no workspace from which to find per-workspace state. Session rooms were
 not given the same treatment: their bearer is scoped to one share by design,
 and the lobby already hands out fresh links to them.

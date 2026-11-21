@@ -1,0 +1,176 @@
+;;; niwa-journal-gc.el --- Bounded journal coordination collection -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Collect obsolete control records under the workspace's existing cleanup
+;; claims.  Domain records supply retained claim references; claim pruning owns
+;; the locked deletion and generation anchor.  Unreadable references stop GC.
+
+;;; Code:
+(eval-when-compile (require 'cl-lib))
+(require 'generator)
+(require 'niwa-memory-store)
+
+;; `niwa-memory-cycle'
+(declare-function niwa-memory-cycle-inflight-claim "niwa-memory-cycle" (workspace))
+(autoload 'niwa-memory-cycle-inflight-claim "niwa-memory-cycle")
+
+(defun niwa-journal-gc--empty (directory)
+  "Remove DIRECTORY only if empty, returning non-nil on success."
+  (eq 'ok (plist-get (car (niwa-session-control-fs-run-program
+                          (list (list :op 'delete-empty-directory :path directory)))) :status)))
+
+(defun niwa-journal-gc--remove (files lock)
+  "Delete observed FILES under LOCK after verifying all exact bytes.
+FILES is an alist of absolute paths and their complete contents."
+  (mapc #'niwa-session-control-fs-program-value
+        (niwa-session-control-fs-run-program
+         (append (mapcar (lambda (file) (list :op 'verify :path (car file) :content (cdr file))) files)
+                 (mapcar (lambda (file) (list :op 'delete-file :path (car file))) files)) lock)))
+
+(iter-defun niwa-journal-gc--manifests (root now limit)
+  "Yield while removing ROOT manifests whose claims expired by NOW.
+Remove at most LIMIT groups; return protected generations and removal count."
+  (let ((directory (file-name-concat (niwa-journal-store-state-directory root) "expiry")) (removed 0) protected)
+    (dolist (path (niwa-session-control-fs-list-directory directory "\\.json\\'"))
+      (iter-yield nil)
+      (let* ((manifest (niwa-journal-cleanup--read root path))
+             (token (plist-get manifest :token))
+             (done (concat path ".done"))
+             (finished (niwa-session-control-fs-path-exists-p done))
+             (outcome (niwa-journal-claim-outcome token)))
+        (if (and (< removed limit) (<= (plist-get token :expires-at) now)
+                 (or finished (memq (plist-get outcome :status) '(failed cancelled expired))
+                     (and (eq 'completed (plist-get outcome :status))
+                          (string-empty-p (plist-get outcome :payload)))))
+            (progn
+              (when finished
+                (unless (and (eq 'completed (plist-get outcome :status))
+                             (equal (plist-get manifest :hash) (plist-get outcome :payload)))
+                  (error "Journal expiry has no accepted proof")))
+              (unless (or (not finished) (equal (plist-get manifest :hash) (niwa-session-control-fs-read-file done)))
+                (error "Journal expiry completion changed"))
+              (niwa-journal-gc--remove
+               (append (list (cons path (niwa-session-control-fs-read-file path)))
+                       (when finished (list (cons done (plist-get manifest :hash))))) (plist-get token :directory))
+              (cl-incf removed))
+          (push (plist-get token :generation) protected))))
+    ;; If interruption followed manifest removal, only its harmless receipt
+    ;; remains.  It cannot authorize publication or deletion on its own.
+    (dolist (path (niwa-session-control-fs-list-directory directory "\\.json\\.done\\'"))
+      (iter-yield nil)
+      (when (and (< removed limit)
+                 (not (niwa-session-control-fs-path-exists-p (string-remove-suffix ".done" path))))
+        (niwa-journal-gc--remove (list (cons path (niwa-session-control-fs-read-file path)))
+                                   (niwa-journal-store-claim-directory root 'mutation))
+        (cl-incf removed)))
+    (list :protected protected :removed removed)))
+
+(iter-defun niwa-journal-gc--passes (workspace mutation now limit)
+  "Yield while retiring WORKSPACE preparations under MUTATION at NOW.
+Return the number of removed preparations, at most LIMIT per opportunity."
+  (let ((removed 0)
+        (cutoff (- now (* niwa-memory-history-max-age-days 86400))))
+    (dolist (directory (niwa-session-control-fs-list-directory
+                        (file-name-concat (niwa-journal-store-state-directory (niwa-journal-store-directory (niwa-workspace-root workspace))) "passes")
+                        niwa-journal-store-id-regexp))
+      (iter-yield nil)
+      (let ((id (file-name-nondirectory directory)))
+        (when (and (< removed limit)
+                   (not (niwa-journal-cleanup-pass-retired-p (niwa-workspace-root workspace) id))
+                   (niwa-session-control-fs-path-exists-p (file-name-concat directory "prepared.el")))
+          (let* ((prepared (niwa-memory-store-read workspace id))
+                 (claim (plist-get prepared :claim))
+                 (outcome (niwa-journal-claim-outcome claim)))
+            (when (and (memq (plist-get outcome :status) '(failed cancelled expired))
+                       (<= (plist-get claim :expires-at) cutoff))
+              (niwa-memory-store--release-pins workspace prepared nil mutation)
+              (let (files)
+                ;; Remove the preparation last so interrupted deletion keeps
+                ;; the authority and deadline needed to finish collection.
+                (dolist (name '("accepted.el" "prepared.el"))
+                  (iter-yield nil)
+                  (let ((path (file-name-concat directory name)))
+                    (when (niwa-session-control-fs-path-exists-p path)
+                      (push (cons path (niwa-session-control-fs-read-file path)) files))))
+                (niwa-memory-store--assert-owned mutation)
+                (niwa-journal-gc--remove (nreverse files) (plist-get mutation :directory))
+                (cl-incf removed)))))
+        (iter-yield nil)
+        (when (and (< removed limit) (niwa-journal-gc--empty directory))
+          (cl-incf removed))))
+    removed))
+
+(iter-defun niwa-journal-gc--references (workspace)
+  "Yield while collecting claim generations referenced by WORKSPACE records.
+Read all remaining records, including partially retired groups.  Refuse broken
+references instead of guessing that their claim can be removed."
+  (let ((root (niwa-journal-store-directory (niwa-workspace-root workspace)))
+        files protected)
+    ;; Admission reserves its token before immutable preparation can exist.
+    ;; That single slot must survive ordinary coordination GC after a crash.
+    (when-let* ((claim (niwa-memory-cycle-inflight-claim workspace)))
+      (push (plist-get claim :generation) protected))
+    (dolist (directory (niwa-session-control-fs-list-directory
+                        (file-name-concat (niwa-journal-store-state-directory root) "passes") niwa-journal-store-id-regexp))
+      (iter-yield nil)
+      (let ((path (file-name-concat directory "prepared.el")))
+        (when (niwa-session-control-fs-path-exists-p path) (push path files))))
+    (dolist (path files)
+      (iter-yield nil)
+      (let* ((data (car (niwa-memory-store--read-lisp path)))
+             (claim (plist-get data :claim))
+             (generation (plist-get claim :generation)))
+        (unless (and (integerp generation) (> generation 0)
+                     (niwa-journal-store-id-p (plist-get claim :owner)))
+          (error "Unreadable retained claim reference: %s" path))
+        (push generation protected)))
+    (delete-dups protected)))
+
+(defconst niwa-journal-gc--claim-pair-limit 200
+  "Most obsolete claim and outcome pairs one batch deletes across directories.
+Tests bind it small to cross a batch boundary without hundreds of files.")
+
+(defconst niwa-journal-gc--content-group-limit 50
+  "Most content groups one batch deletes, including recovery and expiry.
+Tests bind it small to cross a batch boundary without dozens of groups.")
+
+(iter-defun niwa-journal-gc (workspace mutation)
+  "Yield while collecting WORKSPACE state under live MUTATION ownership.
+The caller also holds digest and consolidation admission.  Return progress
+and the remaining content budget.  Delete at most
+`niwa-journal-gc--claim-pair-limit' claim pairs and
+`niwa-journal-gc--content-group-limit' content groups across all
+directories in one batch."
+  (let* ((root (niwa-journal-store-directory (niwa-workspace-root workspace)))
+         (now (niwa-session-control-fs-target-time (plist-get mutation :directory)))
+         (manifests (iter-yield-from (niwa-journal-gc--manifests root now niwa-journal-gc--content-group-limit)))
+         (groups (plist-get manifests :removed))
+         (groups (+ groups (iter-yield-from (niwa-journal-gc--passes workspace mutation now (- niwa-journal-gc--content-group-limit groups)))))
+         (removed groups)
+         (references (iter-yield-from (niwa-journal-gc--references workspace)))
+         (remaining niwa-journal-gc--claim-pair-limit)
+         (directories (list (cons (niwa-journal-store-claim-directory root 'mutation) (plist-get manifests :protected))
+                            (cons (niwa-journal-store-claim-directory root 'digest-run) nil)
+                            (cons (niwa-journal-store-claim-directory root 'consolidation) references))))
+    (dolist (directory (niwa-session-control-fs-list-directory
+                        (file-name-concat (niwa-journal-store-state-directory root) "captures") niwa-journal-store-id-regexp))
+      (iter-yield nil)
+      (push (cons (file-name-concat directory "attempts") nil) directories))
+    (dolist (entry directories)
+      (iter-yield nil)
+      (when (and (> remaining 0) (niwa-session-control-fs-directory-p (car entry)))
+        (niwa-memory-store--assert-owned mutation)
+        (let ((count (iter-yield-from (niwa-journal-claim-prune (car entry) (cdr entry) remaining))))
+          (cl-incf removed count)
+          (cl-decf remaining count))))
+    (dolist (directory (niwa-session-control-fs-list-directory
+                        (file-name-concat (niwa-journal-store-state-directory root) "evidence-pins") niwa-journal-store-id-regexp))
+      (iter-yield nil)
+      (when (and (< groups niwa-journal-gc--content-group-limit) (niwa-journal-gc--empty directory))
+        (cl-incf groups)
+        (cl-incf removed)))
+    (list :progress removed :remaining (- niwa-journal-gc--content-group-limit groups)
+          :more (or (zerop remaining) (= groups niwa-journal-gc--content-group-limit)))))
+
+(provide 'niwa-journal-gc)
+;;; niwa-journal-gc.el ends here

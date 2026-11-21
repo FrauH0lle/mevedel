@@ -1,6 +1,6 @@
 /* Archived segments are host-backed, read-only disclosures, separate from live state. */
 'use strict';
-window.mevedelHistoryView = Object.freeze({
+window.niwaHistoryView = Object.freeze({
   create({send, el, renderRecord, onArtifacts, onLoaded}) {
     const root = document.getElementById('history');
     const rows = new Map();
@@ -70,7 +70,7 @@ window.mevedelHistoryView = Object.freeze({
           node.addEventListener('toggle', () => {
             if (!node.open) return;
             // A segment loaded while closed may have measured without layout.
-            if (row.loaded) window.mevedelTranscriptRenderer.fitActivityFailures(row.body);
+            if (row.loaded) window.niwaTranscriptRenderer.fitActivityFailures(row.body);
             else load(row);
           });
         }
@@ -103,11 +103,11 @@ window.mevedelHistoryView = Object.freeze({
         row.body.replaceChildren(el('p', 'history-note', 'Archived conversation. New messages go to the live session.'));
         const ledger = el('div', 'ledger history-ledger');
         row.records.forEach(record => ledger.append(renderRecord(record)));
-        window.mevedelTranscriptRenderer.groupActivity(ledger);
-        window.mevedelTranscriptRenderer.markContinuations(ledger);
+        window.niwaTranscriptRenderer.groupActivity(ledger);
+        window.niwaTranscriptRenderer.markContinuations(ledger);
         row.body.append(ledger);
         // Grouping ran detached; measure failure totals now that it is shown.
-        window.mevedelTranscriptRenderer.fitActivityFailures(ledger);
+        window.niwaTranscriptRenderer.fitActivityFailures(ledger);
         row.records = [];
         row.loaded = true;
         row.reqId = null;
@@ -115,7 +115,7 @@ window.mevedelHistoryView = Object.freeze({
         // continue the live transcript's pinned prompt.
         onLoaded?.();
         if (row.sourceReveal) finishReveal(row,
-          window.mevedelTranscriptRenderer.revealTool(row.body, row.sourceReveal.id));
+          window.niwaTranscriptRenderer.revealTool(row.body, row.sourceReveal.id));
       }
     }
 
@@ -134,7 +134,7 @@ window.mevedelHistoryView = Object.freeze({
         if (ancestor.tagName === 'DETAILS') ancestor.open = true;
         ancestor = ancestor.parentElement;
       }
-      if (row.loaded) return Promise.resolve(window.mevedelTranscriptRenderer.revealTool(row.body, id));
+      if (row.loaded) return Promise.resolve(window.niwaTranscriptRenderer.revealTool(row.body, id));
       finishReveal(row, false);
       return new Promise(resolve => {
         row.sourceReveal = {id, resolve, timer: setTimeout(() => failure(row,

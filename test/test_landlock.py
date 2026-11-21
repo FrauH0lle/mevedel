@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import patch
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts/mevedel-landlock.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/niwa-landlock.py"
 SPEC = importlib.util.spec_from_file_location("landlock", SCRIPT)
 landlock = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(landlock)
@@ -201,7 +201,7 @@ print("relocated sockets stay blocked")
     def test_only_allowed_host_sockets_are_reachable(self):
         allowed = str(self.root / "allowed" / "socket")
         host = str(self.root / "host")
-        abstract = f"mevedel-landlock-test-{os.getpid()}"
+        abstract = f"niwa-landlock-test-{os.getpid()}"
         self.server(allowed)
         self.server(host)
         self.server("\0" + abstract)

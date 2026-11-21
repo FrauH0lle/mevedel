@@ -1,17 +1,17 @@
 ;;; native-wait-advised.el --- Refuse an unsafe wait entry -*- lexical-binding: t -*-
 
 (require 'ert)
-(require 'mevedel-native)
-(require 'mevedel-structs)
+(require 'niwa-native)
+(require 'niwa-structs)
 
-(defvar mevedel-test-native-root)
+(defvar niwa-test-native-root)
 
-(let ((mevedel-user-dir mevedel-test-native-root)
+(let ((niwa-user-dir niwa-test-native-root)
       (advice (lambda (original &rest arguments)
                 (apply original arguments))))
   (unwind-protect
       (progn
         (advice-add 'condition-wait :around advice)
-        (should (mevedel-native-load))
-        (should-not (mevedel-native--timed-wait-available-p)))
+        (should (niwa-native-load))
+        (should-not (niwa-native--timed-wait-available-p)))
     (advice-remove 'condition-wait advice)))

@@ -106,7 +106,7 @@
     const notice = el('p', 'ds-notice');
     notice.setAttribute('role', 'status');
     root.replaceChildren(list, thread, notice);
-    root.addEventListener('click', window.mevedelTranscriptRenderer.messageAction);
+    root.addEventListener('click', window.niwaTranscriptRenderer.messageAction);
 
     // -- Model ------------------------------------------------------------
 
@@ -133,7 +133,7 @@
         const print = JSON.stringify(record);
         const old = rendered.get(record.id);
         const node = old && old.print === print ? old.node
-          : window.mevedelTranscriptRenderer.renderRecord(record, () => null, undefined, old?.node);
+          : window.niwaTranscriptRenderer.renderRecord(record, () => null, undefined, old?.node);
         next.set(record.id, {print, node});
         if (record.shared) node.dataset.questionId = record.shared.questionId;
         const d = find(context?.discussionId) || find(fallback);
@@ -432,7 +432,7 @@
       renderComposer(current.kind === NEW ? null : find(current.id));
     });
     attach.addEventListener('click', () => picker.click());
-    window.mevedelComposer.bind(input, send);
+    window.niwaComposer.bind(input, send);
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (sending || !canWrite()) return;
@@ -445,7 +445,7 @@
         if (opened === false) return;
         if (key() === at && input.value === text) {
           input.value = '';
-          window.mevedelComposer.setExpanded(input, false);
+          window.niwaComposer.setExpanded(input, false);
         }
         if (at === NEW && key() === NEW && typeof opened === 'string') {
           if (find(opened)) show({kind: 'thread', id: opened, keep: true});
@@ -508,5 +508,5 @@
     });
   }
 
-  window.mevedelDiscussionSidebar = Object.freeze({create});
+  window.niwaDiscussionSidebar = Object.freeze({create});
 })();

@@ -22,8 +22,8 @@ FULL_SUITE = frozenset({'Eask', 'scripts/check.sh', 'test/affected_tests.py',
                         'test/ert-runner.el', 'test/helpers.el', 'test/run_tests.py'})
 # Fast files (under a second together) covering the data model, the package
 # entry point and agent execution; always added to an affected selection.
-SMOKE = ('test/test-mevedel-agent-exec.el', 'test/test-mevedel-persistence.el',
-         'test/test-mevedel-structs.el')
+SMOKE = ('test/test-niwa-agent-exec.el', 'test/test-niwa-persistence.el',
+         'test/test-niwa-structs.el')
 DOCUMENTATION = ('.md', '.org', '.txt', '.png', '.jpg', '.svg', '.gif')
 NODE_TESTS = ('.js', '.mjs')
 PYTHON_TEST = re.compile(r'test/test_[^/]+\.py\Z')
@@ -47,7 +47,7 @@ def changed_files(root, rev):
 
 def documentation_p(path):
     """Return non-nil when PATH is prose or an image rather than code."""
-    return path.endswith(DOCUMENTATION) or path.startswith(('docs/', '.mevedel/'))
+    return path.endswith(DOCUMENTATION) or path.startswith(('docs/', '.niwa/'))
 
 
 def node_test_p(path):

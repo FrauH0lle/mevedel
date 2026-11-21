@@ -45,7 +45,7 @@ test('board exports are standalone SVG with positioned lines and opaque white PN
     return [...ctx.getImageData(0,0,1,1).data];
   },png.data);
   assert.deepEqual(corner,[255,255,255,255]);
-  if (process.env.MEVEDEL_EXPORT_SCREENSHOTS) {
+  if (process.env.NIWA_EXPORT_SCREENSHOTS) {
     const dir = new URL('../../.scratch/editor-polish/',import.meta.url);
     await mkdir(dir,{recursive:true});
     await writeFile(new URL('export.svg',dir),svg.text);

@@ -1,0 +1,297 @@
+;;; test-niwa-auth.el --- Provider authentication lifecycle -*- lexical-binding: t -*-
+;;; Commentary:
+;; Real HTTP and subprocess fixtures exercise expiry, login and cancellation.
+;;; Code:
+(require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'niwa-auth)
+(require 'niwa-claude-code)
+
+(defconst niwa-auth-test--fixtures
+  (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "fixtures"))
+
+(defmacro niwa-auth-test--with-provider (status &rest body)
+  "Run BODY with isolated credentials and a local HTTP server returning STATUS."
+  (declare (indent 1))
+  `(let* ((directory (make-temp-file "niwa-auth-test-" t))
+          (port-file (file-name-concat directory "port"))
+          (gptel--openai-oauth-token-file (file-name-concat directory "token.json"))
+          (gptel--known-backends nil)
+          (niwa-auth--operations (make-hash-table :test #'equal))
+          (niwa-auth-changed-hook nil)
+          (backend (gptel-make-openai-oauth "Test Codex"))
+          (connections-before (niwa-test--live-connections))
+          (server (make-process :name "niwa-auth-fixture" :noquery t
+				:command (list (executable-find "python3")
+                                               (file-name-concat niwa-auth-test--fixtures "provider-auth.py")
+                                               port-file (number-to-string ,status)))))
+     (unwind-protect
+         (cl-labels ((await (predicate)
+                       (niwa-test--await 5 "Authentication fixture timed out"
+                         (funcall predicate))))
+           (await (lambda () (file-exists-p port-file)))
+           (let ((gptel--openai-oauth-url
+                  (concat "http://127.0.0.1:" (with-temp-buffer (insert-file-contents port-file) (buffer-string)))))
+             ,@body))
+       (niwa-auth-stop-all)
+       (delete-process server)
+       ;; Cancellation can precede the asynchronous socket's open callback.
+       ;; Let EOF from this fixture's stopped server retire that connection.
+       (niwa-test--await 5 "Authentication fixture left a connection"
+         (not (cl-set-difference (niwa-test--live-connections)
+                                 connections-before)))
+       (delete-directory directory t))))
+
+(niwa-deftest niwa-auth-supported-p
+  (:doc "offers browser login only for Codex and Claude Code")
+  (let ((gptel--known-backends nil))
+    (should (niwa-auth-supported-p (gptel-make-openai-oauth "Test Codex")))
+    (should (niwa-auth-supported-p (niwa-claude-code-register)))
+    (should-not (niwa-auth-supported-p (gptel-make-openai "Test Key" :key "test")))))
+
+(niwa-deftest niwa-auth-refresh (:quiet t)
+  ,test
+  (test)
+  :doc "expired credentials renew once and every backend observes the new token"
+  (niwa-auth-test--with-provider 200
+				    (gptel-oauth--write-token gptel--openai-oauth-token-file
+							      '(:access_token "old" :refresh_token "old-refresh" :expires_at 0))
+				    (should-not (niwa-auth-codex-ready-p backend))
+				    ;; The credential lock holds even when the user disables lock files.
+				    (let ((create-lockfiles nil))
+				      (should-error (niwa-auth-assert-ready backend) :type 'user-error))
+				    (should (file-locked-p (concat gptel--openai-oauth-token-file ".niwa-auth")))
+				    (let ((id (plist-get (niwa-auth-state backend) :id)))
+				      (niwa-auth-refresh backend)
+				      (should (equal id (plist-get (niwa-auth-state backend) :id))))
+				    (await (lambda () (equal "ready" (plist-get (niwa-auth-state backend) :status))))
+				    (should (niwa-auth-codex-ready-p backend))
+				    (should (= #o600 (file-modes gptel--openai-oauth-token-file)))
+				    (should-not (plist-get (niwa-auth-state backend) :access_token))
+				    (should-not (file-locked-p (concat gptel--openai-oauth-token-file ".niwa-auth")))
+				    (delete-file gptel--openai-oauth-token-file)
+				    (should-not (niwa-auth-codex-ready-p backend)))
+  :doc "rejected renewal requires login without forwarding HTTP secrets"
+  (niwa-auth-test--with-provider 401
+				    (setf (gptel-openai-oauth-token backend) '(:refresh_token "old-refresh"))
+				    (niwa-auth-refresh backend)
+				    (await (lambda () (equal "required" (plist-get (niwa-auth-state backend) :status))))
+				    (should-not (string-search "fixture-access" (prin1-to-string (niwa-auth-state backend))))))
+
+(niwa-deftest niwa-auth-start (:quiet t)
+  ,test
+  (test)
+  :doc "Codex device authorization completes through the token exchange"
+  (niwa-auth-test--with-provider 200
+				    (niwa-auth-start backend)
+				    (await (lambda () (equal "ready" (plist-get (niwa-auth-state backend) :status))))
+				    (should (niwa-auth-codex-ready-p backend))
+				    (should-not (plist-get (niwa-auth-state backend) :code))
+				    (niwa-auth-cancel backend)
+				    (should-not (niwa-auth-state backend)))
+  :doc "Claude verifies subscription after the fixed full-code login process"
+  (niwa-auth-test--with-provider 200
+				    (let ((backend (niwa-claude-code-register))
+					  (niwa-claude-code-executable (file-name-concat directory "claude")))
+				      (copy-file (file-name-concat niwa-auth-test--fixtures "claude-status.py") niwa-claude-code-executable)
+				      (set-file-modes niwa-claude-code-executable #o700)
+				      (niwa-auth-start backend)
+				      (await (lambda () (plist-get (niwa-auth-state backend) :url)))
+				      (should-error (niwa-auth-submit-code backend "stale" "fixture-code#fixture-state") :type 'user-error)
+				      (niwa-auth-submit-code backend (plist-get (niwa-auth-state backend) :id) "fixture-code#fixture-state")
+				      (await (lambda () (equal "ready" (plist-get (niwa-auth-state backend) :status))))
+				      (should-not (plist-get (niwa-auth-state backend) :url)))))
+
+(niwa-deftest niwa-auth--claude-login-url-regexp
+  (:doc "finds the authorization URL in each form the Claude CLI prints")
+  (cl-flet ((url (output)
+              (and (string-match niwa-auth--claude-login-url-regexp output)
+                   (match-string 0 output))))
+    (should (equal "https://claude.com/cai/oauth/authorize?code=true&state=s"
+                   (url (concat "If the browser didn't open, visit: "
+                                "https://claude.com/cai/oauth/authorize"
+                                "?code=true&state=s\nPaste code here > "))))
+    (should (equal "https://claude.ai/oauth/authorize?state=s"
+                   (url "https://claude.ai/oauth/authorize?state=s")))
+    (should (equal "https://platform.claude.com/oauth/authorize?state=s"
+                   (url "\"https://platform.claude.com/oauth/authorize?state=s\"")))
+    (should-not (url "https://claude.com/oauth/authorize?state=s"))
+    (should-not (url "https://example.com/oauth/authorize?state=s"))))
+
+(niwa-deftest niwa-auth-cancel (:quiet t)
+  (niwa-auth-test--with-provider 200
+				    (niwa-auth-start backend)
+				    (niwa-auth-cancel backend)
+				    (accept-process-output nil 0.05)
+				    (should-not (niwa-auth-state backend))
+				    (should-not (file-exists-p gptel--openai-oauth-token-file))))
+
+(niwa-deftest niwa-auth--dispatch (:quiet t)
+  (niwa-auth-test--with-provider 200
+				    (with-temp-buffer
+				      (setq-local niwa-auth--managed t)
+				      (gptel-oauth--write-token gptel--openai-oauth-token-file
+								'(:access_token "expired" :refresh_token "old-refresh" :expires_at 0))
+				      (let* (sent failed
+						  (fsm (gptel-make-fsm :state 'WAIT
+								       :info (list :buffer (current-buffer) :backend backend)
+								       :handlers (list (list 'ERRS (lambda (_) (setq failed t)))))))
+					(niwa-auth--dispatch (lambda (_) (setq sent t)) fsm)
+					(should-not sent)
+					(should failed)
+					(should (eq 'ERRS (gptel-fsm-state fsm)))
+					(await (lambda () (equal "ready" (plist-get (niwa-auth-state backend) :status))))
+					;; Renewal does not replay the failed sample.
+					(should-not sent)))))
+
+(niwa-deftest niwa-auth-codex-ready-p (:quiet t)
+  (niwa-auth-test--with-provider 200
+    (dolist (content '("\"not a token\"" "(:access_token 7 :expires_at \"bad\")" "(:access_token"))
+      (with-temp-file gptel--openai-oauth-token-file (insert content))
+      (should-not (niwa-auth-codex-ready-p backend)))
+    (delete-file gptel--openai-oauth-token-file)
+    (make-directory gptel--openai-oauth-token-file)
+    (should-not (niwa-auth-codex-ready-p backend))))
+
+(niwa-deftest niwa-auth--http (:quiet t)
+  ,test
+  (test)
+  :doc "a rejected request leaves no response buffer behind"
+  ;; url-http answers a 401 by retrying in a second buffer.
+  (niwa-test-http
+   (lambda (_request) '("401 Unauthorized" "" "SECRET"))
+   (lambda (url)
+     (let ((buffers (buffer-list)) result)
+       (niwa-auth--http (concat url "/oauth/token") '(("grant_type" "refresh_token")) t
+                           (lambda (payload code) (setq result (list payload code))))
+       (niwa-test--await 5 "HTTP request did not settle" result)
+       (should (equal 401 (cadr result)))
+       (should-not (seq-filter (lambda (buffer) (string-prefix-p " *http" (buffer-name buffer)))
+                               (seq-difference (buffer-list) buffers))))))
+  :doc "a GET sends caller headers and returns the caller's parse"
+  (let (request)
+    (niwa-test-http
+     (lambda (line) (setq request line) '("200 OK" "" "{\"a\":1}"))
+     (lambda (url)
+       (let (result)
+         (niwa-auth--http (concat url "/usage") nil nil
+                             (lambda (payload code) (setq result (list payload code)))
+                             '(("Authorization" . "Bearer test"))
+                             (lambda () (json-parse-buffer :object-type 'alist)))
+         (niwa-test--await 5 "HTTP request did not settle" result)
+         (should (equal '(((a . 1)) 200) result))
+         (should (string-prefix-p "GET /usage" request))))))
+  :doc "a missing response buffer fails immediately and retires its timeout"
+  (let (result timer)
+    (cl-letf (((symbol-function 'url-retrieve) (lambda (&rest _) nil))
+	      ((symbol-function 'niwa-transport-run-at-time)
+	       (lambda (seconds function &rest args)
+		 (setq timer (apply #'run-at-time seconds nil function args)))))
+      (unwind-protect
+	  (progn
+	    (funcall (niwa-auth--http "https://example.invalid" nil nil
+					 (lambda (payload code) (setq result (list payload code)))))
+	    (should (equal result '(nil 0)))
+	    (should-not (memq timer timer-list)))
+	(when timer (cancel-timer timer)))))
+  :doc "cancelling a resolving connection collects it only after setup settles"
+  (let ((response (generate-new-buffer " *auth-http-resolving*"))
+        process cancel results (state 'connect))
+    (unwind-protect
+        (progn
+          (setq process (make-pipe-process :name "auth-http-resolving"
+                                           :buffer response :noquery t))
+          (cl-letf* ((status (symbol-function 'process-status))
+                     (delete (symbol-function 'delete-process))
+                     ((symbol-function 'process-status)
+                      (lambda (value) (if (eq value process) state (funcall status value))))
+                     ((symbol-function 'delete-process)
+                      (lambda (value)
+                        (when (and (eq value process) (eq state 'connect))
+                          (ert-fail "Deleted a resolving connection"))
+                        (funcall delete value)))
+                     ((symbol-function 'url-retrieve) (lambda (&rest _) response)))
+            (setq cancel (niwa-auth--http "https://example.invalid" nil nil
+                                           (lambda (&rest result) (push result results))))
+            (funcall cancel)
+            (should-not (buffer-live-p response))
+            (should-not (process-buffer process))
+            (should (process-live-p process))
+            (setq state 'open)
+            (funcall (process-sentinel process) process "open")
+            (should (eq 'closed (funcall status process)))
+            (should-not results)))
+      (setq state 'closed)
+      (when cancel (funcall cancel))
+      (when (and process (process-live-p process)) (delete-process process))
+      (when (buffer-live-p response) (kill-buffer response))))
+  :doc "a late cancelled HTTP callback cleans its response without publishing"
+  (let (callback cancel results response)
+    (unwind-protect
+	(cl-letf (((symbol-function 'url-retrieve)
+		   (lambda (_url complete &rest _)
+		     (setq callback complete response (generate-new-buffer " *auth-http*")))))
+	  (setq cancel (niwa-auth--http "https://example.invalid" nil nil
+					   (lambda (&rest result) (push result results))))
+	  (funcall cancel)
+	  (should-not (buffer-live-p response))
+	  (setq response (generate-new-buffer " *auth-http-late*"))
+	  (with-current-buffer response (funcall callback nil))
+	  (should-not (buffer-live-p response))
+	  (should-not results))
+      (when cancel (funcall cancel))
+      (when (buffer-live-p response) (kill-buffer response)))))
+
+(niwa-deftest niwa-auth--dispatch/pass-through (:quiet t)
+  ,test
+  (test)
+  :doc "an ordinary backend's request proceeds unchanged"
+  (with-temp-buffer
+    (setq-local niwa-auth--managed t)
+    (let (sent)
+      (niwa-auth--dispatch
+       (lambda (_) (setq sent t))
+       (gptel-make-fsm :state 'WAIT :info (list :buffer (current-buffer)
+                                                :backend (gptel--make-openai :name "Plain"))))
+      (should sent)))
+  :doc "a managed Codex request with a current loaded token skips the credential file"
+  (let ((gptel--openai-oauth-token-file (make-temp-name "/nonexistent/token-"))
+        (backend (gptel--make-openai-oauth :name "Current"))
+        sent)
+    (setf (gptel-openai-oauth-token backend)
+          (list :access_token "current" :expires_at (+ (float-time) 3600)))
+    (with-temp-buffer
+      (setq-local niwa-auth--managed t)
+      (niwa-auth--dispatch
+       (lambda (_) (setq sent t))
+       (gptel-make-fsm :state 'WAIT :info (list :buffer (current-buffer) :backend backend))))
+    (should sent)
+    (should (equal "current" (plist-get (gptel-openai-oauth-token backend) :access_token)))))
+
+(niwa-deftest niwa-auth--lock (:quiet t)
+  ,test
+  (test)
+  :doc "credential path errors terminate login so the owner can retry"
+  (let* ((directory (make-temp-file "auth-lock-" t))
+         (gptel--openai-oauth-token-file (file-name-concat directory "blocked" "token"))
+         (gptel--known-backends nil)
+         (backend (gptel-make-openai-oauth "Lock test"))
+         (niwa-auth--operations (make-hash-table :test #'equal))
+         (niwa-auth-changed-hook nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat directory "blocked") (insert "Not a directory"))
+          (should-error (niwa-auth-start backend) :type 'user-error)
+          (should (equal "failed" (plist-get (niwa-auth-state backend) :status)))
+          (should-error (niwa-auth-start backend) :type 'user-error))
+      (niwa-auth-stop-all)
+      (delete-directory directory t)))
+  :doc "credential renewal owns its lock even with editor file locks disabled"
+  (niwa-auth-test--with-provider 200
+                                    (let ((create-lockfiles nil))
+                                      (niwa-auth-start backend)
+                                      (should (eq t (file-locked-p (concat gptel--openai-oauth-token-file ".niwa-auth"))))
+                                      (niwa-auth-cancel backend)
+                                      (should-not (file-locked-p (concat gptel--openai-oauth-token-file ".niwa-auth"))))))
+
+(provide 'test-niwa-auth)
+;;; test-niwa-auth.el ends here

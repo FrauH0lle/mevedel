@@ -9,8 +9,8 @@ const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const {chromium} = require('playwright');
 const SUMMARY_LABEL = '── Worked for 2m 37s · Thu 29 Oct 14:32 ';
 const SUMMARY_DETAILS = 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s';
-// Visual evidence is opt-in: MEVEDEL_CAPTURE_SCREENSHOTS=DIR saves PNGs there.
-const CAPTURE_DIR = process.env.MEVEDEL_CAPTURE_SCREENSHOTS;
+// Visual evidence is opt-in: NIWA_CAPTURE_SCREENSHOTS=DIR saves PNGs there.
+const CAPTURE_DIR = process.env.NIWA_CAPTURE_SCREENSHOTS;
 async function capture(page, name) {
   if (!CAPTURE_DIR) return;
   await mkdir(resolve(CAPTURE_DIR), {recursive: true});
@@ -36,7 +36,7 @@ test('activity summaries preserve failures, children and disclosure at phone and
           const target = document.getElementById('transcript');
           for (let n = 1; n <= 4; n++) {
             const old = target.querySelector(`[data-record-id="tool-${n}"]`);
-            const turn = window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool', toolUseId: `source-${n}`,
+            const turn = window.niwaTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool', toolUseId: `source-${n}`,
               activity: window.activity, presentation: {name: n === 2 ? 'Grep' : 'Read',
                 sourceId: n === 1 ? 'nested-control' : undefined,
                 body: `result-${n}`, collapsed: true}}, null, null, old);
@@ -44,11 +44,11 @@ test('activity summaries preserve failures, children and disclosure at phone and
           }
           // The request's closing rule follows its activity, outside the group.
           const old = target.querySelector('[data-record-id="summary-1"]');
-          const closing = window.mevedelTranscriptRenderer.renderRecord({id: 'summary-1',
+          const closing = window.niwaTranscriptRenderer.renderRecord({id: 'summary-1',
             kind: 'request-summary', text: label, details, item: 'board-1'}, () => ({label: 'Dir'}), null, old);
           if (old) old.replaceWith(closing); else target.append(closing);
-          window.mevedelTranscriptRenderer.groupActivity(target);
-          window.mevedelTranscriptRenderer.markContinuations(target);
+          window.niwaTranscriptRenderer.groupActivity(target);
+          window.niwaTranscriptRenderer.markContinuations(target);
         };
         window.render();
       }, [SUMMARY_LABEL, SUMMARY_DETAILS]);
@@ -122,17 +122,17 @@ test('activity summaries preserve failures, children and disclosure at phone and
       assert.equal(await page.locator('#draft').inputValue(), '> exact\nmultiline draft');
       assert.equal(await page.locator('.activity-group > summary').evaluate(node =>
         node.scrollWidth <= node.clientWidth), true);
-      assert.equal(await page.evaluate(() => window.mevedelTranscriptRenderer.revealTool(
+      assert.equal(await page.evaluate(() => window.niwaTranscriptRenderer.revealTool(
         document.getElementById('transcript'), 'source-4')), true);
       assert.equal(await page.locator('[data-record-id="tool-4"] details').evaluate(node => node.open), true);
-      assert.equal(await page.evaluate(() => window.mevedelTranscriptRenderer.revealTool(
+      assert.equal(await page.evaluate(() => window.niwaTranscriptRenderer.revealTool(
         document.getElementById('transcript'), 'nested-control')), true);
       assert.equal(await page.locator('[data-record-id="tool-1"] details').evaluate(node => node.open), true);
       await page.locator('.activity-group > summary').click();
       await page.evaluate(() => {
         const target = document.getElementById('transcript');
         target.replaceChildren(...target.querySelectorAll('[data-record-id]'));
-        window.mevedelTranscriptRenderer.groupActivity(target);
+        window.niwaTranscriptRenderer.groupActivity(target);
       });
       assert.equal(await page.locator('.activity-group').evaluate(node => node.open), false,
         'an explicit group fold survives a snapshot or agent transcript rebuild');
@@ -160,11 +160,11 @@ test('a cut activity label still shows its failure total, without repeating it w
           summary: '9 calls: read 4 files, searched 2 patterns, evaluated 1 form, ran 2 commands (1 failed)'};
         const target = document.getElementById('transcript');
         for (let n = 1; n <= 3; n++) {
-          target.append(window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool',
+          target.append(window.niwaTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool',
             toolUseId: `source-${n}`, activity, presentation: {name: 'Read', body: 'ok', collapsed: true}},
           null, null, null));
         }
-        window.mevedelTranscriptRenderer.groupActivity(target);
+        window.niwaTranscriptRenderer.groupActivity(target);
       });
       const label = page.locator('.activity-group > summary .activity-label');
       const total = page.locator('.activity-group > summary .activity-failed');
@@ -213,9 +213,9 @@ test('an archived segment measures its failure total once attached and when reop
         return node;
       };
       window.sent = [];
-      window.archive = window.mevedelHistoryView.create({
+      window.archive = window.niwaHistoryView.create({
         send: async frame => { window.sent.push(frame); return true; }, el,
-        renderRecord: record => window.mevedelTranscriptRenderer.renderRecord(record, null, null, null),
+        renderRecord: record => window.niwaTranscriptRenderer.renderRecord(record, null, null, null),
         onArtifacts: () => {}, onLoaded: () => {}});
       window.archive.connection(true);
       window.archiveIndex = current => window.archive.handle({t: 'history-index', currentSegment: current,
@@ -276,7 +276,7 @@ test('thinking disclosure keeps native toggles, draft and fit at phone and deskt
       await page.locator('#draft').fill('> exact\nmultiline draft');
       await page.evaluate(() => {
         window.rebuildThinking = () => {
-          const target = document.getElementById('transcript'), renderer = window.mevedelTranscriptRenderer;
+          const target = document.getElementById('transcript'), renderer = window.niwaTranscriptRenderer;
           const previous = new Map([...target.querySelectorAll('[data-record-id]')].map(node => [node.dataset.recordId, node]));
           target.replaceChildren(...[
             {id: 'before', kind: 'tool', name: 'Read', activity: {id: 'before', summary: 'Read 2 files'}},
@@ -342,9 +342,9 @@ test('source navigation loads exactly the host-located archive', async () => {
       const el = (tag, cls, text) => { const node = document.createElement(tag);
         node.className = cls || ''; node.textContent = text || ''; return node; };
       window.sourceSent = [];
-      window.sourceHistory = window.mevedelHistoryView.create({el, onArtifacts() {},
+      window.sourceHistory = window.niwaHistoryView.create({el, onArtifacts() {},
         send: frame => { window.sourceSent.push(frame); return Promise.resolve(true); },
-        renderRecord: record => window.mevedelTranscriptRenderer.renderRecord(record)});
+        renderRecord: record => window.niwaTranscriptRenderer.renderRecord(record)});
       window.sourceHistory.connection(true);
       window.sourceHistory.handle({t: 'history-index', currentSegment: 4, final: true,
         records: [{kind: 'chat', number: 1, title: 'Work', firstSegment: 1, lastSegment: 4}]});
@@ -388,7 +388,7 @@ test('revealed sources use the unobscured transcript viewport', async () => {
         for (const id of ['transcript', 'history-body', 'agent-transcript']) {
           const container = document.getElementById(id);
           if (id === 'agent-transcript') container.innerHTML = '<div class="spacer"></div>';
-          container.append(window.mevedelTranscriptRenderer.renderRecord({id, kind: 'tool', toolUseId: `source-${id}`,
+          container.append(window.niwaTranscriptRenderer.renderRecord({id, kind: 'tool', toolUseId: `source-${id}`,
             presentation: {name: 'Bash', body: id === 'history-body'
               ? Array.from({length: 60}, (_, n) => `Oversized source line ${n}`).join('\n')
               : 'first output line\nsecond output line', collapsed: true}}));
@@ -400,7 +400,7 @@ test('revealed sources use the unobscured transcript viewport', async () => {
         await page.evaluate(id => {
           const container = document.getElementById(id);
           if (id === 'agent-transcript') container.closest('.viewer-panel').hidden = false;
-          window.mevedelTranscriptRenderer.revealTool(container, `source-${id}`);
+          window.niwaTranscriptRenderer.revealTool(container, `source-${id}`);
         }, id);
         await page.waitForTimeout(700);
         const geometry = await page.locator(`[data-tool-use-id="source-${id}"]`).evaluate(node => {

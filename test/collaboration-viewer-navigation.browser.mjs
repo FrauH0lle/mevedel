@@ -20,8 +20,8 @@ const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const {chromium} = require('playwright');
 
 const TYPES = {html: 'text/html', css: 'text/css', js: 'text/javascript'};
-// Visual evidence is opt-in: MEVEDEL_CAPTURE_SCREENSHOTS=DIR saves PNGs there.
-const CAPTURE_DIR = process.env.MEVEDEL_CAPTURE_SCREENSHOTS;
+// Visual evidence is opt-in: NIWA_CAPTURE_SCREENSHOTS=DIR saves PNGs there.
+const CAPTURE_DIR = process.env.NIWA_CAPTURE_SCREENSHOTS;
 async function capture(page, name) {
   if (!CAPTURE_DIR) return;
   await mkdir(resolve(CAPTURE_DIR), {recursive: true});
@@ -388,7 +388,7 @@ test('workspace notification bell belongs to full and owner lobby links only', a
           static async requestPermission() { return 'granted'; }
           constructor(title) { window.shown.push(title); }
         };
-        if (viewOnly) localStorage.setItem(`mevedel-notify:${location.hash.slice(1)}`, 'on');
+        if (viewOnly) localStorage.setItem(`niwa-notify:${location.hash.slice(1)}`, 'on');
         Object.defineProperty(document, 'hidden', {value: true});
         let subscription;
         const registration = {unregister: async () => true, pushManager: {
@@ -410,7 +410,7 @@ test('workspace notification bell belongs to full and owner lobby links only', a
         await page.push[lobbyRoom.id]({t: 'notice', message: 'delivered'});
         await page.getByText('delivered', {exact: true}).waitFor();
         assert.deepEqual(await page.evaluate(() => window.shown), []);
-        assert.equal(await page.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
+        assert.equal(await page.evaluate(() => localStorage.getItem('niwa-last-share')), null);
         assert.equal(page.received.some(({frame}) => frame.t === 'push-subscribe'), false);
       } else {
         assert.match(await bell.getAttribute('aria-label'), /workspace/);
@@ -423,7 +423,7 @@ test('workspace notification bell belongs to full and owner lobby links only', a
         assert.match(await bell.getAttribute('aria-label'), /while this tab is away/);
         assert.equal(await bell.getAttribute('aria-pressed'), 'true');
         await page.push[lobbyRoom.id]({t: 'notice', kind: 'goal'});
-        await page.waitForFunction(() => window.shown.includes('New mevedel activity'));
+        await page.waitForFunction(() => window.shown.includes('New niwa activity'));
         const reopened = await page.context().newPage();
         const restored = next('push-subscribe');
         await reopened.goto('http://localhost:8765/');
@@ -437,23 +437,23 @@ test('workspace notification bell belongs to full and owner lobby links only', a
           await outage.goto('http://localhost:8765/');
           await outage.locator('#terminal-state').waitFor();
           assert.equal(await outage.locator('#terminal-title').textContent(), 'Lobby unavailable');
-          assert.equal(await outage.evaluate(() => localStorage.getItem('mevedel-last-share')), new URL(link).hash.slice(1));
+          assert.equal(await outage.evaluate(() => localStorage.getItem('niwa-last-share')), new URL(link).hash.slice(1));
         }
         const unsubscribed = next('push-unsubscribe');
         await reopened.locator('#notify-button').click();
         await unsubscribed;
         assert.equal(await reopened.evaluate(() => window.unsubscribed), true);
-        assert.equal(await reopened.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
-        assert.equal(await reopened.evaluate(fragment => localStorage.getItem(`mevedel-notify:${fragment}`),
+        assert.equal(await reopened.evaluate(() => localStorage.getItem('niwa-last-share')), null);
+        assert.equal(await reopened.evaluate(fragment => localStorage.getItem(`niwa-notify:${fragment}`),
                                              new URL(link).hash.slice(1)), null);
         await reopened.evaluate(() => { delete window.PushManager; });
         await reopened.locator('#notify-button').click();
         await page.push[lobbyRoom.id]({t: 'notice', kind: 'goal'});
         await page.push[lobbyRoom.id]({t: 'bye', reason: 'rotated'});
         await reopened.locator('#terminal-state').waitFor();
-        assert.deepEqual(await reopened.evaluate(() => window.shown), ['New mevedel activity']);
+        assert.deepEqual(await reopened.evaluate(() => window.shown), ['New niwa activity']);
         assert.equal(await reopened.locator('#notify-button').isVisible(), false);
-        assert.equal(await reopened.evaluate(() => localStorage.getItem('mevedel-last-share')), null);
+        assert.equal(await reopened.evaluate(() => localStorage.getItem('niwa-last-share')), null);
       }
       await page.context().close();
     }
@@ -467,7 +467,7 @@ test('hidden viewer without Push only notifies for explicit host notices', async
     await page.addInitScript(() => {
       delete window.PushManager;
       Object.defineProperty(document, 'hidden', {value: true, configurable: true});
-      localStorage.setItem(`mevedel-notify:${location.hash.slice(1)}`, 'on');
+      localStorage.setItem(`niwa-notify:${location.hash.slice(1)}`, 'on');
       window.shown = [];
       window.Notification = class {
         static permission = 'granted';
@@ -491,7 +491,7 @@ test('hidden viewer without Push only notifies for explicit host notices', async
     for (const outcome of ['error', 'aborted', 'lost', 'success']) {
       await send({t: 'notice', kind: 'completion', outcome});
     }
-    const idle = 'The mevedel session is idle again.';
+    const idle = 'The niwa session is idle again.';
     assert.deepEqual(await shownAfter('Completion notices received'), [
       {title: 'Turn failed', body: 'Open the session for the failure and recovery actions.'},
       {title: 'Turn interrupted', body: idle},
@@ -501,7 +501,7 @@ test('hidden viewer without Push only notifies for explicit host notices', async
     for (const kind of ['notify', 'goal', 'failure', 'other']) {
       await send({t: 'notice', kind, message: 'Private transcript details'});
     }
-    const generic = {title: 'New mevedel activity', body: 'Open MevView to see the encrypted session update.'};
+    const generic = {title: 'New niwa activity', body: 'Open MevView to see the encrypted session update.'};
     assert.deepEqual(await shownAfter('Attention notices received'), [generic, generic, generic]);
     assert.equal(await page.evaluate(() => {
       delete document.hidden;
@@ -711,7 +711,7 @@ test('multiline inputs expand reversibly and message actions copy source with a 
             if (command === 'copy') window.fallbackCopy = document.activeElement.value;
             return true;
           };
-          const turn = window.mevedelTranscriptRenderer.renderRecord({id: 'rendered-only', kind: 'assistant'});
+          const turn = window.niwaTranscriptRenderer.renderRecord({id: 'rendered-only', kind: 'assistant'});
           turn.querySelector('.prose').innerHTML = '<p>First paragraph</p><p>Second<br>line</p>';
           document.getElementById('transcript').append(turn);
         });
@@ -729,7 +729,7 @@ test('multiline inputs expand reversibly and message actions copy source with a 
           document.getElementById('artifact-title').textContent = 'Review notes';
           document.getElementById('artifact-body').innerHTML = '<article class="prose"><h1>Review notes</h1><p>A shared document for the implementation review.</p></article>';
           const drafts = new Map();
-          window.discussionView = window.mevedelDiscussionSidebar.create({
+          window.discussionView = window.niwaDiscussionSidebar.create({
             root: document.getElementById('artifact-discussion-sidebar'), noun: 'artifact',
             canWrite: () => true, draft: {get: key => drafts.get(key) || {},
               set: (key, value) => drafts.set(key, {...drafts.get(key), ...value})},

@@ -58,7 +58,7 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
   panel.node.hidden = true;
   const opened = [];
   const sheets = [];
-  const nav = window.mevedelNav.create({
+  const nav = window.niwaNav.create({
     state: {project: 'proj', sessionName: 'Feature work', writable: true,
             fragment: 'here.secret', ...state},
     el: (tag, className, text) => element(document, tag, className, text),
@@ -83,10 +83,10 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
     return menu.children.find(child => child.attributes.role === 'menuitem');
   };
   return {nav, nodes, window, history, calls, tab, panel, opened, pop, lobbyCalls,
-          sheets, menu, historyShare: window.mevedelNav.historyShare};
+          sheets, menu, historyShare: window.niwaNav.historyShare};
 }
 
-const shares = tab => JSON.parse(tab.get('mevedel-tab-shares'));
+const shares = tab => JSON.parse(tab.get('niwa-tab-shares'));
 
 // Joining a room names it in the entry and keeps its link in the tab only.
 {
@@ -258,7 +258,7 @@ const shares = tab => JSON.parse(tab.get('mevedel-tab-shares'));
 // Shared link helpers keep the browser's native alternate navigation intact.
 {
   const {window} = build();
-  const {link, roomURL} = window.mevedelNav;
+  const {link, roomURL} = window.niwaNav;
   assert.equal(roomURL('here.secret'), 'https://relay.example/#here.secret');
   assert.equal(roomURL('#here.secret', {view: 'artifacts'}),
                'https://relay.example/#here.secret?view=artifacts');

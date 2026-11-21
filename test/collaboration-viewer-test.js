@@ -171,7 +171,7 @@ function base64url(bytes) {
   return Buffer.from(bytes).toString('base64url');
 }
 
-// Host-side sealing, mirroring mevedel-collaboration--seal: envelope is
+// Host-side sealing, mirroring niwa-collaboration--seal: envelope is
 // [4-byte peerId][12-byte nonce][ciphertext||tag].
 async function seal(key, peer, frame) {
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -269,7 +269,7 @@ async function testTransportLifecycle() {
     },
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
-  const transport = window.mevedelViewerTransport.create({
+  const transport = window.niwaViewerTransport.create({
     roomId: 'roomroomroomroom', key: {}, giveUpMs: 60000,
     hello: () => ({t: 'hello'}), onConnection() {},
     onFrame(frame) {
@@ -423,7 +423,7 @@ async function testTransportGiveUp() {
     },
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
-  const createTransport = () => window.mevedelViewerTransport.create({
+  const createTransport = () => window.niwaViewerTransport.create({
     roomId: 'roomroomroomroom', key: {}, giveUpMs: 100, joinGraceMs: 10,
     hello: () => ({t: 'hello'}), onConnection() {}, onFrame() {},
     onGiveUp() { giveUps++; }, async onOpen() {},
@@ -475,7 +475,7 @@ function navigationFixture(context) {
   context.window.location ||= {};
   Object.assign(context.window.location, {origin: location.origin, pathname: location.pathname});
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-nav.js', 'utf8'), context);
-  return params => context.window.mevedelNav.roomURL(
+  return params => context.window.niwaNav.roomURL(
     `roomroomroomroom.${base64url(new Uint8Array(32))}`, params);
 }
 
@@ -491,12 +491,12 @@ async function testItemConversations() {
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
     window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/?shared=doc',hash:''},history:{replaceState(){}},
-      mevedelViewerTransport:{parseFragment:()=>null}},
+      niwaViewerTransport:{parseFragment:()=>null}},
     MessageChannel:class {constructor(){this.port1={postMessage:m=>messages.push(m),close(){}};this.port2={};}},
   };
   const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
+  api=context.window.niwaEditingView.create({state,href,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
     send:async frame=>{
       const args=JSON.parse(Buffer.from(frame.data,'base64').toString());
       lastArgs=args;
@@ -556,11 +556,11 @@ async function testEditingAvailability() {
     URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:node,querySelectorAll:()=>creates},
-    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},niwaViewerTransport:{parseFragment:()=>null}},
   };
   const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.niwaEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     send:async frame=>{
       const args=JSON.parse(atob(frame.data));
       const reply=args.action==='list' ? {result:[{id:'doc',kind:'document',title:'Notes'}]}
@@ -601,18 +601,18 @@ async function testEditingDock() {
   const node = id => { if (!nodes.has(id)) nodes.set(id,new Element('div')); return nodes.get(id); };
   const media = {matches:true, listeners:[], addEventListener(type, fn) { this.listeners.push(fn); }};
   const state = {records:new Map(),ownQueue:[],readOnly:false,sessionName:'Planning'};
-  const document = {title:'Planning · mevedel',getElementById:node,querySelectorAll:()=>[]};
+  const document = {title:'Planning · niwa',getElementById:node,querySelectorAll:()=>[]};
   let focused = 0, init = null, editorPort = null, api;
   const context = {
     URL, crypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout, MessageChannel,
     localStorage:{length:0,getItem:()=>null}, document,
     window:{matchMedia:()=>media, open:()=>assert.fail('A docked item opens no tab'),
       location:{href:'http://localhost/',hash:''}, history:{replaceState(){}},
-      mevedelViewerTransport:{parseFragment:()=>null}},
+      niwaViewerTransport:{parseFragment:()=>null}},
   };
   const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.niwaEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     onDock:(on,id)=>docks.push([on,id]), onFocusChat:()=>focused++,
     send:async frame=>{
       if (!frame.data) return true;
@@ -638,7 +638,7 @@ async function testEditingDock() {
   assert.deepEqual(docks,[[true,'doc']]);
   assert.equal(api.dockedItem(),'doc');
   // The room keeps the page title while the item shares its page.
-  assert.equal(document.title,'Planning · mevedel');
+  assert.equal(document.title,'Planning · niwa');
   assert.equal(state.editorTitle ?? null,null);
   const frame = node('editing-body').children[0];
   frame.contentWindow = {postMessage(message, origin, ports) { init = message; [editorPort] = ports; }};
@@ -658,13 +658,13 @@ async function testEditingDock() {
   assert.deepEqual(docks.at(-1),[false,null]);
   assert.deepEqual(fromRoom.filter(message => message.type === 'docked'),[{type:'docked',docked:false}]);
   assert.equal(api.dockedItem(),null);
-  assert.equal(document.title,'Notes · mevedel');
+  assert.equal(document.title,'Notes · niwa');
   editorPort.postMessage({type:'focus-chat'});
   await tick();
   assert.equal(focused,1);
   node('editing-close').onclick();
   assert.equal(panel.hidden,true);
-  assert.equal(document.title,'Planning · mevedel');
+  assert.equal(document.title,'Planning · niwa');
   editorPort.close();
 }
 
@@ -673,7 +673,7 @@ async function testEditingDock() {
 async function testEditingDeletion() {
   const nodes = new Map(), flashes = [], store = new Map();
   const node = id => { if (!nodes.has(id)) nodes.set(id,new Element('div')); return nodes.get(id); };
-  const draft = (id, kind, pending) => store.set(`mevedel-editing::${id}`,
+  const draft = (id, kind, pending) => store.set(`niwa-editing::${id}`,
     JSON.stringify({id, kind, title:id, crdt:'', pending}));
   draft('stale', 'whiteboard', []);
   draft('board', 'whiteboard', []);
@@ -683,13 +683,13 @@ async function testEditingDeletion() {
     localStorage:{get length() { return store.size; }, key:i => [...store.keys()][i],
       getItem:k => store.get(k) ?? null, setItem:(k, v) => store.set(k, v), removeItem:k => store.delete(k)},
     document:{getElementById:node,querySelectorAll:()=>[]},
-    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},niwaViewerTransport:{parseFragment:()=>null}},
   };
   const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
   let listFails = false;
   const create = onCatalog => {
-    const view=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},href,
+    const view=context.window.niwaEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},href,
       el:tag=>new Element(tag),flash:message=>flashes.push(message),summarize(){},onCatalog,
       send:async frame=>{
         const args=JSON.parse(atob(frame.data));
@@ -713,7 +713,7 @@ async function testEditingDeletion() {
   assert.equal(catalogChanges, 1);
   assert.equal(api.present('board'), true);
   assert.equal(api.present('missing'), false);
-  assert.equal(store.has('mevedel-editing::stale'), false, 'a stale draft without edits is dropped');
+  assert.equal(store.has('niwa-editing::stale'), false, 'a stale draft without edits is dropped');
   const event = value => { const data=btoa(JSON.stringify(value));
     api.receive({t:'editing-event',offset:0,total:data.length,data}); };
   event({event:'deleted', id:'board', actor:'Ann'});
@@ -721,15 +721,15 @@ async function testEditingDeletion() {
   assert.equal(catalogChanges, 2);
   assert.deepEqual(node('editing-items').children.map(b => b.dataset.itemId), ['doc']);
   assert.equal(flashes.at(-1), '“Board” was deleted by Ann.');
-  assert.equal(store.has('mevedel-editing::board'), false);
+  assert.equal(store.has('niwa-editing::board'), false);
   event({event:'deleted', id:'doc', actor:'Ann'});
-  assert.equal(store.has('mevedel-editing::doc'), true, 'unsaved edits stay recoverable');
+  assert.equal(store.has('niwa-editing::doc'), true, 'unsaved edits stay recoverable');
   assert.deepEqual(node('editing-items').children.map(b => b.dataset.itemId), ['doc'],
                    'listed again as a local recovery');
   // A disconnected browser knows nothing about what the host still has.
   draft('unlisted', 'whiteboard', []);
   api.connection(false);
-  assert.equal(store.has('mevedel-editing::unlisted'), true);
+  assert.equal(store.has('niwa-editing::unlisted'), true);
   // A host that cannot list its items leaves every discussion in place.
   listFails = true;
   let failedChanges = 0;
@@ -750,11 +750,11 @@ async function testItemDiscussionAsk() {
     crypto: require('node:crypto').webcrypto,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
-    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},niwaViewerTransport:{parseFragment:()=>null}},
   };
   const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.niwaEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     send:async frame=>{
       const args=JSON.parse(atob(frame.data));
       if (args.action==='discussion') asked.push(args);
@@ -785,7 +785,7 @@ function testCompletionRendering() {
   const href = navigationFixture(context);
   installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
-  const render = (record, onExecutionOpen) => window.mevedelTranscriptRenderer.renderRecord(
+  const render = (record, onExecutionOpen) => window.niwaTranscriptRenderer.renderRecord(
     record, null, null, null, onExecutionOpen);
   const execution = {owner: '/root', ownPath: '/root', id: 'exec-1', kind: 'bash',
     command: 'make check', description: 'Run checks', eventCount: null, exitCode: 0};
@@ -866,7 +866,7 @@ function testCompletionRendering() {
 
   const artifact = {id: 'artifact-1', kind: 'tool', artifact: 'page/index.html', store: 'page'};
   let openedArtifact = null;
-  const card = window.mevedelTranscriptRenderer.renderRecord(artifact, null,
+  const card = window.niwaTranscriptRenderer.renderRecord(artifact, null,
     record => { openedArtifact = record; }, null, null, null,
     route => { assert.equal(route.artifact, artifact); return href({artifact: route.artifact.store}); });
   const artifactLink = findByClass(card, 'artifact-open');
@@ -887,7 +887,7 @@ function testRequestSummaryRendering() {
   const context = {window, document};
   installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
-  const renderer = window.mevedelTranscriptRenderer;
+  const renderer = window.niwaTranscriptRenderer;
   const label = '── Worked for 2m 37s · Thu 29 Oct 14:32 ';
   const details = 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s';
   const record = {id: 'summary-1', kind: 'request-summary', text: label, details,
@@ -943,7 +943,7 @@ function testCompactionRendering() {
   const context = {window, document};
   installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
-  const renderer = window.mevedelTranscriptRenderer;
+  const renderer = window.niwaTranscriptRenderer;
   const record = {id: 'compaction-1', kind: 'compaction', revision: 0,
     text: 'Handoff preface.\n\n## Goal\n- **Continue** the work.',
     activity: {id: 'tools', summary: 'Read 2 files', status: 'completed'}};
@@ -995,7 +995,7 @@ function testThinkingRendering() {
   for (const file of ['renderer', 'viewer-pinned-prompt', 'viewer-agent', 'viewer-history']) {
     vm.runInNewContext(fs.readFileSync(`relay/viewer/${file}.js`, 'utf8'), context);
   }
-  const renderer = window.mevedelTranscriptRenderer;
+  const renderer = window.niwaTranscriptRenderer;
   const record = {id: 'thinking-1', kind: 'thinking', revision: 1, text: '**Consider** the options.',
     activity: {id: 'tools', summary: 'Read 2 files', status: 'completed'}};
   let turn = renderer.renderRecord(record);
@@ -1029,7 +1029,7 @@ function testThinkingRendering() {
     const node = new Element(tag); node.className = cls || ''; node.textContent = text || ''; return node;
   };
   const send = frame => { sent.push(frame); return true; };
-  const agent = window.mevedelAgentView.create({send, el});
+  const agent = window.niwaAgentView.create({send, el});
   agent.open({path: '/root/worker'});
   let streamed = record;
   const reply = () => agent.handle({reqId: sent.at(-1).reqId, final: true, records: [streamed]});
@@ -1045,7 +1045,7 @@ function testThinkingRendering() {
   }
 
   // Loaded archives retain their record nodes across index refreshes and reconnects.
-  const history = window.mevedelHistoryView.create({send, el, renderRecord: renderer.renderRecord,
+  const history = window.niwaHistoryView.create({send, el, renderRecord: renderer.renderRecord,
     onArtifacts() {}});
   const index = {t: 'history-index', currentSegment: 2, final: true, records: [
     {kind: 'chat', number: 1, title: 'Chat', firstSegment: 1, lastSegment: 2}]};
@@ -1076,7 +1076,7 @@ function testComposerShortcut() {
     let clicks = 0;
     button.title = 'Post reply';
     button.click = () => { clicks++; };
-    window.mevedelComposer.bind(input, button);
+    window.niwaComposer.bind(input, button);
     assert.equal(button.title, `Post reply (${hint})`);
     assert.equal(button.attributes['aria-keyshortcuts'], 'Control+Enter Meta+Enter');
     for (const event of [{key: 'Enter'}, {key: 'Enter', shiftKey: true},
@@ -1313,7 +1313,7 @@ async function main() {
       return element;
     },
     hasFocus() { return this.focused !== false; },
-    title: 'mevedel live session',
+    title: 'niwa live session',
     documentElement: {
       scrollHeight: 100,
       attributes: {},
@@ -1404,7 +1404,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-requests.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
-  assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
+  assert.equal(tabStorage.get('niwa-tab-share'), `${roomId}.${ownerSecret}`);
 
   // Opening another room's link in this tab only changes the fragment;
   // the page reloads to join it, but ignores a fragment that is no link.
@@ -1423,7 +1423,7 @@ async function main() {
 
   // Link grammar: view links carry the bare key, full links append the
   // write token, anything else is rejected.
-  const api = context.window.mevedelViewer;
+  const api = context.window.niwaViewer;
   assert.equal((window.listeners.visibilitychange || []).length, 0);
   // Notification presence, the lobby's foreground refresh, and the
   // page report that marks a hidden tab away.
@@ -1469,7 +1469,7 @@ async function main() {
     nodes.appearance.value = theme;
     nodes.appearance.dispatch('change');
     assert.equal(document.documentElement.attributes['data-theme'], theme === 'system' ? undefined : theme);
-    assert.equal(JSON.parse(storage.get('mevedel-appearance')).theme, theme);
+    assert.equal(JSON.parse(storage.get('niwa-appearance')).theme, theme);
   }
   nodes.palette.value = 'warm';
   nodes.accents.value = 'minimal';
@@ -1551,7 +1551,7 @@ async function main() {
     socket.dispatch('message', {data: await seal(key, 1, frame)});
     delivered++;
     // Wait until the viewer's serialized inbound chain has consumed it.
-    await waitFor(() => context.window.mevedelViewerApplied === delivered,
+    await waitFor(() => context.window.niwaViewerApplied === delivered,
                   'frame application');
   };
   const deliver = frame => deliverTo(first, frame);
@@ -1575,12 +1575,12 @@ async function main() {
   assert.equal(hello.name[0], hello.name.split(' ')[1][0], 'generated name alliterates');
   assert.equal(textOf(nodes['you-label']), hello.name, 'the header shows who you are');
   assert.equal(textOf(nodes['composer-identity']), `as ${hello.name}`);
-  assert.equal(tabStorage.get('mevedel-random-name'), hello.name, 'a reload of this tab keeps the name');
-  assert.equal(storage.has('mevedel-chosen-name'), false, 'a random name is not remembered by the browser');
+  assert.equal(tabStorage.get('niwa-random-name'), hello.name, 'a reload of this tab keeps the name');
+  assert.equal(storage.has('niwa-chosen-name'), false, 'a random name is not remembered by the browser');
   // The stable per-browser guest id rides every hello, so the host can
   // match this guest's own queued entries across reconnects.
   assert.match(hello.guestId, /^[A-Za-z0-9_-]{8,64}$/);
-  assert.equal(storage.get('mevedel-guest-id'), hello.guestId);
+  assert.equal(storage.get('niwa-guest-id'), hello.guestId);
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
@@ -1676,7 +1676,7 @@ async function main() {
   // line-number gutter kept out of the highlighter.
   await deliver({t: 'record', record: {
     id: 'read', kind: 'tool', revision: 0, name: 'Read', status: 'completed',
-    summary: 'Read', detail: 'mevedel-view.el',
+    summary: 'Read', detail: 'niwa-view.el',
     result: '  1\t(defun demo ()\n  2\t  "doc")',
   }});
   const readFlat = JSON.stringify(findByRecordId(nodes.transcript, 'read'),
@@ -1692,7 +1692,7 @@ async function main() {
   await deliver({t: 'record', record: {
     id: 'grep', kind: 'tool', revision: 0, name: 'Grep', status: 'completed',
     summary: 'Grep', detail: 'defun',
-    result: 'mevedel-view.el:42:(defun demo ()\nrelay/main.go:9:func main() {',
+    result: 'niwa-view.el:42:(defun demo ()\nrelay/main.go:9:func main() {',
   }});
   const grepFlat = JSON.stringify(findByRecordId(nodes.transcript, 'grep'),
                                   (k, v) => (k === 'parent' ? undefined : v));
@@ -1713,7 +1713,7 @@ async function main() {
   await deliver({t: 'record', record: {
     id: 'xref', kind: 'tool', revision: 0, name: 'XrefReferences',
     status: 'completed', summary: 'XrefReferences', detail: 'demo',
-    result: 'mevedel-view.el:42: (defun demo ()',
+    result: 'niwa-view.el:42: (defun demo ()',
   }});
   const xrefFlat = JSON.stringify(findByRecordId(nodes.transcript, 'xref'),
                                   (k, v) => (k === 'parent' ? undefined : v));
@@ -1808,7 +1808,7 @@ async function main() {
   assert.match(textOf(elements(topList)[3]), /^git fetch and git pull/);
   await deliver({t: 'remove', ids: ['lists']});
 
-  const mixedLists = window.mevedelTranscriptRenderer.renderMarkdown(
+  const mixedLists = window.niwaTranscriptRenderer.renderMarkdown(
     '- Parent\n  wrapped **bold** and `code` <img src=x onerror=alert(1)>\n'
     + '  1. Child\n     - Grandchild\n  2. Sibling\n'
     + '  - Unordered child\n- Next\n\n1. Ordered root\n\nAfter');
@@ -1886,7 +1886,7 @@ async function main() {
   // Attachments are not only photos: an allowlisted text type rides the
   // frame verbatim, a disallowed one never leaves the browser, and the
   // extension decides when the browser reports no type at all.
-  const api2 = context.window.mevedelViewer;
+  const api2 = context.window.niwaViewer;
   const failedRead = assert.rejects(api2.addFiles([{
     ...fakeFile('unreadable.log', '', 'x'),
     arrayBuffer: async () => { throw new Error('read failed'); },
@@ -1958,14 +1958,14 @@ async function main() {
     await waitFor(() => first.sent.length === before + 1, 'sealed name update');
     assert.deepEqual(await unseal(key, first.sent.at(-1)), {t: 'set-name', name: expected});
     assert.equal(textOf(nodes['you-label']), expected);
-    assert.equal(storage.get('mevedel-chosen-name'), chosen);
+    assert.equal(storage.get('niwa-chosen-name'), chosen);
     assert.equal(nodes['composer-input'].value, 'Unsent draft');
   }
   const afterName = first.sent.length;
   chooseName(hello.name);
   await tick();
   assert.equal(first.sent.length, afterName, 'an unchanged name sends nothing');
-  assert.equal(storage.get('mevedel-chosen-name'), hello.name,
+  assert.equal(storage.get('niwa-chosen-name'), hello.name,
                'typing the random name keeps it as a choice');
   chooseName('');
   // A random name of one's own replaces the tab's and is not remembered.
@@ -1974,8 +1974,8 @@ async function main() {
   const fresh = (await unseal(key, first.sent.at(-1))).name;
   assert.notEqual(fresh, hello.name);
   assert.match(fresh, /^[A-Z][a-z]+ [A-Z][a-z]+$/);
-  assert.equal(tabStorage.get('mevedel-random-name'), fresh);
-  assert.equal(storage.has('mevedel-chosen-name'), false);
+  assert.equal(tabStorage.get('niwa-random-name'), fresh);
+  assert.equal(storage.has('niwa-chosen-name'), false);
 
   await Promise.all([
     api2.addFiles([fakeFile('one.log', '', '1'),
@@ -2253,8 +2253,8 @@ async function main() {
                 'notification permission');
   // Opting into notifications is the install use-case, so the share
   // credentials persist for the installed app to relaunch with.
-  await waitFor(() => storage.has('mevedel-last-share'), 'persisted share');
-  assert.equal(storage.get('mevedel-last-share'), `${roomId}.${ownerSecret}`);
+  await waitFor(() => storage.has('niwa-last-share'), 'persisted share');
+  assert.equal(storage.get('niwa-last-share'), `${roomId}.${ownerSecret}`);
   await waitFor(() => first.sent.length === pushBefore + 1,
                 'sealed push subscription');
   assert.deepEqual(await unseal(key, first.sent[pushBefore]),
@@ -2293,7 +2293,7 @@ async function main() {
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
                  mode: 'edits', name: 'Pipeline diagram'});
   assert.equal(nodes['session-label'].textContent, 'Pipeline diagram');
-  assert.equal(document.title, 'Pipeline diagram · mevedel');
+  assert.equal(document.title, 'Pipeline diagram · niwa');
 
   // Owner link: requesting a separate session. The sheet collects the
   // name and optional prompt; the request travels as its own frame.
@@ -2360,7 +2360,7 @@ async function main() {
   assert.match(textOf(nodes.invites), /handed-over · open/);
   // The room this tab stands in is kept too, under its session's name,
   // but is not counted as somewhere to go.
-  const storedRooms = JSON.parse(storage.get('mevedel-rooms'));
+  const storedRooms = JSON.parse(storage.get('niwa-rooms'));
   assert.deepEqual([storedRooms[0].room, storedRooms[0].name],
                    ['roomroomroomroom', 'Pipeline diagram']);
   assert.deepEqual(storedRooms.slice(1),
@@ -2393,7 +2393,7 @@ async function main() {
   const refused = nodes.invites.children[1];
   refused.children[refused.children.length - 1].children[0].dispatch('click');
   assert.equal(nodes.invites.children.length, 2);
-  assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 3);
+  assert.equal(JSON.parse(storage.get('niwa-rooms')).length, 3);
 
   // Owner link: a settled response carries its fork point, and Fork from
   // here asks the host for a Conversation Fork. The page marks the owner
@@ -3190,11 +3190,11 @@ async function main() {
   assert.equal(nodes.attachments.children.length, 0);
   assert.equal(nodes['notify-button'].hidden, true);
   // A dead room's persisted credentials die with it.
-  assert.equal(storage.has('mevedel-last-share'), false);
-  assert.equal(tabStorage.has('mevedel-tab-share'), false);
+  assert.equal(storage.has('niwa-last-share'), false);
+  assert.equal(tabStorage.has('niwa-tab-share'), false);
   nodes['notify-button'].dispatch('click');
   await tick();
-  assert.equal(storage.has('mevedel-last-share'), false);
+  assert.equal(storage.has('niwa-last-share'), false);
   await waitFor(() => unsubscribeCount === 2, 'push unsubscribe');
   sockets[1].dispatch('close', {code: 4001});
   assert.equal(timer, null);
@@ -3213,7 +3213,7 @@ async function main() {
     t: 'welcome', proto: 5, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
     title: 'SNT analysis pipeline', readOnly: false})});
   await waitFor(() => textOf(nodes['terminal-title']) === 'Artifact link', 'artifact link notice');
-  assert.equal(textOf(nodes['terminal-message']), 'Paste this link into mevedel or an MCP client.');
+  assert.equal(textOf(nodes['terminal-message']), 'Paste this link into niwa or an MCP client.');
   assert.equal(nodes.composer.hidden, true);
   assert.equal(artifactSocket.readyState, 3, 'the viewer leaves the artifact room');
 
@@ -3229,7 +3229,7 @@ async function main() {
   oldHostSocket.dispatch('message', {data: await seal(key, 1, {
     t: 'error', nonce: oldHostHello.nonce, message: 'protocol mismatch: host speaks 4'})});
   await waitFor(() => textOf(nodes['terminal-title']) === 'Rejected', 'protocol refusal');
-  assert.match(textOf(nodes['terminal-message']), /host speaks 4.*update mevedel.*reload the viewer/);
+  assert.match(textOf(nodes['terminal-message']), /host speaks 4.*update niwa.*reload the viewer/);
   assert.equal(oldHostSocket.readyState, 3, 'the viewer leaves the mismatched room');
 
   console.log('viewer protocol passed');

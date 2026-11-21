@@ -1,6 +1,6 @@
 /* Body layout state must not make streamed records restyle the whole room.
- * MEVEDEL_SELECTOR_EVIDENCE=DIR saves screenshots and matched timing samples.
- * MEVEDEL_SELECTOR_ASSETS=DIR uses a frozen viewer for baseline comparisons.
+ * NIWA_SELECTOR_EVIDENCE=DIR saves screenshots and matched timing samples.
+ * NIWA_SELECTOR_ASSETS=DIR uses a frozen viewer for baseline comparisons.
  * Run: node --test test/collaboration-viewer-selectors.browser.mjs
  */
 import test from 'node:test';
@@ -12,8 +12,8 @@ import {resolve} from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const {chromium} = require('playwright');
-const evidence = process.env.MEVEDEL_SELECTOR_EVIDENCE;
-const assets = resolve(process.env.MEVEDEL_SELECTOR_ASSETS || resolve(root, 'relay/viewer'));
+const evidence = process.env.NIWA_SELECTOR_EVIDENCE;
+const assets = resolve(process.env.NIWA_SELECTOR_ASSETS || resolve(root, 'relay/viewer'));
 
 async function room(browser, width, theme) {
   const page = await browser.newPage({viewport: {width, height: width === 375 ? 667 : 900}});
@@ -37,8 +37,8 @@ async function room(browser, width, theme) {
     document.getElementById('commands-box').hidden = false;
     document.getElementById('session-summary').textContent = '3 commands';
     document.getElementById('room-button').hidden = false;
-    window.mevedelHeader.create();
-    window.render = record => mevedelTranscriptRenderer.renderRecord(record, () => {});
+    window.niwaHeader.create();
+    window.render = record => niwaTranscriptRenderer.renderRecord(record, () => {});
   }, theme);
   return page;
 }

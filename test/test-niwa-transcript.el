@@ -1,0 +1,2490 @@
+;;; test-niwa-transcript.el --- Tests for transcript structure -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+(require 'niwa-transcript)
+(require 'niwa-transcript-audit)
+(require 'niwa-transcript-restore)
+(require 'niwa-pipeline)
+(require 'niwa-tool-media)
+(require 'niwa-tool-render-data)
+(require 'niwa-utilities)
+
+(defvar niwa-tool-media--store)
+
+(defmacro niwa-transcript-test--with-buffer (&rest body)
+  "Run BODY with a temporary Org transcript bound as `data-buf'."
+  (declare (indent 0) (debug t))
+  `(let ((data-buf (generate-new-buffer " *test-transcript*")))
+     (unwind-protect
+         (progn
+           (with-current-buffer data-buf
+             (org-mode))
+           ,@body)
+       (when (buffer-live-p data-buf)
+         (kill-buffer data-buf)))))
+
+(defun niwa-transcript-test--insert (data-buf text property)
+  "Append TEXT to DATA-BUF with gptel PROPERTY."
+  (with-current-buffer data-buf
+    (goto-char (point-max))
+    (let ((start (point)))
+      (insert text)
+      (when property
+        (put-text-property start (point) 'gptel property)))))
+
+(niwa-deftest niwa-transcript-prompt-transform-start ()
+  ,test
+  (test)
+  :doc "returns the prompt after leading system reminders"
+  (with-temp-buffer
+    (insert "<system-reminder>\nremember\n"
+            "<system-reminder>\nliteral\n</system-reminder>\n"
+            "after literal\n</system-reminder>\n\n")
+    (let ((prompt-start (point)))
+      (insert "User prompt")
+      (should (= prompt-start
+                 (niwa-transcript-prompt-transform-start)))))
+
+  :doc "skips trailing hidden metadata when locating prompt start"
+  (dolist (property '(ignore niwa-render-data niwa-hook-audit))
+    (with-temp-buffer
+      (let ((prompt-start (point)))
+        (insert (propertize "User prompt" 'gptel 'prompt))
+        (insert (propertize "\n<hidden />" 'gptel property))
+        (insert "\n\n")
+        (should (= prompt-start
+                   (niwa-transcript-prompt-transform-start)))))))
+
+;;
+;;; Segment extraction
+
+(niwa-deftest niwa-transcript--cache-rebase ()
+  (let ((cache (niwa-transcript-cache-create
+                :origin 10 :high 100 :restart 50 :blocked 70
+                :raw '((tool 20 30 "id")) :ranges '((tool 20 30 "id"))
+                :segments '((user 10 20) (tool 20 30 "id")))))
+    (niwa-transcript--cache-rebase cache 5)
+    (should (= 15 (niwa-transcript-cache-origin cache)))
+    (should (= 105 (niwa-transcript-cache-high cache)))
+    (should (= 55 (niwa-transcript-cache-restart cache)))
+    (should (= 75 (niwa-transcript-cache-blocked cache)))
+    (should (equal '((tool 25 35 "id"))
+                   (niwa-transcript-cache-raw cache)))
+    (should (equal '((tool 25 35 "id"))
+                   (niwa-transcript-cache-ranges cache)))
+    (should (equal '((user 15 25) (tool 25 35 "id"))
+                   (niwa-transcript-cache-segments cache)))))
+
+(niwa-deftest niwa-transcript--cached-parse ()
+  ,test
+  (test)
+  :doc "changing the consumer purpose derives the right result"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_reasoning\nThinking\n#+end_reasoning\n")
+    (let ((cache (niwa-transcript-cache-create)))
+      (should (equal (niwa-transcript-segments (point-min) (point-max))
+                     (niwa-transcript--cached-parse cache nil nil)))
+      ;; Changing the consumer's purpose must not reuse conversation segments
+      ;; as normalization ranges.
+      (should (equal (niwa-transcript--structural-ranges
+                      (point-min) (point-max)
+                      (niwa-transcript--property-segments
+                       (point-min) (point-max)))
+                     (niwa-transcript--cached-parse cache nil t)))))
+  :doc "an interrupted derivation retains one owned proof rather than leaking consumers"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n")
+    (let ((cache (niwa-transcript-cache-create)))
+      (dotimes (_ 3)
+        (cl-letf (((symbol-function 'niwa-transcript--property-segments)
+                   (lambda (&rest _) (error "Interrupted derivation"))))
+          (should-error (niwa-transcript--cached-parse cache nil nil)))
+        (should (= 1 (length niwa-transcript-source--consumers)))))))
+
+(niwa-deftest niwa-transcript-cached-ranges ()
+  ,test
+  (test)
+  :doc "known metadata rebases origins and leaves an identical full derivation"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n"
+            "#+begin_summary\nInherited\n#+end_summary\n"
+            "Prompt\n#+begin_reasoning\nThinking\n#+end_reasoning\n")
+    (let ((cache (niwa-transcript-cache-create)))
+      (dotimes (_ 4)
+        (let ((origin (niwa-transcript--skip-leading-properties-drawer 1)))
+          (should (equal (niwa-transcript--structural-ranges
+                          (point-min) (point-max)
+                          (niwa-transcript--property-segments
+                           (point-min) (point-max)))
+                         (niwa-transcript-cached-ranges cache origin))))
+        (niwa-transcript-source-call-with-metadata-change
+         (lambda () (goto-char 14) (insert ":META: value\n")))
+        (goto-char (point-max))
+        (insert (propertize "Tail\n" 'gptel 'response))))))
+
+(niwa-deftest niwa-transcript--cache-restart ()
+  ,test
+  (test)
+  :doc "tool closes keep recovery lookahead and unresolved containers live"
+  (with-temp-buffer
+    (insert (make-string 100 ?x) "\n#+end_tool\n")
+    (let ((cache (niwa-transcript-cache-create
+                  :ranges '((tool 10 20) (reasoning 30 40) (tool 60 70))
+                  :raw '((reasoning 25 80)))))
+      (should (= 25 (niwa-transcript--cache-restart cache 90)))
+      (setf (niwa-transcript-cache-blocked cache) 24)
+      (should (= 10 (niwa-transcript--cache-restart cache 90)))
+      (should (= 1 (niwa-transcript--cache-restart cache 20)))))
+  :doc "plain appends do not scan from an old tool or the beginning of history"
+  (with-temp-buffer
+    (insert (make-string 1000 ?x) "\nTail\n")
+    (let ((cache (niwa-transcript-cache-create
+                  :ranges '((tool 10 20)))))
+      (should (= (point-max)
+                 (niwa-transcript--cache-restart cache (point-max)))))))
+
+(niwa-deftest niwa-transcript-cached-segments ()
+  ,test
+  (test)
+  :doc "a long unbroken response line remains equivalent after an append"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+            "#+end_tool\n"
+            (propertize (make-string 100000 ?x) 'gptel 'response))
+    (let ((cache (niwa-transcript-cache-create)))
+      (niwa-transcript-cached-segments cache)
+      (insert (propertize "tail" 'gptel 'response))
+      (should (equal (niwa-transcript-segments (point-min) (point-max))
+                     (niwa-transcript-cached-segments cache)))))
+  :doc "an edit far along an opener line can validate a formerly rejected control"
+  (dolist (pair '(("<hook-context>" . "</hook-context>")
+                  ("<task-background>" . "</task-background>")
+                  ("<system-reminder>" . "</system-reminder>")
+                  (":PROMPT:" . ":END:")))
+    (with-temp-buffer
+      (org-mode)
+      (insert (car pair) (make-string 100 ?\s))
+      (let ((invalid (point))
+            (cache (niwa-transcript-cache-create)))
+        (insert "x\npayload\n" (cdr pair) "\n")
+        (niwa-transcript-cached-segments cache)
+        (delete-region invalid (1+ invalid))
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache))))))
+  :doc "seeded edit scripts preserve full parser semantics across recovery and tail reuse"
+  (dolist (seed '(17 42 2026))
+    (with-temp-buffer
+      (org-mode)
+      (insert "Prompt\n#+begin_tool\n"
+              (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+              "#+end_tool\n"
+              (propertize "Answer\n" 'gptel 'response))
+      (let ((cache (niwa-transcript-cache-create))
+            (state (cl-make-random-state seed)))
+        (dotimes (iteration 100)
+          (should (equal (niwa-transcript-segments (point-min) (point-max))
+                         (niwa-transcript-cached-segments cache)))
+          (pcase (% iteration 7)
+            (0 (goto-char (point-max))
+               (insert (propertize "Tail\n" 'gptel 'response)))
+            (1 (goto-char (point-max))
+               (insert "#+begin_reasoning\nThinking\n#+end_reasoning\n"))
+            (2 (goto-char (1+ (cl-random (buffer-size) state)))
+               (insert "edited"))
+            (3 (let ((start (1+ (cl-random (buffer-size) state))))
+                 (delete-region start (min (+ start 4) (point-max)))))
+            (4 (goto-char (point-max))
+               (insert (propertize "recovered\n" 'gptel '(tool . "one"))
+                       "#+end_tool\n"))
+            (5 (goto-char (point-max))
+               (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n"))
+            (6 (with-silent-modifications
+                 (put-text-property 1 (min 15 (point-max)) 'gptel 'ignore))))))))
+  :doc "a dirty frontier outside a new restriction cannot retain inaccessible controls"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_reasoning\nOne\n#+end_reasoning\n"
+            "#+begin_reasoning\nTwo\n#+end_reasoning\n")
+    (let ((cache (niwa-transcript-cache-create)))
+      (niwa-transcript-cached-segments cache)
+      (goto-char (point-max))
+      (insert (propertize "More\n" 'gptel 'response))
+      (save-restriction
+        (narrow-to-region (point-min) 15)
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache))))
+      (should (equal (niwa-transcript-segments (point-min) (point-max))
+                     (niwa-transcript-cached-segments cache)))))
+  :doc "incomplete controls before a closed tool remain resumable on a later close"
+  (dolist (pair '(("#+begin_reasoning\n" . "#+end_reasoning\n")
+                  ("<system-reminder>\n" . "</system-reminder>\n")
+                  ("<hook-context>\n" . "</hook-context>\n")
+                  ("<task-background>\n" . "</task-background>\n")
+                  (":PROMPT:\n" . ":END:\n")
+                  ("<agent-result sender=\"/root/a\">\n" . "</agent-result>\n")))
+    (with-temp-buffer
+      (niwa--transcript-org-mode)
+      (insert (car pair) "Before\n#+begin_tool\n"
+              (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "a"))
+              "#+end_tool\n" (propertize "Streaming\n" 'gptel 'response))
+      (let ((cache (niwa-transcript-cache-create)))
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache)))
+        (insert (cdr pair))
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache))))))
+  :doc "a property-only change, narrowing and switching source invalidate retained structure"
+  (let ((cache (niwa-transcript-cache-create)))
+    (dotimes (_ 2)
+      (with-temp-buffer
+        (niwa--transcript-org-mode)
+        (insert "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+        (niwa-transcript-cached-segments cache)
+        (with-silent-modifications (put-text-property 1 4 'gptel 'ignore))
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache)))
+        (save-restriction
+          (narrow-to-region 2 (1- (point-max)))
+          (should (equal (niwa-transcript-segments (point-min) (point-max))
+                         (niwa-transcript-cached-segments cache)))))))
+  :doc "leading saved state and summary contents are not parsed as conversation controls"
+  (with-temp-buffer
+    (niwa--transcript-org-mode)
+    (insert ":PROPERTIES:\n:MODEL: test\n:END:\n"
+            "#+begin_summary\n<agent-result sender=\"/root/a\">\n"
+            "Summary\n</agent-result>\n#+end_summary\n\n"
+            "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (niwa-transcript-cache-create)))
+      (dotimes (_ 2)
+        (should (equal (niwa-transcript-segments (point-min) (point-max))
+                       (niwa-transcript-cached-segments cache)))
+        (insert (propertize "More\n" 'gptel 'response)))))
+  :doc "a control inside tool metadata restarts at the containing tool, not its payload"
+  (with-temp-buffer
+    (niwa--transcript-org-mode)
+    (let* ((cache (niwa-transcript-cache-create))
+           (body (concat "(:name \"Read\" :args nil)\nresult\n"
+                         (niwa-tool-render-data-format
+                          '(:nested "<agent-result sender=\"/root/a\">\nquoted\n</agent-result>\n")
+                          "one"))))
+      (insert "Prompt\n#+begin_tool\n" (propertize body 'gptel '(tool . "one"))
+              "#+end_tool\n" (propertize "Answer\n" 'gptel 'response))
+      (niwa-transcript-cached-segments cache)
+      (insert (propertize "More\n" 'gptel 'response))
+      (should (equal (niwa-transcript-segments (point-min) (point-max))
+                     (niwa-transcript-cached-segments cache)))))
+  :doc "tool recovery can extend its last close beyond a later closed audit"
+  (with-temp-buffer
+    (niwa--transcript-org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "one"))
+            "#+end_tool\n"
+            (niwa--format-hook-audit-record '(:type guest-prompt :name "Guest"))
+            (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (niwa-transcript-cache-create))
+          (old-end (point-max)))
+      (niwa-transcript-cached-segments cache)
+      (insert (propertize "recovered output\n" 'gptel '(tool . "one")) "#+end_tool\n")
+      (let* ((full (niwa-transcript-segments (point-min) (point-max)))
+             (tool (assq 'tool full)))
+        (should (> (caddr tool) old-end))
+        (should (equal full (niwa-transcript-cached-segments cache))))))
+  :doc "tool recovery accepts a close prefix with trailing non-word-boundary text"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "one"))
+            "#+end_tool\n" (make-string 500 ?x) "\n")
+    (let ((cache (niwa-transcript-cache-create))
+          (old-end (point-max)))
+      (niwa-transcript-cached-segments cache)
+      (insert "#+end_toolXYZ\n")
+      (let* ((full (niwa-transcript-segments (point-min) (point-max)))
+             (tool (assq 'tool full)))
+        (should (> (caddr tool) old-end))
+        (should (equal full (niwa-transcript-cached-segments cache)))))))
+
+(niwa-deftest niwa-transcript--overlay-ranges ()
+  ,test
+  (test)
+  :doc "higher precedence ranges can return to earlier and overlapping source"
+  (let* ((segments '((user 1 101)))
+         (ranges '((render-data 50 60) (ignored 80 90)
+                   (reasoning 20 70) (mailbox 40 85) (tool 25 55)))
+         (original-segments (copy-tree segments))
+         (original-ranges (copy-tree ranges)))
+    (should (equal (niwa-transcript--overlay-ranges segments ranges)
+                   '((user 1 20) (reasoning 20 25) (tool 25 55)
+                     (mailbox 55 85) (ignored 85 90) (user 90 101))))
+    (should (equal segments original-segments))
+    (should (equal ranges original-ranges)))
+  :doc "metadata contained by a tool stays in it, but crossing metadata does not"
+  (should (equal (niwa-transcript--overlay-ranges
+                  '((user 1 10) (tool 10 40) (response 40 60))
+                  '((render-data 15 20) (ignored 25 30) (ignored 35 45)))
+                 '((user 1 10) (tool 10 35) (ignored 35 45) (response 45 60))))
+  :doc "a repaired tool leaves the old tool suffix as user text"
+  (should (equal (niwa-transcript--overlay-ranges
+                  '((tool 1 100)) '((tool 10 30) (tool 50 70)))
+                 '((tool 1 10) (tool 10 30) (user 30 50)
+                   (tool 50 70) (user 70 100)))))
+
+(niwa-deftest niwa-transcript--overlay-range ()
+  ,test
+  (test)
+  :doc "ranges outside existing roles preserve source order and role gaps"
+  (dolist (case '((((user 10 20) (response 30 40)) (reasoning 1 5)
+                  ((reasoning 1 5) (user 10 20) (response 30 40)))
+                 (((user 10 20) (response 30 40)) (reasoning 22 28)
+                  ((user 10 20) (reasoning 22 28) (response 30 40)))
+                 (((user 10 20) (response 30 40)) (reasoning 45 50)
+                  ((user 10 20) (response 30 40) (reasoning 45 50)))
+                 (((user 10 20) (response 30 40)) (reasoning 15 35)
+                  ((user 10 15) (reasoning 15 35) (response 35 40)))
+                 (nil (reasoning 1 5) ((reasoning 1 5)))))
+    (let ((original (copy-tree (car case))))
+      (should (equal (niwa-transcript--overlay-range (car case) (cadr case))
+                     (caddr case)))
+      (should (equal (car case) original)))))
+
+(niwa-deftest niwa-transcript--render-data-block-at ()
+  ,test
+  (test)
+  :doc "a neighboring tool owner does not authorize user or response metadata"
+  (dolist (property '(nil response))
+    (dolist (framing '(0 1))
+      (with-temp-buffer
+        (org-mode)
+        (insert (propertize "#+begin_tool\n(:name \"Bash\" :args nil)\noutput\n#+end_tool\n"
+                            'gptel '(tool . "real-call")))
+        (let ((start (point)))
+          (insert (substring-no-properties
+                   (niwa-tool-render-data-format
+                    '(:kind request-summary :text "literal content") "real-call")
+                   framing))
+          (put-text-property start (point) 'gptel property)
+          (dolist (normalize '(nil t))
+            (when normalize (niwa-transcript-normalize-properties))
+            (should-not (niwa-transcript--render-data-block-at
+                         (+ start 1 (- framing))))
+            (should-not (assq 'render-data
+                              (niwa-transcript--structural-ranges
+                               (point-min) (point-max)
+                               (niwa-transcript--property-segments
+                                (point-min) (point-max))))))))))
+  :doc "cached decoding still respects bounded reads including optional newlines"
+  (with-temp-buffer
+    (insert (niwa-tool-render-data-format '(:kind request-summary)))
+    (let ((niwa-transcript--render-data-blocks (make-hash-table :test #'eql)))
+      (should (niwa-transcript--render-data-block-at 2))
+      (should-not (niwa-transcript--render-data-block-at 2 (- (point-max) 2)))
+      (should (= (1- (point-max))
+                 (cadr (niwa-transcript--render-data-block-at
+                        2 (1- (point-max))))))
+      (should (= (point-max)
+                 (cadr (niwa-transcript--render-data-block-at 2)))))))
+
+(niwa-deftest niwa-transcript--structural-ranges ()
+  ,test
+  (test)
+  :doc "distinguishes generated structure from quotes across many property runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (expected)
+      (dotimes (_ 20)
+        (insert (propertize "Quoted example:\n#+begin_reasoning\nquoted\n#+end_reasoning\n"
+                            'gptel 'response))
+        (let ((start (point)))
+          (insert (propertize "#+begin_reasoning\nactual\n#+end_reasoning\n"
+                              'gptel 'ignore))
+          (push (list 'reasoning start (point)) expected))
+        (insert (propertize "Answer.\n" 'gptel 'response)))
+      (should (equal (nreverse expected)
+                     (niwa-transcript--structural-ranges
+                      (point-min) (point-max)
+                      (niwa-transcript--property-segments
+                       (point-min) (point-max))))))))
+
+(niwa-deftest niwa-transcript--org-tool-blocks-overlapping ()
+  ,test
+  (test)
+  :doc "tool discovery retires property runs before each candidate block"
+  (with-temp-buffer
+    (org-mode)
+    (let (expected inspected)
+      (dotimes (i 32)
+        (insert (propertize "Answer\n" 'gptel 'response))
+        (let ((start (point)))
+          (insert (propertize "#+begin_tool\n(:name \"Bash\")\nok\n#+end_tool\n"
+                              'gptel (cons 'tool (number-to-string i))))
+          (push (cons start (point)) expected)))
+      (let ((check (symbol-function
+                    'niwa-transcript--tool-block-overlaps-tool-segment-p)))
+        (cl-letf (((symbol-function
+                    'niwa-transcript--tool-block-overlaps-tool-segment-p)
+                   (lambda (segments start end)
+                     (push (and segments (<= (caddr (car segments)) start))
+                           inspected)
+                     (funcall check segments start end))))
+          (should (equal (nreverse expected)
+                         (niwa-transcript--org-tool-blocks-overlapping
+                          (niwa-transcript--property-segments
+                           (point-min) (point-max))
+                          (point-min) (point-max))))))
+      (should (= 32 (length inspected)))
+      (should-not (memq t inspected)))))
+
+(niwa-deftest niwa-transcript-segments ()
+  ,test
+  (test)
+  :doc "single user segment"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "Hello\n" nil)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'user (caar segs))))))
+
+  :doc "user + response segments"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "Hello\n" nil)
+    (niwa-transcript-test--insert data-buf "Hi there\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 2 (length segs)))
+        (should (eq 'user (caar segs)))
+        (should (eq 'response (caadr segs))))))
+
+  :doc "restores a prompt hidden by stale ignore bounds after a fork point"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "First answer.\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf
+     (substring-no-properties
+      (niwa--format-hook-audit-record
+       '(:type fork-point :fork-point-id "fork-1")))
+     'niwa-hook-audit)
+    (niwa-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
+    (niwa-transcript-test--insert
+     data-buf "#+begin_reasoning\nThinking.\n#+end_reasoning\n" 'ignore)
+    (niwa-transcript-test--insert data-buf "Second answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (equal '(response ignored user reasoning response)
+                       (mapcar #'car segs)))
+        (should (string-match-p
+                 "Second prompt"
+                 (buffer-substring-no-properties
+                  (cadr (caddr segs)) (caddr (caddr segs))))))))
+
+  :doc "fork prompt recovery stops at authoritative assistant boundaries"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "First answer.\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf
+     (substring-no-properties
+      (niwa--format-hook-audit-record
+       '(:type fork-point :fork-point-id "fork-1")))
+     'niwa-hook-audit)
+    (niwa-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
+    (niwa-transcript-test--insert data-buf "Planning response.\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n"
+     '(tool . "call_1"))
+    (niwa-transcript-test--insert data-buf "After tool.\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf "#+begin_reasoning\nLater thought.\n#+end_reasoning\n" 'ignore)
+    (niwa-transcript-test--insert data-buf "Final answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should
+         (equal '(response ignored user response tool response
+                           reasoning response)
+                (mapcar #'car segs))))))
+
+  :doc "response + tool + response segments"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "Some response\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n"
+     '(tool . "call_1"))
+    (niwa-transcript-test--insert data-buf "More response\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 3 (length segs)))
+        (should (eq 'response (caar segs)))
+        (should (eq 'tool (caadr segs)))
+        (should (eq 'response (car (caddr segs)))))))
+
+  :doc "task background remains distinct from the authoritative Agent Task"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert
+     data-buf
+     (concat "<task-background>\nAdvisory context.\n</task-background>\n"
+             "\n* Agent Task: child\n\nDo the work.\n")
+     nil)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (equal '(task-background user) (mapcar #'car segs)))
+        (should (string-match-p
+                 "Advisory context"
+                 (buffer-substring-no-properties
+                  (cadr (car segs)) (caddr (car segs)))))
+        (should (string-match-p
+                 "Agent Task"
+                 (buffer-substring-no-properties
+                  (cadr (cadr segs)) (caddr (cadr segs))))))))
+
+  :doc "response table continuation gaps stay in the response"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "| Name" 'response)
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert " | Role |\n")
+        (remove-text-properties start (point) '(gptel nil))))
+    (niwa-transcript-test--insert
+     data-buf
+     "|------|------|\n| Alice | Engineer |\n"
+     'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'response (caar segs))))))
+
+  :doc "expands partial start/end to full gptel runs"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "Some response\n" 'response)
+    (niwa-transcript-test--insert
+     data-buf
+     "\n(:name \"Grep\" :args (:pattern \"foo\"))\n\nmatch\n"
+     '(tool . "call_1"))
+    (niwa-transcript-test--insert data-buf "More response\n" 'response)
+    (with-current-buffer data-buf
+      ;; Simulate incremental rerender entering in the middle of the tool run.
+      (let* ((tool-start (next-single-property-change (point-min) 'gptel))
+             (mid-start (+ tool-start 2))
+             (mid-end (+ tool-start 10))
+             (segs (niwa-transcript-segments mid-start mid-end)))
+        (should (= 1 (length segs)))
+        (pcase-let ((`(,kind ,seg-start ,_seg-end) (car segs)))
+          (should (eq 'tool kind))
+          (should (eq ?\n (char-after seg-start)))
+          (should (string-prefix-p "\n(:name \"Grep\""
+                                   (buffer-substring-no-properties seg-start (+ seg-start 20))))))))
+
+  :doc "repairs restored tool blocks and adjacent response fragments"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (niwa-transcript-test--insert data-buf "Assistant intro.\n" 'response)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        ;; Simulate stale GPTEL_BOUNDS that cover the begin marker but
+        ;; stop before the org block end marker.
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (insert "I added the missing declaration.\n")
+        (save-excursion
+          (search-backward "eclaration")
+          (setq response-start (point)))
+        (put-text-property response-start (point) 'gptel 'response))
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (equal '(response tool response) (mapcar #'car segs)))
+        (should (string-prefix-p "#+begin_tool"
+                                 (buffer-substring-no-properties
+                                  (cadr (cadr segs))
+                                  (+ (cadr (cadr segs)) 12))))
+        (should (string-match-p
+                 "I added the missing declaration"
+                 (buffer-substring-no-properties
+                  (cadr (caddr segs)) (caddr (caddr segs))))))))
+  :doc "splits assistant prefixes after restored agent-result blocks"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start prefix-start response-start)
+        (setq block-start (point))
+        (insert "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
+                "VERDICT: PASS\n"
+                "</agent-result>\n")
+        (setq prefix-start (point))
+        (insert "Green loo")
+        (setq response-start (point))
+        (insert "p completed.\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(mailbox response) (mapcar #'car segs)))
+          (should (= (cadr (car segs)) block-start))
+          (should (= (caddr (car segs)) prefix-start))
+          (should (string-prefix-p
+                   "Green loop completed"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
+  :doc "does not treat literal tool markers as tool blocks without a tool run"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert
+     data-buf
+     (concat "Text mentioning markers:\n"
+             "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+             "(:name \"Read\")\n#+end_tool\n")
+     'response)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'response (caar segs))))))
+  :doc "preserves text after a stale tool run extends beyond end marker"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (insert "Tail text must survive.\n")
+        ;; Stale bounds can cover the block and spill into following text.
+        (put-text-property (+ block-start 20) (point)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool user) (mapcar #'car segs)))
+          (should (= block-end (cadr (cadr segs))))
+          (should (string-match-p
+                   "Tail text must survive"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
+  :doc "keeps literal end-tool markers inside recovered tool results"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "before\n"
+                "#+end_tool\n"
+                "After\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "keeps persisted-looking tool blocks inside recovered tool results"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not extend recovered tool block to response marker text"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (setq response-start (point))
+        (insert "Assistant text can mention markers.\n#+end_tool\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not extend stale spill through response marker text"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (setq response-start (point))
+        (insert "Assistant text can mention markers.\n#+end_tool\n")
+        (put-text-property block-start (point)
+                           'gptel '(tool . "call_1"))
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "recovers outer block when stale bounds start at nested marker"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not cross unpropertized output after a literal close"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n"
+                "still outer output\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= nested-start (cadr (cadr segs))))
+          (should (= block-end (caddr (cadr segs))))))))
+  :doc "keeps same tool run across a nested-looking marker"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n"
+                "still outer output\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "splits adjacent persisted tool blocks sharing a stale tool prop"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (first-start first-end second-start second-end)
+        (setq first-start (point))
+        (insert "#+begin_tool (Agent :task_name \"review\")\n"
+                "(:name \"Agent\" :args (:task_name \"review\" :message \"Review.\"))\n\n"
+                "reviewer body\n"
+                "#+end_tool\n")
+        (setq first-end (point))
+        (setq second-start (point))
+        (insert "#+begin_tool (Agent :task_name \"verify\")\n"
+                "(:name \"Agent\" :args (:task_name \"verify\" :message \"Verify.\"))\n\n"
+                "verifier body\n"
+                "#+end_tool\n")
+        (setq second-end (point))
+        (put-text-property first-start second-end
+                           'gptel '(tool . "call_shared"))
+        (let ((segs (niwa-transcript-segments
+                     (point-min) (point-max))))
+          (should (equal '(tool tool) (mapcar #'car segs)))
+          (should (= first-start (cadr (car segs))))
+          (should (= first-end (caddr (car segs))))
+          (should (= second-start (cadr (cadr segs))))
+          (should (= second-end (caddr (cadr segs))))))))
+  :doc "does not extend stale tool block across mailbox delivery"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (first-start first-end second-start second-end)
+        (setq first-start (point))
+        (insert "#+begin_tool (TaskList)\n"
+                "(:name \"TaskList\" :args nil)\n\n"
+                "tasks\n"
+                "#+end_tool\n"
+                "Waiting on verifier result.\n"
+                "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
+                "VERDICT: FAIL\n"
+                "</agent-result>\n")
+        (setq second-start (point))
+        (insert "#+begin_tool (TaskUpdate)\n"
+                "(:name \"TaskUpdate\" :args nil)\n\n"
+                "updated\n"
+                "#+end_tool\n")
+        (setq second-end (point))
+        (save-excursion
+          (goto-char first-start)
+          (re-search-forward "^#\\+end_tool[^\n]*\n")
+          (setq first-end (point)))
+        ;; Simulate stale restored bounds that paint the whole range as
+        ;; one tool run even though the middle contains assistant prose
+        ;; and a mailbox delivery.
+        (put-text-property first-start second-end
+                           'gptel '(tool . "call_stale"))
+        (let ((segs (niwa-transcript-segments
+                     (point-min) (point-max))))
+          (should (equal '(tool user mailbox tool) (mapcar #'car segs)))
+          (should (= first-start (cadr (car segs))))
+          (should (= first-end (caddr (car segs))))
+          (should (= second-start (cadr (cadddr segs))))
+          (should (= second-end (caddr (cadddr segs))))
+          (should (string-match-p
+                   "/root/verifier"
+                   (buffer-substring-no-properties
+                    (cadr (caddr segs)) (caddr (caddr segs)))))))))
+  :doc "does not cross a blank unpropertized gap after a literal close"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n\n"
+                "still outer output\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= nested-start (cadr (cadr segs))))
+          (should (= block-end (caddr (cadr segs))))))))
+  :doc "recovers outer block when stale bounds start after a nested marker"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start block-end stale-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n")
+        (setq stale-start (point))
+        (insert "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property stale-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not merge a previous unpropertized block into a later tool"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n")
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (cadr segs))))
+          (should (= real-end (caddr (cadr segs))))))))
+  :doc "does not merge a prose gap before a later unpropertized tool"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n"
+                "Normal assistant text before real tool.\n")
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (cadr segs))))
+          (should (= real-end (caddr (cadr segs))))))))
+  :doc "does not cross response text before a stale tool run"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (response-start real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n\n")
+        (setq response-start (point))
+        (insert "Normal assistant text before real tool.\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(user response tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (caddr segs))))
+          (should (= real-end (caddr (caddr segs))))))))
+  :doc "recovers a structural close line misclassified as response"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start close-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close when body lost tool property"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start body-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n")
+        (setq body-start (point))
+        (insert "body\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start body-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close after a literal output marker"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body before\n"
+                "#+end_tool\n"
+                "body after\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start close-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close after unclassified body text"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (block-start gap-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body before\n"
+                "#+end_tool\n")
+        (setq gap-start (point))
+        (insert "body after\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start gap-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "does not swallow legitimate user prompt between tool and response"
+  (niwa-transcript-test--with-buffer
+    (with-current-buffer data-buf
+      (let (tool-start response-start)
+        (setq tool-start (point))
+        (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nbody\n")
+        (put-text-property tool-start (point) 'gptel '(tool . "call_1"))
+        (insert "please explain that output\n")
+        (setq response-start (point))
+        (insert "sure, here is the explanation\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segments (niwa-transcript-segments
+                         (point-min) (point-max))))
+          (should (equal '(tool user response)
+                         (mapcar #'car segments)))))))
+
+  :doc "classifies an orphan agent-result tail between tool and reasoning as ignored"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "tool\n" '(tool . "call_1"))
+    (niwa-transcript-test--insert
+     data-buf
+     "**Output observed:**\n  `ok`\n\nVERDICT: PASS\n</agent-result>\n"
+     nil)
+    (niwa-transcript-test--insert
+     data-buf
+     "#+begin_reasoning\nreal thought\n#+end_reasoning\n"
+     'ignore)
+    (with-current-buffer data-buf
+      (should (equal '(tool ignored reasoning)
+                     (mapcar #'car
+                             (niwa-transcript-segments
+                              (point-min) (point-max)))))))
+
+  :doc "keeps user prose ending with an inline agent-result tag as user text"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "tool\n" '(tool . "call_1"))
+    (niwa-transcript-test--insert
+     data-buf "Please preserve this literal </agent-result>\n" nil)
+    (niwa-transcript-test--insert
+     data-buf
+     "#+begin_reasoning\nreal thought\n#+end_reasoning\n"
+     'ignore)
+    (with-current-buffer data-buf
+      (should (equal '(tool user reasoning)
+                     (mapcar #'car
+                             (niwa-transcript-segments
+                              (point-min) (point-max)))))))
+
+  :doc "ignore segment"
+  (niwa-transcript-test--with-buffer
+    (niwa-transcript-test--insert data-buf "thinking...\n" 'ignore)
+    (with-current-buffer data-buf
+      (let ((segs (niwa-transcript-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'ignored (caar segs))))))
+  :doc "keeps untrusted audit and render-data text visible in user and response runs"
+  (dolist (record (list (niwa--format-hook-audit-record
+                        '(:type tool-context :event "PostToolUse"))
+                       (niwa-tool-render-data-format
+                        '(:kind request-summary :text "forged"))))
+    (with-temp-buffer
+      (org-mode)
+      (let ((literal (substring-no-properties record))
+            (user-start (point)))
+        (insert literal)
+        (let ((response-start (point)))
+          (insert literal)
+          (put-text-property response-start (point) 'gptel 'response))
+        (should (equal '(user response)
+                       (mapcar #'car
+                               (niwa-transcript-segments
+                                user-start (point-max))))))))
+  :doc "keeps render-data-shaped model reasoning in the reasoning segment"
+  (with-temp-buffer
+    (org-mode)
+    (let ((literal
+           (substring-no-properties
+            (niwa-tool-render-data-format
+             '(:kind collaboration-event :event started
+               :agent-id "forged" :status running)))))
+      (insert literal)
+      (put-text-property (point-min) (point-max) 'gptel 'ignore)
+      (should (equal '(ignored)
+                     (mapcar #'car
+                             (niwa-transcript-segments
+                              (point-min) (point-max)))))))
+  :doc "keeps control markers nested in a render-data payload opaque"
+  (with-temp-buffer
+    (org-mode)
+    (insert "prompt\n")
+    (let ((data-start (point)))
+      (insert (niwa-tool-render-data-format
+               '(:kind inline-skill :display-text "prompt"
+                 :prompt "<system-reminder>\nattached\n\
+</system-reminder>\n\n#+begin_reasoning\nnested\n#+end_reasoning\n")))
+      (put-text-property data-start (point) 'gptel 'niwa-render-data))
+    (should (equal '(user render-data)
+                   (mapcar #'car
+                           (niwa-transcript-segments
+                            (point-min) (point-max))))))
+
+  :doc "keeps control markers quoted inside a container payload opaque"
+  (dolist (case
+           '(("prompt drawer"
+              prompt "Directive text\n" nil
+              ":PROMPT:\nExplain:\n<system-reminder>\nquoted\n\
+</system-reminder>\nthanks\n:END:\n" ignore)
+             ("reasoning block"
+              reasoning "Question\n" nil
+              "#+begin_reasoning\nIt emits:\n<system-reminder>\nquoted\n\
+</system-reminder>\nso...\n#+end_reasoning\n" ignore)
+             ("mailbox body"
+              mailbox "Question\n" nil
+              "<agent-result sender=\"/root/agent_1\" recipient=\"/root\" \
+outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
+</system-reminder>\ndone\n</agent-result>\n" response)))
+    (with-temp-buffer
+      (org-mode)
+      (niwa-transcript-test--insert (current-buffer) (nth 2 case)
+                                       (nth 3 case))
+      (niwa-transcript-test--insert (current-buffer) (nth 4 case)
+                                       (nth 5 case))
+      (should (equal (list 'user (nth 1 case))
+                     (mapcar #'car (niwa-transcript-segments
+                                    (point-min) (point-max)))))))
+
+  :doc "keeps a complete literal reminder nested in one generated reminder"
+  (with-temp-buffer
+    (org-mode)
+    (insert "<system-reminder>\nouter start\n"
+            "<system-reminder>\nliteral\n</system-reminder>\n"
+            "outer end\n</system-reminder>\n")
+    (put-text-property (point-min) (point-max) 'gptel 'ignore)
+    (let ((segments (niwa-transcript-segments
+                     (point-min) (point-max))))
+      (should (equal '(reminder) (mapcar #'car segments)))
+      (should (string-match-p
+               "outer end"
+               (buffer-substring-no-properties
+                (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "leaves control markers the model quoted in its response as prose"
+  (dolist (quoted '("<system-reminder>\nbody\n</system-reminder>"
+                    "<hook-context>\n<hook-event name=\"X\">y</hook-event>\n\
+</hook-context>"
+                    ":PROMPT:\nbody\n:END:"))
+    (with-temp-buffer
+      (org-mode)
+      (niwa-transcript-test--insert (current-buffer) "Question\n" nil)
+      (niwa-transcript-test--insert
+       (current-buffer)
+       (concat "The format is:\n" quoted "\nand that is all.\n")
+       'response)
+      (should (equal '(user response)
+                     (mapcar #'car (niwa-transcript-segments
+                                    (point-min) (point-max)))))))
+
+  :doc "still nests a tool call inside its reasoning block"
+  (with-temp-buffer
+    (org-mode)
+    (niwa-transcript-test--insert (current-buffer) "Prompt\n" nil)
+    (let ((start (point)))
+      (insert "#+begin_reasoning\nBefore tool.\n")
+      (let ((tool-start (point)))
+        (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+                "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+                "contents\n"
+                "#+end_tool\n")
+        (put-text-property start (point) 'gptel 'ignore)
+        (put-text-property (+ tool-start 46) (- (point) 12)
+                           'gptel '(tool . "call_read")))
+      (insert "After tool.\n#+end_reasoning\n")
+      (put-text-property (point) (point) 'gptel 'ignore))
+    (should (memq 'tool
+                  (mapcar #'car (niwa-transcript-segments
+                                 (point-min) (point-max))))))
+
+  :doc "still classifies a hook context that follows the user's prompt text"
+  (with-temp-buffer
+    (org-mode)
+    (niwa-transcript-test--insert
+     (current-buffer)
+     "How far is the moon?\n\n<hook-context>\n\
+<hook-event name=\"SessionStart\">ctx</hook-event>\n</hook-context>\n\n"
+     nil)
+    (should (equal '(user hook-context user)
+                   (mapcar #'car (niwa-transcript-segments
+                                  (point-min) (point-max))))))
+
+  :doc "classifies every persisted transcript control range"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let ((tool-start (point)))
+      (insert "#+begin_tool\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
+    (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n"
+            "<agent-result sender=\"/root/agent_1\" recipient=\"/root\" outcome=\"completed\">\ndone\n</agent-result>\n"
+            "<system-reminder>\nremember\n</system-reminder>\n"
+            "<hook-context>\n<hook-event name=\"UserPromptSubmit\">ctx</hook-event>\n"
+            "</hook-context>\n")
+    (insert (niwa-tool-render-data-format '(:kind diff)))
+    (insert ":PROMPT:\nhidden prompt\n:END:\n")
+    (insert (niwa--format-hook-audit-record
+             '(:type tool-context :event "PostToolUse")))
+    (let ((types (mapcar #'car
+                         (niwa-transcript-segments
+                          (point-min) (point-max)))))
+      (dolist (type '(tool reasoning mailbox reminder hook-context
+                           render-data prompt ignored))
+        (should (memq type types)))))
+
+  :doc "leaves incomplete live control text as ordinary transcript text"
+  (dolist (text '("#+begin_reasoning\npartial"
+                  "<system-reminder>\n"
+                  "<system-reminder>\nouter\n<system-reminder>\nliteral\n\
+</system-reminder>\n"))
+    (with-temp-buffer
+      (org-mode)
+      (insert text)
+      (should (equal '(user)
+                     (mapcar #'car
+                             (niwa-transcript-segments
+                              (point-min) (point-max)))))))
+  :doc "skips leading metadata and classifies transcript spans"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:foo: bar\n:END:\n")
+    (insert "#+begin_summary\nold summary\n#+end_summary\n\n")
+    (let (user-start user-end response-start response-end tool-start tool-end)
+      (setq user-start (point))
+      (insert "User request\n")
+      (setq user-end (point))
+      (setq response-start (point))
+      (insert (propertize "Assistant response\n" 'gptel 'response))
+      (setq response-end (point))
+      (setq tool-start (point))
+      (insert (propertize "#+begin_tool\n(:name \"Read\")\n#+end_tool\n"
+                          'gptel '(tool . "1")))
+      (setq tool-end (point))
+      (should (equal (niwa-transcript-segments
+                      (point-min) (point-max))
+                     `((user ,user-start ,user-end)
+                       (response ,response-start ,response-end)
+                       (tool ,tool-start ,tool-end))))))
+
+  :doc "keeps restored newline-delimited prompts between responses"
+  (with-temp-buffer
+    (let (first-response-start first-response-end
+                               second-prompt-start second-prompt-end
+                               second-response-start second-response-end)
+      (setq first-response-start (point))
+      (insert "First response.\n")
+      (setq first-response-end (1- (point)))
+      (put-text-property first-response-start first-response-end
+                         'gptel 'response)
+      (setq second-prompt-start (point))
+      (insert "Second prompt.\n")
+      (setq second-prompt-end (point))
+      (setq second-response-start (point))
+      (insert "Second response.")
+      (setq second-response-end (point))
+      (put-text-property second-response-start second-response-end
+                         'gptel 'response)
+      (let ((segs (niwa-transcript-segments
+                   (point-min) (point-max))))
+        (should (equal '(response user response)
+                       (mapcar #'car segs)))
+        (should (<= (cadr (cadr segs)) second-prompt-start))
+        (should (= second-prompt-end (caddr (cadr segs))))))))
+
+
+(niwa-deftest niwa-transcript--org-block-depths-before ()
+  ,test
+  (test)
+  :doc "counts genuine tool markers, indented ones included"
+  ;; Pins the whitespace-tolerant form: gptel's own org support accepts
+  ;; an indented marker, and the in-span walk already tolerated one, so
+  ;; the prefix scan must agree.
+  (with-temp-buffer
+    (insert "  #+begin_tool call
+(:name \"Read\" :args nil)
+")
+    (should (equal '(1 . 0) (niwa-transcript--org-block-depths-before (point-max))))
+    (insert "  #+end_tool
+")
+    (should (equal '(0 . 0) (niwa-transcript--org-block-depths-before (point-max)))))
+
+  :doc "a propertized marker counts without the serialized plist body"
+  (with-temp-buffer
+    (let ((start (point)))
+      (insert "#+begin_tool call
+prose result
+")
+      (put-text-property start (point) 'gptel 'response))
+    (should (equal '(1 . 0) (niwa-transcript--org-block-depths-before (point-max)))))
+
+  :doc "literal begin_tool inside plain user text is not structural"
+  ;; An unbalanced marker a user typed used to open a phantom block that
+  ;; swallowed every later prompt from the index and from compaction
+  ;; turn boundaries.
+  (with-temp-buffer
+    (insert "look at this snippet:
+#+begin_tool oops
+more of my prompt
+")
+    (should (equal '(0 . 0) (niwa-transcript--org-block-depths-before (point-max)))))
+
+  :doc "a stray end_tool in user text stays harmless at depth zero"
+  (with-temp-buffer
+    (insert "#+end_tool
+still my prompt
+")
+    (should (equal '(0 . 0) (niwa-transcript--org-block-depths-before (point-max)))))
+
+  :doc "counts summary nesting separately in the same pass and resumes"
+  (with-temp-buffer
+    (insert "#+begin_summary\nsummary\n#+begin_reasoning\nthinking\n")
+    (let ((middle (point)))
+      (should (equal '(1 . 1) (niwa-transcript--org-block-depths-before middle)))
+      (insert "#+end_reasoning\n#+end_summary\n#+end_summary\n")
+      ;; Depths never go below zero; resuming equals a full count.
+      (should (equal '(0 . 0) (niwa-transcript--org-block-depths-before (point-max))))
+      (should (equal (niwa-transcript--org-block-depths-before (point-max))
+                     (niwa-transcript--org-block-depths-before
+                      (point-max) middle 1 1))))))
+
+(niwa-deftest niwa-transcript--control-search-lines ()
+  ,test
+  (test)
+  :doc "finds with the kind index exactly what a plain search finds"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:X: 1\n:END:\nprompt\n:PROMPT:\nbody\n:END:\n"
+            "#+begin_reasoning\nthink\n#+END_REASONING\n"
+            "#+begin_tool (:name \"Read\")\nx\n#+end_tool\n"
+            "<system-reminder>\nr\n</system-reminder>\n"
+            "<agent-result id=\"a\">\nres\n</agent-result>\n"
+            "<hook-context>\nh\n</hook-context>\n"
+            "<task-background>\nt\n</task-background>\n"
+            "<!-- niwa-render-data -->\nd\n<!-- /niwa-render-data -->\n"
+            "<!-- niwa-hook-audit -->\na\n<!-- /niwa-hook-audit -->\n"
+            "#+begin_reasoning inline #+end_tool\n")
+    (let ((index (niwa-transcript--control-line-positions)))
+      (dolist (entry niwa-transcript--control-search-kinds)
+        (let ((regexp (car entry)) plain indexed)
+          (goto-char (point-min))
+          (while (niwa-transcript--search-control-line regexp nil)
+            (push (list (match-beginning 0) (match-end 0)) plain))
+          (let ((niwa-transcript--control-lines index))
+            (goto-char (point-min))
+            (while (niwa-transcript--search-control-line regexp nil)
+              (push (list (match-beginning 0) (match-end 0)) indexed)))
+          (should plain)
+          (should (equal plain indexed)))))))
+
+(niwa-deftest niwa-transcript-leading-property ()
+  ,test
+  (test)
+  :doc "reads the leading drawer as `org-entry-get' does, and nothing later"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response (1 2)))\n"
+            ":NIWA_SEGMENT_TAIL_PROMPTS: 3  \n:END:\n"
+            "*** Prompt\n:PROPERTIES:\n:LATER: no\n:END:\n")
+    (dolist (name '("NIWA_SEGMENT_TAIL_PROMPTS" "GPTEL_BOUNDS" "MISSING"))
+      (should (equal (org-entry-get (point-min) name)
+                     (niwa-transcript-leading-property name))))
+    (should (equal "3" (niwa-transcript-leading-property
+                        "NIWA_SEGMENT_TAIL_PROMPTS")))
+    (should-not (niwa-transcript-leading-property "LATER")))
+  :doc "returns nil without a leading drawer"
+  (with-temp-buffer
+    (insert "text\n:PROPERTIES:\n:X: 1\n:END:\n")
+    (should-not (niwa-transcript-leading-property "X"))))
+
+(niwa-deftest niwa-transcript--skip-leading-properties-drawer ()
+  ,test
+  (test)
+  :doc "advances past a well-formed :PROPERTIES: drawer at POS"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_MODEL: x\n:END:\nhello\n")
+    (let ((after (niwa-transcript--skip-leading-properties-drawer (point-min))))
+      (should (> after (point-min)))
+      (should (string= "hello\n" (buffer-substring-no-properties
+                                  after (point-max))))))
+  :doc "returns POS unchanged when no drawer is present"
+  (with-temp-buffer
+    (insert "no drawer here\n")
+    (should (= (point-min)
+               (niwa-transcript--skip-leading-properties-drawer (point-min)))))
+  :doc "returns POS unchanged when drawer is malformed (no :END:)"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_MODEL: x\nstuff\n")
+    (should (= (point-min)
+               (niwa-transcript--skip-leading-properties-drawer (point-min))))))
+
+
+(niwa-deftest niwa-transcript--skip-leading-summary-block ()
+  ,test
+  (test)
+  :doc "advances past a leading compaction summary block"
+  (with-temp-buffer
+    (insert "#+begin_summary niwa-role=compaction-summary\nsummary\n#+end_summary\nlive\n")
+    (let ((after (niwa-transcript--skip-leading-summary-block (point-min))))
+      (should (> after (point-min)))
+      (should (string= "live\n" (buffer-substring-no-properties
+                                 after (point-max))))))
+  :doc "returns POS unchanged when no summary starts there"
+  (with-temp-buffer
+    (insert "live\n")
+    (should (= (point-min)
+               (niwa-transcript--skip-leading-summary-block (point-min))))))
+
+(niwa-deftest niwa-transcript-summary-source ()
+  ,test
+  (test)
+  :doc "finds a leading summary and the position after it"
+  (with-temp-buffer
+    (insert "#+begin_summary niwa-role=compaction-summary\nsummary\n#+end_summary\nlive\n")
+    (pcase-let ((`(,source . ,next)
+                 (niwa-transcript-summary-source (point-min))))
+      (should (= (point-min) (car source)))
+      (should (string-suffix-p "#+end_summary\n"
+                               (buffer-substring-no-properties
+                                (car source) (cdr source))))
+      (should (equal "live\n" (buffer-substring-no-properties next (point-max))))))
+  :doc "reports no summary and an unchanged start for an uncompacted buffer"
+  (with-temp-buffer
+    (insert "live\n")
+    (should (equal (cons nil (point-min))
+                   (niwa-transcript-summary-source (point-min) t))))
+  :doc "an agent summary behind its task anchor needs producer ownership"
+  (with-temp-buffer
+    (insert "Task anchor.\n")
+    (let ((start (point)))
+      (insert (propertize "#+begin_summary niwa-role=compaction-summary\n"
+                          'gptel 'ignore)
+              "agent summary"
+              (propertize "\n#+end_summary\n" 'gptel 'ignore))
+      (insert "live\n")
+      (should-not (car (niwa-transcript-summary-source (point-min))))
+      (let ((source (car (niwa-transcript-summary-source (point-min) t))))
+        (should (= start (car source)))
+        (should (string-match-p "agent summary"
+                                (buffer-substring-no-properties
+                                 (car source) (cdr source)))))))
+  :doc "a literal example in ordinary text is not an agent summary"
+  (with-temp-buffer
+    (insert "Task anchor.\n#+begin_summary niwa-role=compaction-summary\nx\n#+end_summary\n")
+    (should-not (car (niwa-transcript-summary-source (point-min) t)))))
+
+(niwa-deftest niwa-transcript-summary-body ()
+  ,test
+  (test)
+  :doc "returns the text between the wrapper lines"
+  (with-temp-buffer
+    (insert "#+begin_summary niwa-role=compaction-summary\nPreface.\n\n## Goal\n- Go\n#+end_summary\n")
+    (should (equal "Preface.\n\n## Goal\n- Go"
+                   (niwa-transcript-summary-body
+                    (cons (point-min) (point-max))))))
+  :doc "ignores the blank lines a leading summary range includes"
+  (with-temp-buffer
+    (insert "#+begin_summary\nBody.\n#+end_summary\n\n\nlive\n")
+    (should (equal "Body."
+                   (niwa-transcript-summary-body
+                    (car (niwa-transcript-summary-source (point-min)))))))
+  :doc "keeps a nested example's lines and accepts markers"
+  (with-temp-buffer
+    (insert "#+begin_summary\nA\n#+begin_src org\nB\n#+end_src\n#+end_summary\n")
+    (should (equal "A\n#+begin_src org\nB\n#+end_src"
+                   (niwa-transcript-summary-body
+                    (cons (copy-marker (point-min)) (copy-marker (point-max))))))))
+
+
+
+(defun niwa-transcript-test--all-gptel-prop-p (start end expected)
+  "Return non-nil when START..END all has gptel EXPECTED."
+  (let ((pos start)
+        (ok t))
+    (while (and ok (< pos end))
+      (unless (equal (get-text-property pos 'gptel) expected)
+        (setq ok nil))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    ok))
+
+
+(defun niwa-transcript-test--no-tool-prop-p (start end)
+  "Return non-nil when START..END has no tool gptel property."
+  (let ((pos start)
+        (ok t))
+    (while (and ok (< pos end))
+      (let ((prop (get-text-property pos 'gptel)))
+        (when (or (eq prop 'tool)
+                  (and (consp prop) (eq (car prop) 'tool)))
+          (setq ok nil)))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    ok))
+
+
+(niwa-deftest niwa-transcript--org-tool-block-parts ()
+  ,test
+  (test)
+
+  :doc "parses a tool block whose serialized argument contains escaped quotes"
+  ;; Org gives backslash symbol syntax rather than escape syntax, so scanning
+  ;; the plist with org's table closed the string at the first \" and made a
+  ;; well-formed block look malformed, which fell back to raw rendering.
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool (ToolCall ...)\n")
+    (insert "(:name \"ToolCall\" :args (:expression \"(Grep :pattern \\\"^[(]defcustom\\\")\"))\n")
+    (insert "result\n")
+    (insert "#+end_tool\n")
+    (let ((parts (niwa-transcript--org-tool-block-parts (point-min) (point-max))))
+      (should parts)
+      (should (< (plist-get parts :tool-start) (plist-get parts :tool-end)))
+      (should (string-match-p
+               "defcustom"
+               (buffer-substring-no-properties (plist-get parts :tool-start)
+                                               (plist-get parts :tool-end))))))
+
+  :doc "still parses a tool block with no escaped quotes"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool (Read ...)\n")
+    (insert "(:name \"Read\" :args (:file_path \"/tmp/x\"))\n")
+    (insert "body\n")
+    (insert "#+end_tool\n")
+    (should (niwa-transcript--org-tool-block-parts (point-min) (point-max)))))
+
+(defun niwa-transcript-test--tool-block-props-p
+    (start end tool-prop)
+  "Return non-nil when org tool START..END has parseable TOOL-PROP.
+The `#+begin_tool' and `#+end_tool' scaffolding must not carry a tool
+property, while the readable `(:name ...)' sexp and result body carry
+TOOL-PROP."
+  (when-let* ((parts (niwa-transcript--org-tool-block-parts
+                      start end)))
+    (and (niwa-transcript-test--no-tool-prop-p
+          (plist-get parts :prefix-start)
+          (plist-get parts :prefix-end))
+         (niwa-transcript-test--all-gptel-prop-p
+          (plist-get parts :tool-start)
+          (plist-get parts :tool-end)
+          tool-prop)
+         (niwa-transcript-test--no-tool-prop-p
+          (plist-get parts :suffix-start)
+          (plist-get parts :suffix-end)))))
+
+
+(niwa-deftest niwa-transcript-normalize-properties ()
+  ,test
+  (test)
+  :doc "incremental normalization equals full normalization through adversarial edits"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n#+begin_summary\nInherited\n#+end_summary\n"
+            "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+            "#+end_tool\n#+begin_reasoning\nThinking\n#+end_reasoning\n"
+            (propertize "Answer\n" 'gptel 'response))
+    (niwa-transcript-normalize-properties)
+    (let ((state (cl-make-random-state 57231)))
+      (dotimes (iteration 80)
+        (pcase (% iteration 8)
+          (0 (goto-char (point-max))
+             (insert (propertize "More answer\n" 'gptel 'response)))
+          (1 (goto-char (point-max))
+             (insert "<system-reminder>\nReminder\n</system-reminder>\n"))
+          (2 (goto-char (+ 20 (cl-random (- (point-max) 21) state)))
+             (insert "middle"))
+          (3 (let ((start (+ 20 (cl-random (- (point-max) 22) state))))
+               (delete-region start (min (+ start 3) (point-max)))))
+          (4 (goto-char (point-max))
+             (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n"))
+          (5 (with-silent-modifications
+               (put-text-property 20 (min 40 (point-max)) 'gptel 'response)))
+          (6 (niwa-transcript-source-call-with-metadata-change
+              (lambda () (goto-char 14) (insert ":META: value\n"))))
+          (7 (delete-region (max 20 (- (point-max) 25)) (point-max))))
+        (let ((input (buffer-substring (point-min) (point-max))) expected)
+          ;; This oracle deliberately bypasses every derived cache.
+          (with-temp-buffer
+            (org-mode)
+            (insert input)
+            (let* ((drawer (niwa-transcript--skip-leading-properties-drawer 1))
+                   (base (niwa-transcript--property-segments 1 (point-max)))
+                   (ranges (niwa-transcript--structural-ranges 1 (point-max) base)))
+              (niwa-transcript--clear-gptel-properties 1 drawer)
+              (niwa-transcript--apply-structural-properties ranges)
+              (niwa-transcript--repair-response-continuation-properties ranges))
+            (setq expected (buffer-substring (point-min) (point-max))))
+          (niwa-transcript-normalize-properties)
+          (should (equal-including-properties
+                   expected (buffer-substring (point-min) (point-max))))))))
+  :doc "unchanged normalization is reused and text or property edits invalidate it"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
+    (let ((scans 0)
+          (scan (symbol-function 'niwa-transcript--structural-ranges)))
+      (cl-letf (((symbol-function 'niwa-transcript--structural-ranges)
+                 (lambda (&rest args)
+                   (cl-incf scans)
+                   (apply scan args))))
+        (niwa-transcript-normalize-properties)
+        (let ((first scans))
+          (should (> first 0))
+          (save-restriction
+            (narrow-to-region 3 (point-max))
+            (niwa-transcript-normalize-properties))
+          (should (= scans first))
+          (put-text-property (point-min) (point-max) 'gptel nil)
+          (niwa-transcript-normalize-properties)
+          (should (> scans first))
+          (should (eq (get-text-property (point-min) 'gptel) 'ignore))
+          (setq first scans)
+          (goto-char (point-max))
+          (insert "#+begin_reasoning\nMore.\n#+end_reasoning\n")
+          (niwa-transcript-normalize-properties)
+          (should (> scans first))
+          (should (eq (get-text-property (1- (point-max)) 'gptel) 'ignore))))))
+  :doc "repairs stale tool, mailbox, and structural transcript properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\nUser prompt\n")
+    (let (tool-start tool-end response-start response-end task-start task-end
+          waiting-start waiting-end mailbox-start mailbox-end after-start
+          after-end reasoning-start reasoning-end)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff --stat\")\n"
+              "(:name \"Bash\" :args (:command \"git diff --stat\"))\n\n"
+              " file.el | 1 +\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nThinking text.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      (setq response-start (point))
+      (insert "I found uncommitted changes on top of the requested commits.\n")
+      (setq response-end (point))
+      (setq task-start (point))
+      (insert "#+begin_tool (TaskList :status \"in_progress\")\n"
+              "(:name \"TaskList\" :args (:status \"in_progress\"))\n\n"
+              "Tasks with status in_progress:\n"
+              "#3 [in_progress] Run reviewer and verifier on current diff\n"
+              "#+end_tool\n")
+      (setq task-end (point))
+      (setq waiting-start (point))
+      (insert "Waiting for the reviewer and verifier results.\n\n")
+      (setq waiting-end (point))
+      (setq mailbox-start (point))
+      (insert "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" "
+              "outcome=\"completed\">\n"
+              "{\"overall_correctness\":\"patch is incorrect\"}\n"
+              "</agent-result>\n")
+      (setq mailbox-end (point))
+      (setq after-start (point))
+      (insert "The reviewer found a blocking permission-mode issue.\n")
+      (setq after-end (point))
+      ;; Simulate stale saved-session structure: tool ids exist only on
+      ;; fragments and response properties bleed into structural blocks.
+      (put-text-property (+ tool-start 54) (- tool-end 12)
+                         'gptel '(tool . "call_diff"))
+      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
+      (put-text-property (- response-start 20) (- response-end 10)
+                         'gptel 'response)
+      (put-text-property (+ task-start 50) (- task-end 12)
+                         'gptel '(tool . "call_task"))
+      (put-text-property waiting-start (- waiting-end 20)
+                         'gptel 'response)
+      (put-text-property (- mailbox-end 24) (- after-end 12)
+                         'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--tool-block-props-p
+               tool-start tool-end '(tool . "call_diff")))
+      (should (niwa-transcript-test--tool-block-props-p
+               task-start task-end '(tool . "call_task")))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               reasoning-start reasoning-end 'ignore))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               response-start (- response-end 10) 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p (- response-end 10) response-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               waiting-start (- waiting-end 20) 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p (- waiting-end 20) waiting-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p mailbox-start mailbox-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p after-start (- after-end 12) 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p (- after-end 12) after-end nil))))
+  :doc "does not promote the org drawer or plain first prompt to response"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:NIWA_SESSION_ID: main\n:END:\n\n")
+    (let ((drawer-end (point))
+          user-start user-end response-start response-end tool-start tool-end)
+      (setq user-start (point))
+      (insert "Do a review of the changes. Do not modify code.\n\n")
+      (setq user-end (point))
+      (setq response-start (point))
+      (insert "I will inspect the diff and report findings.\n")
+      (setq response-end (point))
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      ;; User text is nil-property, while the assistant text has a partial
+      ;; response run.  Normalization must not infer missing prose bounds.
+      (put-text-property response-start (- response-end 10)
+                         'gptel 'response)
+      (put-text-property (+ tool-start 45) (- tool-end 12)
+                         'gptel '(tool . "call_diff"))
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p (point-min) drawer-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p user-start user-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               response-start (- response-end 10) 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p (- response-end 10) response-end nil))
+      (should (niwa-transcript-test--tool-block-props-p
+               tool-start tool-end '(tool . "call_diff")))))
+  :doc "leaves pasted tool-shaped text in user prompts unclassified"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (user-start user-end)
+      (setq user-start (point))
+      (insert "Please inspect this transcript:\n\n"
+              "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output copied from another editor\n"
+              "#+end_tool\n\n"
+              "What happened here?\n")
+      (setq user-end (point))
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p
+               user-start user-end nil))))
+
+  :doc "keeps restored persisted hook audit side channels ignored"
+  (with-temp-buffer
+    (org-mode)
+    (let ((audit
+           (propertize
+            (substring-no-properties
+             (niwa--format-hook-audit-record
+              '(:type compact-context
+                      :event "PreCompact"
+                      :context "private note")))
+            'gptel 'ignore)))
+      (insert ":PROPERTIES:\n:END:\n"
+              "#+begin_summary niwa-role=compaction-summary\n"
+              "summary\n"
+              audit
+              "#+end_summary\n"))
+    (goto-char (point-min))
+    (search-forward "<!-- niwa-hook-audit -->")
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'ignore))
+    (niwa-transcript-normalize-properties)
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'ignore)))
+
+  :doc "leaves pasted tool-shaped text inside reasoning unclassified"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (reasoning-start tool-start tool-end reasoning-end)
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nUser pasted transcript starts here.\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output copied by user\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (insert "Pasted transcript tail.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      (niwa-transcript-normalize-properties)
+      (should (eq (get-text-property reasoning-start 'gptel) 'ignore))
+      (should-not (text-property-any tool-start tool-end 'gptel '(tool . "")))
+      (should (eq (get-text-property (1- reasoning-end) 'gptel) 'ignore))))
+  :doc "keeps later plain user prompts outside repaired response runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (user1-start user1-end response1-start response1-end
+          user2-start user2-end response2-start response2-end)
+      (setq user1-start (point))
+      (insert "First plain prompt\n\n")
+      (setq user1-end (point))
+      (setq response1-start (point))
+      (insert "First answer.\n\n")
+      (setq response1-end (point))
+      (setq user2-start (point))
+      (insert "Second plain prompt\n\n")
+      (setq user2-end (point))
+      (setq response2-start (point))
+      (insert "Second answer with missing tail property.\n")
+      (setq response2-end (point))
+      (put-text-property response1-start response1-end
+                         'gptel 'response)
+      (put-text-property response2-start (- response2-end 10)
+                         'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p user1-start user1-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p response1-start response1-end 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p user2-start user2-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               response2-start (- response2-end 10) 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p (- response2-end 10) response2-end nil))))
+  :doc "repairs mid-line response prefixes after structural blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (tool-start tool-end tool-prefix-start tool-response-start
+          tool-response-end agent-start agent-end agent-prefix-start
+          agent-response-start agent-response-end)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq tool-prefix-start (point))
+      (insert "Focu")
+      (setq tool-response-start (point))
+      (insert "sed tests are green.\n")
+      (setq tool-response-end (point))
+      (insert "\n")
+      (setq agent-start (point))
+      (insert "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
+              "VERDICT: PASS\n"
+              "</agent-result>\n")
+      (setq agent-end (point))
+      (setq agent-prefix-start (point))
+      (insert "The verifier retur")
+      (setq agent-response-start (point))
+      (insert "ned PASS.\n")
+      (setq agent-response-end (point))
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
+      (put-text-property tool-response-start tool-response-end
+                         'gptel 'response)
+      (put-text-property agent-response-start agent-response-end
+                         'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--tool-block-props-p
+               tool-start tool-end '(tool . "call_read")))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               tool-prefix-start tool-response-end 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p agent-start agent-end nil))
+      (should (niwa-transcript-test--all-gptel-prop-p agent-prefix-start agent-response-end
+                                                         'response))))
+  :doc "does not repair response prefixes across a real prompt"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (tool-start tool-end second-prompt-start
+          response-prefix-start response-start response-end)
+      (insert "First prompt\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq second-prompt-start (point))
+      (insert "Second prompt\n")
+      (setq response-prefix-start (point))
+      (insert "Conti")
+      (setq response-start (point))
+      (insert "nuing the answer.\n")
+      (setq response-end (point))
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
+      (put-text-property response-start response-end
+                         'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should-not (get-text-property second-prompt-start 'gptel))
+      (should-not (get-text-property response-prefix-start 'gptel))
+      (should (eq (get-text-property response-start 'gptel) 'response))))
+  :doc "repairs multi-run response prefixes after reasoning blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (reasoning1-start reasoning1-end reasoning1-prefix-start
+          reasoning1-response-start reasoning1-response-end
+          reasoning2-start reasoning2-end reasoning2-prefix-start
+          reasoning2-nil-start reasoning2-response-start
+          reasoning2-response-end)
+      (setq reasoning1-start (point))
+      (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
+      (setq reasoning1-end (point))
+      (insert "\n")
+      (setq reasoning1-prefix-start (point))
+      (insert "I")
+      (setq reasoning1-response-start (point))
+      (insert "’ll start by checking bounds.\n")
+      (setq reasoning1-response-end (point))
+      (insert "\n")
+      (setq reasoning2-start (point))
+      (insert "#+begin_reasoning\nMore thinking.\n#+end_reasoning\n")
+      (setq reasoning2-end (point))
+      (insert "\n")
+      (setq reasoning2-prefix-start (point))
+      (insert "Whi")
+      (setq reasoning2-nil-start (point))
+      (insert "l")
+      (setq reasoning2-response-start (point))
+      (insert "e the agents run, I’ll test.\n")
+      (setq reasoning2-response-end (point))
+      (put-text-property reasoning1-start reasoning1-end
+                         'gptel 'ignore)
+      (put-text-property reasoning1-response-start reasoning1-response-end
+                         'gptel 'response)
+      (put-text-property reasoning2-start reasoning2-nil-start
+                         'gptel 'ignore)
+      (put-text-property reasoning2-response-start reasoning2-response-end
+                         'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p reasoning1-start reasoning1-end 'ignore))
+      (should (niwa-transcript-test--all-gptel-prop-p reasoning1-prefix-start
+                                                         reasoning1-response-end 'response))
+      (should (niwa-transcript-test--all-gptel-prop-p reasoning2-start reasoning2-end 'ignore))
+      (should (niwa-transcript-test--all-gptel-prop-p reasoning2-prefix-start
+                                                         reasoning2-response-end 'response))))
+  :doc "preserves tool blocks nested inside reasoning blocks"
+  (with-temp-buffer
+    (org-mode)
+    (let (reasoning-start tool-start tool-end reasoning-tail-start
+          reasoning-end)
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nBefore tool.\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq reasoning-tail-start (point))
+      (insert "After tool.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      ;; Simulate the backend shape where the outer reasoning block and the
+      ;; inner tool call both have persisted GPTEL_BOUNDS ranges.  The
+      ;; normalization pass must not let the broad reasoning range overwrite
+      ;; the nested tool range.
+      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
+      (put-text-property (+ tool-start 46) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p reasoning-start tool-start 'ignore))
+      (should (niwa-transcript-test--tool-block-props-p
+               tool-start tool-end '(tool . "call_read")))
+      (should (niwa-transcript-test--all-gptel-prop-p
+               reasoning-tail-start reasoning-end 'ignore))))
+  :doc "keeps render-data separators out of tool-call property runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (tool-start tool-end separator-start separator-end response-start)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"date\")\n"
+              "(:name \"Bash\" :args (:command \"date\"))\n\n"
+              "Execution completed.\n")
+      (insert
+       (niwa-tool-render-data-format
+        '(:kind bash-result :exit-code 0)))
+      (setq separator-start (point))
+      (insert "\n")
+      (setq separator-end (point))
+      (insert "#+end_tool\n")
+      (setq tool-end (point)
+            response-start (point))
+      (insert "The command completed.\n")
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_date"))
+      (put-text-property response-start (point) 'gptel 'response)
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--all-gptel-prop-p
+               separator-start separator-end 'niwa-render-data))))
+  :doc "returns and leaves unclosed structural openers unclassified"
+  (dolist (snippet `("#+begin_reasoning\npartial thought"
+                     ,(concat "#+begin_tool (Bash :command \"date\")\n"
+                              "(:name \"Bash\" :args (:command \"date\"))\n\n"
+                              "partial output")
+                     "<system-reminder>\npartial reminder"
+                     "<hook-context>\npartial hook"
+                     "<!-- niwa-render-data -->\n(:kind collaboration-event)"
+                     ":PROMPT:\npartial prompt"))
+    (with-temp-buffer
+      (org-mode)
+      (insert ":PROPERTIES:\n:END:\nUser prompt\n\n")
+      (let ((start (point)))
+        (insert snippet)
+        (with-timeout
+            (1 (ert-fail
+                (format "normalization looped on incomplete block: %S"
+                        snippet)))
+          (niwa-transcript-normalize-properties))
+        (should-not (get-text-property start 'gptel)))))
+
+  :doc "clears stale tool properties from closed unparseable org tool blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\nUser prompt\n\n")
+    (let ((start (point)))
+      (insert "#+begin_tool (Bash :command \"date\")\nnot a sexp\n#+end_tool\n")
+      (put-text-property start (point) 'gptel '(tool . "call-bad"))
+      (niwa-transcript-normalize-properties)
+      (should (niwa-transcript-test--no-tool-prop-p
+               start (point))))))
+
+(niwa-deftest niwa-transcript--tool-block-retry-gap-p ()
+  ,test
+  (test)
+  :doc "classifies whitespace, tool, response, ignored, and invalid gaps"
+  (dolist (case '(("   \n\t" (tool . "call-1") nil)
+                  (" \noutput\n " (tool . "call-1") t)
+                  (" \noutput\n " response nil)
+                  (" \noutput\n " ignore nil)))
+    (pcase-let ((`(,text ,property ,expected) case))
+      (with-temp-buffer
+        (let ((start (point)))
+          (insert text)
+          (put-text-property start (point) 'gptel property)
+          (should (eq expected
+                      (and (niwa-transcript--tool-block-retry-gap-p
+                            start (point))
+                           t)))))))
+  (with-temp-buffer
+    (insert "output")
+    (should-not
+     (niwa-transcript--tool-block-retry-gap-p nil (point-max)))
+    (should-not
+     (niwa-transcript--tool-block-retry-gap-p (point-min) nil))
+    (should-not
+     (niwa-transcript--tool-block-retry-gap-p
+      (point-min) (point-min))))
+  (with-temp-buffer
+    (insert "output")
+    (put-text-property (point-min) (point-max)
+                       'gptel '(tool . "call-1"))
+    (string-match "\\(sentinel\\)" "sentinel")
+    (let ((before (match-data)))
+      (should (niwa-transcript--tool-block-retry-gap-p
+               (point-min) (point-max)))
+      (should (equal before (match-data))))))
+
+(niwa-deftest niwa-transcript--summary-truncation-marker ()
+  ,test
+  (test)
+  :doc "reports the exact omitted tool-result size"
+  (should (string-match-p
+           "omitted 42 chars"
+           (niwa-transcript--summary-truncation-marker 42))))
+
+(niwa-deftest niwa-transcript--summary-truncate-string ()
+  ,test
+  (test)
+  :doc "caps one string argument and reports the omission"
+  (let ((value (niwa-transcript--summary-truncate-string "abcdef" 3)))
+    (should (string-prefix-p "abc" value))
+    (should (string-match-p "omitted 3 chars" value))))
+
+(niwa-deftest niwa-transcript--summary-truncate-args ()
+  ,test
+  (test)
+  :doc "recursively caps strings inside tool arguments"
+  (let ((value (niwa-transcript--summary-truncate-args
+                '(:args ["abcdef"]) 3)))
+    (should (string-prefix-p "abc" (aref (plist-get value :args) 0)))))
+
+(niwa-deftest niwa-transcript--summary-tool-sexp-start ()
+  ,test
+  (test)
+  :doc "finds readable tool metadata in plain and Org forms"
+  (should (= 0 (niwa-transcript--summary-tool-sexp-start
+                "(:name \"Read\")")))
+  (should (integerp
+           (niwa-transcript--summary-tool-sexp-start
+            "#+begin_tool\n(:name \"Read\")\n#+end_tool\n")))
+
+  :doc "accepts separator whitespace before the Org tool header"
+  (let* ((text (concat "\n\n#+begin_tool (Bash :command \"printf ... )\n"
+                       "(:name \"Bash\" :args (:command \"printf ok\"))\n\nok\n"
+                       "#+end_tool\n"))
+         (start (niwa-transcript--summary-tool-sexp-start text)))
+    (should (integerp start))
+    (should (equal "Bash" (plist-get (car (read-from-string text start)) :name))))
+
+  :doc "does not search arbitrary result text for a tool header or plist"
+  (dolist (text '("Result\n#+begin_tool\n(:name \"Read\")\n"
+                  "#+begin_tool\nResult\n(:name \"Read\")\n"
+                  "Result\n(:name \"Read\")\n"))
+    (should-not (niwa-transcript--summary-tool-sexp-start text))))
+
+(niwa-deftest niwa-transcript--summary-media-placeholder ()
+  ,test
+  (test)
+  :doc "keeps media kind, MIME type, and path without payload bytes"
+  (should (equal "[media: image; MIME image/png; path plot.png]"
+                 (niwa-transcript--summary-media-placeholder
+                  '(:kind image :mime "image/png" :path "plot.png")))))
+
+(niwa-deftest niwa-transcript--summary-tool-parts ()
+  ,test
+  (test)
+  :doc "separates readable tool metadata from its bounded result"
+  (pcase-let ((`(,call ,result)
+               (niwa-transcript--summary-tool-parts
+                "(:name \"Read\" :args (:file_path \"x\"))\n\nresult"
+                100 nil nil)))
+    (should (string-match-p "Read" call))
+    (should (equal "result" result))))
+
+(niwa-deftest niwa-transcript--summary-evidence-item ()
+  ,test
+  (test)
+  :doc "wraps evidence with explicit matching provenance delimiters"
+  (let ((item (niwa-transcript--summary-evidence-item "user" " text ")))
+    (should (string-prefix-p "--- evidence item; provenance: user ---" item))
+    (should (string-suffix-p "--- end evidence item ---" item))))
+
+(niwa-deftest niwa-transcript-project-segments ()
+  ,test
+  (test)
+  :doc "projects selected canonical spans as plain evidence without reclassification"
+  (with-temp-buffer
+    (insert (propertize "Ask\nReply\n" 'gptel 'response))
+    (let ((text (niwa-transcript-project-segments
+                 '((user 1 5) (response 5 11)))))
+      (should (equal text
+                     (concat "--- evidence item; provenance: user ---\nAsk\n"
+                             "--- end evidence item ---\n\n"
+                             "--- evidence item; provenance: assistant ---\nReply\n"
+                             "--- end evidence item ---")))
+      (should-not (text-property-not-all 0 (length text) 'gptel nil text)))))
+
+(niwa-deftest niwa-transcript--own-line-prompt-p ()
+  ,test
+  (test)
+  :doc "accepts user text on its own line and rejects tails, blanks, and other types"
+  (with-temp-buffer
+    (insert "Answer.\n\nPrompt\n" "er.\n" "\n\n")
+    (should (niwa-transcript--own-line-prompt-p '(user 8 17)))
+    (should-not (niwa-transcript--own-line-prompt-p '(user 17 21)))
+    (should-not (niwa-transcript--own-line-prompt-p '(user 21 23)))
+    (should-not (niwa-transcript--own-line-prompt-p '(ignored 8 17)))))
+
+(niwa-deftest niwa-transcript--repair-response-fragment-segments ()
+  ,test
+  (test)
+  :doc "trusted audits between a final response and its summary stay ignored"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer.\n" 'gptel 'response)
+            "\n\n"
+            (niwa--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1"))
+            (niwa--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-2"))
+            (niwa-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (should (equal '(response ignored render-data)
+                   (mapcar #'car (niwa-transcript-segments
+                                  (point-min) (point-max))))))
+
+  :doc "the separator gptel inserts after a final response is no user turn"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\n"
+            (niwa-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (let ((segments (niwa-transcript-segments (point-min) (point-max))))
+      (should (equal '(response render-data) (mapcar #'car segments)))
+      (should (equal "Answer."
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a prompt on its own line after a response stays user before its audit"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\nGuest prompt\n"
+            (niwa--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1")))
+    (let ((segments (niwa-transcript-segments (point-min) (point-max))))
+      (should (equal '(response user ignored) (mapcar #'car segments)))
+      (should (equal "\n\nGuest prompt\n"
+                     (buffer-substring-no-properties
+                      (cadr (cadr segments)) (caddr (cadr segments)))))))
+
+  :doc "a stale tail continuing the response's last line joins it before an audit"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answ" 'gptel 'response)
+            "er.\n"
+            (niwa--format-hook-audit-record
+             '(:type execution-breadcrumb :execution-id "exec-1")))
+    (let ((segments (niwa-transcript-segments (point-min) (point-max))))
+      (should (equal '(response ignored) (mapcar #'car segments)))
+      (should (equal "Answer.\n"
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a generated prompt after a response stays user before its display record"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answer." 'gptel 'response)
+            "\n\nGenerated prompt\n"
+            (niwa-tool-render-data-format
+             '(:kind user-display :text "Shown")))
+    (let ((segments (niwa-transcript-segments (point-min) (point-max))))
+      (should (equal '(response user render-data) (mapcar #'car segments)))
+      (should (equal "Answer."
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments)))))))
+
+  :doc "a stale tail continuing the response's last line joins it before a summary"
+  (with-temp-buffer
+    (org-mode)
+    (insert (propertize "Answ" 'gptel 'response)
+            "er.\n"
+            (niwa-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 1.0)))
+    (let ((segments (niwa-transcript-segments (point-min) (point-max))))
+      (should (equal '(response render-data) (mapcar #'car segments)))
+      (should (equal "Answer.\n"
+                     (buffer-substring-no-properties
+                      (cadr (car segments)) (caddr (car segments))))))))
+
+(niwa-deftest niwa-transcript-project-evidence ()
+  ,test
+  (test)
+  :doc "includes retained guidance but excludes provider reconstruction metadata"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Task.\n"
+            (niwa--format-hook-audit-record
+             '(:type injected-reminders :phase turn-start
+               :items ((:type fixture :body "Keep this relevant instruction."))))
+            (niwa--format-hook-audit-record
+             '(:type provider-tool-batch :messages [(:secret "opaque-provider-data")]))
+            (propertize "Answer.\n" 'gptel 'response))
+    (let ((evidence (niwa-transcript-project-evidence
+                     (list (cons (point-min) (point-max))))))
+      (should (string-search "Keep this relevant instruction." evidence))
+      (should (string-search "provenance: system-reminder" evidence))
+      (should-not (string-search "opaque-provider-data" evidence))))
+
+  :doc "retains saved Skill instructions and later retirement without live invocation records"
+  (dolist (call '("(:name \"Skill\" :args (:name \"careful-edit\"))"
+                   "(:name \"ToolCall\" :args (:expression \"(Skill :name \\\"careful-edit\\\")\"))"))
+   (let* ((file (make-temp-file "niwa-skill-evidence-" nil ".org"))
+         (body (concat (make-string 200 ?x)
+                       "\nKeep the user's existing changes intact.")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (org-mode)
+            (insert "#+begin_tool\n")
+            (let ((start (point)))
+              (insert call "\n\n" body)
+              (put-text-property start (point) 'gptel '(tool . "call-skill")))
+            (insert "\n#+end_tool\n"
+                    "The task is complete; stop using careful-edit now.\n"
+                    "#+begin_tool\n")
+            (let ((start (point)))
+              (insert "(:name \"Read\" :args (:file_path \"output.txt\"))\n\n"
+                      (make-string 200 ?y))
+              (put-text-property start (point) 'gptel '(tool . "call-read")))
+            (insert "\n#+end_tool\n")
+            (gptel--save-state))
+          (with-temp-buffer
+            (org-mode)
+            (insert-file-contents file)
+            (niwa-transcript-restore-properties)
+            (let ((evidence
+                   (niwa-transcript-project-evidence
+                    (list (cons (point-min) (point-max))) :tool-output-max 20)))
+              (should (string-search body evidence))
+              (should (string-search "stop using careful-edit now" evidence))
+              (should (string-search "provenance: tool-result" evidence))
+              (should (string-search "tool output truncated" evidence))
+              (should-not (string-search (make-string 21 ?y) evidence))
+              (should-not
+               (text-property-not-all 0 (length evidence) 'gptel nil evidence)))))
+      (delete-file file))))
+
+  :doc "projects model-visible transcript roles as immutable neutral evidence"
+  (with-temp-buffer
+    (org-mode)
+    (insert "User request\n")
+    (let ((reasoning-start (point)))
+      (insert "#+begin_reasoning\nReasoning\n#+end_reasoning\n")
+      (put-text-property reasoning-start (point) 'gptel 'ignore))
+    (let ((response-start (point)))
+      (insert "Assistant answer\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((ignored-start (point)))
+      (insert "<!-- niwa-render-data -->\n(:secret t)\n<!-- /niwa-render-data -->\n")
+      (put-text-property ignored-start (point) 'gptel 'ignore))
+    (let ((evidence
+           (niwa-transcript-project-evidence
+            (list (cons (point-min) (point-max)))
+            :skill-provenance '("$tdd (instruction, turn 2)"))))
+      (erase-buffer)
+      (insert "replacement")
+      (should (string-match-p "provenance: user" evidence))
+      (should (string-match-p "User request" evidence))
+      (should (string-match-p "provenance: reasoning" evidence))
+      (should (string-match-p "Reasoning" evidence))
+      (should (string-match-p "provenance: assistant" evidence))
+      (should (string-match-p "Assistant answer" evidence))
+      (should-not (string-match-p "secret" evidence))
+      (should (string-match-p "provenance: skill-invocation" evidence))
+      (should (string-match-p (regexp-quote "$tdd (instruction, turn 2)")
+                              evidence))))
+
+  :doc "separates bounded tool calls/results and replaces native media"
+  (let ((tool-results-dir (make-temp-file "niwa-summary-media-" t))
+        (niwa-tool-media--store nil))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "#+begin_tool (Read :file_path \"big.png\")\n")
+          (let* ((tool-start (point))
+                 (result
+                  (niwa-tool-media-attach-result
+                   (concat
+                    "(:name \"Read\" :args (:file_path \"big.png\"))\n\n"
+                    (make-string 200 ?x))
+                   '((:kind image :mime "image/png" :data "QUJD"
+                             :path "diagram.png"))
+                   tool-results-dir "call-read")))
+            (insert result "\n#+end_tool\n")
+            (put-text-property tool-start (point)
+                               'gptel '(tool . "call-read")))
+          (setq niwa-tool-media--store nil)
+          (let ((evidence
+                 (niwa-transcript-project-evidence
+                  (list (cons (point-min) (point-max)))
+                  :tool-output-max 20
+                  :tool-results-dir tool-results-dir)))
+            (should (string-match-p "provenance: tool-call" evidence))
+            (should (string-match-p "file_path" evidence))
+            (should (string-match-p "provenance: tool-result" evidence))
+            (should (string-match-p "tool output truncated" evidence))
+            (should (string-match-p
+                     (regexp-quote
+                      "[media: image; MIME image/png; path diagram.png]")
+                     evidence))
+            (should-not (string-match-p "QUJD" evidence))
+            ;; Frozen evidence is plain text: a surviving `(tool . id)'
+            ;; gptel property would make gptel's prompt parser read the
+            ;; truncated result body as a tool-call plist.
+            (should-not
+             (text-property-not-all 0 (length evidence) 'gptel nil evidence))
+            (should (= 1 (let ((start 0) (count 0))
+                           (while (string-match
+                                   "provenance: tool-call" evidence start)
+                             (setq count (1+ count)
+                                   start (match-end 0)))
+                           count)))))
+      (delete-directory tool-results-dir t))))
+
+
+(niwa-deftest niwa-transcript--tool-block-call-readable-before-p ()
+  ,test
+  (test)
+  :doc "leaves point untouched when it sits past the scanned region"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool\n(:name \"Read\" :args nil)\n#+end_tool\n"
+            "#+begin_tool\n(:name \"Grep\" :args nil)\n#+end_tool\n")
+    (goto-char (point-min))
+    (let* ((second (progn (re-search-forward "^#\\+begin_tool" nil t 2)
+                          (match-beginning 0)))
+           ;; Point past the region is exactly how the block scanner calls
+           ;; this: narrowing must not rewind its forward search.
+           (after (point)))
+      (should (niwa-transcript--tool-block-call-readable-before-p
+               (point-min) second))
+      (should (= after (point)))))
+
+  :doc "rejects a region whose first form is not a tool call plist"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool\nnot a plist\n#+end_tool\n")
+    (goto-char (point-max))
+    (should-not (niwa-transcript--tool-block-call-readable-before-p
+                 (point-min) (point-max)))
+    (should (= (point-max) (point)))))
+
+(niwa-deftest niwa-transcript--instruction-tool-p ()
+  ,test
+  (test)
+  :doc "recognizes only Skill calls whose instruction result reaches the model"
+  (should (niwa-transcript--instruction-tool-p '(:name "Skill")))
+  (should (niwa-transcript--instruction-tool-p
+           '(:name "ToolCall" :args (:expression "(Skill :name \"x\")"))))
+  (dolist (expression '("'(Skill)" "(progn (Skill) 1)" "(Read)" "("))
+    (should-not (niwa-transcript--instruction-tool-p
+                 (list :name "ToolCall" :args (list :expression expression))))))
+
+(provide 'test-niwa-transcript)
+;;; test-niwa-transcript.el ends here

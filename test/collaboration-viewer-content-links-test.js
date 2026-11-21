@@ -10,7 +10,7 @@ const window = {};
 const context = {window, document, console};
 const href = navigation(context);
 load('relay/viewer/renderer.js', context);
-const renderer = window.mevedelTranscriptRenderer;
+const renderer = window.niwaTranscriptRenderer;
 const opened = [];
 const destinations = [];
 const target = value => { destinations.push(JSON.parse(JSON.stringify(value))); return href(value); };

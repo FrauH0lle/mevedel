@@ -28,41 +28,41 @@ LISP = r''';;; -*- lexical-binding: t -*-
 (require 'cl-lib)
 (require 'json)
 (require 'memory-history-fixtures)
-(require 'mevedel-memory-pass)
-(require 'mevedel-native)
-(setq mevedel-native--load-state "benchmark uses fallback timer"
-      mevedel-telemetry-enabled t
-      mevedel-telemetry-lag-threshold 0.001
-      mevedel-telemetry--lag-count-threshold 0.001
-      mevedel-memory-consolidation-mode 'auto
-      mevedel-memory-history-max-age-days 14
-      mevedel-journal-max-age-days 14)
+(require 'niwa-memory-pass)
+(require 'niwa-native)
+(setq niwa-native--load-state "benchmark uses fallback timer"
+      niwa-telemetry-enabled t
+      niwa-telemetry-lag-threshold 0.001
+      niwa-telemetry--lag-count-threshold 0.001
+      niwa-memory-consolidation-mode 'auto
+      niwa-memory-history-max-age-days 14
+      niwa-journal-max-age-days 14)
 (let* ((root (file-name-as-directory (getenv "BENCH_WORKSPACE")))
-       (workspace (mevedel-workspace--create :root root :id root :type 'project))
+       (workspace (niwa-workspace--create :root root :id root :type 'project))
        (step (getenv "BENCH_STEP"))
        (output (getenv "BENCH_REPLY"))
        accepted payload handle started finished result delays diagnostics)
   (condition-case failure
       (progn
         ;; Fence copied live owners, preserving settled authentication evidence.
-        (let ((directory (file-name-concat root ".mevedel/state/journal")))
+        (let ((directory (file-name-concat root ".niwa/state/journal")))
           (when (file-directory-p directory)
             (dolist (file (directory-files-recursively directory "[0-9]\\{20\\}\\.claim\\'"))
               (unless (file-exists-p (concat (file-name-sans-extension file) ".outcome"))
-                (let* ((record (mevedel-journal-claim--decode
+                (let* ((record (niwa-journal-claim--decode
                                 (with-temp-buffer (insert-file-contents file) (buffer-string)) nil))
                        (claim (append (list :directory (file-name-directory file)) record)))
                   (when (> (plist-get record :expires-at) (float-time))
-                    (unless (mevedel-journal-claim-settle claim 'cancelled "")
+                    (unless (niwa-journal-claim-settle claim 'cancelled "")
                       (error "Could not fence copied live claim"))))))))
         (if (equal step "generate")
           (progn
             ;; Build each pass with the real helper, staging settled history
             ;; between passes to avoid quadratic recovery during fixture setup.
             (dotimes (batch 80)
-              (mevedel-test-memory-history-create workspace 1 4 16384)
-              (dolist (relative '(".mevedel/journal" ".mevedel/state/journal/passes"
-                                  ".mevedel/state/journal/decisions" ".mevedel/state/journal/writes"))
+              (niwa-test-memory-history-create workspace 1 4 16384)
+              (dolist (relative '(".niwa/journal" ".niwa/state/journal/passes"
+                                  ".niwa/state/journal/decisions" ".niwa/state/journal/writes"))
                 (let ((destination (file-name-concat (getenv "BENCH_SHARDS")
                                                    (number-to-string batch) relative)))
                   (make-directory (file-name-directory destination) t)
@@ -71,24 +71,24 @@ LISP = r''';;; -*- lexical-binding: t -*-
             (kill-emacs 0))
         ;; Fixture preparation and GC are outside the watched interval.
         (when (member step '("application" "publication"))
-          (setq accepted (car (mevedel-test-memory-history-create workspace 1 1 128 t)))
+          (setq accepted (car (niwa-test-memory-history-create workspace 1 1 128 t)))
           (when (equal step "publication")
             ;; A new unaccepted no-action review exercises the normal publisher.
-            (let* ((claim (mevedel-journal-claim-acquire
-                           (mevedel-memory-store--claim-directory workspace) 180))
-                   (scope (mevedel-memory-scope-capture workspace)))
-              (setq payload (list :prepared (mevedel-memory-store-prepare workspace claim scope nil "")
+            (let* ((claim (niwa-journal-claim-acquire
+                           (niwa-memory-store--claim-directory workspace) 180))
+                   (scope (niwa-memory-scope-capture workspace)))
+              (setq payload (list :prepared (niwa-memory-store-prepare workspace claim scope nil "")
                                   :reply "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none"
                                   :entries nil :model "test:model" :references nil :notes nil)))))
         (garbage-collect)
-        (setq mevedel-memory-decision--inhibit-recovery nil)
+        (setq niwa-memory-decision--inhibit-recovery nil)
         (when (equal step "cleanup")
-          (setq mevedel-journal-cleanup--inhibit-scheduling nil))
-        (advice-add 'mevedel-telemetry-record-workspace :before
+          (setq niwa-journal-cleanup--inhibit-scheduling nil))
+        (advice-add 'niwa-telemetry-record-workspace :before
                     (lambda (_workspace event &rest props)
                       (when (and started (eq event 'event-loop-lag))
                         (push (plist-get props :delay-ms) delays))))
-        (advice-add 'mevedel-journal-worker--read :filter-return
+        (advice-add 'niwa-journal-worker--read :filter-return
                     (lambda (reply)
                       (when (plist-get reply :error) (push (plist-get reply :error) diagnostics))
                       (when (and (equal step "cleanup")
@@ -96,7 +96,7 @@ LISP = r''';;; -*- lexical-binding: t -*-
                                            (numberp (plist-get reply :cleanup-at)))))
                         (push "Cleanup skipped admission" diagnostics))
                       reply))
-        (advice-add 'mevedel-memory-decision--recovery-failed :before
+        (advice-add 'niwa-memory-decision--recovery-failed :before
                     (lambda (_key reason)
                       (push reason diagnostics)
                       (when (equal step "recovery")
@@ -106,8 +106,8 @@ LISP = r''';;; -*- lexical-binding: t -*-
                       (when (and (stringp format-string)
                                  (string-match-p "journal cleanup failed" format-string))
                         (push (apply #'format-message format-string arguments) diagnostics))))
-        (setq handle (mevedel-telemetry-memory-pass-start workspace "housekeeping-benchmark"))
-        (unless (and handle mevedel-telemetry--lag-timer (not noninteractive))
+        (setq handle (niwa-telemetry-memory-pass-start workspace "housekeeping-benchmark"))
+        (unless (and handle niwa-telemetry--lag-timer (not noninteractive))
           (error "Interactive heartbeat did not start"))
         (cl-labels
             ((complete (value) (setq result value finished (float-time))))
@@ -118,13 +118,13 @@ LISP = r''';;; -*- lexical-binding: t -*-
              (condition-case error-data
                  (pcase step
                    ("recovery"
-                    (mevedel-memory-decision-schedule-recovery workspace (lambda () (complete '(:status recovered)))))
+                    (niwa-memory-decision-schedule-recovery workspace (lambda () (complete '(:status recovered)))))
                    ("application"
-                    (mevedel-memory-pass--apply-async
+                    (niwa-memory-pass--apply-async
                      (list :workspace workspace :origin-buffer (current-buffer)) accepted #'complete))
                    ("publication"
-                    (mevedel-journal-worker-start workspace 'memory-publish #'complete nil payload))
-                   ("cleanup" (mevedel-journal-cleanup-schedule workspace t))
+                    (niwa-journal-worker-start workspace 'memory-publish #'complete nil payload))
+                   ("cleanup" (niwa-journal-cleanup-schedule workspace t))
                    ("control"
                     ;; Busy Lisp, not sleep-for: sleeping dispatches timers.
                     (let ((until (+ (float-time) .12)))
@@ -136,15 +136,15 @@ LISP = r''';;; -*- lexical-binding: t -*-
            .05 .05
            (lambda ()
              (when (and started (not finished) (equal step "cleanup")
-                        (not (gethash root mevedel-journal-cleanup--pending))
-                        (not (mevedel-journal-cleanup-active-p workspace)))
+                        (not (gethash root niwa-journal-cleanup--pending))
+                        (not (niwa-journal-cleanup-active-p workspace)))
                (complete '(:status collected)))
              (when (and started (not finished) (> (- (float-time) started) 300))
                (complete '(:error "Completion deadline exceeded")))
              ;; One full fallback heartbeat after completion flushes callback lag.
              (when (and finished (> (- (float-time) finished) .2))
-               (mevedel-telemetry-memory-pass-settle handle)
-               (mevedel-telemetry--lag-stop)
+               (niwa-telemetry-memory-pass-settle handle)
+               (niwa-telemetry--lag-stop)
                (let* ((success (and (not diagnostics) (not (plist-get result :error))
                                     (pcase step
                                       ("application" (and (= 1 (or (plist-get result :applied-count) 0))
@@ -204,12 +204,12 @@ def interactive(command, environment, directory, timeout=360):
 
 def copy_state(source, destination, backup=None):
     """Copy journal evidence without symlinks or host-side claim mutations."""
-    state = destination / ".mevedel"
+    state = destination / ".niwa"
     (state / "state").mkdir(parents=True)
-    shutil.copy2(source / ".mevedel/workspace-id", state / "workspace-id")
-    for origin, target in ((backup / "state-journal" if backup else source / ".mevedel/state/journal",
+    shutil.copy2(source / ".niwa/workspace-id", state / "workspace-id")
+    for origin, target in ((backup / "state-journal" if backup else source / ".niwa/state/journal",
                             state / "state/journal"),
-                           (backup / "journal" if backup else source / ".mevedel/journal",
+                           (backup / "journal" if backup else source / ".niwa/journal",
                             state / "journal")):
         if origin.exists():
             if origin.is_symlink() or any(path.is_symlink() for path in origin.rglob("*")):
@@ -235,15 +235,15 @@ def main():
     elpas = list((ROOT / ".eask").glob("*/elpa"))
     if len(elpas) != 1:
         parser.error("Bootstrap .eask dependencies first")
-    with tempfile.TemporaryDirectory(prefix="mevedel-housekeeping-", dir="/tmp") as name:
+    with tempfile.TemporaryDirectory(prefix="niwa-housekeeping-", dir="/tmp") as name:
         temporary = Path(name)
         if args.self_test:
             fixture = temporary / "symlink-source"
-            (fixture / ".mevedel/state/journal").mkdir(parents=True)
-            (fixture / ".mevedel/workspace-id").write_text("fixture")
+            (fixture / ".niwa/state/journal").mkdir(parents=True)
+            (fixture / ".niwa/workspace-id").write_text("fixture")
             host_claim = temporary / "must-survive.claim"
             host_claim.write_text("unchanged")
-            (fixture / ".mevedel/state/journal/mutation").symlink_to(temporary, target_is_directory=True)
+            (fixture / ".niwa/state/journal/mutation").symlink_to(temporary, target_is_directory=True)
             try:
                 copy_state(fixture, temporary / "rejected-copy")
             except RuntimeError:
@@ -256,13 +256,13 @@ def main():
         packages = COMMON["freeze_dependencies"](elpas[0], temporary / "dependencies")
         snapshot = temporary / "sources"
         snapshot.mkdir()
-        for path in ROOT.glob("mevedel*.el"):
+        for path in ROOT.glob("niwa*.el"):
             shutil.copy2(path, snapshot / path.name)
         shutil.copytree(ROOT / "prompts", snapshot / "prompts")
         shutil.copytree(ROOT / "test", snapshot / "test", ignore=shutil.ignore_patterns("*.elc"))
         build = temporary / "compiled"
         build.mkdir()
-        environment.update(MEVEDEL_BENCH_SOURCE=str(snapshot), MEVEDEL_BENCH_BUILD=str(build))
+        environment.update(NIWA_BENCH_SOURCE=str(snapshot), NIWA_BENCH_BUILD=str(build))
         dependencies = [item for package in packages for item in ("-L", str(package))]
         batch = ["emacs", "--batch", "-Q", "--eval", f'(progn {COMMON["ISOLATE"]})'] + dependencies
         print("Compiling private source snapshot...", flush=True)
@@ -274,8 +274,8 @@ def main():
         baseline.mkdir()
         if source:
             if args.synthetic:
-                (baseline / ".mevedel").mkdir()
-                shutil.copy2(source / ".mevedel/workspace-id", baseline / ".mevedel/workspace-id")
+                (baseline / ".niwa").mkdir()
+                shutil.copy2(source / ".niwa/workspace-id", baseline / ".niwa/workspace-id")
             else:
                 copy_state(source, baseline, args.backup.resolve() if args.backup else None)
         paths = ["-L", str(build), "-L", str(snapshot / "test")] + dependencies
@@ -291,8 +291,8 @@ def main():
             # The source workspace and every captured external target remain
             # read-only. Namespace aliases point workspace-local targets at copies.
             mounts = ["--bind", str(copied), str(baseline)]
-            if source and (source / ".mevedel").exists():
-                mounts += ["--bind", str(copied / ".mevedel"), str(source / ".mevedel")]
+            if source and (source / ".niwa").exists():
+                mounts += ["--bind", str(copied / ".niwa"), str(source / ".niwa")]
             command = ["bwrap", "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/",
                        "--dev-bind", "/dev", "/dev",
                        "--bind", name, name] + mounts + ["--", "emacs", "-Q", "-nw",
@@ -304,7 +304,7 @@ def main():
             if step == "generate":
                 for shard in sorted((run / "shards").iterdir()):
                     shutil.copytree(shard, copied, dirs_exist_ok=True)
-                journal = copied / ".mevedel/state/journal"
+                journal = copied / ".niwa/state/journal"
                 counts = [len(list((journal / "passes").glob("*/accepted.el"))),
                           len(list((journal / "decisions").glob("*.el"))),
                           len(list((journal / "writes").glob("*.el")))]
@@ -317,7 +317,7 @@ def main():
             print("Generating valid 80-pass history...", flush=True)
             measure("generate", 0)
         steps = ["control"] if args.self_test else ["recovery", "application", "publication", "cleanup"]
-        journal = baseline / ".mevedel/state/journal"
+        journal = baseline / ".niwa/state/journal"
         inventory = {"accepted_passes": len(list((journal / "passes").glob("*/accepted.el"))),
                      "decisions": len(list((journal / "decisions").glob("*.el"))),
                      "writes": len(list((journal / "writes").glob("*.el")))}

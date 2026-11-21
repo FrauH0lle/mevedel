@@ -4,8 +4,8 @@
 
 ;;; Code:
 
-(defvar mevedel-claude-code-auto-update)
-(setq mevedel-claude-code-auto-update nil)
+(defvar niwa-claude-code-auto-update)
+(setq niwa-claude-code-auto-update nil)
 
 (require 'cl-lib)
 (require 'ert)
@@ -14,36 +14,36 @@
 ;; The shared fixture macros below let-bind these product variables, and a
 ;; macro expands in its consumer, so their owners must be loaded here rather
 ;; than in every consumer.
-(require 'mevedel-permission-mode)
-(require 'mevedel-plugin-registry)
-(require 'mevedel-structs)
-(require 'mevedel-tool-registry)
+(require 'niwa-permission-mode)
+(require 'niwa-plugin-registry)
+(require 'niwa-structs)
+(require 'niwa-tool-registry)
 (require 'tramp)
 
 ;; Tests exercise the documented setup, where users enable visit restoration.
-(require 'mevedel-notes-activation)
-(mevedel-notes-global-mode 1)
+(require 'niwa-notes-activation)
+(niwa-notes-global-mode 1)
 
 ;; Module-focused fixtures do not create journal jobs unless the journal
 ;; integration test explicitly enables the feature for its temporary workspace.
-(defvar mevedel-journal-enabled)
-(setq mevedel-journal-enabled nil)
-(defvar mevedel-journal-max-age-days)
-(setq mevedel-journal-max-age-days nil)
-(defvar mevedel-journal-process--inhibit-scheduling)
-(setq mevedel-journal-process--inhibit-scheduling t)
-(defvar mevedel-journal-cleanup--inhibit-scheduling)
-(setq mevedel-journal-cleanup--inhibit-scheduling t)
-(defvar mevedel-journal-idle--inhibit-scheduling)
-(setq mevedel-journal-idle--inhibit-scheduling t)
-(defvar mevedel-memory-decision--inhibit-recovery)
-(setq mevedel-memory-decision--inhibit-recovery t)
-(defvar mevedel-memory-pass--inhibit-scheduling)
-(setq mevedel-memory-pass--inhibit-scheduling t)
+(defvar niwa-journal-enabled)
+(setq niwa-journal-enabled nil)
+(defvar niwa-journal-max-age-days)
+(setq niwa-journal-max-age-days nil)
+(defvar niwa-journal-process--inhibit-scheduling)
+(setq niwa-journal-process--inhibit-scheduling t)
+(defvar niwa-journal-cleanup--inhibit-scheduling)
+(setq niwa-journal-cleanup--inhibit-scheduling t)
+(defvar niwa-journal-idle--inhibit-scheduling)
+(setq niwa-journal-idle--inhibit-scheduling t)
+(defvar niwa-memory-decision--inhibit-recovery)
+(setq niwa-memory-decision--inhibit-recovery t)
+(defvar niwa-memory-pass--inhibit-scheduling)
+(setq niwa-memory-pass--inhibit-scheduling t)
 ;; Tests must never take real system sleep locks; cases that exercise the
 ;; inhibitor bind a stand-in command.
-(defvar mevedel-sleep-inhibit)
-(setq mevedel-sleep-inhibit nil)
+(defvar niwa-sleep-inhibit)
+(setq niwa-sleep-inhibit nil)
 
 ;; Tests that stub Markdown fontification on may enter `markdown-ts-mode'
 ;; without its grammars.  Emacs 31 then offers to install them with a
@@ -62,23 +62,23 @@
 ;; `jka-compr'
 (defvar jka-compr-temp-name-template)
 
-;; `mevedel-execution-process'
-(defvar mevedel-execution-process--child-kill-delay)
+;; `niwa-execution-process'
+(defvar niwa-execution-process--child-kill-delay)
 
-;; `mevedel-permission-log'
-(declare-function mevedel-permission-log-path "mevedel-permission-log"
+;; `niwa-permission-log'
+(declare-function niwa-permission-log-path "niwa-permission-log"
                   (session))
 
-;; `mevedel-transcript-audit'
-(declare-function mevedel--read-hook-audit-record "mevedel-transcript-audit"
+;; `niwa-transcript-audit'
+(declare-function niwa--read-hook-audit-record "niwa-transcript-audit"
                   (text))
 
-;; `mevedel-transport'
-(defvar mevedel-transport--pause-guard)
+;; `niwa-transport'
+(defvar niwa-transport--pause-guard)
 
-;; `mevedel-utilities'
-(defvar mevedel--hook-audit-close)
-(defvar mevedel--hook-audit-open)
+;; `niwa-utilities'
+(defvar niwa--hook-audit-close)
+(defvar niwa--hook-audit-open)
 
 ;; `org-persist'
 (defvar org-persist-directory)
@@ -109,11 +109,11 @@
 
 ;; Org can otherwise select Eask's shared dependency directory as its cache.
 ;; Keep its process-wide registry and files together in the worker-owned HOME.
-(defconst mevedel-test--worker-home (expand-file-name "~")
+(defconst niwa-test--worker-home (expand-file-name "~")
   "Eask's isolated HOME, also used for caches retained across cases.")
 (with-eval-after-load 'org-persist
   (setq org-persist-directory
-        (file-name-concat mevedel-test--worker-home "org-persist")))
+        (file-name-concat niwa-test--worker-home "org-persist")))
 
 ;; gptel ships no default backend, and a session cannot be saved without one.
 ;; Tests that create chat buffers would otherwise warn on every teardown save
@@ -123,12 +123,12 @@
     ;; Package autoloads are absent in `emacs -Q' child processes.
     (require 'gptel-openai)
     (setq-default gptel-backend
-                  (gptel-make-openai "mevedel-test"
+                  (gptel-make-openai "niwa-test"
                                      :key "test"
-                                     :models '(mevedel-test-model)))
-    (setq-default gptel-model 'mevedel-test-model)))
+                                     :models '(niwa-test-model)))
+    (setq-default gptel-model 'niwa-test-model)))
 
-(defconst mevedel-test--muted-message-regexps
+(defconst niwa-test--muted-message-regexps
   '("\\`Type q to \\(?:restore previous buffer\\|delete help window\\)"
     ;; TRAMP narrates its own connection attempts, including the ones a
     ;; mock-method test means to fail.
@@ -144,49 +144,49 @@
     "\\`Cannot remove lock file ")
   "Third-party progress messages the run log must not carry.
 
-Each entry names a message mevedel does not emit and cannot suppress at
-its source.  Nothing mevedel itself reports belongs here: its messages
+Each entry names a message niwa does not emit and cannot suppress at
+its source.  Nothing niwa itself reports belongs here: its messages
 either signal a defect worth seeing or belong to a test that captures
 them.")
 
-(defun mevedel-test--mute-third-party-message (original &optional format &rest args)
+(defun niwa-test--mute-third-party-message (original &optional format &rest args)
   "Call ORIGINAL with FORMAT and ARGS unless the result is muted.
 A muted call returns the text it would have shown, as `message' does."
   (let ((text (and format (apply #'format-message format args))))
     (if (and text
              (seq-some (lambda (regexp) (string-match-p regexp text))
-                       mevedel-test--muted-message-regexps))
+                       niwa-test--muted-message-regexps))
         text
       (apply original format args))))
 
-(defun mevedel-test--frame (frame)
+(defun niwa-test--frame (frame)
   "Normalize FRAME's wire records to plists for assertions."
   (if (plist-member frame :records)
       (json-parse-string (json-encode frame) :object-type 'plist :array-type 'array
                          :false-object :json-false :null-object nil)
     frame))
 
-(defun mevedel-test--read-file (path)
+(defun niwa-test--read-file (path)
   "Read decoded text from PATH for filesystem assertions."
   (with-temp-buffer
     (insert-file-contents path)
     (buffer-string)))
 
-(defun mevedel-test--read (args)
+(defun niwa-test--read (args)
   "Await the public Read handler for ARGS, preserving its result envelope."
   (let (done result cancel)
     (unwind-protect
         (progn
-          (setq cancel (mevedel-tool-fs-read
+          (setq cancel (niwa-tool-fs-read
                         (lambda (value) (setq result value done t)) args))
           (with-timeout (10 (ert-fail "Read callback timed out"))
             (while (not done) (accept-process-output nil 0.01)))
           result)
       (when (functionp cancel) (funcall cancel)))))
 
-(defun mevedel-test--permission-log-entries (session)
+(defun niwa-test--permission-log-entries (session)
   "Read permission log entries for SESSION."
-  (let ((file (mevedel-permission-log-path session))
+  (let ((file (niwa-permission-log-path session))
         entries)
     (when (and file (file-exists-p file))
       (with-temp-buffer
@@ -198,37 +198,37 @@ A muted call returns the text it would have shown, as `message' does."
           (end-of-file nil))))
     (nreverse entries)))
 
-(defun mevedel-test--hook-audit-records (text)
+(defun niwa-test--hook-audit-records (text)
   "Return hook audit records parsed from TEXT."
   (let (records)
     (with-temp-buffer
       (insert (or text ""))
       (goto-char (point-min))
-      (while (search-forward mevedel--hook-audit-open nil t)
+      (while (search-forward niwa--hook-audit-open nil t)
         (let ((record-start (point)))
-          (when (search-forward mevedel--hook-audit-close nil t)
+          (when (search-forward niwa--hook-audit-close nil t)
             (when-let* ((record
-                         (mevedel--read-hook-audit-record
+                         (niwa--read-hook-audit-record
                           (buffer-substring-no-properties
                            record-start (match-beginning 0)))))
               (push record records))))))
     (nreverse records)))
 
-(defun mevedel-test--drop-sessionless-permission-warning
+(defun niwa-test--drop-sessionless-permission-warning
     (original type message &rest args)
   "Call ORIGINAL unless MESSAGE is the sessionless permission warning.
 TYPE and ARGS are passed through unchanged."
-  (unless (and (eq type 'mevedel)
+  (unless (and (eq type 'niwa)
                (string-match-p "no session in context"
                                (format "%s" message)))
     (apply original type message args)))
 
-(advice-add 'message :around #'mevedel-test--mute-third-party-message)
+(advice-add 'message :around #'niwa-test--mute-third-party-message)
 
 
-;; `mevedel-test--worktree-root' is fixed from this helper's location so a
+;; `niwa-test--worktree-root' is fixed from this helper's location so a
 ;; test that temporarily binds `default-directory' cannot redirect the guard.
-(defconst mevedel-test--worktree-root
+(defconst niwa-test--worktree-root
   (file-name-as-directory
    (expand-file-name
     ".."
@@ -236,24 +236,24 @@ TYPE and ARGS are passed through unchanged."
      (or load-file-name buffer-file-name default-directory))))
   "Worktree root whose portable control artifacts tests must not mutate.")
 
-(defconst mevedel-test--acp-peer
-  (file-name-concat mevedel-test--worktree-root "test" "fixtures" "acp-agent.py")
+(defconst niwa-test--acp-peer
+  (file-name-concat niwa-test--worktree-root "test" "fixtures" "acp-agent.py")
   "The scripted ACP peer standing in for an agent adapter.")
 
-(defmacro mevedel-test--await (timeout message condition)
+(defmacro niwa-test--await (timeout message condition)
   "Process output until CONDITION holds; fail with MESSAGE after TIMEOUT seconds."
   (declare (indent 2) (debug t))
   `(with-timeout (,timeout (ert-fail ,message))
      (while (not ,condition) (accept-process-output nil 0.01))))
 
-(defun mevedel-test--application-step ()
+(defun niwa-test--application-step ()
   "Process one automatic application event or wait for child output in batch."
-  (if (eq (car unread-command-events) 'mevedel-memory-application)
+  (if (eq (car unread-command-events) 'niwa-memory-application)
       ;; Batch `read-event' returns this without the command loop's dispatch.
       (funcall (lookup-key special-event-map (vector (pop unread-command-events))))
     (accept-process-output nil .01)))
 
-(defmacro mevedel-test--with-idle-application (&rest body)
+(defmacro niwa-test--with-idle-application (&rest body)
   "Run BODY with two seconds of idle time and short one-shot callbacks.
 Replace `run-with-idle-timer' with `run-at-time' after 0.01 seconds,
 ignoring the requested delay and repeat interval.  This batch fixture
@@ -266,38 +266,38 @@ Callers remain responsible for cancelling timers they leave pending."
                 (apply #'run-at-time .01 nil function args))))
      ,@body))
 
-(defvar mevedel-test--timestamp-offset 0
-  "Seconds added to every timestamp mevedel formats inside a shifted clock.
+(defvar niwa-test--timestamp-offset 0
+  "Seconds added to every timestamp niwa formats inside a shifted clock.
 
 A case that needs two durable saves to carry different whole-second stamps
 sets this instead of sleeping past a second boundary.")
 
-(defvar mevedel-test--format-time-string nil
+(defvar niwa-test--format-time-string nil
   "The real `format-time-string' while a shifted clock is installed.")
 
-(defmacro mevedel-test--with-shifted-clock (&rest body)
+(defmacro niwa-test--with-shifted-clock (&rest body)
   "Run BODY with formatted timestamps shifted by the test's own offset.
 
 Durable saves stamp `updated-at' and derive session ids at whole-second
 resolution, so a case proving two saves differ used to sleep for over a
-second.  Setting `mevedel-test--timestamp-offset' advances the clock those
+second.  Setting `niwa-test--timestamp-offset' advances the clock those
 stamps see, which is both instant and deterministic: the case no longer
 depends on when in a second it happened to run."
   (declare (indent 0) (debug t))
-  `(let ((mevedel-test--timestamp-offset 0)
-         (mevedel-test--format-time-string
+  `(let ((niwa-test--timestamp-offset 0)
+         (niwa-test--format-time-string
           (symbol-function 'format-time-string)))
      (cl-letf (((symbol-function 'format-time-string)
                 (lambda (format &optional time &rest arguments)
-                  (apply mevedel-test--format-time-string
+                  (apply niwa-test--format-time-string
                          format
                          (or time
                              (time-add (current-time)
-                                       mevedel-test--timestamp-offset))
+                                       niwa-test--timestamp-offset))
                          arguments))))
        ,@body)))
 
-(defmacro mevedel-test--with-captured-diagnostics (place &rest body)
+(defmacro niwa-test--with-captured-diagnostics (place &rest body)
   "Run BODY collecting its messages and warnings into PLACE.
 
 A test that deliberately injects a failure owns the diagnostic it provokes:
@@ -305,49 +305,49 @@ letting it reach the run log buries real failures in expected noise.  PLACE
 is set to the collected text so the test can assert on it, or nil when the
 test asserts the durable state the diagnostic merely echoes."
   (declare (indent 1) (debug (form body)))
-  `(let ((mevedel-test--captured ""))
+  `(let ((niwa-test--captured ""))
      (cl-letf* ((original-message (symbol-function 'message))
                 ((symbol-function 'message)
                  (lambda (&optional format &rest args)
                    (when format
-                     (setq mevedel-test--captured
-                           (concat mevedel-test--captured
+                     (setq niwa-test--captured
+                           (concat niwa-test--captured
                                    (apply #'format format args) "\n")))
                    nil))
                 ((symbol-function 'display-warning)
                  (lambda (_type warning &rest _)
-                   (setq mevedel-test--captured
-                         (concat mevedel-test--captured
+                   (setq niwa-test--captured
+                         (concat niwa-test--captured
                                  (format "%s" warning) "\n"))
                    nil)))
        (ignore original-message)
        (unwind-protect (progn ,@body)
-         ,@(when place `((setq ,place mevedel-test--captured)))))))
+         ,@(when place `((setq ,place niwa-test--captured)))))))
 
-(defmacro mevedel-test--with-captured-messages (place &rest body)
+(defmacro niwa-test--with-captured-messages (place &rest body)
   "Run BODY collecting its messages into PLACE, leaving warnings alone.
 Use this when BODY reports progress the run log does not need but a test
 still inspects the warnings it raises."
   (declare (indent 1) (debug (form body)))
-  `(let ((mevedel-test--captured ""))
+  `(let ((niwa-test--captured ""))
      (cl-letf (((symbol-function 'message)
                 (lambda (&optional format &rest args)
                   (when format
-                    (setq mevedel-test--captured
-                          (concat mevedel-test--captured
+                    (setq niwa-test--captured
+                          (concat niwa-test--captured
                                   (apply #'format format args) "\n")))
                   nil)))
        (unwind-protect (progn ,@body)
-         ,@(when place `((setq ,place mevedel-test--captured)))))))
+         ,@(when place `((setq ,place niwa-test--captured)))))))
 
-(defun mevedel-test--worktree-control-snapshot ()
+(defun niwa-test--worktree-control-snapshot ()
   "Return content/shape snapshots of worktree-root portable controls.
 
 The baseline may contain an artifact left by an earlier interrupted run; the
 guard detects only changes made by the current test invocation."
   (mapcar
    (lambda (name)
-     (let ((path (file-name-concat mevedel-test--worktree-root name)))
+     (let ((path (file-name-concat niwa-test--worktree-root name)))
        (cons
         name
         (cond
@@ -380,28 +380,28 @@ guard detects only changes made by the current test invocation."
    '(".lease" ".recovery" "agents" "plans" "file-history" "instructions"
      "session.meta.el")))
 
-(defvar mevedel-agent--registry)
+(defvar niwa-agent--registry)
 
-(defvar mevedel-test--builtin-agent-registry 'unset
+(defvar niwa-test--builtin-agent-registry 'unset
   "The agent registry as the loaded modules built it.
 Captured lazily, before the first test mutates it.")
 
-(defun mevedel-test--restore-agent-registry ()
-  "Restore `mevedel-agent--registry' to its as-loaded contents.
+(defun niwa-test--restore-agent-registry ()
+  "Restore `niwa-agent--registry' to its as-loaded contents.
 The cleanup for a test that registers agents: wiping the registry
 instead would destroy the built-in agents later suites depend on."
-  (when (eq mevedel-test--builtin-agent-registry 'unset)
+  (when (eq niwa-test--builtin-agent-registry 'unset)
     (error "Capture the agent registry before restoring it"))
-  (setq mevedel-agent--registry
-        (copy-alist mevedel-test--builtin-agent-registry)))
+  (setq niwa-agent--registry
+        (copy-alist niwa-test--builtin-agent-registry)))
 
-(defun mevedel-test--capture-agent-registry ()
+(defun niwa-test--capture-agent-registry ()
   "Capture the built-in agent registry once, before a test mutates it."
-  (when (eq mevedel-test--builtin-agent-registry 'unset)
-    (setq mevedel-test--builtin-agent-registry
-          (copy-alist mevedel-agent--registry))))
+  (when (eq niwa-test--builtin-agent-registry 'unset)
+    (setq niwa-test--builtin-agent-registry
+          (copy-alist niwa-agent--registry))))
 
-(defun mevedel-test--cancel-stray-lease-timers ()
+(defun niwa-test--cancel-stray-lease-timers ()
   "Cancel lease renewal, checkpoint, and deferred transport timers a test left.
 
 A surviving timer performs target I/O from wherever the main loop is waiting
@@ -409,114 +409,114 @@ during later tests, which floods their output and can wedge a shared TRAMP
 connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (or (memq (timer--function timer)
-                    '(mevedel-session-durability-heartbeat
-                      mevedel-artifact-store--announce-content
-                      mevedel-session-persistence--checkpoint-tick
-                      mevedel-transport-run-when-idle
-                      mevedel-transport--retry))
+                    '(niwa-session-durability-heartbeat
+                      niwa-artifact-store--announce-content
+                      niwa-session-persistence--checkpoint-tick
+                      niwa-transport-run-when-idle
+                      niwa-transport--retry))
               ;; A view poll timer whose buffer died through a hookless
               ;; kill is a stray wakeup holding a dead view.
               (and (eq (timer--function timer)
-                       'mevedel-view--control-transfer-refresh)
+                       'niwa-view--control-transfer-refresh)
                    (let ((view (car (timer--args timer))))
                      (and (bufferp view) (not (buffer-live-p view))))))
       (cancel-timer timer)))
-  (when (boundp 'mevedel-artifact-store--content-changes)
-    (clrhash mevedel-artifact-store--content-changes))
-  (when (fboundp 'mevedel-session-persistence-stop-checkpoints)
-    (mevedel-session-persistence-stop-checkpoints))
-  (when (fboundp 'mevedel-transport-cancel-pending)
-    (mevedel-transport-cancel-pending)))
+  (when (boundp 'niwa-artifact-store--content-changes)
+    (clrhash niwa-artifact-store--content-changes))
+  (when (fboundp 'niwa-session-persistence-stop-checkpoints)
+    (niwa-session-persistence-stop-checkpoints))
+  (when (fboundp 'niwa-transport-cancel-pending)
+    (niwa-transport-cancel-pending)))
 
-(defvar mevedel-test--release-leaked-state-p t
+(defvar niwa-test--release-leaked-state-p t
   "Whether each test releases global session and workspace state.
 Bound to nil only to measure what that release costs.")
 
-(defun mevedel-test--release-leaked-state ()
+(defun niwa-test--release-leaked-state ()
   "Drop live session and workspace state a test left registered.
 
 Registered sessions and workspaces are process-global.  A test that leaves
 them behind makes every later test carry that state: execution bookkeeping
 walks the session registry, and workspace detection re-resolves roots whose
 target is gone, which is slow, noisy, and order dependent."
-  (when (boundp 'mevedel-execution--sessions)
+  (when (boundp 'niwa-execution--sessions)
     ;; Settling state a test left behind reports on that state; the report
     ;; belongs to the test that leaked it, not to the run log.
-    (mevedel-test--with-captured-diagnostics nil
-      (let ((mevedel-execution-process--child-kill-delay 0.05))
-        (ignore-errors (mevedel-execution-teardown-all))))
-    (clrhash mevedel-execution--sessions))
-  (when (fboundp 'mevedel-workspace-clear-registry)
-    (ignore-errors (mevedel-workspace-clear-registry)))
+    (niwa-test--with-captured-diagnostics nil
+      (let ((niwa-execution-process--child-kill-delay 0.05))
+        (ignore-errors (niwa-execution-teardown-all))))
+    (clrhash niwa-execution--sessions))
+  (when (fboundp 'niwa-workspace-clear-registry)
+    (ignore-errors (niwa-workspace-clear-registry)))
   ;; Generated-state exclusion is remembered per root for the process, so a
   ;; test that reuses a root would otherwise inherit the previous answer.
-  (when (boundp 'mevedel-workspace--generated-state-ignored)
-    (clrhash mevedel-workspace--generated-state-ignored))
+  (when (boundp 'niwa-workspace--generated-state-ignored)
+    (clrhash niwa-workspace--generated-state-ignored))
   ;; The Markdown fontifier keeps one buffer alive across calls by design.
-  (when (fboundp 'mevedel-view--release-markdown-fontify-buffer)
-    (mevedel-view--release-markdown-fontify-buffer))
-  (when (boundp 'mevedel-skills--frontmatter-cache)
-    (clrhash mevedel-skills--frontmatter-cache))
+  (when (fboundp 'niwa-view--release-markdown-fontify-buffer)
+    (niwa-view--release-markdown-fontify-buffer))
+  (when (boundp 'niwa-skills--frontmatter-cache)
+    (clrhash niwa-skills--frontmatter-cache))
   ;; A probe a test cancels mid-flight caches a non-answer that only the next
   ;; launch retries.  Later real-Bubblewrap cases read the cache directly and
   ;; would silently skip, so drop non-answers as launches do; keep definitive
   ;; results to avoid re-probing every case.
-  (when (bound-and-true-p mevedel-sandbox--probe-cache)
-    (setq mevedel-sandbox--probe-cache
+  (when (bound-and-true-p niwa-sandbox--probe-cache)
+    (setq niwa-sandbox--probe-cache
           (cl-remove-if (lambda (entry) (plist-get (cdr entry) :retry-on-execution))
-                        mevedel-sandbox--probe-cache)))
+                        niwa-sandbox--probe-cache)))
   ;; A paced stream starts the Emacs-wide pause guard on first use.
-  (when (bound-and-true-p mevedel-transport--pause-guard)
-    (delete-process mevedel-transport--pause-guard)
-    (setq mevedel-transport--pause-guard nil)))
+  (when (bound-and-true-p niwa-transport--pause-guard)
+    (delete-process niwa-transport--pause-guard)
+    (setq niwa-transport--pause-guard nil)))
 
 ;; A publication staging directory belongs to the session that staged it and
 ;; lives until that session commits, abandons, or releases its lease.  Tests
 ;; drop sessions without that release, so each test removes what it staged.
-(defvar mevedel-test--staged-publications nil
+(defvar niwa-test--staged-publications nil
   "Publication staging directories created during the running test.")
 
-(defun mevedel-test--record-staged-publication (batch)
+(defun niwa-test--record-staged-publication (batch)
   "Remember staged BATCH's directory for the running test's teardown."
-  (push (plist-get batch :directory) mevedel-test--staged-publications)
+  (push (plist-get batch :directory) niwa-test--staged-publications)
   batch)
 
-(with-eval-after-load 'mevedel-session-publication
-  (advice-add 'mevedel-session-publication--stage-artifacts :filter-return
-              #'mevedel-test--record-staged-publication))
+(with-eval-after-load 'niwa-session-publication
+  (advice-add 'niwa-session-publication--stage-artifacts :filter-return
+              #'niwa-test--record-staged-publication))
 
-(defun mevedel-test--delete-staged-publications ()
+(defun niwa-test--delete-staged-publications ()
   "Delete the publication staging directories the running test left."
-  (dolist (directory mevedel-test--staged-publications)
+  (dolist (directory niwa-test--staged-publications)
     (when (file-directory-p directory)
       (delete-directory directory t))))
 
-(defun mevedel-test--assert-worktree-controls-unchanged (before)
+(defun niwa-test--assert-worktree-controls-unchanged (before)
   "Signal when a test changes worktree-root session artifacts.
 BEFORE is the snapshot captured before test setup; an existing artifact is
 allowed, but creation, deletion, or mutation during the test is not.  The
 watched names cover session control state and the session artifacts a
 fixture writes when it derives paths from an unset save path."
-  (let ((after (mevedel-test--worktree-control-snapshot)))
+  (let ((after (niwa-test--worktree-control-snapshot)))
     (unless (equal before after)
       (error "Test changed worktree-root portable controls: %S -> %S"
              before after))))
 
-(defvar mevedel-test--placeholder-root nil
+(defvar niwa-test--placeholder-root nil
   "This process's private stand-in for a placeholder workspace root.")
 
-(defun mevedel-test--placeholder-root ()
+(defun niwa-test--placeholder-root ()
   "Return a private directory for tests whose workspace root is incidental.
 Such tests still persist workspace state under their root, and the shared
 temporary directory is an ancestor of every other test directory."
-  (or mevedel-test--placeholder-root
+  (or niwa-test--placeholder-root
       (let ((root (file-name-as-directory
-                   (make-temp-file "mevedel-test-root-" t))))
+                   (make-temp-file "niwa-test-root-" t))))
         (add-hook 'kill-emacs-hook
                   (lambda () (ignore-errors (delete-directory root t))))
-        (setq mevedel-test--placeholder-root root))))
+        (setq niwa-test--placeholder-root root))))
 
-(defun mevedel-test--assert-no-temporary-root-state ()
+(defun niwa-test--assert-no-temporary-root-state ()
   "Signal when Git or workspace state is found in the shared temp directory.
 A workspace rooted at `temporary-file-directory' makes every later temporary
 test directory resolve to that workspace.  Preserve the evidence: shared-root
@@ -526,42 +526,42 @@ state might belong to another process, not the test that first notices it."
                 #'file-exists-p
                 (mapcar (lambda (name)
                           (expand-file-name name temporary-file-directory))
-                        '(".git" ".mevedel")))))
+                        '(".git" ".niwa")))))
     (error "Git or workspace state found after test %S in the temporary directory: %S"
            (when-let* ((test (ert-running-test))) (ert-test-name test))
            leaked)))
 
-(defconst mevedel-test--shared-temporary-directory temporary-file-directory
+(defconst niwa-test--shared-temporary-directory temporary-file-directory
   "Shared temp root checked for contamination, never a write allowance.")
 
-(defvar mevedel-test--write-roots nil
+(defvar niwa-test--write-roots nil
   "Test-owned directories where Lisp file mutations are allowed.
 Remote acceptance fixtures may dynamically add their provisioned remote root.
 This is an assertion boundary, not a sandbox for external subprocesses.")
 
-(defvar mevedel-test--write-violations nil
+(defvar niwa-test--write-violations nil
   "Rejected file mutations in the current case, even if caught by its body.")
 
-(defconst mevedel-test--file-truename (symbol-function 'file-truename)
+(defconst niwa-test--file-truename (symbol-function 'file-truename)
   "Real path resolver for guard bookkeeping, unaffected by product test stubs.")
 
-(defun mevedel-test--truename (path)
+(defun niwa-test--truename (path)
   "Resolve PATH without entering a product test's path-resolution stub.
 The native resolver calls `file-truename' recursively for missing ancestors."
-  (cl-letf (((symbol-function 'file-truename) mevedel-test--file-truename))
+  (cl-letf (((symbol-function 'file-truename) niwa-test--file-truename))
     (file-truename path)))
 
-(defun mevedel-test--check-write (operation path)
+(defun niwa-test--check-write (operation path)
   "Reject OPERATION on PATH outside the current test's owned roots.
 Resolve local symlinks, including existing ancestors of a new file.  Mock
 TRAMP paths address the local filesystem; other remote paths require an
 explicit allowance on that same remote connection.  Avoid remote I/O merely
 to decide whether a path is allowed.  Remote symlinks and subprocess writes
 are outside this Lisp-level assertion's boundary."
-  (when (and mevedel-test--write-roots (stringp path))
+  (when (and niwa-test--write-roots (stringp path))
     (let* ((expanded (expand-file-name path))
            (remote (file-remote-p expanded))
-           (mock (equal (file-remote-p expanded 'method) "mevedelmock"))
+           (mock (equal (file-remote-p expanded 'method) "niwamock"))
            (local (if mock (file-remote-p expanded 'localname) expanded))
            (resolved
             (cond
@@ -571,10 +571,10 @@ are outside this Lisp-level assertion's boundary."
              ((memq operation '(delete-file delete-directory rename-file
                                 make-symbolic-link add-name-to-file))
               (file-name-concat
-               (mevedel-test--truename
+               (niwa-test--truename
                 (file-name-directory (directory-file-name local)))
                (file-name-nondirectory (directory-file-name local))))
-             (t (mevedel-test--truename local)))))
+             (t (niwa-test--truename local)))))
       (unless
           (cl-some
            (lambda (root)
@@ -586,12 +586,12 @@ are outside this Lisp-level assertion's boundary."
                  (let ((root (directory-file-name root)))
                    (or (equal resolved root)
                        (string-prefix-p (file-name-as-directory root) resolved))))))
-           mevedel-test--write-roots)
+           niwa-test--write-roots)
         (let ((violation (list operation expanded)))
-          (push violation mevedel-test--write-violations)
+          (push violation niwa-test--write-violations)
           (error "Test attempted file mutation outside owned roots: %S" violation))))))
 
-(defun mevedel-test--guard-file-mutation (operation positions &rest args)
+(defun niwa-test--guard-file-mutation (operation positions &rest args)
   "Check OPERATION's file arguments at POSITIONS in ARGS.
 Rename, copy and link destinations ending in a slash name a child of that
 directory, not the directory entry itself.  Check that actual child so its
@@ -608,11 +608,11 @@ be safely replaced by an entry-changing operation."
         (setq path (file-name-concat
                     path (file-name-nondirectory
                           (directory-file-name (car args))))))
-      (mevedel-test--check-write operation path))))
+      (niwa-test--check-write operation path))))
 
-(defun mevedel-test--guard-temp-file (prefix &rest _args)
+(defun niwa-test--guard-temp-file (prefix &rest _args)
   "Check the location in which `make-temp-file' will create PREFIX."
-  (mevedel-test--check-write
+  (niwa-test--check-write
    'make-temp-file (expand-file-name prefix temporary-file-directory)))
 
 ;; Guard entry points rather than only write-region: mkdir, rename, delete,
@@ -623,49 +623,49 @@ be safely replaced by an entry-changing operation."
                  (add-name-to-file 0 1) (make-symbolic-link 1)
                  (set-file-modes 0) (set-file-times 0)))
   (advice-add (car entry) :before
-              (apply-partially #'mevedel-test--guard-file-mutation
+              (apply-partially #'niwa-test--guard-file-mutation
                                (car entry) (cdr entry))))
-(advice-add 'make-temp-file :before #'mevedel-test--guard-temp-file)
+(advice-add 'make-temp-file :before #'niwa-test--guard-temp-file)
 
-(defvar mevedel-test-allow-provider-requests nil
+(defvar niwa-test-allow-provider-requests nil
   "Non-nil lets a test send gptel requests through the real transport.
 Bind it only around a request to a local fake server.")
 
-(defvar mevedel-test--provider-programs '("claude" "claude-agent-acp")
+(defvar niwa-test--provider-programs '("claude" "claude-agent-acp")
   "Provider CLIs a test may launch only as a copy under its owned roots.")
 
-(defvar mevedel-test--in-provider-transport nil
+(defvar niwa-test--in-provider-transport nil
   "Non-nil while gptel's transport is starting a request.")
 
-(defun mevedel-test--mark-provider-transport (function &rest args)
+(defun niwa-test--mark-provider-transport (function &rest args)
   "Call FUNCTION with ARGS, marking gptel's request launch."
-  (let ((mevedel-test--in-provider-transport t))
+  (let ((niwa-test--in-provider-transport t))
     (apply function args)))
 
-(defun mevedel-test--refuse-provider-request (&rest _)
+(defun niwa-test--refuse-provider-request (&rest _)
   "Fail the running test when gptel's transport reaches the network.
 Stubs installed with `cl-letf' replace the advised launch and bypass this."
-  (when (and mevedel-test--in-provider-transport (ert-running-test)
-             (not mevedel-test-allow-provider-requests))
+  (when (and niwa-test--in-provider-transport (ert-running-test)
+             (not niwa-test-allow-provider-requests))
     (error "Test %S attempted a real provider request; stub the transport or \
-bind `mevedel-test-allow-provider-requests' around a local fake server"
+bind `niwa-test-allow-provider-requests' around a local fake server"
            (ert-test-name (ert-running-test)))))
 
-(defun mevedel-test--refuse-provider-process (&rest args)
+(defun niwa-test--refuse-provider-process (&rest args)
   "Fail the running test when ARGS launch gptel's curl or a provider CLI.
 Fake CLIs copied below the case's owned roots still launch."
   (when-let* ((program (car (plist-get args :command))))
     (when (equal "curl" (file-name-nondirectory program))
-      (mevedel-test--refuse-provider-request)))
+      (niwa-test--refuse-provider-request)))
   (when-let* (((ert-running-test))
               (program (car (plist-get args :command)))
               ((member (file-name-nondirectory program)
-                       mevedel-test--provider-programs))
+                       niwa-test--provider-programs))
               (path (executable-find program))
               ((not (cl-some (lambda (root)
                                (string-prefix-p (file-name-as-directory root)
-                                                (mevedel-test--truename path)))
-                             mevedel-test--write-roots))))
+                                                (niwa-test--truename path)))
+                             niwa-test--write-roots))))
     (error "Test %S attempted to launch the real provider CLI %s; use a fake"
            (ert-test-name (ert-running-test)) path)))
 
@@ -673,13 +673,13 @@ Fake CLIs copied below the case's owned roots still launch."
 ;; the refusal sits at the launch so tests stubbing it below gptel still run.
 (dolist (function '(gptel-curl-get-response gptel--url-get-response
                     gptel--url-retrieve))
-  (advice-add function :around #'mevedel-test--mark-provider-transport))
+  (advice-add function :around #'niwa-test--mark-provider-transport))
 (dolist (function '(url-retrieve url-retrieve-synchronously))
-  (advice-add function :before #'mevedel-test--refuse-provider-request))
+  (advice-add function :before #'niwa-test--refuse-provider-request))
 ;; Curl, Claude Code status checks and the ACP adapter start through make-process.
-(advice-add 'make-process :before #'mevedel-test--refuse-provider-process)
+(advice-add 'make-process :before #'niwa-test--refuse-provider-process)
 
-(defun mevedel-test--live-connections ()
+(defun niwa-test--live-connections ()
   "Return live network processes and TRAMP connection processes."
   (delete-dups
    (append
@@ -693,7 +693,7 @@ Fake CLIs copied below the case's owned roots still launch."
                       (and (process-live-p process) process)))
                   (tramp-list-connections))))))
 
-(defun mevedel-test--call-with-isolation (body)
+(defun niwa-test--call-with-isolation (body)
   "Call BODY in a private temp root and assert its leak boundaries.
 The private cwd and TMPDIR also contain accidental relative subprocess
 writes, but do not restrict a subprocess using an absolute pathname.
@@ -709,35 +709,35 @@ Always restore unread events and close only connections created by BODY."
          ;; absolute client pathname would escape a remote fixture's root.
          (tramp-temp-name-prefix "tramp.")
          (jka-compr-temp-name-template (file-name-concat root "jka-com"))
-         (tramp-methods (cl-remove "mevedelmock" tramp-methods
+         (tramp-methods (cl-remove "niwamock" tramp-methods
                                    :key #'car :test #'equal))
          (native-comp-eln-load-path
           (when (native-comp-available-p)
             (cons (file-name-concat root "eln-cache/") native-comp-eln-load-path)))
-         (mevedel-test--placeholder-root nil)
-         (mevedel-test--write-roots
+         (niwa-test--placeholder-root nil)
+         (niwa-test--write-roots
           (mapcar
            (lambda (directory)
              (if (file-remote-p directory) directory
-               (mevedel-test--truename directory)))
-           (append (list root mevedel-test--worker-home (expand-file-name "~"))
+               (niwa-test--truename directory)))
+           (append (list root niwa-test--worker-home (expand-file-name "~"))
                    (mapcar #'getenv '("XDG_CACHE_HOME" "XDG_CONFIG_HOME"
                                      "XDG_DATA_HOME" "XDG_STATE_HOME"))
-                   mevedel-test--write-roots)))
-         (mevedel-test--write-violations nil)
+                   niwa-test--write-roots)))
+         (niwa-test--write-violations nil)
          (events-before
           (mapcar (lambda (variable) (cons variable (copy-tree (symbol-value variable))))
                   '(unread-command-events unread-input-method-events
                     unread-post-input-method-events)))
-         (connections-before (mevedel-test--live-connections)))
+         (connections-before (niwa-test--live-connections)))
     (dolist (name '("TMPDIR" "TMP" "TEMP")) (setenv name root))
     ;; A child Emacs inherits TMPDIR too.  Its HOME/XDG roots must remain below
     ;; that directory to satisfy the same safe-startup assertion as this worker.
-    (dolist (entry '(("HOME" . "mevedel-test-home-case")
-                     ("XDG_CACHE_HOME" . "mevedel-test-home-case/.cache")
-                     ("XDG_CONFIG_HOME" . "mevedel-test-home-case/.config")
-                     ("XDG_DATA_HOME" . "mevedel-test-home-case/.local/share")
-                     ("XDG_STATE_HOME" . "mevedel-test-home-case/.local/state")
+    (dolist (entry '(("HOME" . "niwa-test-home-case")
+                     ("XDG_CACHE_HOME" . "niwa-test-home-case/.cache")
+                     ("XDG_CONFIG_HOME" . "niwa-test-home-case/.config")
+                     ("XDG_DATA_HOME" . "niwa-test-home-case/.local/share")
+                     ("XDG_STATE_HOME" . "niwa-test-home-case/.local/state")
                      ;; Unix socket pathnames have a small platform limit.
                      ("XDG_RUNTIME_DIR" . "r")))
       (let ((directory (file-name-concat root (cdr entry))))
@@ -747,16 +747,16 @@ Always restore unread events and close only connections created by BODY."
     ;; Emacs caches both the home regexp and the environment that produced it.
     ;; Invalidate rather than let-bind just one half of that paired cache.
     (setq abbreviated-home-dir nil)
-    (mevedel-test--ensure-mock-tramp-method)
+    (niwa-test--ensure-mock-tramp-method)
     (unwind-protect
         (funcall body)
-      (let* ((connections (cl-set-difference (mevedel-test--live-connections)
+      (let* ((connections (cl-set-difference (niwa-test--live-connections)
                                             connections-before))
              (events
               (cl-loop for (variable . before) in events-before
                        unless (equal before (symbol-value variable))
                        append (list variable (symbol-value variable))))
-             (violations mevedel-test--write-violations))
+             (violations niwa-test--write-violations))
         (dolist (entry events-before) (set (car entry) (cdr entry)))
         (setq abbreviated-home-dir nil)
         (dolist (connection (tramp-list-connections))
@@ -765,8 +765,8 @@ Always restore unread events and close only connections created by BODY."
         (dolist (process connections)
           (when (process-live-p process) (delete-process process)))
         (delete-directory root t)
-        (let ((temporary-file-directory mevedel-test--shared-temporary-directory))
-          (mevedel-test--assert-no-temporary-root-state))
+        (let ((temporary-file-directory niwa-test--shared-temporary-directory))
+          (niwa-test--assert-no-temporary-root-state))
         (when (or events connections violations)
           (error "Test %S leaked state: %S"
                  (when-let* ((test (ert-running-test))) (ert-test-name test))
@@ -775,34 +775,34 @@ Always restore unread events and close only connections created by BODY."
                            (list :connections (mapcar #'process-name connections)))
                          (when violations (list :file-mutations violations)))))))))
 
-(defun mevedel-test--isolate-ert-case (original test &rest arguments)
+(defun niwa-test--isolate-ert-case (original test &rest arguments)
   "Run TEST through ORIGINAL with leak assertions inside ERT's failure handler.
 ARGUMENTS are passed through unchanged.  Cover direct `ert-deftest' cases as
-well as `mevedel-deftest', and restore TEST's body even if the runner aborts."
+well as `niwa-deftest', and restore TEST's body even if the runner aborts."
   (let ((body (ert-test-body test)))
     (unwind-protect
         (progn
           (setf (ert-test-body test)
-                (lambda () (mevedel-test--call-with-isolation body)))
+                (lambda () (niwa-test--call-with-isolation body)))
           (apply original test arguments))
       (setf (ert-test-body test) body))))
 
-(advice-add 'ert-run-test :around #'mevedel-test--isolate-ert-case)
+(advice-add 'ert-run-test :around #'niwa-test--isolate-ert-case)
 
 
 ;;
 ;;; TRAMP test helper
 
-(defun mevedel-test--ensure-mock-tramp-method ()
+(defun niwa-test--ensure-mock-tramp-method ()
   "Register the local-shell TRAMP method the tests address as remote.
 
 The definition is inert data, and registering it once per process keeps a
-test that addresses a `mevedelmock' path from depending on an earlier test
+test that addresses a `niwamock' path from depending on an earlier test
 having registered it."
-  (unless (assoc "mevedelmock" tramp-methods)
+  (unless (assoc "niwamock" tramp-methods)
     (add-to-list
      'tramp-methods
-     `("mevedelmock"
+     `("niwamock"
        ;; A real login establishes a target HOME even when the client process
        ;; environment was sanitized.  Use Eask's isolated home for this target.
        (tramp-login-program "env")
@@ -814,9 +814,9 @@ having registered it."
        (tramp-remote-shell-args ("-c"))
        (tramp-connection-timeout 10)))))
 
-(mevedel-test--ensure-mock-tramp-method)
+(niwa-test--ensure-mock-tramp-method)
 
-(defmacro mevedel-test--with-local-shell-tramp (hosts &rest body)
+(defmacro niwa-test--with-local-shell-tramp (hosts &rest body)
   "Run BODY through a local-shell TRAMP method for HOSTS.
 
 The TERM-to-KILL grace runs at its production value: settlement is
@@ -824,7 +824,7 @@ zombie-aware and probes at the main exit, so a stop whose TERM worked
 settles at the sentinel instead of riding the grace timers."
   (declare (indent 1) (debug (form body)))
   `(progn
-     (mevedel-test--ensure-mock-tramp-method)
+     (niwa-test--ensure-mock-tramp-method)
      (let ((tramp-local-host-regexp
             (concat "\\`"
                     (regexp-opt (append ,hosts (list (system-name))))
@@ -833,10 +833,10 @@ settles at the sentinel instead of riding the grace timers."
            ;; isolated HOME; keep connection setup independent of that file.
            (tramp-histfile-override t))
        (let ((original-support-tier
-              (symbol-function 'mevedel-execution-target--support-tier)))
-         (cl-letf (((symbol-function 'mevedel-execution-target--support-tier)
+              (symbol-function 'niwa-execution-target--support-tier)))
+         (cl-letf (((symbol-function 'niwa-execution-target--support-tier)
                     (lambda (method hop)
-                      (if (eq method 'mevedelmock)
+                      (if (eq method 'niwamock)
                           'supported
                         (funcall original-support-tier method hop)))))
            (unwind-protect
@@ -847,7 +847,7 @@ settles at the sentinel instead of riding the grace timers."
 ;;
 ;;; Skill test helpers
 
-(defmacro mevedel-skills-test--with-model-backends (&rest body)
+(defmacro niwa-skills-test--with-model-backends (&rest body)
   "Run BODY with an isolated pair of gptel model backends."
   (declare (indent 0) (debug t))
   `(let ((gptel--known-backends nil))
@@ -859,28 +859,28 @@ settles at the sentinel instead of riding the grace timers."
        (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
        ,@body)))
 
-(defun mevedel-skills-test--make-session (&optional name root)
+(defun niwa-skills-test--make-session (&optional name root)
   "Return a throwaway session named NAME with a minimal workspace at ROOT."
-  (let ((ws (mevedel-workspace--create
+  (let ((ws (niwa-workspace--create
              ;; A real workspace category: durable authority resolution
              ;; refuses to guess one for a synthetic type.
              :type 'file :id (or root "t")
-             :root (or root (mevedel-test--placeholder-root))
+             :root (or root (niwa-test--placeholder-root))
              :name (or name "t")
-             :file-cache (mevedel-file-cache--create
+             :file-cache (niwa-file-cache--create
                           :table (make-hash-table :test #'equal)
                           :order nil :total-bytes 0))))
-    (mevedel-session-create (or name "main") ws)))
+    (niwa-session-create (or name "main") ws)))
 
-(defmacro mevedel-skills-test--with-chat-buffer (session &rest body)
-  "Run BODY in a temp buffer that mimics a mevedel chat buffer.
-SESSION is bound to buffer-local `mevedel--session'."
+(defmacro niwa-skills-test--with-chat-buffer (session &rest body)
+  "Run BODY in a temp buffer that mimics a niwa chat buffer.
+SESSION is bound to buffer-local `niwa--session'."
   (declare (indent 1))
   `(with-temp-buffer
-     (setq mevedel--session ,session)
+     (setq niwa--session ,session)
      ,@body))
 
-(defun mevedel-skills-test--write-skill (dir name frontmatter &optional body)
+(defun niwa-skills-test--write-skill (dir name frontmatter &optional body)
   "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
   (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))
          (skill-file (file-name-concat skill-dir "SKILL.md")))
@@ -895,50 +895,50 @@ SESSION is bound to buffer-local `mevedel--session'."
         (insert body)))
     skill-file))
 
-(defun mevedel-skills-test--write-plugin-manifest (_user-dir repo json)
+(defun niwa-skills-test--write-plugin-manifest (_user-dir repo json)
   "Create a test plugin manifest JSON for REPO in the install directory.
 Return the plugin root directory."
-  (let ((root (file-name-concat mevedel-plugin-install-directory repo)))
+  (let ((root (file-name-concat niwa-plugin-install-directory repo)))
     (make-directory (file-name-concat root ".codex-plugin") t)
     (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
       (insert json))
     root))
 
-(defun mevedel-skills-test--hook-fn (_event)
+(defun niwa-skills-test--hook-fn (_event)
   "Test hook used by skill hook normalization."
   '(:additional-context "skill hook ran"))
 
-(defun mevedel-skills-test--make-workspace (root)
+(defun niwa-skills-test--make-workspace (root)
   "Return a minimal workspace struct rooted at ROOT."
-  (mevedel-workspace--create
+  (niwa-workspace--create
    :type 'file :id root :root root :name "test"
-   :file-cache (mevedel-file-cache--create
+   :file-cache (niwa-file-cache--create
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))
 
-(defun mevedel-skills-test--stateful-skill (&rest slots)
+(defun niwa-skills-test--stateful-skill (&rest slots)
   "Create a file-backed test skill from SLOTS."
   (unless (plist-member slots :source-file)
     (setq slots
           (plist-put slots :source-file
-                     (format "/tmp/mevedel-test-skills/%s/SKILL.md"
+                     (format "/tmp/niwa-test-skills/%s/SKILL.md"
                              (or (plist-get slots :name) "unnamed")))))
-  (apply #'mevedel-skill--create slots))
+  (apply #'niwa-skill--create slots))
 
-(defun mevedel-skills-test--reset-watchers ()
+(defun niwa-skills-test--reset-watchers ()
   "Clear the skill modification-detection global registries."
   (maphash (lambda (_dir desc)
              (ignore-errors (file-notify-rm-watch desc)))
-           mevedel-skills--watchers)
-  (clrhash mevedel-skills--watchers)
-  (clrhash mevedel-skills--remote-watch-states)
-  (clrhash mevedel-skills--dir-buffers)
-  (clrhash mevedel-skills--dirty-buffers)
-  (clrhash mevedel-skills--mtime-cache))
+           niwa-skills--watchers)
+  (clrhash niwa-skills--watchers)
+  (clrhash niwa-skills--remote-watch-states)
+  (clrhash niwa-skills--dir-buffers)
+  (clrhash niwa-skills--dirty-buffers)
+  (clrhash niwa-skills--mtime-cache))
 
-(defun mevedel-test-file-cache-create ()
+(defun niwa-test-file-cache-create ()
   "Return an empty file cache for tests."
-  (mevedel-file-cache--create
+  (niwa-file-cache--create
    :table (make-hash-table :test #'equal)
    :order nil
    :total-bytes 0))
@@ -947,7 +947,7 @@ Return the plugin root directory."
 ;;
 ;;; View test helpers
 
-(defun mevedel-view-test--dry-run-request-data ()
+(defun niwa-view-test--dry-run-request-data ()
   "Return current gptel request data after normal prompt transforms.
 Runs the reminder injector on the realized request, as the WAIT
 handler chain would, so staged reminder entries reach the data."
@@ -957,17 +957,17 @@ handler chain would, so staged reminder entries reach the data."
            :buffer (current-buffer)
            :dry-run t
            :transforms
-           (cons #'mevedel-view--transform-model-input
-                 (remove #'mevedel-view--transform-model-input
+           (cons #'niwa-view--transform-model-input
+                 (remove #'niwa-view--transform-model-input
                          gptel-prompt-transform-functions)))))
-    (when (fboundp 'mevedel-reminders--handle-inject)
-      (mevedel-reminders--handle-inject fsm))
+    (when (fboundp 'niwa-reminders--handle-inject)
+      (niwa-reminders--handle-inject fsm))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
-(defun mevedel-view-test--rail-text (&optional view)
+(defun niwa-view-test--rail-text (&optional view)
   "Return the displayed first line of VIEW's composer, or nil without one."
-  (require 'mevedel-view-composer)
-  (when-let* ((composer (mevedel-view-composer-buffer view)))
+  (require 'niwa-view-composer)
+  (when-let* ((composer (niwa-view-composer-buffer view)))
     (with-current-buffer composer
       (save-excursion
         (goto-char (point-min))
@@ -979,42 +979,42 @@ handler chain would, so staged reminder entries reach the data."
             (forward-char))
           (apply #'concat (nreverse pieces)))))))
 
-(defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
+(defun niwa-view-test--insert-composer-draft (draft &optional point-offset)
   "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
-  (require 'mevedel-view-composer)
+  (require 'niwa-view-composer)
   (let ((view (current-buffer))
-        (start (mevedel-view-composer-draft-start))
+        (start (niwa-view-composer-draft-start))
         (inhibit-read-only t))
-    (with-current-buffer (mevedel-view-composer-buffer view)
+    (with-current-buffer (niwa-view-composer-buffer view)
       (remove-text-properties
-       start (mevedel-view-composer-insert draft start view)
+       start (niwa-view-composer-insert draft start view)
        '(read-only nil
-         mevedel-view-prompt nil
+         niwa-view-prompt nil
          font-lock-face nil
          face nil
          front-sticky nil
          rear-nonsticky nil))
       (goto-char (+ start (or point-offset (length draft)))))))
 
-(defun mevedel-view-test--composer-point-offset (&optional view)
+(defun niwa-view-test--composer-point-offset (&optional view)
   "Return the caret offset from the draft start in VIEW's composer."
   (let* ((view (or view (current-buffer)))
-         (start (mevedel-view-composer-draft-start view)))
-    (with-current-buffer (mevedel-view-composer-buffer view)
+         (start (niwa-view-composer-draft-start view)))
+    (with-current-buffer (niwa-view-composer-buffer view)
       (- (point) start))))
 
-(defun mevedel-view-test--abort-interactions (data-buffer)
+(defun niwa-view-test--abort-interactions (data-buffer)
   "Abort DATA-BUFFER's queued interactions without saving its session.
 A fixture session has no durable home, so the production abort's save would
 only report a failure the test never asked for."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
-      (when (fboundp 'mevedel-permission-queue-abort-all)
-        (mevedel-permission-queue-abort-all))
-      (when (fboundp 'mevedel-plan-approval-abort)
-        (mevedel-plan-approval-abort)))))
+      (when (fboundp 'niwa-permission-queue-abort-all)
+        (niwa-permission-queue-abort-all))
+      (when (fboundp 'niwa-plan-approval-abort)
+        (niwa-plan-approval-abort)))))
 
-(defun mevedel-view-test--position-screen-y (position window &optional _fully)
+(defun niwa-view-test--position-screen-y (position window &optional _fully)
   "Model visible POSITION's Y in WINDOW using terminal unit-height rows.
 Batch Emacs has an initial frame with no native visibility queries.  This
 model supports policy tests, not pixel geometry assertions; interactive
@@ -1029,47 +1029,47 @@ tests use the real measurement function, including images and clipping."
             (setq row (1+ row))))
         (and found row)))))
 
-(defun mevedel-view-test--composer-screen-y (window)
+(defun niwa-view-test--composer-screen-y (window)
   "Return the composer's Y in WINDOW through the geometry seam."
   (let* ((view (window-buffer window))
-         (composer (mevedel-view-composer-window window)))
+         (composer (niwa-view-composer-window window)))
     (when composer
-      (with-current-buffer (mevedel-view-composer-buffer view)
-        (mevedel-view--position-screen-y
-         (mevedel-view-composer-draft-start view) composer)))))
+      (with-current-buffer (niwa-view-composer-buffer view)
+        (niwa-view--position-screen-y
+         (niwa-view-composer-draft-start view) composer)))))
 
-(defmacro mevedel-view-test--with-buffers (&rest body)
+(defmacro niwa-view-test--with-buffers (&rest body)
   "Execute BODY with data and view buffers bound and initialized."
   (declare (indent 0) (debug t))
   `(let ((data-buf (generate-new-buffer " *test-data*"))
          (view-buf (generate-new-buffer " *test-view*"))
-         (mevedel-permission-mode 'ask)
-         (mevedel-user-dir (file-name-as-directory
-                            (make-temp-file "mevedel-view-user-" t)))
-         (mevedel-plugin-extra-roots nil))
+         (niwa-permission-mode 'ask)
+         (niwa-user-dir (file-name-as-directory
+                            (make-temp-file "niwa-view-user-" t)))
+         (niwa-plugin-extra-roots nil))
      (unwind-protect
          (progn
            (with-current-buffer data-buf
-             (mevedel--transcript-org-mode)
+             (niwa--transcript-org-mode)
              (setq-local gptel-response-separator "\n\n")
              ;; These buffers own no root lifecycle, so teardown drains the
              ;; queues a test may assert on without running the session save
              ;; that a fixture session cannot complete.
-             (setq-local mevedel-view--abort-function
-                         #'mevedel-view-test--abort-interactions))
-           (mevedel-view--setup view-buf data-buf)
-           (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)
-                     ((symbol-function 'mevedel-view--position-screen-y)
+             (setq-local niwa-view--abort-function
+                         #'niwa-view-test--abort-interactions))
+           (niwa-view--setup view-buf data-buf)
+           (cl-letf (((symbol-function 'niwa-recovery-save) #'ignore)
+                     ((symbol-function 'niwa-view--position-screen-y)
                       (if noninteractive
-                          #'mevedel-view-test--position-screen-y
-                        (symbol-function 'mevedel-view--position-screen-y))))
+                          #'niwa-view-test--position-screen-y
+                        (symbol-function 'niwa-view--position-screen-y))))
              ,@body))
        (when (buffer-live-p view-buf) (kill-buffer view-buf))
        (when (buffer-live-p data-buf) (kill-buffer data-buf))
-       (when (file-directory-p mevedel-user-dir)
-         (delete-directory mevedel-user-dir t)))))
+       (when (file-directory-p niwa-user-dir)
+         (delete-directory niwa-user-dir t)))))
 
-(defun mevedel-view-test--insert-data (data-buf text props)
+(defun niwa-view-test--insert-data (data-buf text props)
   "Insert TEXT into DATA-BUF with gptel property value PROPS."
   (with-current-buffer data-buf
     (goto-char (point-max))
@@ -1078,7 +1078,7 @@ tests use the real measurement function, including images and clipping."
       (when props
         (put-text-property start (point) 'gptel props)))))
 
-(defun mevedel-view-test--count-substring (needle text)
+(defun niwa-view-test--count-substring (needle text)
   "Return the number of non-overlapping NEEDLE occurrences in TEXT."
   (let ((count 0)
         (start 0)
@@ -1094,7 +1094,7 @@ tests use the real measurement function, including images and clipping."
 
 ;; Adapted from https://github.com/radian-software/straight.el
 
-(defmacro mevedel-test--template (template &optional vars &rest bindings)
+(defmacro niwa-test--template (template &optional vars &rest bindings)
   "Generate multiple test templates.
 
 TEMPLATE is an implicitly backquoted form that serves as the base
@@ -1123,7 +1123,7 @@ Implementation Details:
 - Generates templates with proper variable bindings
 
 Example:
-  (mevedel-test--template
+  (niwa-test--template
     (should (equal ,input ,expected))
   (input expected)
   1 1
@@ -1149,7 +1149,7 @@ This would generate:
       (list `("" ,template))
     ;; Ensure that each binding is preceeded by :doc "DOCSTRING" (or empty) and
     ;; assing them to docstrings and bindings
-    (let ((normalized-bindings (mevedel-test--normalize-cases vars bindings))
+    (let ((normalized-bindings (niwa-test--normalize-cases vars bindings))
           docstrings bindings)
       (while normalized-bindings
         (let ((item (pop normalized-bindings)))
@@ -1190,7 +1190,7 @@ This would generate:
                      for doc in docstrings
                      collect `(,doc . ,(list case)))))))))
 
-(defun mevedel-test--normalize-cases (vars bindings)
+(defun niwa-test--normalize-cases (vars bindings)
   "Ensure each test case group has a docstring.
 VARS is the list of variable names.  BINDINGS is the list of test
 inputs/outputs and optional docstrings."
@@ -1222,7 +1222,7 @@ inputs/outputs and optional docstrings."
       (cl-incf i))
     (nreverse result)))
 
-(cl-defmacro mevedel-deftest (object
+(cl-defmacro niwa-deftest (object
                             (&key before-each after-each expected-result
                                   doc tags vars vars* quiet
                                   &allow-other-keys)
@@ -1249,7 +1249,7 @@ encompass the whole test body, including the code from
 :quiet declares that the function under test reports to the echo area or
 raises a warning on the paths these cases take, and that the cases assert
 the durable state those diagnostics echo rather than the text.  It wraps
-each case in `mevedel-test--with-captured-diagnostics', which is the same
+each case in `niwa-test--with-captured-diagnostics', which is the same
 capture a single call site would use, at the granularity of one tested
 function.  Reach for it when a case cannot avoid provoking correct
 product output; prefer asserting the text with an explicit capture when
@@ -1257,7 +1257,7 @@ the diagnostic itself is the behaviour under test.
 
 TEMPLATE:
 TEMPLATE is a list of forms that will be expanded into test cases
-using `mevedel-test--template'.  There are several patterns:
+using `niwa-test--template'.  There are several patterns:
 
 1. SIMPLE TEST (no variables):
    Just provide a test body.  Use ,test placeholder and (test) binding.
@@ -1277,24 +1277,24 @@ The macro automatically adds tags based on OBJECT:
 EXAMPLES:
 
 Example 1: Simple test (no parameters)
-  (mevedel-deftest zenit-plist-map
+  (niwa-deftest zenit-plist-map
     (:doc \"`zenit-plist-map' maps fn to plist\")
     (let ((plist \\='(:a 1 :b 2 :c 3)))
       (zenit-plist-map (lambda (key val) (1+ val)) plist)
       (should (equal \\='(:a 2 :b 3 :c 4) plist))))
 
 Example 2: Simple test with placeholder
-  (mevedel-deftest file-exists-p!
+  (niwa-deftest file-exists-p!
     (:doc \"`file-exists-p!' tests if one or more files exist.\")
     ,test
     (test)
     (should (file-exists-p! (file!)))
-    (let ((test-file (mevedel-test-make-temp-file)))
+    (let ((test-file (niwa-test-make-temp-file)))
       (should (equal (expand-file-name test-file) (file-exists-p! test-file)))
       (delete-file test-file)))
 
 Example 3: Parameterized test with multiple cases
-  (mevedel-deftest zenit-path
+  (niwa-deftest zenit-path
     (:doc \"`zenit-path' returns a path from segments\")
     (should (equal ,out (zenit-path ,@in)))
     (in out)
@@ -1303,7 +1303,7 @@ Example 3: Parameterized test with multiple cases
     (\"/tmp\" \"foo\" nil \"bar.txt\") \"/tmp/foo/bar.txt\")
 
 Example 4: Multiple test cases with individual docstrings
-  (mevedel-deftest zenit-surrounded-p
+  (niwa-deftest zenit-surrounded-p
     (:vars ((test-buffer (get-buffer-create \"test-buffer\")))
      :before-each
      (with-current-buffer test-buffer
@@ -1326,9 +1326,9 @@ Example 4: Multiple test cases with individual docstrings
       (should-not (zenit-surrounded-p \\='(:beg 5 :end 8 :op \"{\" :cl \"}\")))))
 
 Example 5: Parameterized test with different assertions
-  (mevedel-deftest zenit-file-cookie-p
+  (niwa-deftest zenit-file-cookie-p
     (:doc \"`zenit-file-cookie-p' returns the evaluated result\")
-    (let ((test-file (mevedel-test-make-temp-file nil \".el\" ,fcookie)))
+    (let ((test-file (niwa-test-make-temp-file nil \".el\" ,fcookie)))
       (,assert (zenit-file-cookie-p test-file ,tcookie ,null-value))
       (delete-file test-file))
     (assert fcookie tcookie null-value)
@@ -1338,7 +1338,7 @@ Example 5: Parameterized test with different assertions
     should-not \";;;###foo-test (equal \\\"test\\\" \\\"test\\\")\" \"if\" nil)
 
 Example 6: Test with setup/teardown and vars
-  (mevedel-deftest zenit-syntax-ppss
+  (niwa-deftest zenit-syntax-ppss
     (:vars ((test-buffer (get-buffer-create \"test-buffer\")))
      :before-each
      (with-current-buffer test-buffer
@@ -1376,8 +1376,8 @@ Optionally prefix each case with :doc \"description\" for individual
 test documentation.
 
 See also:
-  `mevedel-test--template' - Template expansion function
-  `mevedel-test--normalize-cases' - Docstring normalization"
+  `niwa-test--template' - Template expansion function
+  `niwa-test--normalize-cases' - Docstring normalization"
   (declare (indent defun) (debug t))
   ;; Initialize test counter and automatic tags
   (let ((counter 0)
@@ -1390,7 +1390,7 @@ See also:
                 (if (macrop object) 'macro))))
         ;; Generate tests from template
         (tests (when template
-                 (macroexpand `(mevedel-test--template ,@template)))))
+                 (macroexpand `(niwa-test--template ,@template)))))
     ;; Combine automatic and manual tags
     (setq tags (append autotags tags))
     ;; Generate the test forms
@@ -1414,30 +1414,30 @@ See also:
                               (list after-each))))))
               (when quiet
                 (setq test-body
-                      `((mevedel-test--with-captured-diagnostics nil
+                      `((niwa-test--with-captured-diagnostics nil
                           ,@test-body))))
               ;; Registrars and uninstall mutate both tool maps.  Give each
               ;; case its own containers and matching lookup cache, including
               ;; when its assertions fail before explicit teardown can run.
               (setq test-body
-                    `((let ((mevedel-tool--registry
-                             (copy-hash-table mevedel-tool--registry))
-                            (mevedel-tool--resolve-cache
+                    `((let ((niwa-tool--registry
+                             (copy-hash-table niwa-tool--registry))
+                            (niwa-tool--resolve-cache
                              (make-hash-table :test #'equal))
                             (gptel--known-tools
                              (copy-tree gptel--known-tools))
                             (worktree-controls-before
-                             (mevedel-test--worktree-control-snapshot))
-                            (mevedel-test--staged-publications nil))
+                             (niwa-test--worktree-control-snapshot))
+                            (niwa-test--staged-publications nil))
                         (unwind-protect
                             (progn ,@test-body)
-                          (mevedel-test--cancel-stray-lease-timers)
-                          (when (boundp 'mevedel--warn-once-table)
-                            (clrhash mevedel--warn-once-table))
-                          (when mevedel-test--release-leaked-state-p
-                            (mevedel-test--release-leaked-state))
-                          (mevedel-test--delete-staged-publications)
-                          (mevedel-test--assert-worktree-controls-unchanged
+                          (niwa-test--cancel-stray-lease-timers)
+                          (when (boundp 'niwa--warn-once-table)
+                            (clrhash niwa--warn-once-table))
+                          (when niwa-test--release-leaked-state-p
+                            (niwa-test--release-leaked-state))
+                          (niwa-test--delete-staged-publications)
+                          (niwa-test--assert-worktree-controls-unchanged
                            worktree-controls-before)))))
               `(ert-deftest
                    ,(intern (concat
@@ -1458,21 +1458,21 @@ See also:
                    (t      test-body)))))
           tests))))
 
-(defun mevedel-test-enable-fontlocking ()
-  "Enable fontlocking for `mevedel-deftest'."
+(defun niwa-test-enable-fontlocking ()
+  "Enable fontlocking for `niwa-deftest'."
   (font-lock-add-keywords
    nil
-   '(("(\\(\\<mevedel-deftest\\)\\>\\s *\\(\\(?:\\sw\\|\\s_\\)+\\)?"
+   '(("(\\(\\<niwa-deftest\\)\\>\\s *\\(\\(?:\\sw\\|\\s_\\)+\\)?"
       (1 font-lock-keyword-face nil t)
       (2 font-lock-function-name-face nil t)))))
 ;; Activate the font-locking
-(mevedel-test-enable-fontlocking)
+(niwa-test-enable-fontlocking)
 
 
 ;;
 ;;; Test Functions
 
-(defun mevedel-test-room-registry (&rest rooms)
+(defun niwa-test-room-registry (&rest rooms)
   "Return a room registry holding ROOMS, keyed by their data buffers."
   (let ((table (make-hash-table :test #'eq)))
     (dolist (room rooms)
@@ -1480,7 +1480,7 @@ See also:
                room table))
     table))
 
-(defun mevedel-test-tabulated-row-cells (row)
+(defun niwa-test-tabulated-row-cells (row)
   "Return ROW's displayed cells as plain strings.
 ROW may be a `tabulated-list-entries' entry or its cell vector."
   (let ((cells (if (vectorp row) row (cadr row))))
@@ -1492,14 +1492,14 @@ ROW may be a `tabulated-list-entries' entry or its cell vector."
         (t (substring-no-properties (format "%s" cell)))))
      (append cells nil))))
 
-(defun mevedel-test-tabulated-entries-cells (&optional entries)
+(defun niwa-test-tabulated-entries-cells (&optional entries)
   "Return ENTRIES as an alist of row ids to plain cell strings."
   (mapcar
    (lambda (entry)
-     (cons (car entry) (mevedel-test-tabulated-row-cells entry)))
+     (cons (car entry) (niwa-test-tabulated-row-cells entry)))
    (or entries tabulated-list-entries)))
 
-(defun mevedel-test-same-items-p (expected actual &rest cl-keys)
+(defun niwa-test-same-items-p (expected actual &rest cl-keys)
   "Verify that EXPECTED and ACTUAL have the same items.
 The order of items does not matter.  Return t if lists match, nil
 otherwise.
@@ -1509,7 +1509,7 @@ CL-KEYS as in `cl-set-difference'.
   (and (null (apply #'cl-set-difference expected actual cl-keys))
        (null (apply #'cl-set-difference actual expected cl-keys))))
 
-(defun mevedel-test-contains-items-p (expected actual &rest cl-keys)
+(defun niwa-test-contains-items-p (expected actual &rest cl-keys)
   "Verify EXPECTED items are present in ACTUAL.
 The order of items does not matter.  Return t if lists match, nil
 otherwise.
@@ -1518,12 +1518,12 @@ CL-KEYS as in `cl-set-difference'.
 \n(fn EXPECTED ACTUAL [KEYWORD VALUE]...)"
   (null (apply #'cl-set-difference expected actual cl-keys)))
 
-(defmacro mevedel-test--with-displayed-buffer (&rest body)
+(defmacro niwa-test--with-displayed-buffer (&rest body)
   "Run BODY in a temp buffer displayed in the selected window.
 Restores the window configuration and kills the buffer afterwards."
   (declare (indent 0))
   `(let ((config (current-window-configuration))
-         (buffer (generate-new-buffer " *mevedel-displayed-test*")))
+         (buffer (generate-new-buffer " *niwa-displayed-test*")))
      (unwind-protect
          (progn
            (set-window-buffer (selected-window) buffer)
@@ -1546,7 +1546,7 @@ Restores the window configuration and kills the buffer afterwards."
 ;; `url-history'
 (defvar url-history-save-interval)
 
-(defun mevedel-test-http (respond action)
+(defun niwa-test-http (respond action)
   "Run ACTION with a local server URL whose requests call RESPOND.
 RESPOND receives a request line and returns (STATUS HEADERS BODY), or nil
 to leave the request unanswered.  All server processes are cleaned up."
@@ -1555,7 +1555,7 @@ to leave the request unanswered.  All server processes are cleaned up."
         (progn
           (setq server
                 (make-network-process
-                 :name "mevedel-test-http" :server t :host 'local :service t
+                 :name "niwa-test-http" :server t :host 'local :service t
                  :family 'ipv4 :noquery t
                  :log (lambda (_server client _message) (push client clients))
                  :filter
@@ -1589,12 +1589,12 @@ to leave the request unanswered.  All server processes are cleaned up."
 ;;
 ;;; Headless Wayland
 
-(defconst mevedel-test--root
+(defconst niwa-test--root
   (expand-file-name ".." (file-name-directory
                           (or load-file-name buffer-file-name byte-compile-current-file)))
   "Repository root.")
 
-(defun mevedel-test--wayland-available-p ()
+(defun niwa-test--wayland-available-p ()
   "Return non-nil when this machine can run a PGTK daemon on a nested KWin.
 The native module must also build here."
   (and (eq system-type 'gnu/linux)
@@ -1603,27 +1603,27 @@ The native module must also build here."
        (executable-find "cc") (executable-find "pkg-config")
        (zerop (call-process "pkg-config" nil nil nil "--exists" "gtk+-3.0" "wayland-client"))))
 
-(defun mevedel-test--run-wayland-fixture (fixture &optional timeout)
+(defun niwa-test--run-wayland-fixture (fixture &optional timeout)
   "Run FIXTURE, a file under test/fixtures, in a PGTK daemon on a nested KWin.
-The daemon gets the display name in MEVEDEL_NATIVE_DISPLAY and writes its
-observations to the file named by MEVEDEL_NATIVE_RESULT before exiting.
+The daemon gets the display name in NIWA_NATIVE_DISPLAY and writes its
+observations to the file named by NIWA_NATIVE_RESULT before exiting.
 A daemon running longer than TIMEOUT seconds, 90 by default, fails the test
-with its last MEVEDEL-CHECKPOINT trace line if one was emitted.
+with its last NIWA-CHECKPOINT trace line if one was emitted.
 Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
 WAYLAND_DEBUG client log."
-  (let* ((directory (make-temp-file "mevedel-wayland-" t))
+  (let* ((directory (make-temp-file "niwa-wayland-" t))
          ;; A terminated compositor may not have released its socket yet.
          (socket (file-name-nondirectory directory))
          (result (file-name-concat directory "result.eld"))
-         (trace (generate-new-buffer " *mevedel-test-wayland-trace*"))
-         (kwin-log (generate-new-buffer " *mevedel-test-kwin*"))
+         (trace (generate-new-buffer " *niwa-test-wayland-trace*"))
+         (kwin-log (generate-new-buffer " *niwa-test-kwin*"))
          (process-environment (cl-remove-if (lambda (entry)
                                               (string-match-p
                                                "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\|DBUS_SESSION_BUS_ADDRESS\\|DBUS_STARTER_ADDRESS\\|DBUS_STARTER_BUS_TYPE\\)="
                                                entry))
                                             process-environment))
          (kwin (make-process
-                :name "mevedel-test-kwin" :noquery t :connection-type 'pipe
+                :name "niwa-test-kwin" :noquery t :connection-type 'pipe
                 :buffer nil :stderr kwin-log
                 :command (list "kwin_wayland" "--virtual" "--no-lockscreen"
                                "--width" "1600" "--height" "1000" "--socket" socket)))
@@ -1637,19 +1637,19 @@ WAYLAND_DEBUG client log."
           (setq daemon
                 (let ((process-environment
                        (append (list "WAYLAND_DEBUG=client"
-                                     (concat "MEVEDEL_NATIVE_DISPLAY=" socket)
-                                     (concat "MEVEDEL_NATIVE_RESULT=" result))
+                                     (concat "NIWA_NATIVE_DISPLAY=" socket)
+                                     (concat "NIWA_NATIVE_RESULT=" result))
                                process-environment)))
                   (make-process
-                   :name "mevedel-test-wayland-daemon" :noquery t :connection-type 'pipe
+                   :name "niwa-test-wayland-daemon" :noquery t :connection-type 'pipe
                    :buffer nil :stderr trace
                    :command
                    (list (expand-file-name invocation-name invocation-directory)
-                         (format "--fg-daemon=mevedel-wayland-test-%d" (emacs-pid)) "-Q"
+                         (format "--fg-daemon=niwa-wayland-test-%d" (emacs-pid)) "-Q"
                          "--eval" (prin1-to-string
-                                   `(setq load-path (cons ,mevedel-test--root load-path)
-                                          mevedel-user-dir ,(file-name-as-directory directory)))
-                         "-l" (file-name-concat mevedel-test--root "test/fixtures" fixture)))))
+                                   `(setq load-path (cons ,niwa-test--root load-path)
+                                          niwa-user-dir ,(file-name-as-directory directory)))
+                         "-l" (file-name-concat niwa-test--root "test/fixtures" fixture)))))
           (with-timeout
               ((or timeout 90)
                (ert-fail
@@ -1658,7 +1658,7 @@ WAYLAND_DEBUG client log."
                     (goto-char (point-max))
                     (format "Wayland scenario %s timed out; last observed state: %s"
                             fixture
-                            (if (re-search-backward "^MEVEDEL-CHECKPOINT \\(.+\\)\n" nil t)
+                            (if (re-search-backward "^NIWA-CHECKPOINT \\(.+\\)\n" nil t)
                                 (match-string-no-properties 1)
                               "no checkpoint received; worker state unavailable"))))))
             (while (process-live-p daemon) (accept-process-output nil 0.05)))

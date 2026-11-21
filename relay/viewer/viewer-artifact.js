@@ -119,7 +119,7 @@
     let storeMarkers = new Map();
     const downloads = new Map();
     let theme = null;
-    const discussionKit = window.mevedelArtifactDiscussions;
+    const discussionKit = window.niwaArtifactDiscussions;
     const side = document.getElementById('artifact-side');
     const discussions = discussionKit && side ? discussionKit.create({
       send, el, toggle: discussToggle, sidebarToggle, side,
@@ -317,7 +317,7 @@
       if (view.pending?.reqId !== reqId) return;
       view.pending = null;
       if (metaEl && view.meta) {
-        metaEl.textContent = `${window.mevedelTranscriptRenderer.formatBytes(view.bytes.length)} · ${view.meta.mime}`;
+        metaEl.textContent = `${window.niwaTranscriptRenderer.formatBytes(view.bytes.length)} · ${view.meta.mime}`;
       }
       if (reloadButton) reloadButton.hidden = false;
       flash(message);
@@ -366,7 +366,7 @@
     function renderContent(restore = null) {
       if (!body || !view.bytes) return;
       const {mime} = view.meta;
-      const {formatBytes, renderMarkdown} = window.mevedelTranscriptRenderer;
+      const {formatBytes, renderMarkdown} = window.niwaTranscriptRenderer;
       if (metaEl) metaEl.textContent = `${formatBytes(view.bytes.length)} · ${mime}`;
       body.replaceChildren();
       view.frame = null;
@@ -551,9 +551,9 @@
         chip.append(el('span', 'dock-chip-name', record.title || record.artifact));
         const size = missing ? 'deleted'
           : typeof record.size === 'number'
-            ? window.mevedelTranscriptRenderer.formatBytes(record.size) : '';
+            ? window.niwaTranscriptRenderer.formatBytes(record.size) : '';
         if (size) chip.append(el('span', 'dock-chip-meta', size));
-        if (!missing) window.mevedelNav.link(chip, href({artifact: record}), () => open(record));
+        if (!missing) window.niwaNav.link(chip, href({artifact: record}), () => open(record));
         nav.append(chip);
       });
     }
@@ -611,5 +611,5 @@
                           setTheme, queue, handleDiscussion, storedDiscussions, discuss, activity});
   }
 
-  window.mevedelArtifactView = Object.freeze({create});
+  window.niwaArtifactView = Object.freeze({create});
 })();

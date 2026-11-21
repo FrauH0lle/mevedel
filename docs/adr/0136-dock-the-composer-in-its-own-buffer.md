@@ -36,7 +36,7 @@ transcript window suppresses its own mode line so there is none between them.
 The composer's top rule also replaces the transcript's plain closing rule
 where the two would meet; labelled request summaries remain visible.
 
-`mevedel-view-pair.el` owns lookup and layout. `window-combination-limit` gives
+`niwa-view-pair.el` owns lookup and layout. `window-combination-limit` gives
 the two windows their own parent. The dock is dedicated to its buffer, preserves
 its height, and survives `delete-other-windows` in the transcript. The paired
 transcript is weakly dedicated: automatic popup display skips it, but explicit

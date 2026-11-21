@@ -7,25 +7,25 @@
 
 (require 'ert)
 (require 'gptel-openai)
-(require 'mevedel-engine-test-support
-         (expand-file-name "../mevedel-engine-test-support.el" (file-name-directory load-file-name)))
-(require 'mevedel-claude-code-session)
+(require 'niwa-engine-test-support
+         (expand-file-name "../niwa-engine-test-support.el" (file-name-directory load-file-name)))
+(require 'niwa-claude-code-session)
 
-(defun mevedel-test-claude-restart (root phase peer)
+(defun niwa-test-claude-restart (root phase peer)
   "Run PHASE of the ROOT restart fixture using external ACP PEER."
-  (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
-         (mevedel-claude-code-directory (file-name-concat root "claude"))
+  (let* ((workspace (test-niwa-session-persistence--make-workspace root))
+         (niwa-claude-code-directory (file-name-concat root "claude"))
          (manifest (file-name-concat root "restart.el"))
          (scope (file-name-concat root "scope"))
          (instructions (file-name-concat scope "AGENTS.md"))
          (evidence (file-name-concat (if (= phase 1) scope root) "evidence.txt"))
          session buffer child launches)
-    (mevedel-test--with-captured-diagnostics diagnostics
+    (niwa-test--with-captured-diagnostics diagnostics
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (mevedel-engine-test--claude-launch
+          (cl-letf (((symbol-function 'niwa-claude-code-launch)
+                     (niwa-engine-test--claude-launch
                       (lambda (_system _mcp model _effort &optional id _hook)
-                        (let ((native (if mevedel--agent-invocation "child-history" "root-history")))
+                        (let ((native (if niwa--agent-invocation "child-history" "root-history")))
                           (push (list native id model) launches)
                           (should (equal (and (= phase 2) native) id))
                           (should (equal "sonnet" model))
@@ -35,84 +35,84 @@
                                         (toolBatches . [[((name . "Read")
                                                          (id . ,(format "%s-%d" native phase))
                                                          (args . ((file_path . ,evidence))))]]))))))))
-            (mevedel-claude-code-register)
-            (dolist (name '("Read" "ListAgents" "SendMessage")) (mevedel-tool-ensure name))
+            (niwa-claude-code-register)
+            (dolist (name '("Read" "ListAgents" "SendMessage")) (niwa-tool-ensure name))
             (make-directory scope t)
             (write-region (format "Use RESTART-PATH-PHASE-%d" phase) nil instructions nil 'silent)
             (write-region "Restart evidence" nil evidence nil 'silent)
             (if (= phase 1)
                 (progn
-                  (setq session (mevedel-session-create "restart" workspace)
+                  (setq session (niwa-session-create "restart" workspace)
                         buffer (generate-new-buffer " *restart-root*"))
                   (with-current-buffer buffer
-                    (mevedel-chat-prepare-transcript-buffer)
-                    (setq-local mevedel--session session mevedel--workspace workspace
+                    (niwa-chat-prepare-transcript-buffer)
+                    (setq-local niwa--session session niwa--workspace workspace
                                 default-directory (file-name-as-directory root))
-                    (setf (mevedel-session-permission-mode session) 'full-auto)
-                    (mevedel-session-set-root-buffer session buffer)
-                    (mevedel-session-artifacts-ensure-files session buffer)
-                    (mevedel-model-set-session-provider
-                     session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)))
+                    (setf (niwa-session-permission-mode session) 'full-auto)
+                    (niwa-session-set-root-buffer session buffer)
+                    (niwa-session-artifacts-ensure-files session buffer)
+                    (niwa-model-set-session-provider
+                     session (niwa-model-resolve-provider "Claude Code:sonnet") buffer)))
               (let ((saved (with-temp-buffer (insert-file-contents manifest) (read (current-buffer)))))
                 (should-not (= (plist-get saved :pid) (emacs-pid)))
-                (setq buffer (mevedel-session-persistence-restore (plist-get saved :path) nil nil workspace)
-                      session (buffer-local-value 'mevedel--session buffer))
-                (should (mevedel-claude-code-backend-p (buffer-local-value 'gptel-backend buffer)))
-                (should-not (mevedel-turn-busy-p buffer))
-                (should-not (mevedel-agent-control-active-turn-p session))
+                (setq buffer (niwa-session-persistence-restore (plist-get saved :path) nil nil workspace)
+                      session (buffer-local-value 'niwa--session buffer))
+                (should (niwa-claude-code-backend-p (buffer-local-value 'gptel-backend buffer)))
+                (should-not (niwa-turn-busy-p buffer))
+                (should-not (niwa-agent-control-active-turn-p session))
                 (should-not launches)
-                (should (eq 'paused (mevedel-goal-status (mevedel-session-goal session))))
-                (unless (assoc "/root/reader" (mevedel-session-agent-registry session))
-                  (error "Child restore failed: %s" mevedel-test--captured))))
+                (should (eq 'paused (niwa-goal-status (niwa-session-goal session))))
+                (unless (assoc "/root/reader" (niwa-session-agent-registry session))
+                  (error "Child restore failed: %s" niwa-test--captured))))
             (with-current-buffer buffer
               (setq-local gptel-system-prompt "Root restart fixture"
-                          gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+                          gptel-tools (list (niwa-tool-gptel-tool (niwa-tool-ensure "Read"))))
               (goto-char (point-max))
               (insert (format "\nRoot turn %d" phase))
-              (let ((owner (mevedel--send-request (format "Root turn %d" phase))))
+              (let ((owner (niwa--send-request (format "Root turn %d" phase))))
                 (with-timeout (10 (ert-fail "Restart root turn timed out"))
-                  (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-                (unless (eq 'success (plist-get (mevedel-engine-info owner) :mevedel-acp-outcome))
+                  (while (niwa-turn-busy-p buffer) (accept-process-output nil 0.01)))
+                (unless (eq 'success (plist-get (niwa-engine-info owner) :niwa-acp-outcome))
                   (error "Request outcome: %S; diagnostics: %S"
-                         (plist-get (mevedel-engine-info owner) :error) mevedel-test--captured)))
+                         (plist-get (niwa-engine-info owner) :error) niwa-test--captured)))
               (if (= phase 1)
-                  (mevedel-agent-control-spawn
+                  (niwa-agent-control-spawn
                    session "reader" "Read the evidence."
                    (lambda (result) (setq child (plist-get result :record)))
-                   :agent (mevedel-agent--create :name "reader" :description "Inspect evidence"
+                   :agent (niwa-agent--create :name "reader" :description "Inspect evidence"
                                                 :tools '(Read) :system-prompt "Child restart fixture"))
-                (setq child (mevedel-agent-control--record-at-path session "/root/reader"))
+                (setq child (niwa-agent-control--record-at-path session "/root/reader"))
                 (should child)
                 (setq-local gptel-model 'haiku)
-                (mevedel-agent-control-send-message session "/root/reader" "Read again after restart."))
+                (niwa-agent-control-send-message session "/root/reader" "Read again after restart."))
               (with-timeout (10 (ert-fail "Restart child turn timed out"))
-                (while (mevedel-agent-control-active-turn-p session) (accept-process-output nil 0.01)))
+                (while (niwa-agent-control-active-turn-p session) (accept-process-output nil 0.01)))
               (should (equal (format "child-history phase %d complete" phase)
-                             (mevedel-agent-record-settled-result child)))
-              (should (= phase (mevedel-session-turn-count session)))
+                             (niwa-agent-record-settled-result child)))
+              (should (= phase (niwa-session-turn-count session)))
               (dolist (scope '("root" "/root/reader"))
-                (let ((history (alist-get scope (mevedel-session-external-conversations session) nil nil #'equal)))
+                (let ((history (alist-get scope (niwa-session-external-conversations session) nil nil #'equal)))
                   (should (eq 'ready (plist-get history :state)))))
-              (dolist (conversation (list buffer (mevedel-agent-record-conversation-buffer child)))
+              (dolist (conversation (list buffer (niwa-agent-record-conversation-buffer child)))
                 (with-current-buffer conversation
-                  (should (= 1 (mevedel-engine-test--count-evidence (format "RESTART-PATH-PHASE-%d" phase))))))
+                  (should (= 1 (niwa-engine-test--count-evidence (format "RESTART-PATH-PHASE-%d" phase))))))
               (when (= phase 2)
                 (should (string-search "root-history phase 1 complete" (buffer-string)))
-                (with-current-buffer (mevedel-agent-record-conversation-buffer child)
+                (with-current-buffer (niwa-agent-record-conversation-buffer child)
                   (should (string-search "child-history phase 1 complete" (buffer-string)))))
               (when (= phase 1)
-                (setf (mevedel-session-goal session)
-                      (mevedel-goal--create :id "restart-goal" :objective "Wait for explicit resume"
+                (setf (niwa-session-goal session)
+                      (niwa-goal--create :id "restart-goal" :objective "Wait for explicit resume"
                                             :status 'active :tokens-used 0 :time-used-seconds 0
                                             :turns-run 0 :created-at "now" :updated-at "now")))
-              (mevedel-session-artifacts-save session buffer)
+              (niwa-session-artifacts-save session buffer)
               (when (= phase 1)
                 (with-temp-file manifest
-                  (prin1 (list :pid (emacs-pid) :path (mevedel-session-save-path session)) (current-buffer)))))
+                  (prin1 (list :pid (emacs-pid) :path (niwa-session-save-path session)) (current-buffer)))))
             (should (= 2 (length launches))))
-        (when (and child (buffer-live-p (mevedel-agent-record-conversation-buffer child)))
-          (kill-buffer (mevedel-agent-record-conversation-buffer child)))
-        (test-mevedel-session-persistence--release-and-kill buffer session)
-        (mevedel-workspace-clear-registry)))))
+        (when (and child (buffer-live-p (niwa-agent-record-conversation-buffer child)))
+          (kill-buffer (niwa-agent-record-conversation-buffer child)))
+        (test-niwa-session-persistence--release-and-kill buffer session)
+        (niwa-workspace-clear-registry)))))
 
 ;;; claude-restart.el ends here

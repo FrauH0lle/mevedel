@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 COLLECTOR = Path(__file__).with_name('checkdoc-collect.el')
 STUB_COLLECTOR = Path(__file__).with_name('test-stubs-collect.el')
 TEST_COLLECTOR = Path(__file__).with_name('test-inventory-collect.el')
-INPUT_MARKER = re.compile(r'(?<![\w-])mevedel-view--input-marker(?:-position)?(?![\w-])')
+INPUT_MARKER = re.compile(r'(?<![\w-])niwa-view--input-marker(?:-position)?(?![\w-])')
 
 
 def git(root, *args):
@@ -54,7 +54,7 @@ def lisp_boundaries(name, text):
 
 def composer_marker_errors(name, text):
     """Reject references to the former inline input marker outside exemptions."""
-    if name == 'mevedel-view-composer.el' or 'test' in Path(name).parts[:-1]:
+    if name == 'niwa-view-composer.el' or 'test' in Path(name).parts[:-1]:
         return []
     return [f'{name}:{number}: composer-marker: {match[0]} is retired; '
             'use the composer draft or transcript tail interface'
@@ -193,7 +193,7 @@ def checkdoc(root, sources):
     """Run installed Emacs checkdoc on snapshots, never loading project code."""
     if not sources:
         return []
-    with tempfile.TemporaryDirectory(prefix='mevedel-checkdoc-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='niwa-checkdoc-') as tmp:
         directory = Path(tmp)
         files = []
         for number, (name, text) in enumerate(sources):
@@ -229,7 +229,7 @@ def new_diagnostics(old, current):
 
 def test_stubs(root, sources):
     """Resolve function owners and lint test snapshots in non-evaluating Emacs."""
-    with tempfile.TemporaryDirectory(prefix='mevedel-test-stubs-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='niwa-test-stubs-') as tmp:
         directory = Path(tmp)
         request, response = directory / 'input.json', directory / 'output.json'
         request.write_text(json.dumps([{'name': name, 'text': text}
@@ -251,7 +251,7 @@ def stub_library(name):
 
 def test_inventory(root, sources):
     """Read test names, imports and fixture references without evaluating code."""
-    with tempfile.TemporaryDirectory(prefix='mevedel-test-inventory-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='niwa-test-inventory-') as tmp:
         directory = Path(tmp)
         request, response = directory / 'input.json', directory / 'output.json'
         request.write_text(json.dumps([{'name': name, 'text': text}

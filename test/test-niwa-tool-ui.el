@@ -1,0 +1,1595 @@
+;;; test-niwa-tool-ui.el --- Interaction tool assembly tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Tests the small user-interaction tool assembly boundary.  Focused Ask and
+;; Ask behavior lives in its mirrored test module.
+
+;;; Code:
+
+(require 'gptel)
+(require 'json)
+(require 'niwa-agent-control)
+(require 'niwa-agent-conversation)
+(require 'niwa-agent-exec)
+(require 'niwa-agents)
+(require 'niwa-compact)
+(require 'niwa-compact-evidence)
+(require 'niwa-compact-target)
+(require 'niwa-goal)
+(require 'niwa-mcp)
+(require 'niwa-session-persistence)
+(require 'niwa-tool-registry)
+(require 'niwa-tool-ui)
+(require 'niwa-tools)
+(require 'niwa-view)
+(require 'niwa-view-render)
+(require 'niwa-structs)
+(require 'niwa-workspace)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+(defun niwa-tool-ui-test--session ()
+  "Return a fresh in-memory session for tool UI tests."
+  (niwa-session-create
+   "main"
+   (niwa-workspace--create
+    :type 'project
+    :id "tool-ui"
+    :root temporary-file-directory
+    :name "tool-ui")))
+
+(defun niwa-tool-ui-test--insert-rendering (rendering)
+  "Insert RENDERING before the current view's composer."
+  (let ((inhibit-read-only t))
+    (goto-char (niwa-view-transcript-tail))
+    (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+    (unwind-protect
+        (niwa-view--insert-rendered-tool rendering (cons 1 1))
+      (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil))))
+
+(niwa-deftest niwa-tool-ui--deliver-result ()
+  ,test
+  (test)
+  :doc "wraps raw results in the canonical envelope"
+  (let (delivered)
+    (niwa-tool-ui--deliver-result
+     (lambda (value) (setq delivered value))
+     "done")
+    (should (equal '(:result "done") delivered)))
+
+  :doc "preserves result metadata envelopes"
+  (let ((envelope '(:result "done" :render-data (:kind card)
+                    :media ((:type image))))
+        delivered)
+    (niwa-tool-ui--deliver-result
+     (lambda (value) (setq delivered value))
+     envelope)
+    (should (eq envelope delivered))))
+
+(niwa-deftest niwa-tool-ui--register
+  (:before-each (niwa-tool-clear-registry)
+   :after-each (niwa-tool-clear-registry))
+  ,test
+  (test)
+  :doc "assembles the user-interaction tool surface"
+  (progn
+    (niwa-tool-ui--register)
+    (dolist (name '("Ask" "Agent" "ListAgents"
+                    "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
+      (should (niwa-tool-get name)))
+    (should (equal '((success . niwa-tool-ui--render-list-agents))
+                   (niwa-tool-renderer
+                    (niwa-tool-get "ListAgents"))))
+    (should (niwa-tool-async-p (niwa-tool-get "WaitAgent")))
+    (should (string-match-p
+             "starting its turn if idle"
+             (niwa-tool-description (niwa-tool-get "SendMessage"))))
+    (should (string-match-p
+             "Only.*RESULT.*terminal"
+             (niwa-tool-description (niwa-tool-get "WaitAgent"))))
+    (should-not (niwa-tool-get "RequestAccess")))
+
+  :doc "Agent advertises general-purpose omission in both discovery and provider contracts"
+  (progn
+    (niwa-tool-ui--register)
+    (let* ((tool (niwa-tool-get "Agent"))
+           (provider-tool (niwa-tool-gptel-tool tool))
+           (prompt (gptel-tool-description provider-tool))
+           (role-arg (cl-find "role" (gptel-tool-args provider-tool)
+                              :key (lambda (arg) (plist-get arg :name))
+                              :test #'equal)))
+      (should (string-match-p "omit role for general-purpose"
+                              (niwa-tool-description tool)))
+      (should (equal prompt (niwa-tool-prompt tool)))
+      (dolist (text '("General-purpose (omit `role`)"
+                      "effective instructions, tools, model policy"
+                      "same permission constraints"
+                      "Choose a named role when its specialization"))
+        (should (string-match-p (regexp-quote text) prompt)))
+      (should (string-match-p
+               "Agent(task_name=\"parser_fix\",[\n ]+message=" prompt))
+      (should (plist-get role-arg :optional))
+      (should (equal [] (plist-get role-arg :enum)))
+      (should (string-match-p "Omit for general-purpose"
+                              (plist-get role-arg :description)))
+      (should (string-match-p "Select a named role for its specialization"
+                              (plist-get role-arg :description)))))
+
+  :doc "Agent native schema and ToolSearch contract accept free-form names"
+  (progn
+    (niwa-tool-ui--register)
+    (let* ((tool (niwa-tool-get "Agent"))
+           (provider-tool (niwa-tool-gptel-tool tool))
+           (task-arg (cl-find "task_name" (gptel-tool-args provider-tool)
+                              :key (lambda (arg) (plist-get arg :name))
+                              :test #'equal))
+           contract)
+      (with-temp-buffer
+        (setq-local niwa--session (niwa-tool-ui-test--session))
+        (setf (niwa-session-tool-catalog niwa--session)
+              '((("niwa" "Agent") . "Start a child")))
+        (niwa-tools--tool-search (lambda (text) (setq contract text)) "Agent"))
+      (dolist (text (list contract (niwa-tool-prompt tool)
+                         (plist-get task-arg :description)))
+        (let ((case-fold-search t))
+          (should (string-match-p "free-form task name" text)))
+        (should (string-match-p "canonical path" text))
+        (should-not (string-match-p "matching.*a-z0-9" text)))
+      (should (string-search "numeric suffixes" (plist-get task-arg :description)))
+      (should (string-search "Use that returned path for follow-ups"
+                             (niwa-tool-prompt tool)))
+      (should (string-search "niwa://agents.md" (niwa-tool-prompt tool)))
+      (should (string-search (plist-get task-arg :description) contract))
+      (should (string-search (niwa-tool-prompt tool) contract))))
+
+  :doc "a request's role and model rosters never reach the shared schema"
+  (let ((gptel--known-tools nil)
+        (niwa-agent--registry
+         (list (cons "probe" (niwa-agent--create
+                              :name "probe" :description "Probe role."
+                              :system-prompt "Probe.")))))
+    (cl-flet ((arg (name &optional provider)
+                (cl-find name (gptel-tool-args
+                               (or provider
+                                   (niwa-tool-gptel-tool (niwa-tool-get "Agent"))))
+                         :key (lambda (arg) (plist-get arg :name))
+                         :test #'equal)))
+      (niwa-tool-ui--register)
+      (let ((model-description (plist-get (arg "model") :description)))
+        (with-temp-buffer
+          (setq-local gptel-tools
+                      (list (niwa-tool-gptel-tool (niwa-tool-get "Agent"))))
+          (niwa-agents--setup-for-request)
+          (should (equal ["probe"] (plist-get (arg "role" (car gptel-tools)) :enum)))
+          (should (equal [] (plist-get (arg "role") :enum))))
+        (niwa-tool-clear-registry)
+        (niwa-tool-ui--register)
+        (should (equal [] (plist-get (arg "role") :enum)))
+        (should-not (plist-member (arg "model") :enum))
+        (should (equal model-description
+                       (plist-get (arg "model") :description))))))
+
+  :doc "blocked and failed retained agents keep their transcript handles"
+  (progn
+    (niwa-tool-ui--register)
+    (let ((tool (niwa-tool-get "Agent")))
+      (dolist (status '(blocked error))
+        (let ((rendering
+               (niwa-view--invoke-renderer
+                tool
+                (list :kind 'collaboration-event :event 'started
+                      :path "/root/worker" :status status)
+                '(:task_name "worker") "Child started.")))
+          (should (eq 'agent-handle (plist-get rendering :vtype)))
+          (should (eq status (plist-get rendering :agent-status)))
+          (should (eq 'error (plist-get rendering :status)))))
+      (should-not (niwa-view--invoke-renderer
+                   tool nil '(:task_name "worker") "Error: launch refused"))))
+
+  :doc "Agent exposes every optional context and configuration control"
+  (progn
+    (niwa-tool-ui--register)
+    (let* ((tool (niwa-tool-get "Agent"))
+           (args (niwa-tool-args tool))
+           (context-arg (assq 'context args))
+           (prompt (niwa-tool-prompt tool)))
+      (dolist (name '(role context model effort working_directory))
+        (let ((arg (assq name args)))
+          (should arg)
+          (should (eq :optional (nth 2 arg)))))
+      (should-not (assq 'fork_turns args))
+      (dolist (text '("Defaults to none"
+                      "summary"
+                      "task-focused"
+                      "recent dialogue"
+                      "complete conversation"
+                      "model-visible roles"
+                      "actionable instructions"))
+        (should (string-match-p text (nth 3 context-arg))))
+      (dolist (text '("complete assigned task"
+                      "`context` defaults to `none`"
+                      "recent turns"
+                      "full conversation"
+                      "model-visible roles"
+                      "actionable instructions"
+                      "background and not continue prior"))
+        (should (string-match-p text prompt)))))
+
+  :doc "Agent exposes optional working_directory in provider and discovery contracts"
+  (progn
+    (niwa-tool-ui--register)
+    (let* ((tool (niwa-tool-get "Agent"))
+           (provider (niwa-tool-gptel-tool tool))
+           (arg (cl-find "working_directory" (gptel-tool-args provider)
+                         :key (lambda (entry) (plist-get entry :name))
+                         :test #'equal))
+           contract)
+      (should arg)
+      (should (equal "string" (plist-get arg :type)))
+      (should (plist-get arg :optional))
+      (with-temp-buffer
+        (setq-local niwa--session (niwa-tool-ui-test--session))
+        (setf (niwa-session-tool-catalog niwa--session)
+              '((("niwa" "Agent") . "Start a child")))
+        (niwa-tools--tool-search (lambda (text) (setq contract text)) "Agent"))
+      (should (string-search "working_directory" contract))
+      (should (string-search (plist-get arg :description) contract)))))
+
+(niwa-deftest niwa-tool-ui--agent/working-directory-forwarding
+  (:before-each (niwa-tools-register))
+  ,test
+  (test)
+  :doc "registered provider dispatch forwards explicit and omitted cwd to spawn"
+  (let* ((root (file-name-as-directory (make-temp-file "niwa-agent-forward-" t)))
+         (workspace (niwa-workspace--create
+                     :type 'project :id root :root root :name "forward"))
+         (session (niwa-session-create "main" workspace root))
+         (tool (niwa-tool-gptel-tool (niwa-tool-get "Agent")))
+         forwarded)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local niwa--session session niwa--workspace workspace
+                      default-directory root)
+          (setf (niwa-session-permission-mode session) 'full-auto)
+          (cl-letf (((symbol-function 'niwa-agent-control-spawn)
+                     (lambda (seen-session task message callback &rest options)
+                       (push (list seen-session task message options) forwarded)
+                       (funcall callback '(:outcome aborted))
+                       #'ignore)))
+            (dolist (directory (list root nil))
+              (let* ((args (append '(:task_name "cwd" :message "Inspect cwd.")
+                                   (and directory
+                                        (list :working_directory directory))))
+                     result)
+                (apply (gptel-tool-function tool)
+                       (lambda (value &rest _) (setq result value))
+                       (mapcar (lambda (arg)
+                                 (plist-get args (intern (concat ":" (plist-get arg :name)))))
+                               (gptel-tool-args tool)))
+                (should result)
+                (should (= (if directory 1 2) (length forwarded)))
+                (pcase-let ((`(,seen-session ,task ,message ,options) (car forwarded)))
+                  (should (eq session seen-session))
+                  (should (equal "cwd" task))
+                  (should (equal "Inspect cwd." message))
+                  (should (equal directory (plist-get options :working-directory))))))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-tool-ui--agent
+  (:after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "spawns, settles, and retains one path-addressed default agent"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-agent-v2-" t)))
+         (workspace (niwa-workspace-get-or-create
+                     'project "agent-v2" root "agent-v2"))
+         (session (niwa-session-create "main" workspace))
+         (parent (generate-new-buffer " *niwa-agent-v2-parent*"))
+         callbacks
+         invocations
+         launches)
+    (setf (niwa-session-agent-turn-capacity session) 3)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local niwa--session session)
+          (setq-local niwa--workspace workspace)
+          (cl-letf (((symbol-function 'niwa-agent-exec-run)
+                     (lambda (callback _role _description invocation
+                                       buffer &optional _configure)
+                       (if (with-current-buffer buffer
+                             (string-match-p "Fail initialization\\."
+                                             (buffer-string)))
+                           (error "Provider initialization failed")
+                         (push callback callbacks)
+                         (push invocation invocations)
+                         'provider-request))))
+            (let (result)
+              (niwa-tool-ui--agent
+               (lambda (value &rest _) (setq result value))
+               '(:task_name "retryable"
+                 :message "Fail initialization."))
+              (should (string-prefix-p "Error:" (plist-get result :result))))
+            (should-not (assoc "/root/retryable"
+                               (niwa-session-agent-registry session)))
+            (should-not (niwa-session-agent-transcripts session))
+            (should-not
+             (directory-files-recursively
+              root "/agents/.*[.]chat[.]org\\'"))
+            (dotimes (index 3)
+              (let (result)
+                (niwa-tool-ui--agent
+                 (lambda (value &rest _) (setq result value))
+                 (list :task_name (format "task_%d" index)
+                       :message "Inspect the implementation."))
+                (push result launches)))
+            (should-error
+             (niwa-tool-ui--agent
+              #'ignore
+              '(:task_name "too_many" :message "This must not start."))
+             :type 'user-error)
+            (let* ((launch (car (last launches)))
+                   (path (gethash "path"
+                                  (json-parse-string
+                                   (plist-get launch :result)))))
+              (should (equal "/root/task_0" path))
+              (should (equal "niwa-test-model"
+                             (plist-get (plist-get (plist-get launch :render-data)
+                                                   :model-metadata) :model)))
+              (should (equal "Started /root/task_0 · niwa-test-model"
+                             (substring-no-properties
+                              (plist-get
+                               (niwa-tool-ui--render-agent
+                                "Agent"
+                                '(:task_name "task_0")
+                                (plist-get launch :result)
+                                (plist-get launch :render-data))
+                               :header)))))
+            (let* ((records (niwa-session-agent-registry session))
+                   (record (cdr (assoc "/root/task_0" records))))
+              (should (= 3 (length records)))
+              (should (stringp (niwa-agent-record-id record)))
+              (should (equal "/root/task_0"
+                             (niwa-agent-record-path record)))
+              (should (equal "/root"
+                             (niwa-agent-record-parent-path record)))
+              (should (equal "default"
+                             (niwa-agent-record-role record)))
+              (should (equal "default"
+                             (niwa-agent-name
+                              (niwa-agent-configuration-agent
+                               (niwa-agent-record-configuration record)))))
+              (should (eq 'running
+                          (niwa-agent-record-activity record)))
+              (should (stringp
+                       (niwa-agent-record-conversation-location record))))
+            (funcall (car (last callbacks)) "Completed task zero.")
+            (funcall (car (last callbacks)) "Duplicate callback.")
+            (let* ((records (niwa-session-agent-registry session))
+                   (record (cdr (assoc "/root/task_0" records)))
+                   (messages (niwa-session-messages session))
+                   (result (car messages)))
+              (should (eq 'idle (niwa-agent-record-activity record)))
+              (should (= 1 (length messages)))
+              (should (eq 'RESULT (plist-get result :type)))
+              (should (equal "/root/task_0" (plist-get result :sender)))
+              (should (equal "/root" (plist-get result :recipient)))
+              (should (eq 'completed (plist-get result :outcome)))
+              (should (string-match-p "Completed task zero"
+                                      (plist-get result :payload)))
+              (let ((delivery (niwa-tools--message-delivery-block result)))
+                (should (string-match-p
+                         "sender=\"/root/task_0\"" delivery))
+                (should (string-match-p "Completed task zero" delivery))))
+            (funcall
+             (nth 1 callbacks)
+             '(:niwa-agent-terminal-status error
+               :error-details "Provider failed"
+               :fallback-partial nil))
+            (funcall
+             (nth 1 callbacks)
+             '(:niwa-agent-terminal-status error
+               :error-details "Duplicate error"
+               :fallback-partial nil))
+            (let ((result (car (niwa-session-messages session))))
+              (should (= 2 (length (niwa-session-messages session))))
+              (should (eq 'errored (plist-get result :outcome)))
+              (should (string-match-p "Provider failed"
+                                      (plist-get result :payload)))
+              (should-not (string-match-p "default--"
+                                          (plist-get result :payload))))
+            (funcall (car callbacks)
+                     (concat "HEAD" (make-string 40000 ?x) "TAIL"))
+            (let* ((result (car (niwa-session-messages session)))
+                   (payload (plist-get result :payload)))
+              (should (= 3 (length (niwa-session-messages session))))
+              (should (<= (length payload) (* 32 1024)))
+              (should (string-prefix-p "HEAD" payload))
+              (should (string-match-p "TAIL" payload))
+              (should (string-match-p "Full transcript:" payload))
+              (let ((delivery
+                     (niwa-tools--message-delivery-block result)))
+                (should (string-match-p "TAIL" delivery))
+                (should (string-match-p "Full transcript:" delivery))))
+            (let (result)
+              (niwa-tool-ui--agent
+               (lambda (value &rest _) (setq result value))
+               '(:task_name "switch-buffer-error"
+                 :message "Use the released slot."))
+              (should (equal "/root/switch-buffer-error"
+                             (gethash "path" (json-parse-string
+                                              (plist-get result :result)))))
+              (dolist (target '("switch-buffer-error" "/root/switch-buffer-error"))
+                (should (equal "/root/switch-buffer-error"
+                               (niwa-agent-control-resolve-path
+                                session "/root" target)))))
+            (let (result)
+              (niwa-tool-ui--agent
+               (lambda (value &rest _) (setq result value))
+               '(:task_name "task_0" :message "Start a new conversation."))
+              (should (equal "/root/task_0-2"
+                             (gethash "path" (json-parse-string
+                                              (plist-get result :result)))))
+              (funcall (car callbacks) "Finished duplicate name."))
+            (dolist
+                (args '((:task_name "bad_context" :message "bad"
+                         :context "0")
+                        (:task_name "bad_model" :message "bad"
+                         :model "not-a-model")
+                        (:task_name "bad_effort" :message "bad"
+                         :effort "bogus")
+                        (:task_name "nil_effort" :message "bad"
+                         :effort "nil")))
+              (should-error (niwa-tool-ui--agent #'ignore args)
+                            :type 'user-error)
+              (should-not
+               (assoc (concat "/root/" (plist-get args :task_name))
+                      (niwa-session-agent-registry session))))
+            (dolist (pair '(("Review code-block copy" . "/root/review-code-block-copy")
+                            ("Review code-block copy" . "/root/review-code-block-copy-2")
+                            ("Upper" . "/root/upper")
+                            ("two/parts" . "/root/two-parts")
+                            ("ROOT" . "/root/agent-root")
+                            ("\u65e5\u672c\u8a9e" . "/root/agent")))
+              (let (result)
+                (niwa-tool-ui--agent
+                 (lambda (value &rest _) (setq result value))
+                 (list :task_name (car pair) :message "Inspect the task."))
+                (let ((path (gethash "path" (json-parse-string
+                                           (plist-get result :result)))))
+                  (should (equal (cdr pair) path))
+                  (should (equal path (plist-get (plist-get result :render-data) :path)))
+                  (should (equal path (niwa-agent-control-resolve-path
+                                       session "/root" path))))
+                (funcall (car callbacks) "Completed display-name task.")))))
+      (dolist (invocation invocations)
+        (when-let* ((buffer (niwa-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (niwa-session-save-path session)
+        (niwa-session-persistence-lock-release
+         (niwa-session-save-path session)))
+      (when (buffer-live-p parent)
+        (kill-buffer parent))
+      (delete-directory root t)))
+
+  :doc "parent request cancellation cancels unpublished Agent preparation"
+  (with-temp-buffer
+    (let* ((niwa--session (niwa-session--create :name "main"))
+           (niwa--current-request
+            (niwa-request--create :session niwa--session))
+           cancelled
+           result)
+      (cl-letf (((symbol-function 'niwa-agent-control-spawn)
+                 (lambda (_session _task _message callback &rest _)
+                   (lambda ()
+                     (setq cancelled t)
+                     (funcall callback '(:outcome aborted))))))
+        (niwa-tool-ui--agent
+         (lambda (value &rest _) (setq result value))
+         '(:task_name "pending" :message "Prepare this."))
+        (should-not result)
+        (niwa-request-drain-cancellers niwa--current-request)
+        (should cancelled)
+        (should (string-prefix-p "Error:" (plist-get result :result)))))))
+
+(niwa-deftest niwa-tool-ui--agent/frozen-conversation
+  (:before-each (niwa-tools-register)
+   :after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "covers every copied context, independent compaction, and frozen follow-ups"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-agent-frozen-" t)))
+         (workspace (niwa-workspace-get-or-create
+                     'project "agent-frozen" root "agent-frozen"))
+         (session (niwa-session-create "main" workspace))
+         (parent (generate-new-buffer " *niwa-agent-frozen-parent*"))
+         (role
+          (niwa-agent--create
+           :name "freeze_test"
+           :description "Freeze conversation"
+           :tools nil
+           :system-prompt "Initial frozen instructions."))
+         callbacks
+         invocations
+         record
+         configuration
+         child-buffer
+         frozen-buffer
+         initial-invocation)
+    (push (cons "freeze_test" role) niwa-agent--registry)
+    (unwind-protect
+        (with-current-buffer parent
+          (org-mode)
+          (setq-local niwa--session session)
+          (setq-local niwa--workspace workspace)
+          (insert "#+begin_summary\nArchived work summarized.\n#+end_summary\n"
+                  "First live prompt.\n")
+          (let ((response-start (point)))
+            (insert "First live response.\n")
+            (put-text-property response-start (point) 'gptel 'response))
+          (insert "Second live prompt.\n")
+          (let ((response-start (point)))
+            (insert "Second live response.\n")
+            (put-text-property response-start (point) 'gptel 'response))
+          (let ((niwa-agents--specs nil))
+            (cl-letf (((symbol-function 'niwa-agent-exec-run)
+                       (lambda (callback _role _description invocation
+                                         buffer &optional _configure)
+                         (push callback callbacks)
+                         (push invocation invocations)
+                         (setq child-buffer buffer)
+                         'provider-request)))
+              (niwa-tool-ui--agent
+               #'ignore
+               '(:task_name "frozen"
+                 :message "Initial child task."
+                 :role "freeze_test"
+                 :context "1"))
+              (setq record
+                    (cdr (assoc "/root/frozen"
+                                (niwa-session-agent-registry session))))
+              (setq configuration
+                    (niwa-agent-record-configuration record))
+              (setq frozen-buffer child-buffer
+                    initial-invocation (car invocations))
+              (with-current-buffer child-buffer
+                (let ((text (buffer-string)))
+                  (should (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Initial child task" text))))
+              (with-current-buffer frozen-buffer
+                (goto-char (point-max))
+                (let ((start (point)))
+                  (insert "Initial child result.\n")
+                  (put-text-property start (point) 'gptel 'response)))
+              (funcall (car callbacks) "Initial child result.")
+              (with-current-buffer frozen-buffer
+                (let* ((target
+                       (niwa-compact-target-agent-target initial-invocation))
+                       (archive
+                        (niwa-compact-target-call
+                         target :apply "Child work compacted." nil nil nil)))
+                  (should (file-exists-p archive))
+                  (should (string-match-p "Child work compacted"
+                                          (buffer-string)))
+                  (should (string-match-p "Initial child task"
+                                          (buffer-string)))
+                  (should-not (string-match-p "Archived work summarized"
+                                              (buffer-string)))
+                  (should-not (string-match-p "Second live prompt"
+                                              (buffer-string)))))
+              (should (eq record
+                          (cdr (assoc
+                                "/root/frozen"
+                                (niwa-session-agent-registry session)))))
+              (cl-labels
+                  ((fork-text (task-name fork)
+                     (niwa-tool-ui--agent
+                      #'ignore
+                      (append
+                       (list :task_name task-name
+                             :message (format "Task for %s." task-name))
+                       fork))
+                     (prog1
+                         (with-current-buffer child-buffer (buffer-string))
+                       (funcall (car callbacks) "Context fork complete."))))
+                (let ((text (fork-text "explicit_all"
+                                       '(:context "all"))))
+                  (should (string-match-p "Archived work summarized" text))
+                  (should (string-match-p "First live prompt" text))
+                  (should (string-match-p "Second live prompt" text)))
+                (let ((text (fork-text "default_none" nil)))
+                  (should-not
+                   (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should-not (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Task for default_none" text)))
+                (let ((text (fork-text "without_context"
+                                       '(:context "none"))))
+                  (should-not
+                   (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should-not (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Task for without_context" text))))
+              (insert "Parent text added after spawn.\n")
+              (setf (alist-get "freeze_test" niwa-agent--registry
+                               nil nil #'equal)
+                    (niwa-agent--create
+                     :name "freeze_test"
+                     :description "Mutated role"
+                     :tools '((:tool "Eval"))
+                     :system-prompt "Mutated instructions."))
+              (niwa-tool-ui--send-message
+               '(:target "/root/frozen" :message "Follow-up child task."))
+              (let* ((followup (car invocations))
+                     (frozen-agent
+                      (niwa-agent-invocation-agent followup)))
+                (should (eq configuration
+                            (niwa-agent-invocation-frozen-configuration
+                             followup)))
+                (should (equal "Initial frozen instructions."
+                               (niwa-agent-system-prompt frozen-agent)))
+                (should-not (member '(:tool "Eval")
+                                    (niwa-agent-tools frozen-agent)))
+                (with-current-buffer frozen-buffer
+                  (let ((text (buffer-string)))
+                    (should (string-match-p "Follow-up child task" text))
+                    (should-not
+                     (string-match-p "Parent text added after spawn" text))
+                    (should
+                     (= 1 (how-many
+                           (format "^:%s:"
+                                   niwa-agent-task-path-property)
+                           (point-min) (point-max)))))
+                  (goto-char (point-max))
+                  (let ((start (point)))
+                    (insert "Follow-up child result.\n")
+                    (put-text-property start (point) 'gptel 'response)))
+                (funcall (car callbacks) "Follow-up child result.")
+                (with-current-buffer frozen-buffer
+                  (let ((snapshot (niwa-compact-evidence-context-snapshot 1)))
+                    (should (string-match-p "\\* Agent Task: frozen" snapshot))
+                    (should (string-match-p "Child work compacted" snapshot))
+                    (should (string-match-p "Follow-up child task" snapshot))
+                    (should (string-match-p "Follow-up child result" snapshot)))
+                  (let* ((target (niwa-compact-target-agent-target followup))
+                         (archive
+                          (niwa-compact-target-call
+                           target :apply "Follow-up work compacted."
+                           nil nil nil)))
+                    (should (file-exists-p archive))
+                    (should (string-match-p "Initial child task"
+                                            (buffer-string)))
+                    (should (string-match-p "Follow-up work compacted"
+                                            (buffer-string)))
+                    (should (string-match-p "Follow-up child task"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Follow-up child result"
+                                                (buffer-string)))))))))
+      (setq niwa-agent--registry
+            (assoc-delete-all "freeze_test" niwa-agent--registry))
+      (dolist (invocation invocations)
+        (when-let* ((buffer (niwa-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (niwa-session-save-path session)
+        (niwa-session-persistence-lock-release
+         (niwa-session-save-path session)))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-tool-ui--agent/model-policy
+  (:before-each (niwa-tools-register)
+   :after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "freezes parent, role, and explicit model policy through the public tool"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-agent-model-policy-" t)))
+         (workspace (niwa-workspace-get-or-create
+                     'project "agent-model-policy" root "agent-model-policy"))
+         (session (niwa-session-create "main" workspace))
+         (parent (generate-new-buffer " *niwa-agent-model-policy*"))
+         (role (niwa-agent--create
+                :name "model_test"
+                :description "Model policy test"
+                :system-prompt "Use the frozen model policy."))
+         (old-custom (get 'gptel-reasoning-effort 'custom-type))
+         (old-parent (get 'parent-model :reasoning-effort))
+         (old-role (get 'role-model :reasoning-effort))
+         (old-explicit (get 'explicit-model :reasoning-effort))
+         invocations
+         callbacks)
+    (push (cons "model_test" role) niwa-agent--registry)
+    (unwind-protect
+        (let ((gptel--known-backends nil))
+          (gptel-make-openai "Parent" :key "test" :models '(parent-model))
+          (gptel-make-openai "Role" :key "test" :models '(role-model))
+          (gptel-make-openai "Explicit" :key "test" :models '(explicit-model))
+          (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+          (dolist (model '(parent-model role-model explicit-model))
+            (put model :reasoning-effort '(member low medium high)))
+          (with-current-buffer parent
+            (setq-local niwa--session session)
+            (setq-local niwa--workspace workspace)
+            (setq-local gptel-backend (gptel-get-backend "Parent"))
+            (setq-local gptel-model 'parent-model)
+            (setq-local gptel-reasoning-effort 'low)
+            (let ((niwa-agents--specs nil)
+                  (niwa-model-tiers
+                   '((role-tier :provider "Role:role-model" :effort medium)
+                     (explicit-tier :provider "Explicit:explicit-model")))
+                  (niwa-model-workloads '((model_test :tier role-tier))))
+              (should (eq 'low gptel-reasoning-effort))
+              (should (eq 'low
+                          (plist-get
+                           (niwa-model-resolve-workload 'default)
+                           :effort)))
+              (cl-letf (((symbol-function 'niwa-agent-exec-run)
+                         (lambda (callback _role _description invocation
+                                           _buffer &optional _configure)
+                           (push callback callbacks)
+                           (push invocation invocations)
+                           'provider-request)))
+                (cl-labels
+                    ((launch-policy (task role-name &rest controls)
+                       (niwa-tool-ui--agent
+                        #'ignore
+                        (append (list :task_name task
+                                      :message "Inspect model policy.")
+                                (and role-name (list :role role-name))
+                                controls))
+                       (let* ((invocation (car invocations))
+                              (configuration
+                               (niwa-agent-invocation-frozen-configuration
+                                invocation))
+                              (snapshot
+                               (niwa-agent-configuration-request-locals
+                                configuration)))
+                         (funcall (car callbacks) "Model policy inspected.")
+                         snapshot)))
+                  (let ((snapshot (launch-policy "parent_policy" nil)))
+                    (should (equal "Parent"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'parent-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'low
+                                (alist-get 'gptel-reasoning-effort snapshot))))
+                  (let ((snapshot
+                         (launch-policy "role_policy" "model_test")))
+                    (should (equal "Role"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'role-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'medium
+                                (alist-get 'gptel-reasoning-effort snapshot))))
+                  (let ((snapshot
+                         (launch-policy
+                          "explicit_policy" "model_test"
+                          :model "explicit-tier" :effort "high")))
+                    (should (equal "Explicit"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'explicit-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'high
+                                (alist-get 'gptel-reasoning-effort snapshot))))))))
+      (setq niwa-agent--registry
+            (assoc-delete-all "model_test" niwa-agent--registry))
+      (put 'gptel-reasoning-effort 'custom-type old-custom)
+      (put 'parent-model :reasoning-effort old-parent)
+      (put 'role-model :reasoning-effort old-role)
+      (put 'explicit-model :reasoning-effort old-explicit)
+      (dolist (invocation invocations)
+        (when-let* ((buffer (niwa-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (niwa-session-save-path session)
+        (niwa-session-persistence-lock-release
+         (niwa-session-save-path session)))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t)))))
+
+(niwa-deftest niwa-tool-ui--list-agents
+  (:after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "returns the stable roster, treats an empty prefix as omitted, and filters subtrees"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'project :id "list-agents"
+                     :root temporary-file-directory :name "list-agents"))
+         (session (niwa-session-create "main" workspace))
+         (buffer (generate-new-buffer " *niwa-list-agents*")))
+    (setf (niwa-session-agent-registry session)
+          (list
+           (cons "/root/zeta"
+                 (niwa-agent-record--create
+                  :id "default--private-z" :path "/root/zeta"
+                  :role "default" :activity 'idle
+                  :conversation-location "agents/zeta.chat.org"))
+           (cons "/root/alpha"
+                 (niwa-agent-record--create
+                  :id "default--private-a" :path "/root/alpha"
+                  :role "default" :activity 'running))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local niwa--session session)
+          (let ((result (plist-get (niwa-tool-ui--list-agents nil)
+                                   :result)))
+            (should (< (string-match "/root" result)
+                       (string-match "/root/alpha" result)))
+            (should (< (string-match "/root/alpha" result)
+                       (string-match "/root/zeta" result)))
+            (should-not (string-match-p "private" result))
+            (should-not (string-match-p "chat.org" result))
+            (should
+             (equal result
+                    (plist-get
+                     (niwa-tool-ui--list-agents '(:path_prefix ""))
+                     :result))))
+          (let ((result
+                 (plist-get
+                  (niwa-tool-ui--list-agents
+                   '(:path_prefix "/root/alpha"))
+                  :result)))
+            (should (string-match-p "/root/alpha" result))
+            (should-not (string-match-p "/root/zeta" result))))
+      (kill-buffer buffer))))
+
+(niwa-deftest niwa-tool-ui--list-agents/non-ascii
+  (:after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "a non-ASCII agent path reaches the pipeline result as multibyte text"
+  (let* ((workspace (niwa-workspace--create
+                     :type 'project :id "list-agents-u"
+                     :root temporary-file-directory :name "list-agents-u"))
+         (session (niwa-session-create "main" workspace))
+         (path "/root/café")
+         context)
+    (setf (niwa-session-agent-registry session)
+          (list (cons path (niwa-agent-record--create
+                            :id "default--u" :path path
+                            :role "default" :activity 'idle))))
+    (with-temp-buffer
+      (setq-local niwa--session session)
+      (niwa-pipeline--step-handler
+       (list :tool (niwa-tool-ensure "ListAgents") :args nil
+             :cancel-cell (list #'ignore))
+       (lambda (ctx) (setq context ctx)) #'ignore))
+    (let ((text (plist-get context :result)))
+      (should (multibyte-string-p text))
+      (should (string-match-p path text)))))
+
+(niwa-deftest niwa-tool-ui--send-message-activation
+  (:after-each (niwa-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "continues an idle retained conversation and reports to its spawn parent"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-followup-idle-" t)))
+         (workspace (niwa-workspace-get-or-create
+                     'project "followup-idle" root "followup-idle"))
+         (session (niwa-session-create "main" workspace))
+         (parent (generate-new-buffer " *niwa-followup-idle-parent*"))
+         launches
+         fail-launch)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local niwa--session session)
+          (setq-local niwa--workspace workspace)
+          (cl-letf (((symbol-function 'niwa-agent-exec-run)
+                     (lambda (callback _role _description invocation
+                                       buffer &optional _configure)
+                       (when fail-launch
+                         (error "Simulated provider launch failure"))
+                       (setq launches
+                             (append launches
+                                     (list (list :callback callback
+                                                 :invocation invocation
+                                                 :buffer buffer))))
+                       'provider-request)))
+            (let (started)
+              (niwa-tool-ui--agent
+               (lambda (value &rest _) (setq started value))
+               '(:task_name "worker" :message "Inspect feature one."))
+              (should started))
+            (let* ((initial (car launches))
+                   (initial-invocation (plist-get initial :invocation))
+                   (initial-buffer (plist-get initial :buffer))
+                   (initial-id
+                    (niwa-agent-invocation-agent-id initial-invocation)))
+              (funcall (plist-get initial :callback) "Feature one reviewed.")
+              (setf (niwa-session-messages session) nil)
+              (let ((result
+                     (niwa-tool-ui--send-message
+                      '(:target "worker"
+                        :message "Now review feature two."))))
+                (should (equal "Delivered to /root/worker; its turn started."
+                               (plist-get result :result)))
+                (should (equal "/root/worker"
+                               (plist-get (plist-get result :render-data)
+                                          :path))))
+              (should (= 2 (length launches)))
+              (let* ((followup (nth 1 launches))
+                     (followup-invocation
+                      (plist-get followup :invocation)))
+                (should (eq initial-buffer (plist-get followup :buffer)))
+                (should (equal initial-id
+                               (niwa-agent-invocation-agent-id
+                                followup-invocation)))
+                (with-current-buffer initial-buffer
+                  (let ((text (buffer-string)))
+                    (should (< (string-match "Inspect feature one" text)
+                               (string-match "Now review feature two" text)))))
+                (funcall (plist-get followup :callback)
+                         "Feature two reviewed."))
+              (let ((result (car (niwa-session-messages session))))
+                (should (= 1 (length (niwa-session-messages session))))
+                (should (equal "/root/worker" (plist-get result :sender)))
+                (should (equal "/root" (plist-get result :recipient)))
+                (should (string-match-p "Feature two reviewed"
+                                        (plist-get result :payload))))
+              (let* ((record
+                      (cdr (assoc "/root/worker"
+                                  (niwa-session-agent-registry session))))
+                     (location
+                      (niwa-agent-record-conversation-location record))
+                     (text (with-current-buffer initial-buffer
+                             (buffer-string))))
+                (cl-flet
+                    ((snapshot ()
+                       (list :activity (niwa-agent-record-activity record)
+                             :invocation (niwa-agent-record-invocation record)
+                             :location
+                             (niwa-agent-record-conversation-location record)
+                             :mailbox (copy-tree (niwa-agent-record-mailbox record))
+                             :messages (copy-tree (niwa-session-messages session))
+                             :registry
+                             (mapcar (lambda (entry)
+                                       (cons (car entry)
+                                             (niwa-agent-record-activity
+                                              (cdr entry))))
+                                     (niwa-session-agent-registry session))
+                             :transcripts
+                             (copy-tree (niwa-session-agent-transcripts session))
+                             :lease (copy-tree (niwa-session-lease session))
+                             :publication
+                             (copy-tree (niwa-session-publication session))
+                             :pending
+                             (niwa-session-pending-publication session)
+                             :queue (niwa-session-publication-queue session)
+                             :uncommitted
+                             (niwa-session-publication-uncommitted-batches
+                              session)
+                             :active
+                             (niwa-session-publication-active-p session))))
+                (let ((before (snapshot)))
+                (cl-letf
+                    (((symbol-function
+                       'niwa-agent-conversation-save)
+                      (lambda (&rest _) nil)))
+                  (should-error
+                   (niwa-tool-ui--send-message
+                    '(:target "worker"
+                      :message "This task must roll back."))))
+                (should (equal before (snapshot))))
+                (should (= 2 (length launches)))
+                (should (eq 'idle (niwa-agent-record-activity record)))
+                (should (equal location
+                               (niwa-agent-record-conversation-location
+                                record)))
+                (should (equal text
+                               (with-current-buffer initial-buffer
+                                 (buffer-string))))
+                (should
+                 (eq 'completed
+                     (plist-get
+                      (cdr (assoc
+                            (niwa-agent-record-id record)
+                            (niwa-session-agent-transcripts session)))
+                      :status)))
+                (setq fail-launch t)
+                (should-error
+                 (niwa-tool-ui--send-message
+                  '(:target "worker"
+                    :message "Record a failed launch.")))
+                (should (= 2 (length launches)))
+                (should (eq 'idle (niwa-agent-record-activity record)))
+                (should-not (niwa-agent-record-invocation record)))))))
+      (dolist (launch launches)
+        (when-let* ((buffer (plist-get launch :buffer))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (niwa-session-save-path session)
+        (niwa-session-persistence-lock-release
+         (niwa-session-save-path session)))
+      (when (buffer-live-p parent)
+        (kill-buffer parent))
+      (niwa-session-persistence-cancel-deferred-agent-save session)
+      (should-not
+       (gethash session niwa-session-persistence--deferred-agent-saves))
+      (delete-directory root t)))
+
+  :doc "steers a running target at its next boundary when capacity is full"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-followup-running-" t)))
+         (workspace (niwa-workspace-get-or-create
+                     'project "followup-running" root "followup-running"))
+         (session (niwa-session-create "main" workspace))
+         (parent (generate-new-buffer " *niwa-followup-running-parent*"))
+         launches)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local niwa--session session)
+          (setq-local niwa--workspace workspace)
+          (cl-letf (((symbol-function 'niwa-agent-exec-run)
+                     (lambda (callback _role _description invocation
+                                       buffer &optional _configure)
+                       (setq launches
+                             (append launches
+                                     (list (list :callback callback
+                                                 :invocation invocation
+                                                 :buffer buffer))))
+                       'provider-request)))
+            (dolist (name '("one" "two" "three"))
+              (niwa-tool-ui--agent
+               #'ignore (list :task_name name :message "Initial task.")))
+            (should (= 3 (niwa-agent-control--active-count session)))
+            (let ((result
+                   (niwa-tool-ui--send-message
+                    '(:target "/root/one"
+                      :message "Incorporate this steering."))))
+              (should (equal "Queued for /root/one." (plist-get result :result))))
+            (should (= 3 (length launches)))
+            (should (= 3 (niwa-agent-control--active-count session)))
+            (should-not (niwa-session-messages session))
+            (let* ((first (car launches))
+                   (invocation (plist-get first :invocation))
+                   (record (cdr (assoc "/root/one"
+                                       (niwa-session-agent-registry
+                                        session))))
+                   (message (car (niwa-agent-record-mailbox record))))
+              (should (eq 'MAIL (plist-get message :type)))
+              (should (equal "/root" (plist-get message :sender)))
+              (should (equal "/root/one" (plist-get message :recipient)))
+              (should (equal "Incorporate this steering."
+                             (plist-get message :payload)))
+              ;; The ordinary WAIT handler drains the follow-up before the
+              ;; provider's next safe request boundary.
+              (niwa-agent-control-clear-context-mailbox invocation)
+              (funcall (plist-get first :callback)
+                       "Steered task finished."))
+            (should (= 3 (length launches)))
+            (should (= 2 (niwa-agent-control--active-count session)))
+            (should (= 1 (length (niwa-session-messages session))))))
+      (dolist (launch launches)
+        (when-let* ((buffer (plist-get launch :buffer))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (niwa-session-save-path session)
+        (niwa-session-persistence-lock-release
+         (niwa-session-save-path session)))
+      (when (buffer-live-p parent)
+        (kill-buffer parent))
+      (niwa-session-persistence-cancel-deferred-agent-save session)
+      (should-not
+       (gethash session niwa-session-persistence--deferred-agent-saves))
+      (delete-directory root t))))
+
+
+;;; Expand/collapse
+
+(niwa-deftest niwa-tool-ui--render-agent-body
+  (:doc "renders canonical asynchronous Agent start events")
+  ,test
+  (test)
+
+  :doc "returns one canonical Started row keyed by path"
+  (let ((rendering
+         (niwa-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review")
+          "{\"path\":\"/root/spec_review\"}"
+          '(:kind collaboration-event
+            :event started
+            :path "/root/spec_review"
+            :agent-id "default--internal"
+            :status running))))
+    (should (equal "Started /root/spec_review"
+                   (plist-get rendering :header)))
+    (should (equal "/root/spec_review"
+                   (plist-get rendering :agent-path)))
+    (should (equal "default--internal"
+                   (plist-get rendering :agent-id)))
+    (should (eq 'agent-handle (plist-get rendering :vtype))))
+
+  :doc "shows summary preparation before the Agent call completes"
+  (let ((rendering
+         (niwa-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review" :context "summary")
+          "" nil)))
+    (should (equal "Preparing summary context... spec_review"
+                   (plist-get rendering :header)))
+    (should-not (plist-get rendering :expandable-p)))
+
+  :doc "distinguishes launch model identity from summary-generation metadata"
+  (let ((rendering
+         (niwa-tool-ui--render-agent
+          "Agent" '(:task_name "partner") "{\"path\":\"/root/partner\"}"
+          '(:kind collaboration-event :event started :path "/root/partner"
+            :status running
+            :model-metadata (:backend "Claude Code" :model "opus" :effort "high")
+            :summary-metadata (:backend "openai" :model gpt-5 :effort high)))))
+    (should (equal "Started /root/partner · opus:high · summary openai/gpt-5 (high)"
+                   (plist-get rendering :header)))
+    (should (string-search "At launch\nProvider  Claude Code\nModel     opus\nEffort    high"
+                           (plist-get rendering :body))))
+
+  :doc "omits unavailable effort instead of showing an inherited default"
+  (let ((rendering
+         (niwa-tool-ui--render-agent
+          "Agent" nil "result"
+          '(:kind collaboration-event :event started :path "/root/partner"
+            :model-metadata (:backend "provider" :model "mistral")))))
+    (should (equal "Started /root/partner · mistral" (plist-get rendering :header)))
+    (should-not (string-search "Effort" (plist-get rendering :body))))
+
+  :doc "shows privacy-safe summary metadata without summary content"
+  (let ((rendering
+         (niwa-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review" :context "summary")
+          "{\"path\":\"/root/spec_review\"}"
+          '(:kind collaboration-event :event started
+            :path "/root/spec_review" :status running
+            :summary-metadata
+            (:backend "openai" :model gpt-5 :effort high)))))
+    (should (equal
+             "Started /root/spec_review · summary openai/gpt-5 (high)"
+             (plist-get rendering :header)))
+    (should-not (string-match-p "Scope" (plist-get rendering :header))))
+
+  :doc "Started rows preserve a multiline leading-> composer draft"
+  (niwa-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (with-current-buffer view-buf
+        (niwa-view-test--insert-composer-draft draft 4)
+        (let ((rendering
+               (niwa-tool-ui--render-agent
+                "Agent" '(:task_name "spec_review")
+                "{\"path\":\"/root/spec_review\"}"
+                '(:kind collaboration-event
+                  :event started
+                  :path "/root/spec_review"
+                  :agent-id "default--internal"
+                  :model-metadata (:backend "Claude Code" :model "opus" :effort "high")
+                  :status running))))
+          (niwa-tool-ui-test--insert-rendering rendering)
+          (should (string= draft (niwa-view-composer-draft-text nil t)))))))
+
+  :doc "Started paths activate their retained transcript"
+  (niwa-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((rendering
+             (niwa-tool-ui--render-agent
+              "Agent" '(:task_name "spec_review")
+              "{\"path\":\"/root/spec_review\"}"
+              '(:kind collaboration-event
+                :event started
+                :path "/root/spec_review"
+                :status running)))
+            opened)
+        (let ((inhibit-read-only t))
+          (goto-char (niwa-view-transcript-tail))
+          (niwa-view--insert-rendered-tool rendering (cons 1 1)))
+        (goto-char (point-min))
+        (search-forward "/root/spec_review")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'niwa-view-open-agent-transcript)
+                   (lambda (path) (setq opened path))))
+          (niwa-view-activate-at-point))
+        (should (equal "/root/spec_review" opened)))))
+
+  :doc "rejects missing and malformed collaboration event data"
+  (dolist (render-data
+           '(nil
+             (:kind collaboration-event :event started)
+             (:kind collaboration-event :event started :path 7)
+             (:kind collaboration-event :event interacted
+              :path "/root/spec_review")
+             (:kind unrelated :event started :path "/root/spec_review")))
+    (should-not
+     (niwa-tool-ui--render-agent
+      "Agent" '(:task_name "spec_review") "Error: launch failed"
+      render-data)))
+)
+
+
+(niwa-deftest niwa-tool-ui--render-agent-interaction
+  (:doc "Renders retained-agent interaction events")
+  ,test
+  (test)
+  :doc "renders a started header without changing a leading-> draft"
+  (niwa-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line")
+          (rendering
+           (niwa-tool-ui--render-agent-interaction
+            "SendMessage"
+            '(:target "/root/spec_review" :message "Verify documentation")
+            ""
+            '(:kind collaboration-event
+              :event interacted
+              :path "/root/spec_review" :delivery started))))
+      (should (equal "SendMessage: /root/spec_review (started)"
+                     (plist-get rendering :header)))
+      (should (equal "/root/spec_review"
+                     (plist-get rendering :agent-path)))
+      (should (equal "Verify documentation"
+                     (plist-get rendering :body)))
+      (should (plist-get rendering :initially-collapsed-p))
+      (should-not
+       (niwa-tool-ui--render-agent-interaction
+        "SendMessage" '(:target "/root/missing")
+        "Error: Unknown agent target" nil))
+      (with-current-buffer view-buf
+        (niwa-view-test--insert-composer-draft draft 4)
+        (niwa-tool-ui-test--insert-rendering rendering)
+        (should (string= draft (niwa-view-composer-draft-text nil t))))))
+
+  :doc "renders every delivery disposition from render data"
+  (dolist (case '((queued . "message queued")
+                  (started . "started")
+                  (waiting . "waiting for a slot")))
+    (let ((rendering
+           (niwa-tool-ui--render-agent-interaction
+            "SendMessage" '(:message "Continue") ""
+            (list :kind 'collaboration-event :event 'interacted
+                  :path "/root/peer" :delivery (car case)))))
+      (should (equal (format "SendMessage: /root/peer (%s)" (cdr case))
+                     (plist-get rendering :header)))))
+
+  :doc "interaction paths activate transcripts; follow-ups and sent messages expand"
+  (niwa-view-test--with-buffers
+    (let* ((followup
+            (niwa-tool-ui--render-agent-interaction
+             "SendMessage"
+             '(:target "/root/spec_review" :message "Verify documentation")
+             ""
+             '(:kind collaboration-event
+               :event interacted
+               :path "/root/spec_review" :delivery started)))
+           (message
+            (niwa-tool-ui--render-agent-interaction
+             "SendMessage"
+             '(:target "/root/spec_review" :message "Detailed finding")
+             ""
+             '(:kind collaboration-event
+               :event interacted
+               :path "/root/spec_review")))
+           opened)
+      (should (equal "SendMessage: /root/spec_review (message queued)"
+                     (plist-get message :header)))
+      (should (equal "Verify documentation" (plist-get followup :body)))
+      (should (plist-get followup :initially-collapsed-p))
+      (should (equal "Detailed finding" (plist-get message :body)))
+      (should (plist-get message :initially-collapsed-p))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char (niwa-view-transcript-tail))
+          (niwa-view--insert-rendered-tool followup (cons 1 1))
+          (niwa-view--insert-rendered-tool message (cons 2 2)))
+        (goto-char (point-min))
+        (search-forward "SendMessage: /root/spec_review (started)")
+        (goto-char (match-beginning 0))
+        (search-forward "/root/spec_review")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'niwa-view-open-agent-transcript)
+                   (lambda (path) (setq opened path))))
+          (niwa-view-activate-at-point))
+        (should (equal "/root/spec_review" opened))
+        (goto-char (point-min))
+        (search-forward "SendMessage: /root/spec_review (started)")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                   (lambda (&rest _) followup)))
+          (niwa-view-toggle-section))
+        (should (search-forward "Verify documentation"
+                                (niwa-view-transcript-tail) t))
+        (goto-char (point-min))
+        (search-forward "SendMessage: /root/spec_review (message queued)")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                   (lambda (&rest _) message)))
+          (niwa-view-toggle-section))
+        (should (search-forward "Detailed finding"
+                                (niwa-view-transcript-tail) t))))))
+
+(niwa-deftest niwa-tool-ui--render-list-agents
+  (:doc "Renders the retained-agent roster")
+  ,test
+  (test)
+  :doc "renders aligned columns and preserves a multiline leading-> draft"
+  (niwa-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (niwa-tool-ui--render-list-agents
+             "ListAgents" nil
+             "[{\"path\":\"/root\",\"role\":\"default\",\"activity\":\"running\"},{\"path\":\"/root/v2_smoke\",\"role\":\"explorer\",\"activity\":\"idle\"}]"
+             nil)))
+      (should (equal "ListAgents: session (2 agents)"
+                     (plist-get rendering :header)))
+      (should
+       (equal (concat "Path            Role      Activity\n"
+                      "/root           default   running\n"
+                      "/root/v2_smoke  explorer  idle")
+              (plist-get rendering :body)))
+      (with-current-buffer view-buf
+        (niwa-view-test--insert-composer-draft draft 4)
+        (niwa-tool-ui-test--insert-rendering rendering)
+        (should (string= draft (niwa-view-composer-draft-text nil t))))))
+
+  :doc "falls back to generic rendering for malformed results"
+  (should-not
+   (niwa-tool-ui--render-list-agents
+    "ListAgents" nil "not json" nil)))
+
+(niwa-deftest niwa-tool-ui--render-tool-search ()
+  ,test
+  (test)
+  :doc "shows non-empty line counts, original text, and error status"
+  (dolist (case '(("" 0 nil) ("one\n\ntwo\n" 2 nil)
+                  ("Error: Unknown tool" 1 error)))
+    (let* ((result (car case))
+           (count (cadr case))
+           (rendering
+            (niwa-tool-ui--render-tool-search
+             "ToolSearch" '(:query "Read") result nil)))
+      (should (equal (format "ToolSearch: Read (search, %d %s)"
+                             count (if (= count 1) "line" "lines"))
+                     (plist-get rendering :header)))
+      (should (eq result (plist-get rendering :body)))
+      (should (eq (nth 2 case) (plist-get rendering :status)))
+      (should (plist-get rendering :initially-collapsed-p))))
+  :doc "leaves non-string results to generic rendering"
+  (should-not (niwa-tool-ui--render-tool-search nil nil nil nil)))
+
+(niwa-deftest niwa-tool-ui--interrupt-agent
+  (:doc "Interrupts retained turns through canonical path events")
+  ,test
+  (test)
+  :doc "returns the previous activity as JSON with canonical render data"
+  (let* ((session (niwa-tool-ui-test--session))
+         (record
+          (niwa-agent-record--create
+           :id "idle-id" :path "/root/idle" :activity 'idle))
+         result)
+    (setf (niwa-session-agent-registry session)
+          (list (cons "/root/idle" record)))
+    (let ((niwa--session session))
+      (setq result
+            (niwa-tool-ui--interrupt-agent
+             '(:target "/root/idle"))))
+    (should
+     (equal "idle"
+            (gethash
+             "previous_activity"
+             (json-parse-string (plist-get result :result)))))
+    (should (equal 'interrupted
+                   (plist-get (plist-get result :render-data) :event)))
+    (should (equal "/root/idle"
+                   (plist-get (plist-get result :render-data) :path))))
+
+  :doc "renders Interrupted PATH without changing a leading-> draft"
+  (niwa-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (niwa-tool-ui--render-interrupt-agent
+             "InterruptAgent" '(:target "/root/spec_review")
+             "{\"previous_activity\":\"running\"}"
+             '(:kind collaboration-event
+               :event interrupted
+               :path "/root/spec_review"))))
+      (should (equal "InterruptAgent: /root/spec_review (interrupted)"
+                     (plist-get rendering :header)))
+      (with-current-buffer view-buf
+        (niwa-view-test--insert-composer-draft draft 4)
+        (niwa-tool-ui-test--insert-rendering rendering)
+        (should (string= draft (niwa-view-composer-draft-text nil t)))))))
+
+(niwa-deftest niwa-tool-ui--send-message ()
+  ,test
+  (test)
+  :doc "confirms mail queued for a running peer and retains interaction render data"
+  (let* ((session (niwa-tool-ui-test--session))
+         (record (niwa-agent-record--create
+                  :id "peer-id" :path "/root/peer" :activity 'running))
+         result)
+    (setf (niwa-session-agent-registry session)
+          (list (cons "/root/peer" record)))
+    (let ((niwa--session session))
+      (setq result
+            (niwa-tool-ui--send-message
+             '(:target "/root/peer" :message "hello"))))
+    (should (equal "Queued for /root/peer." (plist-get result :result)))
+    (should (equal "/root/peer"
+                   (plist-get (plist-get result :render-data) :path)))
+    (should (eq 'queued
+                (plist-get (plist-get result :render-data) :delivery))))
+
+  :doc "preserves the initiating tool ID and confirms each delivery outcome"
+  (dolist (scenario '((queued . "Queued for /root/peer.")
+                      (started . "Delivered to /root/peer; its turn started.")
+                      (waiting . "Queued for /root/peer; it starts when a slot frees.")))
+    (let ((niwa--session (niwa-tool-ui-test--session))
+          (delivery (car scenario))
+          captured)
+      (cl-letf (((symbol-function 'niwa-pipeline-active-tool-use-id)
+                 (lambda () "send/1"))
+                ((symbol-function 'niwa-agent-control-send-message)
+                 (lambda (session target message &rest keys)
+                   (setq captured (list session target message keys))
+                   (list :path "/root/peer" :delivery delivery))))
+        (let ((result (niwa-tool-ui--send-message
+                       '(:target "peer" :message "Continue"
+                         :working_directory "next/"))))
+          (should (equal (list niwa--session "peer" "Continue"
+                               '(:parent-tool-use-id "send/1"
+                                 :working-directory "next/"))
+                         captured))
+          (should (equal (cdr scenario) (plist-get result :result)))
+          (should (eq delivery
+                      (plist-get (plist-get result :render-data)
+                                 :delivery))))))))
+
+(niwa-deftest niwa-tool-ui--send-message-parent-default
+  (:doc "omitted targets route through the schema to the caller's immediate parent")
+  (let* ((session (niwa-tool-ui-test--session))
+         (parent (niwa-agent-record--create
+                  :path "/root/parent" :parent-path "/root" :activity 'running))
+         (child (niwa-agent-record--create
+                 :path "/root/parent/child" :parent-path "/root/parent"
+                 :activity 'running)))
+    (setf (niwa-session-agent-registry session)
+          (list (cons "/root/parent" parent)
+                (cons "/root/parent/child" child)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local niwa--session session)
+          (dolist (scenario '(("/root/parent/child" nil "/root/parent")
+                              ("/root/parent" nil "/root")
+                              ("/root/parent/child" "/root" "/root")
+                              ("/root" nil nil)))
+            (pcase-let ((`(,sender ,target ,expected) scenario))
+              (setq-local niwa--agent-invocation
+                          (unless (equal sender "/root")
+                            (niwa-agent-invocation--create :path sender)))
+              (let (outcome)
+                (niwa-pipeline-run-tool-outcome
+                 (niwa-tool-ensure "SendMessage")
+                 (lambda (value) (setq outcome value))
+                 (append (list :message "progress")
+                         (when target (list :target target))))
+                (if expected
+                    (progn
+                      (should (eq 'success (plist-get outcome :status)))
+                      (should (equal expected
+                                     (plist-get (plist-get outcome :render-data)
+                                                :path)))
+                      (let ((mail (car (last (niwa-agent-control--mailbox
+                                             session expected)))))
+                        (should (equal sender (plist-get mail :sender)))
+                        (should (equal "progress" (plist-get mail :payload)))))
+                  (should (eq 'error (plist-get outcome :status)))
+                  (should (string-match-p "Root.*target"
+                                          (plist-get outcome :result))))))))
+      (niwa-agent-control-teardown-session session))))
+
+(niwa-deftest niwa-tool-ui--wait-agent ()
+  ,test
+  (test)
+  :doc "uses the ordinary async callback and returns only a wake summary"
+  (let ((session (niwa-tool-ui-test--session))
+        delivered)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (let ((niwa--session session))
+        (niwa-tool-ui--wait-agent
+         (lambda (value) (setq delivered value))
+         '(:timeout_ms 10000)))
+      (niwa-agent-control-send-message session "/root" "secret body")
+      (should (equal "Mailbox activity"
+                     (plist-get delivered :result)))
+      (should-not (string-match-p
+                   "secret body" (plist-get delivered :result)))
+      (should (equal 'finished-waiting
+                     (plist-get (plist-get delivered :render-data) :event)))))
+
+  :doc "request cancellation removes the root waiter without a stale callback"
+  (let* ((session (niwa-tool-ui-test--session))
+         (request (niwa-request--create
+                   :session session :origin "/root"))
+         delivered
+         scheduled)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_delay _repeat function &rest args)
+                 (setq scheduled (cons function args))
+                 'fake-timer)))
+      (let ((niwa--session session)
+            (niwa--current-request request))
+        (niwa-tool-ui--wait-agent
+         (lambda (value) (setq delivered value))
+         '(:timeout_ms 10000)))
+      (should (niwa-session-agent-root-waiter session))
+      (niwa-request-cancel request)
+      (should-not (niwa-session-agent-root-waiter session))
+      (apply (car scheduled) (cdr scheduled))
+      (should-not delivered)))
+
+  :doc "without MCP progress a long wait ends before the client idle limit"
+  (dolist (bounded '(t nil))
+    (let* ((session (niwa-tool-ui-test--session))
+           (niwa-mcp-client-idle-timeout 100)
+           (niwa-tools--current-engine
+            (niwa-request--create
+             :session session :origin "/root"
+             :context (list :niwa-mcp-idle-bounded bounded)))
+           delivered delay scheduled)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (seconds _repeat function &rest args)
+                   (setq delay seconds scheduled (cons function args))
+                   'fake-timer)))
+        (let ((niwa--session session))
+          (niwa-tool-ui--wait-agent
+           (lambda (value) (setq delivered value))
+           '(:timeout_ms 3600000)))
+        (should (if bounded (< delay 100) (= delay 3600)))
+        (apply (car scheduled) (cdr scheduled))
+        (should (eq bounded (and (string-search "Call WaitAgent again"
+                                                (plist-get delivered :result))
+                                 t)))
+        (should-not (niwa-session-agent-root-waiter session)))))
+
+  :doc "renders pending and settled wait text without changing a leading-> draft"
+  (niwa-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (niwa-tool-ui--render-wait-agent
+             "WaitAgent" nil "Timeout elapsed"
+             '(:kind collaboration-event :event finished-waiting
+               :reason timeout))))
+      (should (equal "Waiting for agents"
+                     (niwa-view--tool-status-string "WaitAgent" nil)))
+      (should (equal "WaitAgent: agents (Timeout elapsed)"
+                     (plist-get rendering :header)))
+      (should (equal "WaitAgent" (plist-get rendering :coalesce-key)))
+      (should-not (plist-get rendering :expandable-p))
+      (should-not (plist-get rendering :hidden-p))
+      (with-current-buffer view-buf
+        (niwa-view-test--insert-composer-draft draft 4)
+        (niwa-tool-ui-test--insert-rendering rendering)
+        (should (string-match-p
+                 "WaitAgent: agents"
+                 (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+        (should (string= draft (niwa-view-composer-draft-text nil t)))))))
+
+(provide 'test-niwa-tool-ui)
+
+;;; test-niwa-tool-ui.el ends here

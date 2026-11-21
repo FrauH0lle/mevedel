@@ -26,7 +26,7 @@ and [session publication and recovery](sessions.md) for their failure paths.
 
 A turn engine supplies model communication and model-history behavior. The
 gptel engine keeps its native state machine; the Claude Code engine runs the
-installed agent through ACP and exposes mevedel tools through MCP. Both retain
+installed agent through ACP and exposes niwa tools through MCP. Both retain
 the admitted request's authority, pipeline, transcript and settlement boundary.
 Claude-specific authentication and adapter options stay behind that engine;
 ACP alone does not guarantee prompt replacement or disabled built-in tools.
@@ -47,7 +47,7 @@ explains the boundary.
 
 ## Loading boundaries
 
-`mevedel.el` loads foundational data and instruction restoration, and exposes
+`niwa.el` loads foundational data and instruction restoration, and exposes
 commands through ordinary autoloads. Installation registers the complete tool
 catalog, presets, and integration hooks. Focus and theme callbacks act only on
 loaded views. Uninstall skips optional owners that have never loaded.
@@ -61,20 +61,20 @@ Claude requests have separate implementation boundaries; see [tools](tools.md),
 
 ## Key data structures
 
-Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
+Defined in `niwa-structs.el` / `niwa-tool-registry.el`:
 
-`mevedel-structs.el` owns these passive shapes and their shape-local
-invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
-and `mevedel-turn.el` owns request admission, cancellation, and settlement.
+`niwa-structs.el` owns these passive shapes and their shape-local
+invariants.  `niwa-workspace.el` owns workspace registry and state lookup,
+and `niwa-turn.el` owns request admission, cancellation, and settlement.
 Notes are not structs; see the instruction store below.
 
-- **`mevedel-workspace`**: type, id, root, name, and file-cache.
+- **`niwa-workspace`**: type, id, root, name, and file-cache.
   Its journal and memory observations are disposable UI caches; memory counts
   never authorize a proposal decision or application.
-  Additional roots live in `mevedel-workspace-additional-roots`.
-  `.mevedel/` is derived by
-  `mevedel-workspace-state-dir`, not stored as a slot.
-- **`mevedel-session`**: per-chat state: stable name-independent ID, editable
+  Additional roots live in `niwa-workspace-additional-roots`.
+  `.niwa/` is derived by
+  `niwa-workspace-state-dir`, not stored as a slot.
+- **`niwa-session`**: per-chat state: stable name-independent ID, editable
   display name and one-shot title eligibility, workspace, immutable execution target,
   qualified working directory, tasks, touched-files, permission rules/mode,
   exact or recursive resource grants, reminders, persisted per-conversation
@@ -83,7 +83,7 @@ Notes are not structs; see the instruction store below.
   transient unpublished agent reservations, root activity and tree capacity, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
-  queue, one pending plan approval, selected preset and resolved mevedel preset settings,
+  queue, one pending plan approval, selected preset and resolved niwa preset settings,
   the current session-owned Goal, and a transient bounded tool-input repair
   log. Lifecycle events emitted before session materialization wait in the
   transient `telemetry-pending` queue and flush to the diagnostic stream; the
@@ -91,19 +91,19 @@ Notes are not structs; see the instruction store below.
   may point `audit-session` at its durable parent for redacted audit events and
   shared target mutation authority; its runtime queues and unsanitized logs
   remain side-owned. The transient
-  `execution-state` slot is opaque outside `mevedel-execution.el`;
-  `mevedel-execution-process.el` keeps child processes, timers, spools, and
+  `execution-state` slot is opaque outside `niwa-execution.el`;
+  `niwa-execution-process.el` keeps child processes, timers, spools, and
   process groups behind an opaque child value, so they never enter the general
-  session model or persisted sidecar. `mevedel-execution-telemetry.el` owns an
+  session model or persisted sidecar. `niwa-execution-telemetry.el` owns an
   opaque per-execution context containing live ownership provenance, mutable
   summary cells, and privacy-safe event facts, but no live process record.
   Portable lease
   generations persist only the boolean unsettled-mutation safety latch needed
   when those transient records disappear.
-- **`mevedel-goal`**: identity, objective, lifecycle status and reason,
+- **`niwa-goal`**: identity, objective, lifecycle status and reason,
   token/time/turn accounting, optional budget and accepted-plan reference,
   and timestamps.
-- **`mevedel-request`**: per-turn state: process-unique request identity,
+- **`niwa-request`**: per-turn state: process-unique request identity,
   owning session and agent origin, its once-reserved session turn identity,
   request start time, accumulated active-work pause time, file-snapshots,
   immutable Plan read-only authority, cancellers,
@@ -112,35 +112,35 @@ Notes are not structs; see the instruction store below.
   backend/model/effort policy is captured at admission, before pending skill
   context is consumed; later context generation uses that frozen policy.
   Request-only overrides do not change the session's saved selection.
-- **`mevedel-tool`**: name, handler, description, summary, prompt and prompt
+- **`niwa-tool`**: name, handler, description, summary, prompt and prompt
   provenance,
   args, category, read-only/destructive/async/snapshot flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
-- `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
+- `niwa--instruction-states`: workspace-keyed instruction alists and ID state
   for notes, the recently-closed list, and display-number state. The note is
   the only instruction type: marked code with optional text, kept in the
-  workspace instruction store (`.mevedel/instructions.el`, format 2). Its
+  workspace instruction store (`.niwa/instructions.el`, format 2). Its
   overlay properties carry the author (user, agent, or Buddy), tags, state
   (unsent, sent, or taken), the note conversation's session id once sent, and at
   most one waiting prepared change. Note context reaches a prompt only when the
   note is sent or explicitly mentioned. Done, deleted, and dismissed notes move
-  to recently closed, bounded by `mevedel-notes-closed-max-count` and
-  `mevedel-notes-closed-max-age-days`. See
+  to recently closed, bounded by `niwa-notes-closed-max-count` and
+  `niwa-notes-closed-max-age-days`. See
   [note conversations](sessions.md#note-conversations).
 
 Instruction ownership is split at the durable-record/presentation boundary:
 
-- `mevedel-instruction-registry.el` owns workspace buckets, IDs, traversal,
+- `niwa-instruction-registry.el` owns workspace buckets, IDs, traversal,
   lookup, and links.
-- `mevedel-note-source.el` owns note
+- `niwa-note-source.el` owns note
   anchors, source presentations, and command-scoped replacement.
-- `mevedel-notes.el` owns note commands and rendering, including create, edit,
+- `niwa-notes.el` owns note commands and rendering, including create, edit,
   take, close, and restore.
-- `mevedel-overlay-ui.el` owns action dispatch, labels, keymaps, styling, and
+- `niwa-overlay-ui.el` owns action dispatch, labels, keymaps, styling, and
   redraw.
-- `mevedel-overlays.el` remains the geometry, containment, tag, navigation,
+- `niwa-overlays.el` remains the geometry, containment, tag, navigation,
   context, and prompt core.
 
 Callers do not update a note record and then repair its overlay separately.
@@ -151,14 +151,14 @@ Note overlays do not evaporate: deleting a
 note's whole source text leaves the note with an empty anchor. A missing file
 is shown as source missing.
 
-`mevedel-delete-all-instructions` deletes the current workspace's notes in all
+`niwa-delete-all-instructions` deletes the current workspace's notes in all
 its buffers through the same cleanup as single deletion. Buffers without a
 workspace share the `:global` bucket. Interactive deletion confirms note and
 buffer counts. Deleted notes remain restorable in recently closed until its
 limits expire them; neither closing nor expiry recycles their displayed
 numbers, so old mentions cannot silently target another note.
 
-Instruction overlays persist `mevedel-span` as `line` or `char`. Creation
+Instruction overlays persist `niwa-span` as `line` or `char`. Creation
 infers line shape from a beginning-of-line start and an end-of-line or
 next-beginning-of-line end; the source creation helpers also accept an explicit
 shape for linewise selection integrations. Restored records lacking this
@@ -169,7 +169,7 @@ and adjacent whole lines do not grow line spans. Deleting a boundary newline
 joins the neighboring text into the line instruction. Full deletion still
 leaves a note with an empty anchor.
 
-`mevedel-instruction-edit.el` synchronizes visited source buffers by zero-context
+`niwa-instruction-edit.el` synchronizes visited source buffers by zero-context
 line-diff runs. Equal-sized changed runs map each old line to its corresponding
 new line. For an unequal-sized run, each instruction reserves the first new
 lines for the old run's lines before it and the last new lines for the old
@@ -183,7 +183,7 @@ hooks are intentionally inhibited, and its transcript presentation is rebuilt.
 
 Source edit hooks capture and normalize only instructions touching the changed
 range, including its edges; ordinary typing does not scan the buffer's entire
-instruction registry. `mevedel-instruction-undo.el` fences edge-touching edits
+instruction registry. `niwa-instruction-undo.el` fences edge-touching edits
 with native undo function entries, installing saved geometry after text changes
 in both directions. Strictly interior edits use native marker shifts and add
 no function entries unless normalization or explicit mapping actually moves an
@@ -229,19 +229,19 @@ Single-notification replacements can still produce coextensive presentations;
 equal ranges are never each other's geometric parents, and presentation redraw
 does not delete either instruction merely because their bounds coincide.
 
-`mevedel-instruction-replacement-hold` and
-`mevedel-instruction-replacement-end` let an editing integration extend that
+`niwa-instruction-replacement-hold` and
+`niwa-instruction-replacement-end` let an editing integration extend that
 scope across commands in one buffer; ending, cancellation, and teardown belong
-to the integration. `mevedel-evil.el` installs this bridge only through explicit
-`mevedel-evil-setup`, holding Evil change operators through their following insert
+to the integration. `niwa-evil.el` installs this bridge only through explicit
+`niwa-evil-setup`, holding Evil change operators through their following insert
 session. Loading the optional module does not load Evil or change bindings,
 hooks, or initial states. Setup owns normal-state bindings and visual range/type
 translation; the generic source owner remains independent of Evil. Neither
 replacement resolution nor undo changes a note's conversation or state.
 
-Sending a note (`mevedel-note-send`, or `mevedel-note-send-batch` for several
+Sending a note (`niwa-note-send`, or `niwa-note-send-batch` for several
 notes) creates an ordinary durable session with a user-chosen base preset
-(default `mevedel-implement`) and a separate durable note layer, then
+(default `niwa-implement`) and a separate durable note layer, then
 submits one generated turn: the note text, the noted code at send time, and
 the explicitly mentioned notes, with mention syntax in captured text made
 inert. It never forks or reads another chat's history. The conversation then
@@ -260,10 +260,10 @@ history inspector remains. Old note data is not migrated.
 
 Workspace detection first uses the session or cached workspace, then a
 project.el root. Outside recognized projects it uses the nearest ancestor with
-`.mevedel/workspace-id`, falling back to `default-directory`. File buffers and
+`.niwa/workspace-id`, falling back to `default-directory`. File buffers and
 Dired therefore share one directory workspace and the same portable session
 authority. Plain directories need no project marker. File-based workspaces
-remain available through explicit `mevedel-workspace-functions` customization;
+remain available through explicit `niwa-workspace-functions` customization;
 they are not part of default detection.
 
 Retained current-context delivery loads `AGENTS.md` then `AGENTS.local.md` from the
@@ -272,22 +272,22 @@ deeper file queues any newly applicable instruction files as a host-generated
 same-turn reminder. Content hashes deduplicate unchanged files independently
 for `/root` and each retained agent only while that owner's model-visible
 context remains current. Each
-mevedel `SessionStart` context epoch resets local-history `/root`;
+niwa `SessionStart` context epoch resets local-history `/root`;
 resume resets local-history owners, and retained-agent compaction resets that
 agent. Native-history owners keep their learned scopes across reopening and
 re-send only changed instruction contents in later prompts.
 
-`M-x mevedel-inspect-effective-prompt` and `/prompt` open the same read-only
+`M-x niwa-inspect-effective-prompt` and `/prompt` open the same read-only
 report of the live preset, profile, prompt components, exact final prompt,
 effective tools, prompt provenance, and provider-schema size estimate.
 
 ```
-Data buffer (authoritative gptel/org buffer; holds mevedel--workspace,
-mevedel--session, and the canonical transcript projected into provider context)
+Data buffer (authoritative gptel/org buffer; holds niwa--workspace,
+niwa--session, and the canonical transcript projected into provider context)
   |
-View buffer (mevedel-view-mode; holds mevedel--data-buffer and the
+View buffer (niwa-view-mode; holds niwa--data-buffer and the
 rendered transcript, status and interaction zones)
-  ├─ Composer buffer (mevedel-composer-mode; owns the draft and rail)
+  ├─ Composer buffer (niwa-composer-mode; owns the draft and rail)
   └─ Derived buffers / previews / transcript inspection views point back to
      their data or parent view buffers as needed
 ```
@@ -296,7 +296,7 @@ See [the docked composer](view.md#docked-composer) for the paired windows.
 
 Tools execute in the data-buffer context with `default-directory` set to
 the session working directory. File modifications are tracked per request
-via `mevedel-request-file-snapshots`, while cross-turn file metadata
+via `niwa-request-file-snapshots`, while cross-turn file metadata
 lives on the workspace file cache and session touched-files map. A cached
 entry counts as current only while its modification time, its inode change
 time, and its reported size are all unchanged: a modification time alone is
@@ -304,63 +304,63 @@ not proof, since restoring timestamps, a backwards clock, and
 coarse-grained filesystem stamps all leave it standing, while a change time
 cannot be set from userland and so moves anyway. A rewrite that restores
 all three is the remaining blind spot, and the cache does not detect such a rewrite without a fresh content read. A file over
-`mevedel-file-cache-max-file-bytes` is cached as a fingerprint with no
-content, and mevedel's own session directories are refused outright
-(`mevedel-session-file-cache-excluded-p`); the workspace artifact store is
+`niwa-file-cache-max-file-bytes` is cached as a fingerprint with no
+content, and niwa's own session directories are refused outright
+(`niwa-session-file-cache-excluded-p`); the workspace artifact store is
 cached like ordinary files; see [`docs/reminders.md`](reminders.md) for what the resulting
 `edited-file` reminder reports.
 
-`mevedel-execution-target.el` binds each session to one local or TRAMP target,
+`niwa-execution-target.el` binds each session to one local or TRAMP target,
 owns qualified/native path conversion, and probes target readiness.  Required
 `rg` compatibility is verified against a bounded target-side fixture using the
 Glob and Grep flag surface, rather than inferred from a version string.  The
-project-owned identity in `mevedel-workspace-identity.el` lets equivalent
+project-owned identity in `niwa-workspace-identity.el` lets equivalent
 client-specific TRAMP spellings reopen the same workspace.  SSH-family
 `ssh`/`scp`/`sshx`/`scpx`, Docker, and Podman targets are supported; a target
 without `HOME` is blocked during readiness rather than failing later path
 permission checks.  A target missing `rg`, `bash`, or `setsid` is named in the
 readiness diagnostic together with the install command for whichever package
 manager the probe finds there, so the fix does not require guessing the
-target's distribution.  Mevedel never pushes binaries to a target.
+target's distribution.  Niwa never pushes binaries to a target.
 
 A remote project mounted into the local filesystem -- SSHFS, `rclone mount`,
 NFS, SMB -- is deliberately ordinary local operation, not a remote target.
-Mevedel sees a local path, so files, search, Bash, and sessions use the
+Niwa sees a local path, so files, search, Bash, and sessions use the
 ordinary local execution path and its local dependencies.  The trade is
 that the mount's host runtime is unused: commands run against the local
 toolchain, compilers, and container environment rather than the storage host's.
 Choose a TRAMP target when the project's runtime matters, and a mount when only
 its files do.
 
-`mevedel-execution.el` owns managed admission, the per-session registry,
+`niwa-execution.el` owns managed admission, the per-session registry,
 observations, delivery, and the public execution facade. Its opaque child
-values belong to `mevedel-execution-process.el`, which owns process creation,
+values belong to `niwa-execution-process.el`, which owns process creation,
 stable child environments, process-group signaling, timeout cleanup, and
 bounded disk spooling. Bubblewrap admission and refusal remain with the
-managed facade. `mevedel-execution-scheduler.el` admits managed Bash through a
-fair session-scoped readers/writer lane. `mevedel-bash-policy.el` owns Bash
+managed facade. `niwa-execution-scheduler.el` admits managed Bash through a
+fair session-scoped readers/writer lane. `niwa-bash-policy.el` owns Bash
 classification and reusable rules;
-`mevedel-tool-exec-permission.el` owns Bash/Eval authority and prompt adapters;
-and `mevedel-tool-exec.el` retains their tool lifecycle, rendering, and
+`niwa-tool-exec-permission.el` owns Bash/Eval authority and prompt adapters;
+and `niwa-tool-exec.el` retains their tool lifecycle, rendering, and
 registration. Native filesystem tools use the execution facade's confined
 one-shot helper without entering the Bash scheduler. The Bash adapter also
 captures its analyzed exit-outcome resolver at spawn, so
 later observations derive the same canonical facts without moving command
 semantics into the process owner.
 
-`mevedel-execution-telemetry.el` owns privacy-safe execution event projection,
+`niwa-execution-telemetry.el` owns privacy-safe execution event projection,
 sandbox attempt summaries, Eask workload recognition, and optional GNU time
 resource capture. It never receives a live execution record.
 
-`mevedel-transport.el` answers one question: is this Emacs already inside a
+`niwa-transport.el` answers one question: is this Emacs already inside a
 remote operation?  Durable target I/O started from a timer, a process
 filter, or redisplay must not nest inside an in-flight TRAMP command, so
-callers route deferrable work through `mevedel-transport-run-when-idle`
+callers route deferrable work through `niwa-transport-run-when-idle`
 and it runs when the connection is quiet. Deferred work that owns an
 in-memory admission fence supplies cancellation cleanup so transport teardown
 cannot leave the session permanently busy. Lifecycle events that may fire
 repeatedly (turn completion, activation, buffer kill) arm one coalesced
-opportunity per key through `mevedel-transport-schedule-idle`, which the
+opportunity per key through `niwa-transport-schedule-idle`, which the
 journal processor, idle journal sealing, the memory pass, and memory recovery
 share.
 
@@ -376,38 +376,38 @@ TRAMP let-binds the timer lists to nil around its critical sections, and a
 process filter or sentinel can run inside one. A plain timer armed there either
 fires inside TRAMP's own wait, nested in the remote command, or is discarded
 with the binding. Continuations armed from that context use
-`mevedel-transport-run-at-time`: pipeline yields, the ToolCall trampoline,
+`niwa-transport-run-at-time`: pipeline yields, the ToolCall trampoline,
 WaitAgent timeouts, stream-bridge flushes, and child process settlement and
 retirement. Inside a TRAMP handler frame it holds the timer and arms it when
 the outermost frame returns. The continuation neither disappears nor runs
 nested inside the remote command. A held timer cancelled before arming still
 fires once; its callers check that their work is current. Agent conversation
-saves refused as busy are requeued through `mevedel-transport-run-when-idle`
+saves refused as busy are requeued through `niwa-transport-run-when-idle`
 rather than dropped.
 
-`mevedel-transport-with-exclusive-connection` suspends existing timers the
-same way. `mevedel--timer-pending-p` counts a suspended timer as armed. A
+`niwa-transport-with-exclusive-connection` suspends existing timers the
+same way. `niwa--timer-pending-p` counts a suspended timer as armed. A
 pending retry is therefore not activated a second time on the section's
 temporary list. Otherwise that copy could fire there and leave the suspended
 original marked triggered, which Emacs skips forever.
 
-Replacing a remote file with `mevedel--write-file-atomically` (ApplyPatch,
+Replacing a remote file with `niwa--write-file-atomically` (ApplyPatch,
 skill and plugin files, persisted state) is one pinned control program: the
 temporary file, mode and rename happen beside the destination on the target,
 where TRAMP's file operations needed about twenty round trips. A symlinked
 leaf, an unproven parent spelling, a missing directory or a busy transport falls
 back to the TRAMP operations, which keep their existing semantics.
 
-`mevedel-session-durability.el` owns portable project lease and storage
-primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
-`mevedel-session-transfer.el` owns cooperative control-transfer records, and
-`mevedel-session-publication.el` serializes immutable authoritative
+`niwa-session-durability.el` owns portable project lease and storage
+primitives.  `niwa-session-recovery.el` owns specialized recovery markers,
+`niwa-session-transfer.el` owns cooperative control-transfer records, and
+`niwa-session-publication.el` serializes immutable authoritative
 publication and diagnostics.  All of them bottom out in
-`mevedel-session-control-fs.el`, which performs control filesystem
+`niwa-session-control-fs.el`, which performs control filesystem
 operations through a target-side directory descriptor pinning the parent
-while the relative operation runs; `mevedel-session-control-transfer.el`
+while the relative operation runs; `niwa-session-control-transfer.el`
 coordinates cooperative control transfer above the transfer records --
-persistence calls it for polling, admission, and committed-state adoption.  `mevedel-session-save-as.el` owns the portable
+persistence calls it for polling, admission, and committed-state adoption.  `niwa-session-save-as.el` owns the portable
 Save As transaction and live-session adoption.  Project and file-workspace sessions use the same
 authority profile on local and TRAMP targets: a renewable `.lease/` and an
 immutable publication head.  Workspace-free sessions have no durable authority.
@@ -453,7 +453,7 @@ wake `WaitAgent` early, and launches no model request. Ordinary mailbox
 messages are delivered before the next model sample or wake an explicit
 `WaitAgent`.
 
-`mevedel-background-list.el` is the user-facing projection of that private
+`niwa-background-list.el` is the user-facing projection of that private
 registry, listed beside active agents. The execution module returns immutable all-owner snapshots and
 accepts session-user control by execution ID; process records and operating-
 system identifiers remain private. Model tools continue through the narrower
@@ -477,10 +477,10 @@ the user's newer selection intact.
 
 ### Bounded native gptel sample recovery
 
-`mevedel-gptel-retry.el` adds request-local recovery only to mevedel-admitted
+`niwa-gptel-retry.el` adds request-local recovery only to niwa-admitted
 native gptel requests across all backends, not just Codex OAuth: root
 (including note conversations), shared-item, and retained-agent requests.
-`mevedel-gptel-retry-max-retries` defaults to 10 retries after the initial
+`niwa-gptel-retry-max-retries` defaults to 10 retries after the initial
 attempt, at most 11 physical provider calls per
 logical model sample; zero disables automatic resends. Root requests still
 retain their prepared sample for explicit failed-turn Retry and discard failed
@@ -488,7 +488,7 @@ provisional output, while retained agents opt out of the controller at zero. Eac
 resets the allowance. Root and concurrent children have independent budgets.
 Unadmitted background gptel requests and their separate retry policies are
 unchanged. Claude Code/ACP remains a separate, self-retrying engine; it keeps
-its built-in retries and mevedel's existing one-time credential-refresh-lock
+its built-in retries and niwa's existing one-time credential-refresh-lock
 replay.
 
 gptel retains provider transport and parsing. The controller classifies errors
@@ -547,9 +547,9 @@ the retry wait replaced, unless another owner has claimed it since. Exhaustion
 settles once with one expandable ignored request summary: the existing
 provider error payload plus `:retry-errors` (chronological, bounded sanitized
 attempt diagnostics, at most 11) and `:retry-exhausted`. The live FSM flag
-`:mevedel-retry-exhausted` makes the
+`:niwa-retry-exhausted` makes the
 affected Goal pause instead of multiplying the bound with settled-turn retries.
-An owned nonretryable error carries `:mevedel-retry-permanent` and likewise
+An owned nonretryable error carries `:niwa-retry-permanent` and likewise
 pauses the affected Goal rather than retrying a permanent refusal as a new turn.
 Provider-reported usage is counted once per physical dispatch with a distinct
 telemetry call identity; missing usage remains unknown, not zero. Retry state
@@ -560,12 +560,12 @@ is live request state and is not resumed after restart.
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `gptel--known-tools`. Presets use exact declared names and inherit in parent
 order (later parents win, then the child). Ordinary preset keys resolve to
-`mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
+`niwa-foo`/`niwa--foo` before gptel variables and use gptel's value
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped for variables. Its agent roster
 and tool catalog are read by tool calls after dispatch, so they last until the
 request ends, when teardown reinstalls the session preset's. The built-in base
-preset is `mevedel-implement`. Note conversations add isolation, input recording
+preset is `niwa-implement`. Note conversations add isolation, input recording
 and keys independently of the selected base preset, preserving its system prompt
 and tools across preset changes and resume. There is no retired-preset
 substitution on resume.
@@ -574,16 +574,16 @@ Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
 System prompts are assembled dynamically from ordered profiles in
-`mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
+`niwa-system.el`. `niwa-define-prompt-component` registers reusable
 Markdown, literal text, or dynamic producers.
-`mevedel-define-prompt-profile` selects components, and the profile list is the
+`niwa-define-prompt-profile` selects components, and the profile list is the
 render order; inline `(NAME :file PATH)` and `(NAME :text STRING)` entries keep
 one-off role content local. Blank components are omitted. Workspace-aware
 profiles must explicitly contain `workspace-config` and `environment`, which
 the renderer validates before dispatch.
 
 For retained conversations, named observations are delivered separately through
-`mevedel-context-delivery.el`. The table describes component selection across
+`niwa-context-delivery.el`. The table describes component selection across
 both channels: roles/policies remain stable system instructions, while workspace
 configuration, environment, memory indexes, the specialist tool listing, skills,
 resource availability and Goal state become retained updates. Stateless profiles
@@ -616,15 +616,15 @@ mutations remain sequential. ToolCall suitability lives in its description;
 activating it does not rewrite the earlier system prompt with a promotion.
 Resource availability remains context-specific. Provider cache reuse still depends on provider policy and request configuration.
 
-`mevedel-gptel-stream-bridge.el` isolates private gptel stream advice. It
+`niwa-gptel-stream-bridge.el` isolates private gptel stream advice. It
 repairs detached insertion markers, falls back to raw chunks when a stale
 transformer fails, and delays early output until the process has a registered
 request state machine. Consecutive plain-text inserts are batched for
-`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.4 by default);
+`niwa-gptel-stream-bridge-insert-batch-delay` seconds (0.4 by default);
 non-text boundaries and cleanup flush the batch, and the view renders a
 flushed batch in the same wakeup. Emacs redisplays after every read of
 process output, which on pgtk repaints the whole frame, so the bridge also
-paces reading a local curl stream of a mevedel request: after a small read
+paces reading a local curl stream of a niwa request: after a small read
 it stops curl with SIGSTOP and continues it when the batch is due. The
 server's output waits in the kernel socket buffer and arrives as one burst;
 a read of 4 KiB or more means curl has a backlog, so reading continues. gptel's
@@ -635,7 +635,7 @@ request. Paused processes continue on uninstall, and a guard process
 continues them whenever Emacs ends, including a crash: Emacs starts children
 in their own sessions, so the kernel would leave them stopped. A process stops
 only once the guard knows it. Pacing needs a real local subprocess on a system with job
-control; other transports keep batching alone. `mevedel-acp.el` paces Claude
+control; other transports keep batching alone. `niwa-acp.el` paces Claude
 Code's adapter the same way during a turn, but only in a steady text stream
 (three reads in a row holding only text chunks and the SDK's matching
 `content_block_delta` events): a receipt, tool call, reply or request leaves the
@@ -645,24 +645,24 @@ also waits up to 50 ms for the frames the CLI wrote before it, which the
 adapter may still hold. Pauses never exceed 0.5 s, whatever the batch delay. Setting the
 delay to nil or zero disables batching and pacing. These mechanisms preserve the data buffer as the
 transcript authority; view redraw scheduling remains separate.
-`mevedel-gptel-bridge.el` routes native steering commands through the root
+`niwa-gptel-bridge.el` routes native steering commands through the root
 composer submission path and refuses native agent/confirmation steering;
 there is no second request-local steering queue in managed sessions.
-`mevedel-view-stream.el` owns live-tail render scheduling,
+`niwa-view-stream.el` owns live-tail render scheduling,
 the in-flight tool calls the live render draws as running rows, and
 foreground request-progress state, while
-`mevedel-execution-transcript.el` owns durable execution render data and
+`niwa-execution-transcript.el` owns durable execution render data and
 compaction archive reconciliation. View Stream delegates transcript projection
-to `mevedel-view-render.el`; `mevedel-view-disclosure.el` owns source-backed
-fold state and actions, `mevedel-view-composer.el` owns the editable input,
-submission hooks, and send/fork dispatch, `mevedel-view-segments.el` owns
-ephemeral archived-segment projection, and `mevedel-pending-inputs.el` owns
+to `niwa-view-render.el`; `niwa-view-disclosure.el` owns source-backed
+fold state and actions, `niwa-view-composer.el` owns the editable input,
+submission hooks, and send/fork dispatch, `niwa-view-segments.el` owns
+ephemeral archived-segment projection, and `niwa-pending-inputs.el` owns
 queued follow-ups. Durable segment bytes remain in
-`mevedel-session-artifacts.el`. `mevedel-view.el` coordinates the view mode,
+`niwa-session-artifacts.el`. `niwa-view.el` coordinates the view mode,
 zones, and session lifecycle. The authoritative text remains in the gptel data
 buffer.
 
-`mevedel-mention-bindings.el` owns atomic mention identity as validated text
+`niwa-mention-bindings.el` owns atomic mention identity as validated text
 properties on ordinary prompt strings. Completion or programmatic insertion
 binds when an exact target first becomes known; the composer binds remaining
 resolvable mentions before asynchronous preparation, queueing, or history
@@ -677,7 +677,7 @@ reference spellings resolving to note UUIDs), absolute file pathname,
 and MCP server/URI; there is no resolver registry or
 sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
 
-`mevedel-turn.el` owns top-level request admission, identity, cancellation, and
+`niwa-turn.el` owns top-level request admission, identity, cancellation, and
 the single completion boundary. The ordinary gptel `DONE` state and awaited
 fork-skill workflows call it after response hooks. Error and abort terminals
 also save partial responses and file checkpoints before teardown, but do not
@@ -689,14 +689,14 @@ the machine's request identity keys a degraded settlement. Transport cancellatio
 releases the settlement fence and clears the machine's settlement stamp so a
 later terminal transition can retry it.
 
-`mevedel-turn-end-at-boundary` lets a harness caller end a running root or
+`niwa-turn-end-at-boundary` lets a harness caller end a running root or
 agent turn without aborting it. Once the current tool results are recorded,
 the machine moves to `DONE` instead of sampling again, so the turn settles as a
 completed one: accounting, journal capture, the checkpoint, queued input, and
 Goal continuation run as usual. Errors and pending same-turn steering take
 precedence, so steering is delivered and the turn ends at the following
 boundary. The request is a transition rule added by
-`mevedel-preset--build-transitions`, which root, agent, and
+`niwa-preset--build-transitions`, which root, agent, and
 side-conversation machines all use; an agent turn ended this way settles from
 its `DONE` handler. gptel's own
 post-tool `:stop` differs: it records an error and fails the turn. Callers:
@@ -719,11 +719,11 @@ validation, permission, execution, and persistence boundary. See
 [`tools.md`](tools.md#tool-input-validation-and-repair) and
 [`ADR 0011`](adr/0011-repair-model-tool-input-before-pipeline.md).
 
-`mevedel-tool-repair.el` owns structured contract validation plus generic
-atomic repair. `mevedel-tool-repair-gptel.el` isolates the temporary
-lossless gptel decoding bridge, while `mevedel-tool-repair-diagnostics.el`
+`niwa-tool-repair.el` owns structured contract validation plus generic
+atomic repair. `niwa-tool-repair-gptel.el` isolates the temporary
+lossless gptel decoding bridge, while `niwa-tool-repair-diagnostics.el`
 owns value-free audit records, dispatch-result tracking, and redacted
-telemetry. `mevedel-tool-registry.el` owns the schema declarations and lowers
+telemetry. `niwa-tool-registry.el` owns the schema declarations and lowers
 the internal `path` type to a provider-facing string.
 
 The `workspace-config` component checks each directory from workspace root
@@ -769,7 +769,7 @@ applicable. Unchanged sections are not repeated; unchanged turns add no update.
 Workspace guidance and Goal procedures also update independently, so a counter
 change repeats neither their instructions nor the other fact sections.
 
-`mevedel-context-delivery.el` owns this delivery boundary. Only components selected
+`niwa-context-delivery.el` owns this delivery boundary. Only components selected
 by an agent's frozen definition reach that agent. Workers do not inherit the
 root Goal or the main journal map. The default role, which declares no
 components of its own, freezes its delegator's selection; a root child takes the
@@ -812,7 +812,7 @@ triggers, verification requirements, and documentation discovery. Detailed
 setup, upstream checkout, code-style and test procedures live in
 [development.md](development.md).
 
-The system memory-save policy requires Read of `mevedel://memory.md` before
+The system memory-save policy requires Read of `niwa://memory.md` before
 explicit or model-initiated memory mutations. The manual owns root selection,
 frontmatter, index maintenance and forget semantics. Existing write permissions
 remain authoritative; the manual is not a new permission gate.
@@ -852,12 +852,12 @@ agent's snapshot.
 
 Filesystem-shaped tools consume one closed set of eight resource-address
 families: `work://`, `artifact://`, `skill://`, `agent://`, `history://`,
-`memory://` (including `memory://journal/`), `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
+`memory://` (including `memory://journal/`), `mcp://`, and `niwa://`. `Read` supports all eight; `Glob` and
 `Grep` support `work://`, `artifact://`, `skill://`, `memory://` (including
-`memory://journal/`), `history://saved`, and `mevedel://`. `Grep` also accepts
+`memory://journal/`), `history://saved`, and `niwa://`. `Grep` also accepts
 concrete live history at `history://root[/PATH]`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
 paths. Addresses serialize canonical resource locators and do not replace
-target-native paths, mentions, or permissions. `mevedel://` is an always-
+target-native paths, mentions, or permissions. `niwa://` is an always-
 available, read-only view of packaged Markdown documentation and exposes no
 Elisp source.
 
@@ -880,7 +880,7 @@ agent invocations stamped Plan read-only, such as forked skills or mail-woken
 agent turns from a Plan session, follow the same rules after Plan ends. The
 shared `local/plans/` namespace holds
 durable plans for the parent and retained agents. `work://shared/` maps to
-workspace-owned, untracked `.mevedel/shared/` for temporary working notes and
+workspace-owned, untracked `.niwa/shared/` for temporary working notes and
 handoffs across sessions, with agent-chosen filenames and folders. Memory
 consolidation extracts their lasting knowledge and removes them
 ([shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle)).
@@ -889,7 +889,7 @@ See [`address-to-resource.md`](address-to-resource.md) and
 
 ## Generated workspace state
 
-`.mevedel/state/` contains internal journal records (`journal/`), target write
+`.niwa/state/` contains internal journal records (`journal/`), target write
 coordination (`memory-write/`), clipboard images (`media/`), Git evidence packages
 (`review-packages/`), workspace telemetry (`diagnostics/`), and plugin runtime data
 (`plugin-data/`). The common parent is ignored by Git. This is persistent state,
@@ -901,7 +901,7 @@ generated clipboard/guest PNGs and review packages older than seven days, up to
 100 deletions per run. Completed root turns offer it, and on local Linux
 workspaces the idle maintenance timer offers it while a root session is open,
 so it runs hourly while Emacs is idle. A complete
-target-side ripgrep search of `.mevedel/` retains files mentioned in saved
+target-side ripgrep search of `.niwa/` retains files mentioned in saved
 conversations, historical publication snapshots, input history, memory, journal,
 and other retained state. The artifact and diagnostics directories themselves
 are excluded. Live buffers, input rings, drafts, and gptel file contexts also
@@ -918,12 +918,12 @@ current file and one archive. See [telemetry](telemetry.md).
 
 Public journal entries, curated memory, sessions (including session media and
 diagnostics), shared working files, input history, identity, and configuration
-remain outside this directory. `mevedel-workspace-state-dir` continues to name
-the `.mevedel/` configuration and data root.
+remain outside this directory. `niwa-workspace-state-dir` continues to name
+the `.niwa/` configuration and data root.
 
 ## Persistent memory
 
-Memory indexes are read from configured `.mevedel/memory/` and
+Memory indexes are read from configured `.niwa/memory/` and
 `.agents/memory/` roots, both workspace-local and user-global. The first
 200 lines of each present `MEMORY.md` are included when a profile selects
 the `memory` data component, with an absolute modification-date annotation.
@@ -953,12 +953,12 @@ decision operation and holds instruction proposals for approval.
 The data buffer is normally org-mode so gptel can persist
 `GPTEL_BOUNDS` (gptel's other config properties are stripped; the
 sidecar owns request configuration). Its shape does not follow the user's
-gptel chat settings: `mevedel--transcript-org-mode` sets buffer-local
+gptel chat settings: `niwa--transcript-org-mode` sets buffer-local
 `gptel-prompt-prefix-alist` and `gptel-response-prefix-alist` to nil, so
 user turns are plain text after `gptel-response-separator`, and
 `gptel-include-tool-results` to t, because the view, history,
 compaction, and resume read tool calls and results from the transcript and
-mevedel tools do not set gptel's `:include` slot. Tool results containing
+niwa tools do not set gptel's `:include` slot. Tool results containing
 `:PROPERTIES:` are escaped with `,` in the data buffer to prevent
 nested-drawer confusion; the rendered view strips those storage
 artifacts where appropriate.
@@ -968,13 +968,13 @@ Nobody reads the data buffer's folds -- the view owns disclosure -- and with
 Org's element cache disabled each fold parsed the surrounding structure and ran
 the user's TAB hooks: about 65 ms per tool result in a 2.9 MB transcript,
 growing with it. The transcript's buffer-local `org-cycle-tab-first-hook`
-holds only `mevedel--transcript-cycle-skip`, which answers every
+holds only `niwa--transcript-cycle-skip`, which answers every
 non-interactive call; an interactive TAB in the data buffer still cycles.
 
 ## Transcript structure
 
-`mevedel-transcript.el` owns the canonical transcript grammar. Its primary
-entry point, `mevedel-transcript-segments`, classifies data-buffer spans as
+`niwa-transcript.el` owns the canonical transcript grammar. Its primary
+entry point, `niwa-transcript-segments`, classifies data-buffer spans as
 `(TYPE START END)` where type is `user`, `response`, `tool`, `reasoning`,
 `mailbox`, `reminder`, `hook-context`, `task-background`, `render-data`,
 `prompt`, or `ignored`.
@@ -982,8 +982,8 @@ It combines gptel text-property runs with generated
 control ranges, protects literal user examples from structural recognition,
 and repairs known org/gptel boundary damage.
 Hook audit delimiters are structural only when their complete encoded span
-carries live `mevedel-hook-audit` provenance or the persisted
-`gptel=mevedel-hook-audit` property; delimiter-shaped user, assistant,
+carries live `niwa-hook-audit` provenance or the persisted
+`gptel=niwa-hook-audit` property; delimiter-shaped user, assistant,
 reasoning, and tool text remains ordinary content.
 
 The module also owns the small structural helpers needed to skip leading
@@ -992,15 +992,15 @@ blocks, parse agent mailbox blocks,
 and find the first real user prompt line outside tool/reasoning/summary
 scaffolding.
 
-`mevedel-transcript-normalize-properties` applies those same canonical ranges
+`niwa-transcript-normalize-properties` applies those same canonical ranges
 when a live or restored Org transcript needs its structural `gptel`
-properties repaired. `mevedel-transcript-restore.el` owns restoration of
+properties repaired. `niwa-transcript-restore.el` owns restoration of
 persisted bounds and invokes that normalizer, so persistence and the view do
 not maintain their own transcript grammars. Compaction consumes the same
 canonical spans directly.
 
-`mevedel-transcript-project-evidence` freezes consumer-selected ranges as
-neutral labelled evidence for `mevedel-context-summary.el`. The projection
+`niwa-transcript-project-evidence` freezes consumer-selected ranges as
+neutral labelled evidence for `niwa-context-summary.el`. The projection
 preserves ordering while excluding hidden UI/audit spans, bounding tool
 content, and replacing native media with textual metadata. The stateless
 generator owns the isolated request, inherits the session's streaming choice,

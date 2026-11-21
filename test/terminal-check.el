@@ -15,20 +15,20 @@
 
 (defvar warning-minimum-level)
 
-(defconst mevedel-terminal-check--root
+(defconst niwa-terminal-check--root
   (file-name-directory
    (directory-file-name
     (file-name-directory (or load-file-name buffer-file-name))))
   "Checkout whose sources and tests the runner uses.")
 
-(defconst mevedel-terminal-check--selector
-  '(tag mevedel-docked-composer)
+(defconst niwa-terminal-check--selector
+  '(tag niwa-docked-composer)
   "ERT selector for the cases the terminal child runs.")
 
-(defun mevedel-terminal-check-run ()
+(defun niwa-terminal-check-run ()
   "Run the terminal cases in a disposable terminal Emacs, never this editor."
   (unless noninteractive (error "Use the Eask terminal-check script, not the live editor"))
-  (let* ((temporary (make-temp-file "mevedel-terminal-" t))
+  (let* ((temporary (make-temp-file "niwa-terminal-" t))
          (home (file-name-concat temporary "home"))
          (bootstrap (file-name-concat temporary "bootstrap.el"))
          (log (file-name-concat temporary "ert.log"))
@@ -43,10 +43,10 @@
     (with-temp-file bootstrap
       (prin1 `(progn
                 (setq load-path ',load-path native-comp-jit-compilation nil)
-                (load ,(file-name-concat mevedel-terminal-check--root
+                (load ,(file-name-concat niwa-terminal-check--root
                                          "test" "terminal-check.el")
                       nil t)
-                (mevedel-terminal-check--child ,log))
+                (niwa-terminal-check--child ,log))
              (current-buffer)))
     (let ((process-environment
            (append (list (concat "HOME=" home) "TERM=xterm-256color"
@@ -58,10 +58,10 @@
                            '("XDG_CACHE_HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME"
                              "XDG_STATE_HOME" "XDG_RUNTIME_DIR"))
                    process-environment))
-          (default-directory mevedel-terminal-check--root))
+          (default-directory niwa-terminal-check--root))
       (setq process
             (make-process
-             :name "mevedel-terminal-check" :connection-type 'pty :noquery t
+             :name "niwa-terminal-check" :connection-type 'pty :noquery t
              ;; The child sizes its frame from the terminal when it starts.
              :command (list "sh" "-c" "stty rows 40 cols 110 && exec \"$0\" \"$@\""
                             (expand-file-name invocation-name invocation-directory)
@@ -91,16 +91,16 @@
             (kill-emacs 1))))
       (princ "Terminal check passed\n"))))
 
-(defun mevedel-terminal-check--child (log &optional deadline)
+(defun niwa-terminal-check--child (log &optional deadline)
   "Run the terminal cases, write the ERT report to LOG, and always exit.
 Until DEADLINE, first wait for the parent's focus-in report: only the
 command loop decodes it, so wait from a timer, not a loop."
   (let ((deadline (or deadline (+ (float-time) 10))))
     (if (and (not (eq t (frame-focus-state))) (< (float-time) deadline))
-        (run-at-time 0.1 nil #'mevedel-terminal-check--child log deadline)
-      (mevedel-terminal-check--run-tests log))))
+        (run-at-time 0.1 nil #'niwa-terminal-check--child log deadline)
+      (niwa-terminal-check--run-tests log))))
 
-(defun mevedel-terminal-check--run-tests (log)
+(defun niwa-terminal-check--run-tests (log)
   "Run the terminal cases, write the ERT report to LOG, and exit."
   (let ((status 1))
     (condition-case err
@@ -110,10 +110,10 @@ command loop decodes it, so wait from a timer, not a loop."
           ;; for missing Markdown grammars, would resize the host mid-case.
           (setq resize-mini-windows nil
                 warning-minimum-level :emergency)
-          (dolist (file '("test-mevedel-view-composer-graphical.el"
-                          "test-mevedel-view-pair-graphical.el"))
-            (load (file-name-concat mevedel-terminal-check--root "test" file) nil t))
-          (let ((stats (ert-run-tests-batch mevedel-terminal-check--selector)))
+          (dolist (file '("test-niwa-view-composer-graphical.el"
+                          "test-niwa-view-pair-graphical.el"))
+            (load (file-name-concat niwa-terminal-check--root "test" file) nil t))
+          (let ((stats (ert-run-tests-batch niwa-terminal-check--selector)))
             (cl-loop for test across (ert--stats-tests stats)
                      for result = (ert-test-most-recent-result test)
                      when (ert-test-skipped-p result)

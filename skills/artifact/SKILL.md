@@ -21,12 +21,12 @@ them, and each turn that writes the artifact file records a version.
 This project's artifact store:
 
 ```!el
-(if-let* ((session (or (bound-and-true-p mevedel--session)
-                       (and (bound-and-true-p mevedel--data-buffer)
-                            (buffer-live-p mevedel--data-buffer)
-                            (buffer-local-value 'mevedel--session
-                                                mevedel--data-buffer)))))
-    (mevedel-artifact-store-directory (mevedel-session-workspace session))
+(if-let* ((session (or (bound-and-true-p niwa--session)
+                       (and (bound-and-true-p niwa--data-buffer)
+                            (buffer-live-p niwa--data-buffer)
+                            (buffer-local-value 'niwa--session
+                                                niwa--data-buffer)))))
+    (niwa-artifact-store-directory (niwa-session-workspace session))
   "unavailable: no live session; tell the user instead of guessing a path")
 ```
 

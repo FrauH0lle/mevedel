@@ -119,7 +119,7 @@ class CheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             for name, content in (
-                ('eask', 'printf "%s|%s\\n" "$*" "$MEVEDEL_AFFECTED_BASE" >> "$COMMAND_LOG"\n'),
+                ('eask', 'printf "%s|%s\\n" "$*" "$NIWA_AFFECTED_BASE" >> "$COMMAND_LOG"\n'),
                 ('python3', '[ "$*" = "scripts/check-standards.py" ]\n'),
             ):
                 executable = directory / name
@@ -132,7 +132,7 @@ class CheckTests(unittest.TestCase):
                     subprocess.run(
                         ['sh', str(ROOT / 'scripts/check.sh'), *arguments, '--jobs', '2'],
                         env={**os.environ, 'PATH': f'{directory}:{os.environ["PATH"]}',
-                             'MEVEDEL_AFFECTED_BASE': 'branch-point', 'COMMAND_LOG': str(log)},
+                             'NIWA_AFFECTED_BASE': 'branch-point', 'COMMAND_LOG': str(log)},
                         check=True, capture_output=True)
                     self.assertEqual(log.read_text().splitlines(), [
                         'clean elc|branch-point', 'compile --strict|branch-point',

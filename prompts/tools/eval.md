@@ -57,7 +57,7 @@ its value and output.
   and `additional_permissions` request network or exact absolute read/write paths;
   `require_escalated` requests a full confinement bypass. Include `justification`.
   For grant shapes, escalation prerequisites, and recovery, read
-  `mevedel://tools/execution.md`; if unavailable, do not guess. Unavailable
+  `niwa://tools/execution.md`; if unavailable, do not guess. Unavailable
   confinement is disclosed; approval is not a retry.
 
 ### Examples of good usage

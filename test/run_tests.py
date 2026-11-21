@@ -161,15 +161,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     available_cpus = len(os.sched_getaffinity(0))
     parser.add_argument('--jobs', type=int,
-                        default=os.environ.get('MEVEDEL_TEST_JOBS') or min(8, available_cpus),
-                        help=f'worker limit (default: MEVEDEL_TEST_JOBS, else '
+                        default=os.environ.get('NIWA_TEST_JOBS') or min(8, available_cpus),
+                        help=f'worker limit (default: NIWA_TEST_JOBS, else '
                              f'{min(8, available_cpus)}; {available_cpus} CPUs available)')
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     parser.add_argument('--output', type=Path)
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')
     parser.add_argument('--affected', nargs='?', const='', metavar='REV',
                         help='fast tier: test files for changes since the merge base with '
-                             'REV (default MEVEDEL_AFFECTED_BASE, then worktree pin or master), including '
+                             'REV (default NIWA_AFFECTED_BASE, then worktree pin or master), including '
                              'uncommitted and untracked files')
     lane = parser.add_mutually_exclusive_group()
     lane.add_argument('--fresh-files', action='store_true',
@@ -186,8 +186,8 @@ def main():
     try:
         replay = read_replay(args.replay) if args.replay else None
         if args.affected is not None:
-            base = args.affected or os.environ.get('MEVEDEL_AFFECTED_BASE') or affected_tests.git(
-                ROOT, 'config', '--worktree', '--default=master', '--get', 'mevedel.affectedBase')[0]
+            base = args.affected or os.environ.get('NIWA_AFFECTED_BASE') or affected_tests.git(
+                ROOT, 'config', '--worktree', '--default=master', '--get', 'niwa.affectedBase')[0]
             changed = affected_tests.changed_files(ROOT, base)
             selected, notes = affected_tests.select(ROOT, changed)
             for note in notes[:20]:
@@ -211,8 +211,8 @@ def main():
         parser.error(str(exc))
     complete = set(files) == set(select_files([]))
     # Provisioned acceptance cases share target roots; keep their run serial.
-    if any(value and key.startswith(('MEVEDEL_TEST_SSH_', 'MEVEDEL_TEST_PODMAN_',
-                                     'MEVEDEL_TEST_DOCKER_'))
+    if any(value and key.startswith(('NIWA_TEST_SSH_', 'NIWA_TEST_PODMAN_',
+                                     'NIWA_TEST_DOCKER_'))
            for key, value in os.environ.items()):
         args.jobs = 1
         print('Provisioned remote target detected: running serially.', flush=True)
@@ -240,8 +240,8 @@ def main():
     command = EASK + ['test', 'ert', 'test/ert-runner.el', *files]
     start = time.monotonic()
     env = {key: value for key, value in os.environ.items()
-           if key not in ('MEVEDEL_TEST_PARTITION', 'MEVEDEL_TEST_RESULTS',
-                          'MEVEDEL_TEST_FRESH_FILE')}
+           if key not in ('NIWA_TEST_PARTITION', 'NIWA_TEST_RESULTS',
+                          'NIWA_TEST_FRESH_FILE')}
     discovery_seconds = 0
     if args.fresh_files:
         names = []
@@ -252,7 +252,7 @@ def main():
     else:
         code, discovery_seconds = run_logged(
             command, output / 'inventory.log',
-            {**env, 'MEVEDEL_TEST_RESULTS': str(output / 'inventory.json')})
+            {**env, 'NIWA_TEST_RESULTS': str(output / 'inventory.json')})
         if code:
             print(f'Discovery failed (exit {code}); see {output / "inventory.log"}', file=sys.stderr)
             return code if code > 0 else 1
@@ -274,14 +274,14 @@ def main():
         request = output / f'{index}-partition.json'
         results = output / f'{index}-results.json'
         worker_files = [files[index]] if args.fresh_files else files
-        worker_env = {**env, 'MEVEDEL_TEST_RESULTS': str(results)}
+        worker_env = {**env, 'NIWA_TEST_RESULTS': str(results)}
         if args.fresh_files:
-            worker_env['MEVEDEL_TEST_FRESH_FILE'] = '1'
+            worker_env['NIWA_TEST_FRESH_FILE'] = '1'
         else:
             request.write_text(json.dumps(dict(files=worker_files,
                                               inventory=replay['inventory'] if replay else names,
                                               tests=groups[index])))
-            worker_env['MEVEDEL_TEST_PARTITION'] = str(request)
+            worker_env['NIWA_TEST_PARTITION'] = str(request)
         worker_command = EASK + ['test', 'ert', 'test/ert-runner.el', *worker_files]
         code, seconds = run_logged(worker_command, output / f'{index}.log', worker_env)
         error = None

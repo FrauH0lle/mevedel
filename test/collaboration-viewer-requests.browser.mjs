@@ -70,7 +70,7 @@ async function requestRenderer(page) {
     window.requestSent = [];
     window.requestState = {owner: false};
     const send = frame => window.requestSent.push(frame);
-    window.requestView = window.mevedelRequestView.create({requests, el, send, state: window.requestState});
+    window.requestView = window.niwaRequestView.create({requests, el, send, state: window.requestState});
   })();`});
 }
 
@@ -78,7 +78,7 @@ async function requestRenderer(page) {
 async function header(page) {
   await page.addScriptTag({content: await readFile(
     resolve(root, 'relay/viewer/viewer-header.js'), 'utf8')});
-  await page.evaluate(() => window.mevedelHeader.create());
+  await page.evaluate(() => window.niwaHeader.create());
 }
 
 test('room composer starts at one line and grows and shrinks with its draft', async () => {
@@ -297,9 +297,9 @@ test('Ask custom answers expand, preserve multiline drafts on refresh and use th
       assert.equal(await page.evaluate(() => requestSent.length), 0);
       const collapsed = (await custom.boundingBox()).height;
       const normalHeight = await page.locator('.questionnaire').evaluate(node => node.getBoundingClientRect().height);
-      if (process.env.MEVEDEL_CAPTURE_SCREENSHOTS) {
-        await mkdir(process.env.MEVEDEL_CAPTURE_SCREENSHOTS, {recursive: true});
-        await page.screenshot({path: resolve(process.env.MEVEDEL_CAPTURE_SCREENSHOTS,
+      if (process.env.NIWA_CAPTURE_SCREENSHOTS) {
+        await mkdir(process.env.NIWA_CAPTURE_SCREENSHOTS, {recursive: true});
+        await page.screenshot({path: resolve(process.env.NIWA_CAPTURE_SCREENSHOTS,
           `ask-custom-collapsed-${viewport.width}x${viewport.height}-light.png`)});
       }
       const toggle = page.locator('.question-panel:not([inert]) .input-expand');
@@ -318,9 +318,9 @@ test('Ask custom answers expand, preserve multiline drafts on refresh and use th
       assert.ok(box.y >= header.y + header.height, 'expanded answer stays below the header');
       const submit = await page.getByRole('button', {name: 'Submit answers', exact: true}).boundingBox();
       assert.ok(submit.y + submit.height <= viewport.height, 'Submit stays in the viewport');
-      if (process.env.MEVEDEL_CAPTURE_SCREENSHOTS) {
-        await mkdir(process.env.MEVEDEL_CAPTURE_SCREENSHOTS, {recursive: true});
-        await page.screenshot({path: resolve(process.env.MEVEDEL_CAPTURE_SCREENSHOTS,
+      if (process.env.NIWA_CAPTURE_SCREENSHOTS) {
+        await mkdir(process.env.NIWA_CAPTURE_SCREENSHOTS, {recursive: true});
+        await page.screenshot({path: resolve(process.env.NIWA_CAPTURE_SCREENSHOTS,
           `ask-custom-expanded-${viewport.width}x${viewport.height}-light.png`)});
       }
       if (viewport.width < 640) {
@@ -546,7 +546,7 @@ async function wideRoom(browser, width) {
     rail.className = 'rail';
     const content = document.createElement('div');
     content.className = 'content';
-    content.append(window.mevedelTranscriptRenderer.renderMarkdown([
+    content.append(window.niwaTranscriptRenderer.renderMarkdown([
       'A paragraph keeps its reading measure. '.repeat(12), '',
       '```', 'GET /api/v1/indicators?region=TZ-07&from=2019-01 '.repeat(8), '```', '',
       '| Block | Before | After |', '| --- | --- | --- |', '| Request context | release_id, region | region |',
@@ -628,8 +628,8 @@ test('store refresh keeps the open artifact menu actionable', async () => {
       window.storeSent = [];
       window.storeRows = {artifacts: [{id: 'page', title: 'Page', kind: 'html',
         artifact: 'page/index.html', versions: 1, modified: 1, attached: true}]};
-      window.mevedelTranscriptRenderer = {formatBytes: bytes => `${bytes} B`};
-      window.storeView = window.mevedelStoreView.create({
+      window.niwaTranscriptRenderer = {formatBytes: bytes => `${bytes} B`};
+      window.storeView = window.niwaStoreView.create({
         href: destination => '#room.secret?artifact=' + encodeURIComponent(destination.artifact.id),
         send: frame => window.storeSent.push(frame),
         el: (tag, className, text) => {

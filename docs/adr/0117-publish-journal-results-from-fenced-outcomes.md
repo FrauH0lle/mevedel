@@ -311,8 +311,8 @@ The shared-note review-cadence, finite-cohort and explicit-drain text is
 superseded by [ADR 0128, One daily review, bounded batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches).
 The implementation-specific ownership and recovery boundaries remain below.
 
-`mevedel-memory-cycle.el` owns the private metadata-only
-`.mevedel/state/shared-notes/cycle.el` record per actual workspace journal, bound
+`niwa-memory-cycle.el` owns the private metadata-only
+`.niwa/state/shared-notes/cycle.el` record per actual workspace journal, bound
 to the workspace identity, physical shared root and target. It is not a
 directory/target-tuple store or a cross-alias mapping. A directory or target
 identity change while the cycle is active or unreconciled fails visibly closed;
@@ -377,20 +377,20 @@ file content, preserving unrelated guidance, rather than an appended fragment.
 Empty content clears an existing file or creates an admitted known-absent file
 with zero bytes. The exact captured applicable target set is unchanged.
 
-Private journal records live at `.mevedel/state/journal/`, alongside other
-generated workspace state; public journal entries stay at `.mevedel/journal/`.
-Standard `.mevedel/memory/` roots coordinate through their sibling
+Private journal records live at `.niwa/state/journal/`, alongside other
+generated workspace state; public journal entries stay at `.niwa/journal/`.
+Standard `.niwa/memory/` roots coordinate through their sibling
 `state/memory-write/`. Other memory and instruction roots use
-`ROOT/.mevedel/state/memory-write/root/`. These locations depend only on the
+`ROOT/.niwa/state/memory-write/root/`. These locations depend only on the
 original target, so separate workspaces still share ownership. The `root/`
 child keeps workspace instruction claims separate from its standard memory
-claims. Memory inventory and proposal paths exclude nested `.mevedel/` state.
+claims. Memory inventory and proposal paths exclude nested `.niwa/` state.
 
 Ordinary journal recall defaults to 14 days and is independent of physical
 retention. Unreviewed digests and unresolved proposal/recovery dependencies remain
 stored after recall ends. Fully reviewed public digests retire at idle once all
 proposals are terminal and references end, regardless of creation age. Private
-evidence and checked undo remain for `mevedel-memory-history-max-age-days`
+evidence and checked undo remain for `niwa-memory-history-max-age-days`
 (default 14) after the latest terminal decision. No-action reviews use completion
 time; reversal restarts the window. The memory cockpit exposes Candidates,
 Memories, and History; confirmed topic deletion uses a structured `user` producer
@@ -749,7 +749,7 @@ pruning stops at its budget instead of checking the rest of an already-full batc
   bounded inventory.
 - **Sessionless searches lacked individual cancellation.** External helpers now
   return the existing process owner's cancellation function. An empty synchronous
-  `.mevedel/**` Glob also left gptel's immediate follow-up in a deleted private
+  `.niwa/**` Glob also left gptel's immediate follow-up in a deleted private
   copy directory. Native callback and local HTTP tool-loop tests reproduced the
   failure; restoring the caller directory fixed it without delayed callbacks,
   retained copies, provider retries, or new model instructions.
@@ -884,9 +884,9 @@ the existing checked write protocol.
 
 ### 2026-09-16: collect generated workspace state
 
-The former `journal/state/` and `memory/.mevedel-memory-write/` locations mixed
+The former `journal/state/` and `memory/.niwa-memory-write/` locations mixed
 internal bookkeeping with browsable evidence and curated topics. Grouping them
-under `.mevedel/state/` makes their ownership explicit and supplies one generated
+under `.niwa/state/` makes their ownership explicit and supplies one generated
 state ignore entry. This changes storage paths and private expiry-manifest paths;
 old persisted control records are not read or automatically migrated. Public
 journal retrieval and its domain-specific retention rules remain unchanged.
@@ -1086,7 +1086,7 @@ except `project`, artifact cleanup triggered at turn settlement always found the
 settling session's own PID lock and postponed itself.
 
 Idle sealing now closes a checkpoint after a quiet period
-(`mevedel-journal-seal-idle-minutes`, default 20) with the new closed trigger
+(`niwa-journal-seal-idle-minutes`, default 20) with the new closed trigger
 `idle`, under the same root, read-only and lease rules as other seals. Opening
 a session queues recovery, processing and a consolidation offer. This partially
 reverses the 2026-09-19 decision: the startup cost it measured was journal
@@ -1096,7 +1096,7 @@ admission have run in batch children on local workspaces since 2026-09-22, and
 the remaining editor work only queues behind transport idleness. Remote
 workspaces still do this work synchronously when the transport is idle, as they
 already did after every root turn. A single maintenance timer
-(`mevedel-journal-idle-maintenance-minutes`, default 10) offers local workspaces
+(`niwa-journal-idle-maintenance-minutes`, default 10) offers local workspaces
 processing, consolidation and cleanup while Emacs is quiet. It drains one digest
 per opportunity and makes the hourly cleanup throttle describe a real schedule.
 Remote workspaces are skipped because their editor-side storage work would block
@@ -1147,7 +1147,7 @@ session telemetry showed the turn save, then a `session-save :kind
 agent-registry` publication 0.7 s later, inside the roughly 1.8-s preparation
 window. The debounced agent-state save (two seconds after mailbox consumption
 or an activity transition) had moved the head. A reproduction through
-`mevedel--turn-checkpoint` showed the head check as the only failing condition.
+`niwa--turn-checkpoint` showed the head check as the only failing condition.
 Execution completion records publish the same way. The rejection was correct,
 because the prepared head and source revision were stale. The warning was not:
 the same live root and request still owned the source, and nothing had failed.
@@ -1202,7 +1202,7 @@ listing took 2.3 s. YAML parsing was 0.18 s of a cold listing. A no-op recovery
 (10.7 s) cancelled and restarted the in-flight scan.
 
 Memories now uses an attribute listing to reuse cached metadata and reads only
-changed files, batched and asynchronously; mevedel's own frontmatter form is read
+changed files, batched and asynchronously; niwa's own frontmatter form is read
 without YAML when it provably equals the YAML result. Measured afterwards: 2.8 ms
 for an unchanged local listing, 0.13 s cold; 0.033 s and 0.23 s over the TRAMP
 target. Prior counts choose the opening view; without them the table opens on
@@ -1357,7 +1357,7 @@ empty-body blocks may omit the separator, a trailing `## No action` may be
 absent, and non-empty bodies still require their exact fence. Prose between
 blocks and unterminated non-empty bodies still reject the whole reply.
 Rejected replies are retained, newest eight, under
-`.mevedel/state/diagnostics/rejected-replies/`.
+`.niwa/state/diagnostics/rejected-replies/`.
 
 ### 2026-10-28: carry recovery continuity across adjacent application claims
 

@@ -68,7 +68,7 @@
     function destination(label, title, target, action) {
       const node = el('a', 'btn quiet', label);
       node.title = title;
-      return window.mevedelNav.link(node, href(target), action);
+      return window.niwaNav.link(node, href(target), action);
     }
 
     const KINDS = {html: 'HTML', markdown: 'Markdown', image: 'Image', file: 'File',
@@ -85,7 +85,7 @@
       }
       known.forEach((version, index) => {
         const item = el('li', 'store-version');
-        const age = window.mevedelLobbyView ? window.mevedelLobbyView.age(version.time) : '';
+        const age = window.niwaLobbyView ? window.niwaLobbyView.age(version.time) : '';
         item.append(el('span', 'lobby-meta',
                        `Version ${version.n}${index === 0 ? ' (latest saved)' : ''} · ${age}`));
         const artifact = {...record(row), version: version.n};
@@ -241,11 +241,11 @@
       const meta = [KINDS[row.kind] || row.kind];
       if (row.missing === true) meta.push('file deleted');
       else if (typeof row.size === 'number') {
-        meta.push(window.mevedelTranscriptRenderer.formatBytes(row.size));
+        meta.push(window.niwaTranscriptRenderer.formatBytes(row.size));
       }
       meta.push(`${row.versions} version${row.versions === 1 ? '' : 's'}`);
-      if (window.mevedelLobbyView) {
-        meta.push(window.mevedelLobbyView.age(row.modified));
+      if (window.niwaLobbyView) {
+        meta.push(window.niwaLobbyView.age(row.modified));
       }
       if (here.get(row.id)) meta.push(`${here.get(row.id)} here`);
       if (row.shared === true) meta.push('shared');
@@ -381,5 +381,5 @@
                           conversation: id => act('conversation', id)});
   }
 
-  window.mevedelStoreView = Object.freeze({create});
+  window.niwaStoreView = Object.freeze({create});
 })();

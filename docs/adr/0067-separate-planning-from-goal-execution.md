@@ -50,9 +50,9 @@ with a paused, blocked, budget-limited, or complete Goal uses the baseline;
 already-admitted turns retain their captured policy until settlement. Both Here
 and Worktree leave session baselines unchanged. The Worktree fork copies the
 planning session's ordinary defaults and preset. The selected budget belongs
-only to the Goal, not `mevedel-goal-token-budget`.
+only to the Goal, not `niwa-goal-token-budget`.
 
-`mevedel-implementation-policy.el` owns the strict serializable record
+`niwa-implementation-policy.el` owns the strict serializable record
 `(:model-provider STRING :reasoning-effort SYMBOL-or-nil :permission-mode MODE)`,
 exact model resolution, and current root-policy selection. Missing models or
 unsupported effort fail without baseline fallback. The Goal constructor

@@ -8,7 +8,7 @@ Read account-wide subscription quotas as plain data.
 ### When NOT to use `SubscriptionUsage`
 
 - Estimating this conversation's context size or token cost; quotas are
-  account-wide and include activity outside mevedel.
+  account-wide and include activity outside niwa.
 
 ### How to use `SubscriptionUsage`
 

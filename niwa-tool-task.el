@@ -1,0 +1,1247 @@
+;;; niwa-tool-task.el -- Session task tracking tools -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; TaskWrite, TaskList, and the session task status fragment.
+;; Tasks live on `niwa-session'
+;; with IDs, status, optional owner, and dependency information.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'seq)
+
+(eval-when-compile
+  (require 'niwa-tool-registry))
+
+(require 'subr-x)
+(require 'niwa-structs)
+(require 'niwa-turn)
+(require 'niwa-utilities)
+
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar gptel--fsm-last)
+
+;; `niwa-agents'
+(declare-function niwa-agent-invocation-p "niwa-agents" (cl-x))
+(declare-function niwa-agent-invocation-require-path
+                  "niwa-agents" (invocation))
+
+;; `niwa-agent-conversation'
+(defvar niwa--agent-invocation)
+
+;; `niwa-structs'
+(defvar niwa--session)
+(defvar niwa--view-buffer)
+
+;; `niwa-turn'
+(declare-function niwa-current-turn "niwa-turn" (session))
+
+;; `niwa-utilities'
+(declare-function niwa--truncate-display
+                  "niwa-utilities" (text width &optional ellipsis))
+(autoload 'niwa--truncate-display "niwa-utilities")
+
+;; `niwa-view'
+(defvar niwa-view--status-marker)
+(declare-function niwa-view--render-status "niwa-view" (&optional data-buf))
+(declare-function niwa-view--zone-separator "niwa-view" (label))
+(autoload 'niwa-view--render-status "niwa-view")
+(autoload 'niwa-view--zone-separator "niwa-view")
+
+;; `niwa-view-zone'
+(declare-function niwa-view-zone-collapse-state
+                  "niwa-view-zone" (key &optional default))
+(declare-function niwa-view-zone-set-collapse-state
+                  "niwa-view-zone" (key collapsed))
+(declare-function niwa-view-zone-width "niwa-view-zone" ())
+(autoload 'niwa-view-zone-collapse-state "niwa-view-zone")
+(autoload 'niwa-view-zone-set-collapse-state "niwa-view-zone")
+(autoload 'niwa-view-zone-width "niwa-view-zone")
+
+
+;;
+;;; Status helpers
+
+(defface niwa-tool-task-in-progress
+  '((t :inherit success :weight bold))
+  "Face for the task currently in progress."
+  :group 'niwa)
+
+(defface niwa-tool-task-completed
+  '((t :inherit shadow))
+  "Face for completed task rows.
+The check glyph and the `done' section already mark these rows, so the
+face stays quiet rather than striking a whole section through."
+  :group 'niwa)
+
+(defconst niwa-tool-task--statuses '(pending in-progress completed)
+  "Valid task status symbols.")
+
+(defun niwa-tool-task--parse-status (value)
+  "Parse VALUE into a task status symbol.
+Accepts symbols, strings (\"pending\", \"in_progress\",
+\"in-progress\", \"completed\"), or nil (defaults to `pending').
+Signals an error on unknown values."
+  (pcase value
+    ((or 'nil "" :json-false) 'pending)
+    ((pred symbolp)
+     (if (memq value niwa-tool-task--statuses)
+         value
+       (error "Invalid task status: %S" value)))
+    ((pred stringp)
+     (pcase (downcase value)
+       ("pending" 'pending)
+       ((or "in_progress" "in-progress") 'in-progress)
+       ("completed" 'completed)
+       (_ (error "Invalid task status: %S" value))))
+    (_ (error "Invalid task status: %S" value))))
+
+(defun niwa-tool-task--status-string (status)
+  "Render STATUS symbol as the string shown to the LLM."
+  (pcase status
+    ('pending "pending")
+    ('in-progress "in_progress")
+    ('completed "completed")
+    (_ (format "%s" status))))
+
+
+;;
+;;; Session access
+
+(defun niwa-tool-task--session ()
+  "Return the active session, or signal an error."
+  (or (and (boundp 'niwa--session) niwa--session)
+      (error "No active niwa session in %s" (buffer-name))))
+
+(defun niwa-tool-task--next-id (session)
+  "Return the next unused task ID for SESSION."
+  (1+ (apply #'max 0 (mapcar #'niwa-task-id
+                             (niwa-session-tasks session)))))
+
+(defun niwa-tool-task--find (session id)
+  "Return the task in SESSION with ID, or nil."
+  (cl-find id (niwa-session-tasks session)
+           :key #'niwa-task-id))
+
+(defun niwa-tool-task--normalize-id-list (value)
+  "Normalize VALUE to a list of integer task IDs.
+Accepts nil, a vector, or a list.  Signals an error on non-integers."
+  (let ((lst (cond
+              ((null value) nil)
+              ((vectorp value) (append value nil))
+              ((listp value) value)
+              (t (error "Expected an array of task IDs, got %S" value)))))
+    (dolist (id lst)
+      (unless (integerp id)
+        (error "Task ID must be an integer, got %S" id)))
+    lst))
+
+(defun niwa-tool-task--plist-get-any (plist &rest keys)
+  "Return the first non-nil value in PLIST matching any of KEYS."
+  (cl-loop for key in keys
+           for v = (plist-get plist key)
+           when v return v))
+
+(defun niwa-tool-task--current-agent-owner (&optional session)
+  "Return the current agent's canonical task owner, or nil at root."
+  (and (niwa-agent-invocation-p niwa--agent-invocation)
+       (niwa-task-normalize-owner
+        (niwa-agent-invocation-require-path niwa--agent-invocation)
+        (and session (niwa-session-agent-registry session)))))
+
+(defun niwa-tool-task--argument-value-present-p (args key)
+  "Return non-nil when ARGS has KEY with a non-nil value.
+Optional tool arguments may arrive as explicit nil placeholders; treat
+those the same as omitted arguments."
+  (and (plist-member args key)
+       (let ((value (plist-get args key)))
+         (not (or (null value) (eq value :json-false))))))
+
+(defun niwa-tool-task--optional-argument (args key)
+  "Return ARGS' KEY value, or nil when the caller meant to omit it.
+An empty string and `:json-false' both read as absent.  This is the
+opposite of `niwa-tool-task--argument-value-present-p', whose callers
+give a blank value a meaning of its own: an empty owner selects Main and
+an empty note clears one.  Here a blank is a placeholder for an argument
+the caller did not supply, and reading it as a value silently answers a
+different question than the one asked."
+  (let ((value (plist-get args key)))
+    (unless (or (null value)
+                (eq value :json-false)
+                (and (stringp value) (string-empty-p value)))
+      value)))
+
+(defun niwa-tool-task--owner-from-args (session args keys)
+  "Return a normalized owner in SESSION from ARGS using KEYS.
+When none of KEYS has a value, default to the current caller owner.
+An explicitly empty string targets the main session owner."
+  (catch 'found
+    (dolist (key keys)
+      (when (niwa-tool-task--argument-value-present-p args key)
+        (throw 'found
+               (niwa-task-normalize-owner
+                (plist-get args key)
+                (niwa-session-agent-registry session)))))
+    (niwa-tool-task--current-agent-owner session)))
+
+(defun niwa-tool-task--normalize-note (note)
+  "Normalize NOTE to a compact non-empty string, or nil to clear it."
+  (cond
+   ((null note) nil)
+   ((not (stringp note))
+    (error "Parameter note must be a string"))
+   (t
+    (let ((trimmed (string-clean-whitespace note)))
+      (unless (string-empty-p trimmed)
+        trimmed)))))
+
+(defun niwa-tool-task--check-owner (session owner)
+  "Check the caller may change OWNER's tasks or notes in SESSION.
+Root may manage all owners.  Retained agents may manage their own and
+descendants' tasks, but not another retained agent's.  Main and non-path
+buckets remain shared labels, not retained agent identities."
+  (when-let* ((caller (niwa-tool-task--current-agent-owner session)))
+    (when (and (niwa-agent-path-p owner)
+               (not (equal caller owner))
+               (not (string-prefix-p (concat caller "/") owner)))
+      (error "Tasks owned by %s cannot be changed by %s; omit id to create your own task or ask the owner or its parent to update it"
+             owner caller))))
+
+(defun niwa-tool-task--normalize-subject (value)
+  "Return VALUE as the single non-blank line a task subject must be."
+  (let ((subject (and (stringp value) (string-clean-whitespace value))))
+    (when (or (null subject) (string-empty-p subject))
+      (error "Task subject must be a non-empty string"))
+    subject))
+
+(defun niwa-tool-task--status-note-entry (session owner)
+  "Return SESSION's status note entry for OWNER."
+  (cl-assoc owner (niwa-session-task-status-notes session)
+            :test #'equal))
+
+(defun niwa-tool-task--status-note (session owner)
+  "Return SESSION's status note text for OWNER, or nil."
+  (when-let* ((entry (niwa-tool-task--status-note-entry session owner)))
+    (plist-get (cdr entry) :note)))
+
+(defun niwa-tool-task--set-status-note (session owner note)
+  "Set SESSION's status NOTE for OWNER.
+OWNER is nil for the main session.  A nil NOTE clears the entry."
+  (let* ((owner
+          (niwa-task-normalize-owner
+           owner (niwa-session-agent-registry session)))
+         (note (niwa-tool-task--normalize-note note))
+         (notes (niwa-session-task-status-notes session))
+         (entry (niwa-tool-task--status-note-entry session owner)))
+    (if note
+        (let ((data (list :note note
+                          :updated-turn
+                          (niwa-current-turn session)
+                          :updated-at
+                          (format-time-string "%FT%T%z"))))
+          (if entry
+              (setcdr entry data)
+            (push (cons owner data) notes))
+          (setf (niwa-session-task-status-notes session) notes)
+          note)
+      (setf (niwa-session-task-status-notes session)
+            (cl-remove owner notes :key #'car :test #'equal))
+      nil)))
+
+(defun niwa-tool-task--object-to-plist (obj)
+  "Convert OBJ (alist or plist) to a plist keyed by symbol keywords.
+The JSON object from gptel may arrive as either form; normalize once."
+  (cond
+   ((null obj) nil)
+   ;; Already a plist: first element is a keyword.
+   ((and (listp obj) (keywordp (car obj))) obj)
+   ;; Alist of (KEY . VALUE) pairs.
+   ((and (listp obj) (consp (car obj)))
+    (let (plist)
+      (dolist (pair obj)
+        (let ((k (car pair)))
+          (push (cond
+                 ((keywordp k) k)
+                 ((symbolp k) (intern (format ":%s" k)))
+                 ((stringp k) (intern (format ":%s" k)))
+                 (t (error "Invalid task key: %S" k)))
+                plist)
+          (push (cdr pair) plist)))
+      (nreverse plist)))
+   (t (error "Expected task object, got %S" obj))))
+
+
+;;
+;;; Task mutations
+
+(defun niwa-tool-task--mark-write (session)
+  "Record a successful task write on SESSION.
+Also drops dependency edges the write resolved.  Every task mutation
+lands here, which is why the invariant lives here: a task created
+blocked by an already-completed ID, or updated into one, would otherwise
+keep that edge forever -- nothing clears it, because unblocking only
+ever fired on a task's transition to completed."
+  (niwa-task-prune-resolved-dependencies (niwa-session-tasks session))
+  (setf (niwa-session-last-task-write-turn session)
+        (niwa-current-turn session)))
+
+(defun niwa-tool-task--create-one (session spec &optional id)
+  "Return a task for SESSION from SPEC plist, using ID when non-nil.
+Returns the new `niwa-task' struct."
+  (let* ((p (niwa-tool-task--object-to-plist spec))
+         (subject (plist-get p :subject))
+         (description (plist-get p :description))
+         (status-raw (plist-get p :status))
+         (owner (if (plist-member p :owner)
+                    (plist-get p :owner)
+                  (niwa-tool-task--current-agent-owner session)))
+         (blocked-by-raw (niwa-tool-task--plist-get-any
+                          p :blockedBy :blocked_by :blocked-by))
+         (metadata (plist-get p :metadata)))
+    (setq subject (niwa-tool-task--normalize-subject subject))
+    (let* ((status (niwa-tool-task--parse-status status-raw))
+           (task (niwa-task--create
+                  :id (or id (niwa-tool-task--next-id session))
+                  :subject subject
+                  :description (and (stringp description) description)
+                  :status status
+                  :owner
+                  (niwa-task-normalize-owner
+                   owner (niwa-session-agent-registry session))
+                  :blocked-by (niwa-tool-task--normalize-id-list
+                               blocked-by-raw)
+                  :completed-turn (and (eq status 'completed)
+                                       (niwa-current-turn
+                                        session))
+                  :metadata metadata)))
+      task)))
+
+(defun niwa-tool-task--prepare-update (session id updates)
+  "Validate replacement UPDATES for task ID in SESSION; return an applier.
+UPDATES is the plist of replacement fields.  Every check runs here, so a
+batch can validate all its entries before mutating any task.  Calling the
+returned function applies the fields and returns the task.  Signals an
+error if ID is unknown or a field is invalid."
+  (let ((task (niwa-tool-task--find session id))
+        (p (niwa-tool-task--object-to-plist updates)))
+    (unless task
+      (error "No task with id %s" id))
+    (niwa-tool-task--check-owner session (niwa-task-owner task))
+    (let (subject subject-p
+          description description-p
+          new-status status-p
+          owner owner-p
+          blocked-by blocked-by-p
+          metadata metadata-p)
+      (when-let* ((subject-value
+                   (plist-get p :subject)))
+        (setq subject (niwa-tool-task--normalize-subject subject-value)
+              subject-p t))
+      (when (plist-member p :description)
+        (let ((d (plist-get p :description)))
+          (setq description (and (stringp d) d)
+                description-p t)))
+      (when-let* ((status-raw (niwa-tool-task--optional-argument
+                               p :status)))
+        (setq new-status (niwa-tool-task--parse-status status-raw)
+              status-p t))
+      (when (plist-member p :owner)
+        (setq owner (niwa-task-normalize-owner
+                     (plist-get p :owner)
+                     (niwa-session-agent-registry session))
+              owner-p t))
+      (when (or (plist-member p :blockedBy)
+                (plist-member p :blocked_by)
+                (plist-member p :blocked-by))
+        (setq blocked-by
+              (niwa-tool-task--normalize-id-list
+               (niwa-tool-task--plist-get-any
+                p :blockedBy :blocked_by :blocked-by))
+              blocked-by-p t))
+      (when (plist-member p :metadata)
+        (setq metadata (plist-get p :metadata)
+              metadata-p t))
+      (lambda ()
+        (when subject-p
+          (setf (niwa-task-subject task) subject))
+        (when description-p
+          (setf (niwa-task-description task) description))
+        (when status-p
+          (let ((old-status (niwa-task-status task)))
+            (setf (niwa-task-status task) new-status)
+            (when (and (eq new-status 'completed)
+                       (not (eq old-status 'completed)))
+              (setf (niwa-task-completed-turn task)
+                    (niwa-current-turn session)))))
+        (when owner-p
+          (setf (niwa-task-owner task) owner))
+        (when blocked-by-p
+          (setf (niwa-task-blocked-by task) blocked-by))
+        (when metadata-p
+          (setf (niwa-task-metadata task) metadata))
+        task))))
+
+(defun niwa-tool-task-finalize-owner (session owner status)
+  "Reconcile SESSION tasks owned by OWNER for terminal agent STATUS.
+When STATUS is `completed' and OWNER is a canonical non-root path, mark all
+open tasks for that owner completed and clear that owner's task status
+note.  Dependents unblock through `niwa-tool-task--mark-write'.
+Return non-nil when SESSION changed."
+  (when (and (eq status 'completed)
+             (niwa-agent-path-p owner)
+             (not (equal owner "/root")))
+    (let ((changed nil)
+          (turn (niwa-current-turn session)))
+      (dolist (task (niwa-session-tasks session))
+        (when (and (equal owner (niwa-task-owner task))
+                   (niwa-tool-task--active-p task))
+          (setf (niwa-task-status task) 'completed)
+          (setf (niwa-task-completed-turn task) turn)
+          (setq changed t)))
+      (when (niwa-tool-task--status-note-entry session owner)
+        (niwa-tool-task--set-status-note session owner nil)
+        (setq changed t))
+      (when changed
+        (niwa-tool-task--clear-inactive-status-notes session)
+        (niwa-tool-task--mark-write session))
+      changed)))
+
+
+;;
+;;; Formatting helpers
+
+(defun niwa-tool-task--owner-label (owner)
+  "Return the display label for OWNER."
+  (if (and (stringp owner) (not (string-empty-p owner)))
+      owner
+    "Main"))
+
+(defun niwa-tool-task--owner-display-label (owner)
+  "Return OWNER's label as the task panel renders it.
+Canonical agent paths drop the `/root/' prefix every agent shares.
+Bucket strings and the main session's label are unchanged; tool
+feedback keeps the full label through `niwa-tool-task--owner-label'."
+  (string-remove-prefix "/root/" (niwa-tool-task--owner-label owner)))
+
+(defun niwa-tool-task--metadata-get (metadata &rest keys)
+  "Return the first value in METADATA matching one of KEYS."
+  (catch 'found
+    (dolist (key keys)
+      (let* ((bare (and (keywordp key)
+                        (substring (symbol-name key) 1)))
+             (symbol-key (and bare (intern bare)))
+             (string-hit (and bare (listp metadata)
+                              (assoc bare metadata))))
+        (when (and (listp metadata) (keywordp (car metadata))
+                   (plist-member metadata key))
+          (throw 'found (plist-get metadata key)))
+        (when (and (listp metadata) (assq key metadata))
+          (throw 'found (cdr (assq key metadata))))
+        (when (and symbol-key (listp metadata)
+                   (assq symbol-key metadata))
+          (throw 'found (cdr (assq symbol-key metadata))))
+        (when string-hit
+          (throw 'found (cdr string-hit)))))
+    nil))
+
+(defun niwa-tool-task--activity-summary (task)
+  "Return TASK's display activity, or nil.
+Only agent-owned tasks carry one: the main session's current work is
+already visible in the transcript.  Truncation happens at the single
+row-text site in `niwa-tool-task--format-one'."
+  (when (and (eq (niwa-task-status task) 'in-progress)
+             (niwa-agent-path-p (niwa-task-owner task)))
+    (let ((activity (niwa-tool-task--metadata-get
+                     (niwa-task-metadata task)
+                     :activity :activeForm :active-form :active_form)))
+      (when (and (stringp activity)
+                 (not (string-empty-p activity)))
+        (string-clean-whitespace activity)))))
+
+(defun niwa-tool-task--format-id-list (ids)
+  "Return IDS as a compact task-reference list."
+  (mapconcat (lambda (id) (format "#%d" id)) ids ", "))
+
+(defun niwa-tool-task--propertize-row-part (text face)
+  "Return TEXT with FACE applied for overlay and font-lock rendering."
+  (propertize text 'face face 'font-lock-face face))
+
+(defun niwa-tool-task--dim (text)
+  "Return TEXT propertized as dim panel chrome."
+  (niwa-tool-task--propertize-row-part text 'font-lock-comment-face))
+
+(defun niwa-tool-task--active-p (task)
+  "Return non-nil when TASK is not completed."
+  (not (eq (niwa-task-status task) 'completed)))
+
+(defun niwa-tool-task-session-has-active-p (session)
+  "Return non-nil when SESSION has at least one non-completed task."
+  (cl-some #'niwa-tool-task--active-p
+           (niwa-session-tasks session)))
+
+(defun niwa-tool-task--owner-has-active-p (session owner)
+  "Return non-nil when OWNER has at least one open task in SESSION."
+  (let ((owner
+         (niwa-task-normalize-owner
+          owner (niwa-session-agent-registry session))))
+    (cl-some
+     (lambda (task)
+       (and (equal owner (niwa-task-owner task))
+            (niwa-tool-task--active-p task)))
+     (niwa-session-tasks session))))
+
+(defun niwa-tool-task--clear-inactive-status-notes (session)
+  "Drop SESSION status notes for owners with no open tasks."
+  (setf (niwa-session-task-status-notes session)
+        (cl-remove-if-not
+         (lambda (entry)
+           (niwa-tool-task--owner-has-active-p session (car entry)))
+         (niwa-session-task-status-notes session))))
+
+(defun niwa-tool-task--format-status-note-line (session owner
+                                                          &optional standalone)
+  "Return OWNER's status note display line for SESSION, or nil.
+The note hangs off the header or row above it unless STANDALONE, which
+opens the panel with the main session's note and so has nothing to hang
+from.  A note only renders while OWNER still has an open task, so a
+completed-only owner never keeps a line on the panel."
+  (when (niwa-tool-task--owner-has-active-p session owner)
+    (when-let* ((note (niwa-tool-task--status-note session owner)))
+      (propertize (if standalone note (format "  └ %s" note))
+                  'font-lock-face '(:inherit italic)))))
+
+(defun niwa-tool-task--blocked-suffix (task tasks)
+  "Return TASK's blocked-by suffix given the session's TASKS, or nil.
+Two or more blockers that are all in progress collapse to a count;
+anything else lists the blocking IDs, which a reader still has to
+resolve but at least can."
+  (when-let* ((blocked-by (niwa-task-blocked-by task)))
+    (niwa-tool-task--dim
+     (if (and (cdr blocked-by)
+              (cl-every
+               (lambda (id)
+                 (when-let* ((blocker (cl-find id tasks
+                                               :key #'niwa-task-id)))
+                   (eq (niwa-task-status blocker) 'in-progress)))
+               blocked-by))
+         (format " · blocked by %d running" (length blocked-by))
+       (format " · blocked by %s"
+               (niwa-tool-task--format-id-list blocked-by))))))
+
+(defun niwa-tool-task--format-one (task &optional owner-prefix tasks)
+  "Format TASK as a single display line (propertized).
+OWNER-PREFIX is a display label rendered ahead of the task text, or
+nil for the main session and for rows already sitting under an owner
+header.  The label carries the row's own face so it names the owner
+without dimming it, except behind the dim separator that joins it to
+the task text.  TASKS is the session task list, used to describe
+blockers."
+  (let* ((status (niwa-task-status task))
+         (id (niwa-task-id task))
+         (activity (niwa-tool-task--activity-summary task))
+         ;; A running task's activeForm is the news; its subject is
+         ;; already known.  Both share one row budget, because a very
+         ;; long single line soft-wraps past the status fragment's
+         ;; height cap.
+         (text (niwa--truncate-display
+                (or activity
+                    (string-clean-whitespace (niwa-task-subject task)))
+                72 t))
+         (icon (pcase status
+                 ('completed   "✔")
+                 ('in-progress "→")
+                 (_            "○")))
+         (face (pcase status
+                 ('completed   'niwa-tool-task-completed)
+                 ('in-progress 'niwa-tool-task-in-progress)
+                 (_            'default))))
+    (concat (niwa-tool-task--propertize-row-part icon face) " "
+            (niwa-tool-task--propertize-row-part
+             (format "#%d " id) face)
+            (when owner-prefix
+              (concat (niwa-tool-task--propertize-row-part
+                       owner-prefix
+                       (if (eq status 'completed)
+                           face
+                         'font-lock-constant-face))
+                      (niwa-tool-task--dim " · ")))
+            (niwa-tool-task--propertize-row-part text face)
+            (niwa-tool-task--blocked-suffix task tasks))))
+
+(defun niwa-tool-task--active-priority (task)
+  "Return display priority for active TASK."
+  (pcase (niwa-task-status task)
+    ('in-progress 0)
+    ('pending (if (niwa-task-blocked-by task) 2 1))
+    (_ 3)))
+
+(defun niwa-tool-task--sort-active-tasks (tasks)
+  "Return active TASKS in compact display priority order."
+  (sort tasks :key (lambda (task)
+                    (list (niwa-tool-task--active-priority task)
+                          (niwa-task-id task)))))
+
+(defun niwa-tool-task--sort-completed-tasks (tasks)
+  "Return completed TASKS in stable display order."
+  (sort tasks :key #'niwa-task-id))
+
+(defun niwa-tool-task--summary-line (open completed)
+  "Return one indented summary for omitted OPEN and COMPLETED tasks."
+  (niwa-tool-task--dim
+   (concat "  "
+           (cond
+            ((and (> open 0) (> completed 0))
+             (format "… %d more open · %d completed" open completed))
+            ((> open 0) (format "… %d more open" open))
+            (t (format "… %d completed" completed))))))
+
+(defun niwa-tool-task--render-rows (rows max-lines)
+  "Join ROWS into a panel body, capping the result at MAX-LINES.
+ROWS are (TEXT OPEN-COUNT COMPLETED-COUNT) triples whose counts sum to
+the tasks a truncation drops."
+  (cond
+   ((null rows)
+    (niwa-tool-task--dim "No open tasks."))
+   ((or (null max-lines) (<= (length rows) max-lines))
+    (string-join (mapcar #'car rows) "\n"))
+   (t
+    (let* ((visible (cl-subseq rows 0 (max 0 (1- max-lines))))
+           (omitted (nthcdr (length visible) rows))
+           (open (cl-loop for row in omitted sum (nth 1 row)))
+           (completed (cl-loop for row in omitted sum (nth 2 row))))
+      ;; A cut landing right after a header leaves that header with
+      ;; nothing under it; drop it rather than dangle it.
+      (while (and visible
+                  (zerop (nth 1 (car (last visible))))
+                  (zerop (nth 2 (car (last visible)))))
+        (setq visible (butlast visible)))
+      (string-join
+       (append (mapcar #'car visible)
+               ;; An all-chrome remainder drops no tasks, so there is
+               ;; nothing to summarize.
+               (when (or (> open 0) (> completed 0))
+                 (list (niwa-tool-task--summary-line open completed))))
+       "\n")))))
+
+(defun niwa-tool-task--format-groups (session &optional show-completed
+                                                 max-lines)
+  "Return the task panel body for SESSION.
+Open tasks are ordered once by `niwa-tool-task--sort-active-tasks'.
+An owner holding a single open task renders inline behind an owner
+prefix; an owner holding several renders under one header placed
+at that owner's best-ordered task, which keeps its rows adjacent and
+so bends the global order for the rest of the group.  The main session
+renders without a prefix and never takes a header, and its status note
+opens the panel because it has no header to hang from.  With
+SHOW-COMPLETED, completed tasks follow in a single `done' section.
+MAX-LINES caps the rendered body without changing task storage."
+  (let* ((tasks (niwa-session-tasks session))
+         (active (niwa-tool-task--sort-active-tasks
+                  (cl-remove-if-not #'niwa-tool-task--active-p tasks)))
+         (buckets (seq-group-by #'niwa-task-owner active))
+         (grouped (make-hash-table :test #'equal))
+         rows)
+    (cl-flet ((note-row (owner)
+                (when owner
+                  (when-let*
+                      ((line (niwa-tool-task--format-status-note-line
+                              session owner)))
+                    (list line 0 0)))))
+      (when-let* ((line (niwa-tool-task--format-status-note-line
+                         session nil t)))
+        (push (list line 0 0) rows))
+      (dolist (task active)
+        (let* ((owner (niwa-task-owner task))
+               (bucket (alist-get owner buckets nil nil #'equal)))
+          (cond
+           ;; The main session is the default owner, so a "Main"
+           ;; header names nothing its unprefixed rows do not already
+           ;; say; and a sole open task's header would only repeat the
+           ;; row beneath it.
+           ((or (null owner) (null (cdr bucket)))
+            (push (list (niwa-tool-task--format-one
+                         task
+                         (and owner
+                              (niwa-tool-task--owner-display-label owner))
+                         tasks)
+                        1 0)
+                  rows)
+            (when-let* ((row (note-row owner)))
+              (push row rows)))
+           ;; Already emitted with its group.
+           ((gethash owner grouped))
+           (t
+            (puthash owner t grouped)
+            (push (list (niwa-tool-task--propertize-row-part
+                         (niwa-tool-task--owner-display-label owner)
+                         'font-lock-constant-face)
+                        0 0)
+                  rows)
+            (when-let* ((row (note-row owner)))
+              (push row rows))
+            (dolist (member bucket)
+              (push (list (concat "  " (niwa-tool-task--format-one
+                                        member nil tasks))
+                          1 0)
+                    rows)))))))
+    (when show-completed
+      (when-let* ((completed
+                   (niwa-tool-task--sort-completed-tasks
+                    (cl-remove-if #'niwa-tool-task--active-p tasks))))
+        (push (list (niwa-tool-task--dim "done") 0 0) rows)
+        (dolist (task completed)
+          (let ((owner (niwa-task-owner task)))
+            (push (list (concat "  "
+                                (niwa-tool-task--format-one
+                                 task
+                                 (and owner
+                                      (niwa-tool-task--owner-display-label
+                                       owner))
+                                 tasks))
+                        0 1)
+                  rows)))))
+    (niwa-tool-task--render-rows (nreverse rows) max-lines)))
+
+(defun niwa-tool-task--format-for-llm (tasks)
+  "Return a plain-text summary of TASKS for the LLM."
+  (if (null tasks)
+      "No tasks recorded."
+    (mapconcat
+     (lambda (task)
+       (let ((parts (list (format "#%d [%s] %s"
+                                  (niwa-task-id task)
+                                  (niwa-tool-task--status-string
+                                   (niwa-task-status task))
+                                  (niwa-task-subject task)))))
+         (when-let* ((owner (niwa-task-owner task)))
+           (push (format "owner=%s" owner) parts))
+         (when-let* ((bb (niwa-task-blocked-by task)))
+           (push (format "blockedBy=[%s]"
+                         (mapconcat #'number-to-string bb ","))
+                 parts))
+         (string-join (nreverse parts) " ")))
+     tasks "\n")))
+
+(defun niwa-tool-task-format-active-for-llm (session)
+  "Return SESSION's non-completed tasks in the TaskList text shape."
+  (niwa-tool-task--format-for-llm
+   (cl-remove-if-not #'niwa-tool-task--active-p
+                     (niwa-session-tasks session))))
+
+
+;;
+;;; Status display
+
+(defconst niwa-tool-task--status-min-body-lines 4
+  "Minimum body lines reserved for task status.")
+
+(defconst niwa-tool-task--status-max-body-lines 12
+  "Maximum body lines reserved for task status.")
+
+(defconst niwa-tool-task--status-expanded-max-body-lines 40
+  "Maximum body lines reserved for task status while expanded.")
+
+(defun niwa-tool-task--status-line-budget (&optional expanded)
+  "Return the current task status body-line budget, or nil.
+EXPANDED widens the budget to make room for the completed section.  It
+always exceeds the collapsed budget, because the expanded row list is
+the collapsed one plus a `done' suffix and a truncation reserves a line
+for its summary -- an equal budget would make expanding drop an open row
+and reveal no completed row at all.
+The budget follows the height of the shortest frame showing the buffer,
+not of its window.  A popup split or a growing echo area resizes the
+window but not the frame; a window-height budget re-flowed the panel at
+the next unrelated status redraw after each."
+  (when-let* ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (let* ((height (apply #'min (mapcar (lambda (window)
+                                          (frame-height (window-frame window)))
+                                        windows)))
+           (collapsed
+            (min niwa-tool-task--status-max-body-lines
+                 (max niwa-tool-task--status-min-body-lines
+                      (floor (* height 0.25))))))
+      (if expanded
+          (max (1+ collapsed)
+               (min niwa-tool-task--status-expanded-max-body-lines
+                    (floor (* height 0.6))))
+        collapsed))))
+
+(defvar niwa-tool-task-status-keymap
+  (define-keymap
+    "<tab>" #'niwa-toggle-tasks
+    "TAB"   #'niwa-toggle-tasks
+    "<return>" #'niwa-toggle-tasks
+    "RET"   #'niwa-toggle-tasks
+    "<mouse-1>" #'mouse-set-point
+    "<mouse-2>" #'mouse-set-point)
+  "Keymap installed on the task status fragment.
+Mouse clicks place point without toggling task visibility.
+Shared with the fragment's header label via `where-is-internal' so the
+displayed key matches the actual binding -- see
+`niwa-tool-task--toggle-key-label'.")
+
+(defun niwa-tool-task--toggle-key-label ()
+  "Return the `key-description' string for toggling the task fragment.
+Looks up `niwa-toggle-tasks' directly in the fragment's keymap so
+the label is correct regardless of where point is when the display
+string is built.  Falls back to `M-x niwa-toggle-tasks' if the
+command has somehow lost its binding."
+  (if-let* ((keys (where-is-internal 'niwa-toggle-tasks
+                                     niwa-tool-task-status-keymap
+                                     t)))
+      (key-description keys)
+    "M-x niwa-toggle-tasks"))
+
+(defun niwa-tool-task--fragment-position (&optional position)
+  "Return POSITION when it is on a status task fragment.
+When POSITION is just after task fragment text, also accept the previous
+character so keybindings on trailing newlines still toggle the fragment."
+  (let ((pos (or position (point))))
+    (or (and (eq (get-text-property pos 'niwa-view-zone-namespace)
+                 'status)
+             (eq (get-text-property pos 'niwa-view-zone-id) 'tasks)
+             pos)
+        (and (> pos (point-min))
+             (let ((prev (1- pos)))
+               (and (eq (get-text-property prev
+                                           'niwa-view-zone-namespace)
+                        'status)
+                    (eq (get-text-property prev 'niwa-view-zone-id)
+                        'tasks)
+                    prev))))))
+
+(defun niwa-toggle-tasks ()
+  "Toggle completed task visibility in the session task list."
+  (interactive)
+  (if-let* ((pos (niwa-tool-task--fragment-position))
+            (collapse-key (get-text-property
+                           pos 'niwa-view-zone-collapse-key)))
+      (progn
+        (niwa-view-zone-set-collapse-state
+         collapse-key
+         (not (niwa-view-zone-collapse-state
+               collapse-key
+               (get-text-property pos 'niwa-view-zone-collapsed))))
+        (niwa-view--render-status))
+    (niwa-diagnostic-message
+     (niwa-diagnostic-scope (current-buffer)) "No task list here")))
+
+(defun niwa-tool-task--tallies (session)
+  "Return SESSION's task tallies as one compact label, or nil when empty.
+Zero terms are omitted so the separator rule stays short in the common
+case."
+  (let ((running 0)
+        (blocked 0)
+        (open 0)
+        (done 0))
+    (dolist (task (niwa-session-tasks session))
+      (pcase (niwa-task-status task)
+        ('completed (cl-incf done))
+        ('in-progress (cl-incf running))
+        (_ (if (niwa-task-blocked-by task)
+               (cl-incf blocked)
+             (cl-incf open)))))
+    (when-let* ((parts
+                 (delq nil
+                       (list (and (> running 0) (format "%d running" running))
+                             (and (> blocked 0) (format "%d blocked" blocked))
+                             (and (> open 0) (format "%d open" open))
+                             (and (> done 0) (format "%d done" done))))))
+      (string-join parts " · "))))
+
+(defun niwa-tool-task--task-label (session show-completed)
+  "Return the status-zone task label for SESSION.
+The tallies live here rather than on per-owner headers, so the panel
+states each count once.  SHOW-COMPLETED selects the toggle wording."
+  (let ((separator (propertize " · " 'face 'niwa-view-zone-separator))
+        (tallies (niwa-tool-task--tallies session))
+        (toggle-key
+         (propertize (niwa-tool-task--toggle-key-label)
+                     'face 'help-key-binding)))
+    (concat
+     (propertize "tasks" 'face 'niwa-view-zone-separator)
+     (when tallies
+       (concat separator
+               (propertize tallies 'face 'niwa-view-zone-separator)))
+     separator
+     toggle-key
+     (propertize (if show-completed " to collapse" " to expand")
+                 'face 'niwa-view-zone-separator))))
+
+(defun niwa-tool-task-display-string (session show-completed)
+  "Return task display for SESSION.
+SHOW-COMPLETED controls whether completed task detail is included.
+Every line fits one screen row of the narrowest window showing the view,
+so the line budget is a row budget and a long note or title cannot
+change the panel's height as it changes length."
+  (let* ((limit (max 1 (1- (niwa-view-zone-width))))
+         (body (mapconcat
+                (lambda (line)
+                  (if (<= (string-width line) limit)
+                      line
+                    (truncate-string-to-width line limit nil nil "…")))
+                (split-string (niwa-tool-task--format-groups
+                               session show-completed
+                               (niwa-tool-task--status-line-budget show-completed))
+                              "\n")
+                "\n"))
+         (separator (niwa-view--zone-separator
+                     (niwa-tool-task--task-label
+                      session show-completed))))
+    (concat separator body "\n\n")))
+
+(defun niwa-tool-task-refresh-display ()
+  "Render the current session's task status in its view buffer."
+  (when-let* ((session (and (boundp 'niwa--session) niwa--session))
+              (view-buf (and (boundp 'niwa--view-buffer)
+                             niwa--view-buffer
+                             (buffer-live-p niwa--view-buffer)
+                             niwa--view-buffer)))
+    (with-current-buffer view-buf
+      (let ((niwa--session session))
+        (niwa-view--render-status)))))
+
+
+;;
+;;; Tool handlers
+
+(defun niwa-tool-task--task-container-p (value)
+  "Return non-nil when VALUE matches a task object in a list batch."
+  (and (listp value)
+       (or (and (keywordp (car value))
+                (consp (cdr value)))
+           (and (consp (car value))
+                (atom (caar value))))))
+
+(defun niwa-tool-task--tasks-arg (args)
+  "Return the `:tasks' argument from ARGS as a list of task specs.
+Accepts a vector, list, or single task object; always returns a list."
+  (let ((raw (plist-get args :tasks)))
+    (cond
+     ((null raw) (error "Parameter tasks is required"))
+     ((vectorp raw) (append raw nil))
+     ;; Single task object passed as a plist -- wrap in list.
+     ((and (listp raw) (keywordp (car raw)))
+      (list raw))
+     ;; Lisp callers may pass a list batch instead of a JSON vector.
+     ((and (listp raw) (cl-every #'niwa-tool-task--task-container-p raw))
+      raw)
+     ;; Single task object passed as an alist -- wrap in list.
+     ((and (listp raw) (consp (car raw)) (atom (caar raw)))
+      (list raw))
+     ((listp raw) raw)
+     (t (error "Parameter tasks must be an array, got %S" raw)))))
+
+(defconst niwa-tool-task--note-owner-keys
+  '(:noteOwner :note_owner :note-owner)
+  "Accepted top-level owner keys for task status notes.")
+
+(defun niwa-tool-task--note-feedback (owner note stored)
+  "Return feedback for OWNER status NOTE when STORED."
+  (let ((label (niwa-tool-task--owner-label owner)))
+    (cond
+     (stored
+      (format "Status note for %s: %s" label note))
+     (note
+      (format "Status note for %s not shown because that owner has no open tasks."
+              label))
+     (t
+      (format "Cleared status note for %s." label)))))
+
+(defun niwa-tool-task--prepare-note-arg (session args owner-keys)
+  "Return (OWNER . NOTE) for ARGS' optional top-level :note in SESSION.
+OWNER-KEYS names the optional owner argument aliases.  Returns nil when
+:note is absent.  Both the owner and the note text are resolved here, so
+an unresolvable owner signals before any task has been mutated; NOTE is
+nil when the note clears the owner's entry."
+  (when (niwa-tool-task--argument-value-present-p args :note)
+    (let ((owner (niwa-tool-task--owner-from-args session args owner-keys)))
+      (niwa-tool-task--check-owner session owner)
+      (cons owner
+            (niwa-tool-task--normalize-note (plist-get args :note))))))
+
+(defun niwa-tool-task--apply-note-arg (session prepared)
+  "Store PREPARED, a `niwa-tool-task--prepare-note-arg' result, in SESSION.
+Returns a feedback string when PREPARED is non-nil, otherwise nil.
+Whether a note is storable depends on the owner having an open task, so
+this runs after the task mutation it accompanies."
+  (when prepared
+    (let ((owner (car prepared))
+          (note (cdr prepared))
+          stored)
+      (if (and note (niwa-tool-task--owner-has-active-p session owner))
+          (progn
+            (niwa-tool-task--set-status-note session owner note)
+            (setq stored t))
+        (niwa-tool-task--set-status-note session owner nil))
+      (niwa-tool-task--clear-inactive-status-notes session)
+      (niwa-tool-task--note-feedback owner note stored))))
+
+(defun niwa-tool-task--apply-specs (session specs)
+  "Apply task SPECS to SESSION; return (CREATED . UPDATED) task lists.
+A spec with an `id' updates that task; one without creates a task.  The
+whole batch applies or none of it does: every entry is validated before
+any task changes."
+  (let ((next-id (niwa-tool-task--next-id session))
+        created appliers updated)
+    (dolist (spec specs)
+      (let* ((p (niwa-tool-task--object-to-plist spec))
+             (id (plist-get p :id)))
+        (cond
+         ((and id (not (eq id :null)))
+          (unless (integerp id)
+            (error "Task id must be an integer, got %S" id))
+          (push (niwa-tool-task--prepare-update
+                 session id
+                 (cl-loop for (k v) on p by #'cddr
+                          unless (eq k :id) nconc (list k v)))
+                appliers))
+         (t
+          (push (niwa-tool-task--create-one session p next-id) created)
+          (cl-incf next-id)))))
+    (dolist (apply (nreverse appliers))
+      (cl-pushnew (funcall apply) updated))
+    (setq created (nreverse created))
+    (setf (niwa-session-tasks session)
+          (append (niwa-session-tasks session) created))
+    (cons created (nreverse updated))))
+
+(defun niwa-tool-task--handle-write (args)
+  "Handler for TaskWrite.  ARGS has optional :tasks, :note and :noteOwner."
+  (let* ((session (niwa-tool-task--session))
+         (specs (and (niwa-tool-task--argument-value-present-p args :tasks)
+                     (niwa-tool-task--tasks-arg args)))
+         (prepared-note
+          (niwa-tool-task--prepare-note-arg
+           session args niwa-tool-task--note-owner-keys)))
+    (unless (or specs prepared-note
+                (niwa-tool-task--argument-value-present-p args :note))
+      (error "TaskWrite needs tasks or a note"))
+    (let* ((changes (niwa-tool-task--apply-specs session specs))
+           (created (car changes))
+           (updated (cdr changes))
+           (note-feedback
+            (niwa-tool-task--apply-note-arg session prepared-note)))
+      (niwa-tool-task--clear-inactive-status-notes session)
+      (niwa-tool-task--mark-write session)
+      (niwa-tool-task-refresh-display)
+      (list :result
+            (string-join
+             (delq nil
+                   (list
+                    (when created
+                      (format "Created %d task%s:\n%s"
+                              (length created) (if (cdr created) "s" "")
+                              (niwa-tool-task--format-for-llm created)))
+                    (when updated
+                      (format "Updated %d task%s:\n%s"
+                              (length updated) (if (cdr updated) "s" "")
+                              (niwa-tool-task--format-for-llm updated)))
+                    note-feedback))
+             "\n")))))
+
+(defun niwa-tool-task--handle-list (args)
+  "Handler for TaskList.  ARGS may include an :id or a :status filter."
+  (if-let* ((id (niwa-tool-task--optional-argument args :id)))
+      (niwa-tool-task--handle-get id)
+    (niwa-tool-task--handle-list-all args)))
+
+(defun niwa-tool-task--handle-list-all (args)
+  "Return the session task list, filtered by ARGS' optional :status."
+  (let* ((session (niwa-tool-task--session))
+         (filter-raw (niwa-tool-task--optional-argument args :status))
+         (filter (and filter-raw
+                      (niwa-tool-task--parse-status filter-raw)))
+         (tasks (niwa-session-tasks session))
+         (filtered (if filter
+                       (cl-remove-if-not
+                        (lambda (t1) (eq (niwa-task-status t1) filter))
+                        tasks)
+                     tasks)))
+    (niwa-tool-task-refresh-display)
+    (list :result
+          (if filter
+              (format "Tasks with status %s:\n%s"
+                      (niwa-tool-task--status-string filter)
+                      (niwa-tool-task--format-for-llm filtered))
+            (niwa-tool-task--format-for-llm filtered)))))
+
+(defun niwa-tool-task--handle-get (id)
+  "Return full details of task ID."
+  (let ((session (niwa-tool-task--session)))
+    (unless (integerp id)
+      (error "Parameter id must be an integer"))
+    (let ((task (niwa-tool-task--find session id)))
+      (unless task
+        (error "No task with id %s" id))
+      (with-temp-buffer
+        (insert (format "#%d [%s] %s\n"
+                        (niwa-task-id task)
+                        (niwa-tool-task--status-string
+                         (niwa-task-status task))
+                        (niwa-task-subject task)))
+        (when-let* ((d (niwa-task-description task)))
+          (insert (format "Description: %s\n" d)))
+        (when-let* ((o (niwa-task-owner task)))
+          (insert (format "Owner: %s\n" o)))
+        (when-let* ((bb (niwa-task-blocked-by task)))
+          (insert (format "Blocked by: %s\n"
+                          (mapconcat #'number-to-string bb ", "))))
+        (when-let* ((m (niwa-task-metadata task)))
+          (insert (format "Metadata: %S\n" m)))
+        (list :result (buffer-string))))))
+
+
+;;
+;;; Tool result renderers
+
+(defun niwa-tool-task--result-status (result)
+  "Return renderer status for RESULT."
+  (and (stringp result)
+       (string-prefix-p "Error:" result)
+       'error))
+
+(defun niwa-tool-task--first-result-line (result)
+  "Return the first non-empty line from RESULT."
+  (or (car (split-string (or result "") "\n" t))
+      "done"))
+
+(defun niwa-tool-task--task-line-count (result)
+  "Return the number of task detail lines in RESULT."
+  (if (stringp result)
+      (cl-loop for line in (split-string result "\n" t)
+               count (string-prefix-p "#" (string-trim-left line)))
+    0))
+
+(defun niwa-tool-task--render-event (name _args result _render-data)
+  "Return compact event renderer for NAME and RESULT."
+  (when (stringp result)
+    (list :header (format "%s: %s"
+                          (or name "Task")
+                          (niwa-tool-task--first-result-line result))
+          :status (niwa-tool-task--result-status result)
+          :expandable-p nil)))
+
+(defun niwa-tool-task--section-ids (result heading)
+  "Return the task IDs listed in RESULT's HEADING section, in order."
+  (when (string-match (format "^%s [0-9]+ tasks?:\n" heading) result)
+    (cl-loop for line in (split-string (substring result (match-end 0)) "\n")
+             while (string-match "\\`#\\([0-9]+\\) \\[" line)
+             collect (string-to-number (match-string 1 line)))))
+
+(defun niwa-tool-task--id-range (ids)
+  "Return IDS as a compact `#N' or `#N–#M' label."
+  (if (cdr ids)
+      (format "#%d–#%d" (apply #'min ids) (apply #'max ids))
+    (format "#%d" (car ids))))
+
+(defun niwa-tool-task--render-mutation (name _args result _render-data)
+  "Return collapsible TaskWrite renderer for NAME and RESULT.
+The header counts created and updated tasks; a note-only write shows its
+feedback line."
+  (when (stringp result)
+    (let* ((tool-name (or name "TaskWrite"))
+           (status (niwa-tool-task--result-status result))
+           (created (niwa-tool-task--section-ids result "Created"))
+           (updated (niwa-tool-task--section-ids result "Updated"))
+           (parts (delq nil
+                        (list (and created
+                                   (format "%d created · %s" (length created)
+                                           (niwa-tool-task--id-range created)))
+                              (and updated
+                                   (format "%d updated · %s" (length updated)
+                                           (niwa-tool-task--id-range updated)))))))
+      (if (or status parts)
+          (list :header (if (and parts (not status))
+                            (format "%s: %s" tool-name (string-join parts " · "))
+                          (format "%s: %s" tool-name
+                                  (niwa-tool-task--first-result-line result)))
+                :body result
+                :body-mode nil
+                :status status
+                :initially-collapsed-p t)
+        (niwa-tool-task--render-event name nil result nil)))))
+
+(defun niwa-tool-task--render-list (name args result render-data)
+  "Return rendering plist for TaskList NAME, ARGS, RESULT and RENDER-DATA."
+  (if (niwa-tool-task--optional-argument args :id)
+      (niwa-tool-task--render-get name args result render-data)
+    (when (stringp result)
+    (let* ((status-filter (niwa-tool-task--optional-argument
+                           args :status))
+           (count (niwa-tool-task--task-line-count result))
+           (suffix (format "%s%d %s"
+                           (if status-filter (format "%s, " status-filter) "")
+                           count (if (= count 1) "task" "tasks"))))
+      (list :header (format "%s: %s" (or name "TaskList") suffix)
+            :body result
+            :body-mode nil
+            :status (niwa-tool-task--result-status result)
+            :initially-collapsed-p t)))))
+
+(defun niwa-tool-task--render-get (name args result _render-data)
+  "Return rendering plist for one TaskList task NAME, ARGS, and RESULT."
+  (when (stringp result)
+    (let ((id (plist-get args :id)))
+      (list :header (format "%s: #%s"
+                            (or name "TaskList")
+                            (or id "?"))
+            :body result
+            :body-mode nil
+            :status (niwa-tool-task--result-status result)
+            :initially-collapsed-p t))))
+
+
+;;
+;;; Registration
+
+(defun niwa-tool-task--register ()
+  "Register the task tracking tools."
+
+  (niwa-define-tool
+    :name "TaskWrite"
+    :description "Create or update session tasks in one batch, and set an owner's status note."
+    :summary "Track a plan or checklist: create or update tasks with status, owners, and dependencies."
+    :prompt-file "prompts/tools/taskwrite.md"
+    :handler #'niwa-tool-task--handle-write
+    :args ((tasks array :optional
+                  "Task objects. An object with id updates that task, changing only the fields it names; one without id creates a task and needs subject. Fields: id (integer), subject (string), description (string; empty clears), status (\"pending\"|\"in_progress\"|\"completed\"), owner (canonical agent path or bucket string; empty unassigns; use subjects/descriptions for workstream names), blockedBy (array of task IDs), metadata (object; activity fields supply a running task's display text)."
+                  :items (:type object
+                          :properties (:id (:type integer)
+                                       :subject (:type string)
+                                       :description (:type string)
+                                       :status (:type string)
+                                       :owner (:type string)
+                                       :blockedBy (:type array :items (:type integer))
+                                       :metadata
+                                       (:type object
+                                        :properties (:activity (:type string)
+                                                     :activeForm (:type string)
+                                                     :active-form (:type string)
+                                                     :active_form (:type string))))))
+           (note string :optional
+                 "Owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
+           (noteOwner string :optional
+                      "Owner for note. Omit for the current caller, pass an empty string for Main."))
+    :read-only-p t
+    :groups (tasks)
+    :renderer '((success . niwa-tool-task--render-mutation)))
+
+  (niwa-define-tool
+    :name "TaskList"
+    :description "List the session's tasks, or read one task's full details."
+    :summary "List session tasks, progress, owners, and dependencies, or read one task in full."
+    :prompt-file "prompts/tools/tasklist.md"
+    :handler #'niwa-tool-task--handle-list
+    :args ((status string :optional
+                   "Optional filter: \"pending\", \"in_progress\", or \"completed\".")
+           (id integer :optional
+               "Task ID whose full description and metadata to return."))
+    :read-only-p t
+    :groups (tasks)
+    :renderer '((success . niwa-tool-task--render-list))))
+
+(provide 'niwa-tool-task)
+;;; niwa-tool-task.el ends here

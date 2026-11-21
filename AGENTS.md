@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**mevedel** is an Emacs Lisp package that provides a visual workflow for
+**niwa** is an Emacs Lisp package that provides a visual workflow for
 interacting with LLMs during programming. It enables overlay-based
 instruction management for AI-assisted development with direct gptel
 integration.
@@ -68,7 +68,7 @@ For interactive commands, see [README.md](README.md#usage).
   in prose; there is no note header or lifecycle label to maintain. Keep actionable
   open work in the tracker/backlog, not temporary notes as a task store.
   All notes and attachments reach age-readiness after 14 days without modification
-  by default (`mevedel-working-note-max-age-days`, nil disables automatic disposal).
+  by default (`niwa-working-note-max-age-days`, nil disables automatic disposal).
   Deletion is permanent, without undo or trash. Reading does not reset modification
   age; observed active use still prevents cleanup.
 - Keep managed session plans in `work://plans/`; curate selected durable lessons
@@ -78,7 +78,7 @@ For interactive commands, see [README.md](README.md#usage).
   relocate their files merely to follow the ordinary-notes default.
 - `.scratch/` is local-only, for skill workflow files and disposable execution
   material such as checkouts and logs. Never track or commit anything under it.
-- `.mevedel/shared/`, addressed through `work://shared/`, is untracked,
+- `.niwa/shared/`, addressed through `work://shared/`, is untracked,
   machine-local and temporary. Memory consolidation extracts lasting lessons
   from quiet files and then removes them, so never cite shared files from
   tracked documentation; put durable facts in memory or maintained docs.

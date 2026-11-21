@@ -1,0 +1,930 @@
+;;; test-niwa-tool-code.el --- Tests for code exploration tools -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'gptel)
+(require 'imenu)
+(require 'xref)
+(require 'niwa-tool-registry)
+(require 'niwa-tool-code)
+(require 'niwa-execution-target)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+
+;; `project'
+(defvar project-files-relative-names)
+(defvar project-find-functions)
+(defvar project-list-file)
+
+(defvar niwa-tool-code-test-open-state nil
+  "State captured while opening a test xref location.")
+(defvar niwa-tool-code-test-xref-backend-state nil
+  "State captured while invoking the test xref backend.")
+
+(defun test-niwa-tool-code--handler-result (envelope)
+  "Return the required result from handler ENVELOPE."
+  (should (plist-member envelope :result))
+  (plist-get envelope :result))
+
+(defun test-niwa-tool-code--format-synthetic-tree (root)
+  "Return ROOT formatted as a tree-sitter tree.
+ROOT is a plist tree of (:type TYPE :children LIST), which exercises the
+formatter without a compiled grammar."
+  (cl-letf (((symbol-function 'treesit-node-type)
+             (lambda (node) (plist-get node :type)))
+            ((symbol-function 'treesit-node-check) (lambda (&rest _) nil))
+            ((symbol-function 'treesit-node-start)
+             (lambda (node) (or (plist-get node :start) 1)))
+            ((symbol-function 'treesit-node-end)
+             (lambda (node) (or (plist-get node :end) 1)))
+            ((symbol-function 'treesit-node-field-name) (lambda (_) nil))
+            ((symbol-function 'treesit-node-text)
+             (lambda (node &rest _) (or (plist-get node :text) "")))
+            ((symbol-function 'treesit-node-child-count)
+             (lambda (node) (length (plist-get node :children))))
+            ((symbol-function 'treesit-node-child)
+             (lambda (node i) (nth i (plist-get node :children)))))
+    (niwa-tool-code--treesit-format-tree root 20)))
+
+(cl-defstruct (niwa-tool-code-test-location
+               (:constructor niwa-tool-code-test-location-create (file)))
+  "Test xref location carrying a source FILE."
+  file)
+
+(cl-defmethod xref-location-group ((location niwa-tool-code-test-location))
+  "Return the xref group for test LOCATION."
+  (niwa-tool-code-test-location-file location))
+
+(cl-defmethod xref-location-line ((_location niwa-tool-code-test-location))
+  "Return nil because test locations do not track line numbers."
+  nil)
+
+(cl-defmethod xref-location-marker ((location niwa-tool-code-test-location))
+  "Return a marker for test LOCATION while capturing open state."
+  (setq niwa-tool-code-test-open-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
+  (with-current-buffer
+      (find-file-noselect (niwa-tool-code-test-location-file location))
+    (goto-char (point-min))
+    (forward-line 1)
+    (point-marker)))
+
+(cl-defmethod xref-backend-references
+  ((_backend (eql niwa-tool-code-test-backend)) _identifier)
+  "Capture backend state and return no references."
+  (setq niwa-tool-code-test-xref-backend-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
+  nil)
+
+(cl-defmethod xref-backend-apropos
+  ((_backend (eql niwa-tool-code-test-backend)) _pattern)
+  "Capture backend state and return no apropos matches."
+  (setq niwa-tool-code-test-xref-backend-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
+  nil)
+
+
+;;
+;;; Tool registration
+
+(niwa-deftest niwa-tool-code--register
+  (:before-each (niwa-tool-clear-registry)
+   :after-each (niwa-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "registers concise summaries for xref and imenu roster entries"
+  (progn
+    (niwa-tool-code--register)
+    (should (equal "LSP-aware symbol references, callers, and impact analysis."
+                   (niwa-tool-summary
+                    (niwa-tool-get "XrefReferences"))))
+    (should (equal "LSP-aware symbol definitions and name discovery."
+                   (niwa-tool-summary
+                    (niwa-tool-get "XrefDefinitions"))))
+    (should (equal "Fast outline of functions, classes, and variables in one file."
+                   (niwa-tool-summary
+                    (niwa-tool-get "Imenu")))))
+
+  :doc "declares every native code-tool file argument as a semantic path"
+  (progn
+    (niwa-tool-code--register)
+    (dolist (name '("XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"))
+      (should
+       (eq 'path
+           (cadr (assq 'file_path
+                       (niwa-tool-args (niwa-tool-get name)))))))))
+
+
+;;
+;;; Buffer lifecycle
+
+(niwa-deftest niwa-tool-code--with-file-buffer ()
+  ,test
+  (test)
+
+  :doc "kills buffers it opens"
+  (let ((tmp (make-temp-file "niwa-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-cleanup-test () nil)\n"))
+          (niwa-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (should (buffer-live-p target-buffer))))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "keeps buffers that were already open"
+  (let (buffer
+        (tmp (make-temp-file "niwa-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-preserve-test () nil)\n"))
+          (setq buffer (find-file-noselect tmp))
+          (niwa-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (should (eq target-buffer buffer))))
+          (should (buffer-live-p buffer))
+          (should (eq (find-buffer-visiting tmp) buffer)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-file tmp)))
+
+  :doc "keeps buffers it opens when they become modified"
+  (let ((tmp (make-temp-file "niwa-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-modified-test () nil)\n"))
+          (niwa-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (with-current-buffer target-buffer
+               (set-buffer-modified-p t))))
+          (should (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (with-current-buffer buf
+          (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "opens buffers without prompting for unsafe local variables"
+  (let ((tmp (make-temp-file "niwa-test-" nil ".el"))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        captured opened)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-quiet-open-test () nil)\n"))
+          (cl-letf (((symbol-function 'find-file-noselect)
+                     (lambda (file &rest _args)
+                       (setq captured
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook)
+                             opened (generate-new-buffer " *niwa-test*"))
+                       (with-current-buffer opened
+                         (setq buffer-file-name file))
+                       opened)))
+            (niwa-tool-code--with-file-buffer
+             tmp
+             (lambda (_file-path _full-path target-buffer)
+               (should (eq target-buffer opened)))))
+          (should (equal '(:safe nil nil) captured))
+          (should-not (buffer-live-p opened)))
+      (when (buffer-live-p opened)
+        (kill-buffer opened))
+      (delete-file tmp))))
+
+(niwa-deftest niwa-tool-code--xref-location-line ()
+  ,test
+  (test)
+
+  :doc "runs direct xref line resolution without prompting for unsafe local variables"
+  (let ((enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        captured)
+    (cl-letf (((symbol-function 'xref-location-line)
+               (lambda (_location)
+                 (setq captured
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 42)))
+      (should (= 42 (niwa-tool-code--xref-location-line 'dummy)))
+      (should (equal '(:safe nil nil) captured)))))
+
+(niwa-deftest niwa-tool-code--format-xref-items ()
+  ,test
+  (test)
+
+  :doc "formats file and fallback-marker locations with quiet visits and cleanup"
+  (let ((tmp (make-temp-file "niwa-test-" nil ".el"))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        niwa-tool-code-test-open-state)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "first line\nmatching line\n"))
+          (dolist (location (list (xref-make-file-location tmp 2 0)
+                                  (niwa-tool-code-test-location-create tmp)))
+            (should (equal (format "%s:2: matching line" tmp)
+                           (niwa-tool-code--format-xref-items
+                            (list (xref-make "matching line" location)))))
+            (should-not (find-buffer-visiting tmp)))
+          (should (equal '(:safe nil nil) niwa-tool-code-test-open-state)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "formats xref items without prompting for unsafe local variables"
+  (let ((item (xref-make "matching line" 'dummy-location))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        group-state line-state summary-state)
+    (cl-letf (((symbol-function 'xref-location-group)
+               (lambda (_location)
+                 (setq group-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 "dummy.el"))
+              ((symbol-function 'xref-location-line)
+               (lambda (_location)
+                 (setq line-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 7))
+              ((symbol-function 'xref-item-summary)
+               (lambda (_item)
+                 (setq summary-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 "matching line")))
+      (should (equal "dummy.el:7: matching line"
+                     (niwa-tool-code--format-xref-items (list item))))
+      (should (equal '(:safe nil nil) group-state))
+      (should (equal '(:safe nil nil) line-state))
+      (should (equal '(:safe nil nil) summary-state))))
+
+  :doc "rejects an xref location from another execution target"
+  (niwa-test--with-local-shell-tramp '("first" "second")
+    (let* ((target
+            (niwa-tool-code--execution-target
+             "/niwamock:first:/srv/project/source.el"))
+           (location
+            (xref-make-file-location
+             "/niwamock:second:/srv/other/source.el" 1 0))
+           (item (xref-make "foreign result" location)))
+      (should-error
+       (niwa-tool-code--format-xref-items (list item) target)
+       :type 'niwa-execution-target-error))))
+
+
+;;
+;;; Xref references
+
+(niwa-deftest niwa-tool-code--xref-references ()
+  ,test
+  (test)
+  :doc "searches project files without entering ignored generated state"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-xref-project-" t)))
+         (source (file-name-concat root "source.el"))
+         (ignored-dir
+          (file-name-concat root ".niwa" "sessions" "run"))
+         (ignored (file-name-concat ignored-dir "profiler-memory-profile.el"))
+         (identifier "niwa-xref-project-filter-target")
+         result)
+    (unwind-protect
+        (let ((default-directory root)
+              (project-files-relative-names t)
+              (project-list-file (file-name-concat root "projects")))
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (write-region
+           (concat "!/.niwa/\n"
+                   ".niwa/*\n"
+                   "!.niwa/hooks.json\n")
+           nil (file-name-concat root ".gitignore") nil 'silent)
+          (write-region
+           (format "(defun %s () nil)\n(%s)\n" identifier identifier)
+           nil source nil 'silent)
+          (make-directory ignored-dir t)
+          (write-region (format "(%s)\n" identifier)
+                        nil ignored nil 'silent)
+          (should (zerop
+                   (call-process "git" nil nil nil
+                                 "add" ".gitignore" "source.el")))
+          (niwa-tool-code--xref-references
+           (lambda (envelope)
+             (setq result
+                   (test-niwa-tool-code--handler-result envelope)))
+           (list :identifier identifier :file_path source))
+          (should (string-match-p
+                   (regexp-quote (format "%s:1:" source)) result))
+          (should-not (string-match-p
+                       (regexp-quote "profiler-memory-profile.el") result)))
+      (when-let* ((buffer (find-buffer-visiting source)))
+        (kill-buffer buffer))
+      (delete-directory root t)))
+  :doc "finds references to an elisp symbol"
+  (let* ((root (make-temp-file "niwa-xref-local-" t))
+         (tmp (file-name-concat root "source.el"))
+         (default-directory (file-name-as-directory root))
+         (project-list-file (file-name-concat root "absent" "projects"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (with-temp-file tmp
+            (insert "(defun my-test-fn-12345 () nil)\n"
+                    "(my-test-fn-12345)\n"
+                    "(my-test-fn-12345)\n"))
+          (niwa-tool-code--xref-references
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+           (list :identifier "my-test-fn-12345" :file_path tmp))
+          (should (stringp result))
+          ;; Error messages also name the symbol; require actual call sites.
+          (should (string-match-p (regexp-quote (concat tmp ":2:")) result))
+          (should (string-match-p (regexp-quote (concat tmp ":3:")) result))
+          (should-not (file-exists-p project-list-file))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-directory root t)))
+  :doc "runs xref backend reference lookup without prompting for unsafe local variables"
+  (let* ((tmp (make-temp-file "niwa-test-" nil ".el"))
+         (enable-local-variables t)
+         (find-file-hook '(sentinel-find-file-hook))
+         (hack-local-variables-hook '(sentinel-local-variables-hook))
+         niwa-tool-code-test-xref-backend-state
+         xref-find-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun xref-backend-quiet-test () nil)\n"))
+          (cl-letf (((symbol-function 'xref-find-backend)
+                     (lambda ()
+                       (setq xref-find-backend-state
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook))
+                       'niwa-tool-code-test-backend)))
+            (niwa-tool-code--xref-references
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+             (list :identifier "xref-backend-quiet-test" :file_path tmp)))
+          (should (string-match-p "No references found" result))
+          (should (equal '(:safe nil nil) xref-find-backend-state))
+          (should (equal '(:safe nil nil)
+                         niwa-tool-code-test-xref-backend-state)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "returns message when no references found"
+  (let* ((root (make-temp-file "niwa-xref-local-" t))
+         (tmp (file-name-concat root "source.el"))
+         (default-directory (file-name-as-directory root))
+         (project-list-file (file-name-concat root "absent" "projects"))
+         (identifier (format "nonexistent-symbol-%s" (file-name-base tmp)))
+         (result nil))
+    (unwind-protect
+        (progn
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (with-temp-file tmp
+            (insert "(defun some-unique-fn-99999 () nil)\n"))
+          (niwa-tool-code--xref-references
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+           (list :identifier identifier :file_path tmp))
+          (should (stringp result))
+          (should (equal (format "No references found for '%s'" identifier)
+                         result))
+          (should-not (file-exists-p project-list-file)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-directory root t)))
+  :doc "searches an unrecognized directory without remembering a project"
+  (let* ((root (make-temp-file "niwa-xref-transient-" t))
+         (source (file-name-concat root "source.el"))
+         (project-find-functions nil)
+         (project-list-file (file-name-concat root "absent" "projects"))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun transient-reference () nil)\n(transient-reference)\n"
+                        nil source nil 'silent)
+          (niwa-tool-code--xref-references
+           (lambda (envelope)
+             (setq result (test-niwa-tool-code--handler-result envelope)))
+           (list :identifier "transient-reference" :file_path source))
+          (should (string-match-p (regexp-quote (concat source ":2:")) result))
+          (should-not (file-exists-p project-list-file)))
+      (when-let* ((buffer (find-buffer-visiting source)))
+        (kill-buffer buffer))
+      (delete-directory root t)))
+  :doc "errors on non-existent file"
+  (should-error
+   (niwa-tool-code--xref-references
+    #'ignore (list :identifier "foo" :file_path "/nonexistent/file.el"))
+   :type 'error)
+  :doc "refuses an unverified xref backend for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-xref-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         niwa-tool-code-test-xref-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (niwa-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'niwa-tool-code-test-backend)))
+              (niwa-tool-code--xref-references
+               (lambda (envelope)
+                 (setq result
+                       (test-niwa-tool-code--handler-result envelope)))
+               (list :identifier "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result))
+          (should-not niwa-tool-code-test-xref-backend-state))
+      (delete-directory root t)))
+  :doc "runs Emacs Lisp reference search on the target and returns native paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-xref-remote-elisp-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         (identifier "niwa-remote-elisp-reference-target")
+         (project-list-file (file-name-concat root "absent" "projects"))
+         diagnostics
+         result)
+    (unwind-protect
+        (progn
+          (write-region
+           (format "(defun %s () nil)\n(%s)\n" identifier identifier)
+           nil native-file nil 'silent)
+          (let ((default-directory root))
+            (should (zerop (process-file "git" nil nil nil "init" "--quiet")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "add" "source.el"))))
+          (niwa-test--with-local-shell-tramp '("code")
+            (should (file-exists-p remote-file))
+            ;; Native project discovery probes optional .gitmodules.  TRAMP
+            ;; reports its absence before project.el handles file-missing.
+            (niwa-test--with-captured-messages diagnostics
+              (niwa-tool-code--xref-references
+               (lambda (envelope)
+                 (setq result
+                       (test-niwa-tool-code--handler-result envelope)))
+               (list :identifier identifier :file_path remote-file))))
+          (dolist (line (split-string diagnostics "\n" t))
+            (should (equal line (concat "File is missing: "
+                                        (file-name-directory remote-file)
+                                        ".gitmodules"))))
+          (should (string-match-p (regexp-quote (concat native-file ":2:")) result))
+          (should-not (file-exists-p project-list-file))
+          (should-not (string-match-p "/niwamock:" result)))
+      (delete-directory root t))))
+
+
+;;
+;;; Xref definitions
+
+(niwa-deftest niwa-tool-code--xref-definitions ()
+  ,test
+  (test)
+  :doc "errors on non-existent file"
+  (should-error
+   (niwa-tool-code--xref-definitions
+    #'ignore (list :pattern "foo" :file_path "/nonexistent/file.el"))
+   :type 'error)
+  :doc "runs xref backend apropos lookup without prompting for unsafe local variables"
+  (let* ((tmp (make-temp-file "niwa-test-" nil ".el"))
+         (enable-local-variables t)
+         (find-file-hook '(sentinel-find-file-hook))
+         (hack-local-variables-hook '(sentinel-local-variables-hook))
+         niwa-tool-code-test-xref-backend-state
+         xref-find-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun xref-backend-quiet-test () nil)\n"))
+          (cl-letf (((symbol-function 'xref-find-backend)
+                     (lambda ()
+                       (setq xref-find-backend-state
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook))
+                       'niwa-tool-code-test-backend)))
+            (niwa-tool-code--xref-definitions
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+             (list :pattern "xref-backend-quiet-test" :file_path tmp)))
+          (should (string-match-p "No symbols found" result))
+          (should (equal '(:safe nil nil) xref-find-backend-state))
+          (should (equal '(:safe nil nil)
+                         niwa-tool-code-test-xref-backend-state)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "returns message when no backend or no results"
+  (let* ((tmp (make-temp-file "niwa-test-" nil ".el"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun test-fn () nil)\n"))
+          (niwa-tool-code--xref-definitions
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+           (list :pattern "zzz-nonexistent-pattern-zzz" :file_path tmp))
+          (should (stringp result))
+          (should (string-match-p "No symbols found\\|No xref\\|No tags\\|Error" result))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "loads apropos before regex symbol search"
+  (let* ((tmp (make-temp-file "niwa-test-" nil ".el"))
+         (prefix (replace-regexp-in-string "[^[:alnum:]]" "-"
+                                           (file-name-base tmp)))
+         (alpha (intern (format "%s-apropos-alpha" prefix)))
+         (beta (intern (format "%s-apropos-beta" prefix)))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert ";;; -*- lexical-binding: t -*-\n"
+                    (format "(defun %s () nil)\n" alpha)
+                    (format "(defun %s () nil)\n" beta)))
+          (load tmp nil t)
+          (when (featurep 'apropos)
+            (unload-feature 'apropos t))
+          (niwa-tool-code--xref-definitions
+           (lambda (r)
+             (setq result (test-niwa-tool-code--handler-result r)))
+           (list :pattern (format "%s-apropos-.*" prefix) :file_path tmp))
+          (should (stringp result))
+          (should-not
+           (string-match-p
+            "Symbol.s function definition is void: apropos-parse-pattern"
+            result))
+          (should (string-match-p (symbol-name alpha) result))
+          (should-not (find-buffer-visiting tmp)))
+      (when (fboundp alpha)
+        (fmakunbound alpha))
+      (when (fboundp beta)
+        (fmakunbound beta))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "refuses an unverified xref backend for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-xref-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         niwa-tool-code-test-xref-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (niwa-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'niwa-tool-code-test-backend)))
+              (niwa-tool-code--xref-definitions
+               (lambda (envelope)
+                 (setq result
+                       (test-niwa-tool-code--handler-result envelope)))
+               (list :pattern "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result))
+          (should-not niwa-tool-code-test-xref-backend-state))
+      (delete-directory root t)))
+  :doc "refuses local-state Emacs Lisp definition lookup for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-xref-remote-elisp-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (niwa-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'elisp)))
+              (niwa-tool-code--xref-definitions
+               (lambda (envelope)
+                 (setq result
+                       (test-niwa-tool-code--handler-result envelope)))
+               (list :pattern "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result)))
+      (delete-directory root t))))
+
+
+;;
+;;; Imenu
+
+(niwa-deftest niwa-tool-code--imenu
+  (:vars ((tmp (make-temp-file "niwa-test-" nil ".el")) result)
+   :after-each
+   (progn
+     (when-let* ((buf (find-buffer-visiting tmp)))
+       (kill-buffer buf))
+     (delete-file tmp)))
+  ,test
+  (test)
+  :doc "lists symbols in an elisp file"
+  (progn
+    (with-temp-file tmp
+      (insert ";;; test -*- lexical-binding: t -*-\n"
+              "(defun my-test-alpha () nil)\n"
+              "(defun my-test-beta () nil)\n"
+              "(defvar my-test-gamma 42)\n"))
+    (niwa-tool-code--imenu
+     (lambda (r)
+       (setq result (test-niwa-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p "my-test-alpha" result))
+    (should (string-match-p "my-test-beta" result))
+    (should (string-match-p "my-test-gamma" result))
+    (should-not (find-buffer-visiting tmp)))
+  :doc "returns message for empty file"
+  (progn
+    (with-temp-file tmp
+      (insert ";; empty file\n"))
+    (niwa-tool-code--imenu
+     (lambda (r)
+       (setq result (test-niwa-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p "No.*symbols\\|No imenu\\|Error" result)))
+  :doc "includes line numbers"
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              "(defun my-test-fn-line3 () nil)\n"))
+    (niwa-tool-code--imenu
+     (lambda (r)
+       (setq result (test-niwa-tool-code--handler-result r)))
+     (list :file_path tmp))
+    (should (stringp result))
+    (should (string-match-p ":3:.*my-test-fn-line3" result)))
+  :doc "lists leaves nested below the first category"
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              ";; line 3\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (cons "*Rescan*" -99)
+                             (cons "Class"
+                                   (list (cons "Group"
+                                               (list (cons "method"
+                                                           21)))
+                                         (cons "field" 11)))
+                             (cons "top" 1))))))
+      (niwa-tool-code--imenu
+       (lambda (r)
+         (setq result (test-niwa-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (stringp result))
+    (should (string-match-p ":1:.*top" result))
+    (should (string-match-p ":2:.*\\[Class\\] field" result))
+    (should (string-match-p ":3:.*\\[Class > Group\\] method" result))
+    (should-not (string-match-p "Rescan" result)))
+  :doc "keeps a starred symbol below a category and skips only top-level specials"
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (cons "*Rescan*" -99)
+                             (cons "Variables"
+                                   (list (cons "*global-thing*" 11))))))))
+      (niwa-tool-code--imenu
+       (lambda (r)
+         (setq result (test-niwa-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (string-match-p ":2:.*\\[Variables\\] \\*global-thing\\*"
+                            result))
+    (should-not (string-match-p "Rescan" result)))
+  :doc "reports whole-buffer line numbers for a narrowed buffer"
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"
+              ";; line 3\n"))
+    (let ((buffer (find-file-noselect tmp)))
+      (with-current-buffer buffer
+        (narrow-to-region 11 (point-max)))
+      (cl-letf (((symbol-function 'imenu--make-index-alist)
+                 (lambda (&optional _noerror)
+                   (setq imenu--index-alist
+                         (list (cons "narrowed" 21))))))
+        (niwa-tool-code--imenu
+         (lambda (r)
+           (setq result (test-niwa-tool-code--handler-result r)))
+         (list :file_path tmp))))
+    (should (string-match-p ":3:.*narrowed" result)))
+  :doc "lists an item carrying a position, function, and arguments"
+  (progn
+    (with-temp-file tmp
+      (insert ";; line 1\n"
+              ";; line 2\n"))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist
+                       (list (list "callable" 11 #'ignore "arg"))))))
+      (niwa-tool-code--imenu
+       (lambda (r)
+         (setq result (test-niwa-tool-code--handler-result r)))
+       (list :file_path tmp)))
+    (should (string-match-p ":2:.*callable" result)))
+  :doc "errors on non-existent file"
+  (should-error
+   (niwa-tool-code--imenu
+    #'ignore (list :file_path "/nonexistent/file.el"))
+   :type 'error)
+  :doc "uses a remote file buffer and returns its target-native path"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-imenu-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-imenu-target () nil)\n"
+                        nil native-file nil 'silent)
+          (niwa-test--with-local-shell-tramp '("code")
+            (niwa-tool-code--imenu
+             (lambda (envelope)
+               (setq result
+                     (test-niwa-tool-code--handler-result envelope)))
+             (list :file_path remote-file)))
+          (should (string-match-p "remote-imenu-target" result))
+          (should (string-match-p (regexp-quote native-file) result))
+          (should-not (string-match-p "/niwamock:" result)))
+      (delete-directory root t))))
+
+
+;;
+;;; Treesitter helpers
+
+(niwa-deftest niwa-tool-code--line-column-to-point ()
+  ,test
+  (test)
+  :doc "converts one-based lines and zero-based columns"
+  (with-temp-buffer
+    (insert "first line\nsecond line\nthird line\n")
+    (dolist (case '((1 0 1) (2 0 12) (2 3 15)))
+      (should (= (niwa-tool-code--line-column-to-point
+                  (nth 0 case) (nth 1 case))
+                 (nth 2 case)))))
+  :doc "rejects a line before the first one instead of clamping"
+  (with-temp-buffer
+    (insert "first line\nsecond line\n")
+    (should-error (niwa-tool-code--line-column-to-point 0 0))
+    (should-error (niwa-tool-code--line-column-to-point -2 0)))
+  :doc "rejects a line the buffer does not have"
+  (with-temp-buffer
+    (insert "first line\nsecond line\n")
+    (should-error (niwa-tool-code--line-column-to-point 99 0)))
+  :doc "rejects a column beyond the requested line"
+  (with-temp-buffer
+    (insert "ab\nsecond line\n")
+    (should-error (niwa-tool-code--line-column-to-point 1 99))
+    (should-error (niwa-tool-code--line-column-to-point 1 -1)))
+  :doc "rejects a line past a file with no trailing newline"
+  (with-temp-buffer
+    (insert "ab\ncd")
+    (should (= 4 (niwa-tool-code--line-column-to-point 2 0)))
+    (should-error (niwa-tool-code--line-column-to-point 3 0)))
+  :doc "resolves whole-buffer coordinates in a narrowed buffer"
+  (with-temp-buffer
+    (insert "aaa\nbbb\nccc\nddd\n")
+    (narrow-to-region 5 12)
+    (should (= 1 (niwa-tool-code--line-column-to-point 1 0)))
+    (should (= 13 (niwa-tool-code--line-column-to-point 4 0))))
+  :doc "accepts the final empty line and end-of-line columns"
+  (with-temp-buffer
+    (insert "ab\ncd\n")
+    (should (= 7 (niwa-tool-code--line-column-to-point 3 0)))
+    (should (= 3 (niwa-tool-code--line-column-to-point 1 2)))))
+
+(niwa-deftest niwa-tool-code--treesit-format-tree ()
+  ,test
+  (test)
+  :doc "stops a wide tree at the construction limit and says so"
+  (let* ((niwa-tool-code--treesit-tree-max-chars 200)
+         (children (cl-loop for i from 0 below 60
+                            collect (list :type (format "child-%d" i))))
+         (root (list :type "root" :children children))
+         (result (test-niwa-tool-code--format-synthetic-tree root)))
+    (should (string-search "child-0 " result))
+    (should (string-search "truncated" result))
+    (should-not (string-search "child-59 " result)))
+  :doc "previews only text whose span fits the preview width"
+  (let* ((root (list :type "root"
+                     :children
+                     (list (list :type "short" :start 1 :end 5
+                                 :text "abcd")
+                           (list :type "long" :start 1 :end 100
+                                 :text "unused")
+                           (list :type "multiline" :start 1 :end 5
+                                 :text "a\nb"))))
+         (result (test-niwa-tool-code--format-synthetic-tree root)))
+    (should (string-search "\"abcd\"" result))
+    (should-not (string-search "unused" result))
+    (should-not (string-search "\"a\nb\"" result)))
+  :doc "formats a tree within the limit completely"
+  (let* ((root (list :type "root"
+                     :children (list (list :type "leaf-a")
+                                     (list :type "leaf-b"))))
+         (result (test-niwa-tool-code--format-synthetic-tree root)))
+    (should (string-search "root" result))
+    (should (string-search "  leaf-a" result))
+    (should (string-search "  leaf-b" result))
+    (should-not (string-search "truncated" result))))
+
+(niwa-deftest niwa-tool-code--treesitter ()
+  ,test
+  (test)
+  :doc "errors on non-existent file"
+  (should-error
+   (niwa-tool-code--treesitter
+    #'ignore (list :file_path "/nonexistent/file.el"))
+   :type 'error)
+  :doc "visits a remote file and keeps diagnostics target-native"
+  (skip-unless (treesit-available-p))
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-treesitter-remote-" t)))
+         (native-file (file-name-concat root "source.txt"))
+         (remote-file (format "/niwamock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "remote tree-sitter input\n"
+                        nil native-file nil 'silent)
+          (niwa-test--with-local-shell-tramp '("code")
+            (niwa-tool-code--treesitter
+             (lambda (envelope)
+               (setq result
+                     (test-niwa-tool-code--handler-result envelope)))
+             (list :file_path remote-file)))
+          (should (string-match-p (regexp-quote native-file) result))
+          (should-not (string-match-p "/niwamock:" result)))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-tool-code--location-count ()
+  (should (= ,count (niwa-tool-code--location-count ,result)))
+  (result count)
+  nil 0
+  42 0
+  "" 0
+  "\n\n" 0
+  "Error: lookup failed\nDetails" 0
+  "No symbols found" 0
+  "file.el:1: first\n\nfile.el:2: second\n" 2
+  "Nope.el:1: valid location" 1)
+
+(provide 'test-niwa-tool-code)
+;;; test-niwa-tool-code.el ends here

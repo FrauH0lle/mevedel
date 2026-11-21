@@ -40,7 +40,7 @@ states their exact scope.
 
 ## DEEP HARNESS
 
-Design mevedel as a **deep module**: substantial useful behavior behind a small,
+Design niwa as a **deep module**: substantial useful behavior behind a small,
 clear interface. The LLM is its caller. Depth means capability per amount the
 caller must learn, not implementation size or the number of tools.
 
@@ -130,7 +130,7 @@ Treat latency, responsiveness and resource use as review criteria, not polish.
   no blocking work. Move slow, remote or repeated work off that path, or bound
   it. Count remote round trips: on a TRAMP workspace each one is a network
   delay.
-- **Idle means idle.** With nothing running, mevedel does no polling, redraws
+- **Idle means idle.** With nothing running, niwa does no polling, redraws
   or file checks. Prefer event-driven updates; start a timer when its work
   begins and cancel it when the work ends. Periodic work runs only while it
   has a job, at a rate proportionate to that job.
@@ -140,7 +140,7 @@ Treat latency, responsiveness and resource use as review criteria, not polish.
 
 ## NO BACKWARDS COMPATIBILITY
 
-mevedel is under active development and has no backwards-compatibility
+niwa is under active development and has no backwards-compatibility
 contract. There is currently one known user, so prefer the cleanest current
 design even when it breaks existing APIs, commands, configuration, persisted
 state, or workflows.
@@ -155,7 +155,7 @@ state, or workflows.
 - Existing compatibility code is not precedent. Delete it when a touched
   design no longer needs it.
 - Prefer a direct breaking change over complexity introduced solely to support
-  older mevedel versions or previously persisted local state.
+  older niwa versions or previously persisted local state.
 - Call out destructive effects in the handoff, but do not preserve the old
   behavior merely to avoid a break.
 

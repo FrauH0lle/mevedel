@@ -45,7 +45,7 @@ schedules.
 
 - `create` with `target: "workspace"` needs `name`, `when` and `note`, the
   first message of every run; write it for a fresh session that knows nothing
-  of this conversation. Optional: `preset` (default `mevedel-implement`),
+  of this conversation. Optional: `preset` (default `niwa-implement`),
   `model`, `effort` and `permission_mode` (default this session's), and
   `expires` (no default; `never` on `change` removes it).
 - The user approves every creation and `change` on a card, even in Full

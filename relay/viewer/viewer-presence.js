@@ -63,5 +63,5 @@
     return Object.freeze({report, hello, show});
   }
 
-  window.mevedelPresence = Object.freeze({create, initials});
+  window.niwaPresence = Object.freeze({create, initials});
 })();

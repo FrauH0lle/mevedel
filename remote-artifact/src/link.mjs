@@ -3,7 +3,7 @@
 // edit link).  The link names no artifact; the room's welcome does.
 
 const NOT_ARTIFACT = 'This is not an artifact link. Share the artifact at its origin '
-  + '(mevedel: M-x mevedel-collaboration-share-artifact) and attach the view or edit link it gives.';
+  + '(niwa: M-x niwa-collaboration-share-artifact) and attach the view or edit link it gives.';
 
 /**
  * Parse artifact link TEXT.

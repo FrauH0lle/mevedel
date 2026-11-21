@@ -1,0 +1,94 @@
+;;; niwa-execution-grants.el --- Protected child grant coverage -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Execution mounts retain separately protected descendants of approved trees.
+;; Coverage here reflects that boundary without changing native resource grants.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'niwa-execution-target)
+(require 'niwa-permission-origin)
+(require 'niwa-permission-rules)
+(require 'subr-x)
+
+(defun niwa-execution-grants--boundaries (path access &optional target restrictions)
+  "Return protection boundaries containing PATH for ACCESS on TARGET.
+Include authored and canonical ancestors, literal policy aliases and concrete
+launch RESTRICTIONS.  Match each policy's root, not its descendant suffix, so
+an approved protected tree still covers ordinary descendants within it."
+  (let* ((paths (delete-dups (list (directory-file-name (expand-file-name path))
+                                 (directory-file-name (niwa-file-truename path)))))
+         boundaries)
+    (dolist (entry (niwa-permission-protected-path-policy))
+      (unless (and (eq access 'read) (eq (cdr entry) 'read-only))
+        (let ((pattern (string-remove-suffix "/**" (car entry))))
+          (dolist (candidate paths)
+            (while candidate
+              (when (niwa-permission-rules-match-path-p candidate pattern target)
+                (push (niwa-file-truename candidate) boundaries))
+              (setq candidate (file-name-parent-directory candidate))
+              (when candidate (setq candidate (directory-file-name candidate)))))
+          ;; A literal protected alias can mask the canonical target even when
+          ;; neither the requested spelling nor its ancestors match the policy.
+          (when (and (not (string-match-p "[*?\\[]" pattern))
+                     (or (file-name-absolute-p pattern) (string-prefix-p "~" pattern)))
+            (when-let* ((literal (if (and target (string-prefix-p "~" pattern))
+                                    (niwa-execution-target-expand-path target pattern)
+                                  (expand-file-name pattern)))
+                        ((file-exists-p literal)))
+              (let ((canonical (niwa-file-truename literal)))
+                (when (niwa-permission-rules-path-in-allowed-roots-p
+                       (car (last paths)) (list canonical))
+                  (push canonical boundaries))))))))
+    (dolist (restriction restrictions)
+      (when (or (eq access 'write) (eq (plist-get restriction :mode) 'inaccessible))
+        (let ((boundary (niwa-file-truename (plist-get restriction :path))))
+          (when (cl-some (lambda (candidate)
+                           (niwa-permission-rules-path-in-allowed-roots-p
+                            candidate (list boundary))) paths)
+            (push boundary boundaries)))))
+    (delete-dups (mapcar #'directory-file-name boundaries))))
+
+(defun niwa-execution-grants-socket-p (path)
+  "Return non-nil if canonical PATH currently names a Unix socket.
+Use file attributes so this also checks remote execution paths."
+  (let ((modes (file-attribute-modes
+                (file-attributes (niwa-file-truename path)))))
+    (and (stringp modes) (string-prefix-p "s" modes))))
+
+(defun niwa-execution-grants-covering-grant
+    (path access grants &optional recursive target restrictions)
+  "Return a GRANTS entry that can enforce ACCESS to PATH in a child.
+RECURSIVE requires a tree.  TARGET supplies the policy path domain;
+RESTRICTIONS supplies concrete launch masks.  A broad ancestor never crosses
+a separate protection boundary.  Exact directory writes or masked reads
+require already approved recursive authority, not an exact directory grant.
+Writing an existing socket requires exact nonrecursive authority."
+  (let* ((canonical (directory-file-name (niwa-file-truename path)))
+         (socket (and (eq access 'write) (niwa-execution-grants-socket-p canonical)))
+         (boundaries (niwa-execution-grants--boundaries path access target restrictions))
+         (tree (or recursive
+                   (and (file-directory-p path)
+                        (or (eq access 'write) boundaries)))))
+    (cl-find-if
+     (lambda (grant)
+       (and (niwa-permission-origin-valid-p grant path)
+            (niwa-permission-rules-resource-granted-p path access (list grant) tree)
+            (let ((root (directory-file-name (niwa-file-truename (plist-get grant :path))))
+                  (source (directory-file-name (expand-file-name (plist-get grant :path)))))
+              (and (or (not socket)
+                       (and (not (plist-get grant :recursive))
+                            (equal canonical root)))
+                   (niwa-permission-rules-path-in-allowed-roots-p canonical (list root))
+                   (cl-every
+                    (lambda (boundary)
+                      (or (niwa-permission-rules-path-in-allowed-roots-p root (list boundary))
+                          (niwa-permission-rules-path-in-allowed-roots-p source (list boundary))))
+                    boundaries)))))
+     grants)))
+
+(provide 'niwa-execution-grants)
+
+;;; niwa-execution-grants.el ends here

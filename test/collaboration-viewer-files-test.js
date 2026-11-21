@@ -29,8 +29,8 @@ function build({confirmed = true, sendOk = true, downloadFile = async () => {}} 
   let dropTray = null;
   const window = {
     confirm: () => confirmed,
-    mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
-    mevedelAttachments: {bind: (tray, {target, enabled}) => { dropTray = {tray, target, enabled}; }},
+    niwaTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
+    niwaAttachments: {bind: (tray, {target, enabled}) => { dropTray = {tray, target, enabled}; }},
   };
   const timers = [];
   const context = {window, document, console, btoa, Uint8Array, String, Promise,
@@ -42,14 +42,14 @@ function build({confirmed = true, sendOk = true, downloadFile = async () => {}} 
   const notices = [];
   const opened = [];
   const send = async frame => { sent.push(frame); return sendOk; };
-  const uploads = window.mevedelFilesView.uploader({
+  const uploads = window.niwaFilesView.uploader({
     send, setTimer: context.setTimeout, clearTimer: context.clearTimeout});
-  const files = window.mevedelFilesView.create({
+  const files = window.niwaFilesView.create({
     send, el: (tag, className, text) => element(document, tag, className, text),
     notice: text => notices.push(text), uploads, openFile: path => opened.push(path), downloadFile, href,
   });
   return {files, uploads, nodes, sent, notices, opened, timers, window,
-          document, drop: () => dropTray, api: window.mevedelFilesView};
+          document, drop: () => dropTray, api: window.niwaFilesView};
 }
 
 const rootListing = reqId => ({

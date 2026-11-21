@@ -2,7 +2,7 @@
 
 Installation registers the complete built-in catalog, including schemas,
 prompts, groups, authority callbacks, and renderers. Execution, patch, and web
-registration live in `mevedel-tool-*-registration.el`; their handlers and
+registration live in `niwa-tool-*-registration.el`; their handlers and
 callbacks autoload the implementation on first use. Filesystem registration
 likewise leaves Read and search implementations unloaded. Restoring a saved
 tool reference uses the same registrar mapping as discovery. Shared editing
@@ -30,7 +30,7 @@ the cases that need it. Read, Glob, and Grep share
 [`tools/applypatch.md`](tools/applypatch.md); Bash uses
 [`tools/execution.md`](tools/execution.md); ToolCall uses
 [`ptc-dialect.md`](ptc-dialect.md). Models retrieve these through Read at stable
-`mevedel://` addresses, with no mandatory full-manual load for ordinary calls.
+`niwa://` addresses, with no mandatory full-manual load for ordinary calls.
 Simple tools do not need manuals. Keep consequential prerequisites, authority
 boundaries, irreversible effects, and ordinary grammar visible in descriptions.
 
@@ -84,8 +84,8 @@ One call syncs the workspace store once, including completed operations before
 a later failure. Such failures report completed operations and their UUID
 addresses so callers do not duplicate them on retry. Sends are batched after
 the other operations. Created notes show `agent` as author. Users can dismiss
-one with `mevedel-note-dismiss`, or all agent-authored notes in the workspace
-with `mevedel-note-dismiss-agent-notes`; the latter also syncs once and leaves
+one with `niwa-note-dismiss`, or all agent-authored notes in the workspace
+with `niwa-note-dismiss-agent-notes`; the latter also syncs once and leaves
 user notes and Buddy remarks alone.
 
 ## Shared editing
@@ -108,13 +108,13 @@ settlement until the actual durable outcome is known. See
 
 ## Tool pipeline
 
-`mevedel-tool-registry.el` owns registration, schemas, and conversion of gptel's
+`niwa-tool-registry.el` owns registration, schemas, and conversion of gptel's
 positional arguments to handler plists. Registration loads gptel's tool API;
 the registered callbacks load the execution pipeline on their first call.
 
 All tools share one execution pipeline. Provider calls enter through
-`mevedel-pipeline-run-tool`; nested programmatic calls use
-`mevedel-pipeline-run-tool-outcome`:
+`niwa-pipeline-run-tool`; nested programmatic calls use
+`niwa-pipeline-run-tool-outcome`:
 
 ```mermaid
 flowchart TD
@@ -195,12 +195,12 @@ replace handler/transform-authored approval fields with those accepted records,
 including when a later pipeline step fails. The ordinary render-data provider
 adapter strips them from API messages; they never enter ToolCall guest values.
 
-`mevedel-pipeline-tool-event-hook` publishes `started`, `permission-approved` and
+`niwa-pipeline-tool-event-hook` publishes `started`, `permission-approved` and
 `settled` events with the same tool-use ID, parent ID, source, name, args and data
 buffer. Pending-row consumers bind identity at dispatch, not by matching a later
 approval's arguments. Settlement precedes the external result callback. Each
 observer receives a copied snapshot, and observer errors cannot change tool
-settlement. `mevedel-pipeline-active-permission-approvals` exposes a copy while a
+settlement. `niwa-pipeline-active-permission-approvals` exposes a copy while a
 handler starts or resumes so execution admission can retain its own provenance;
 it is never permission authority. Nested PTC progress and audit keep approvals
 on the child, not the envelope, and retain small approval records even when
@@ -209,7 +209,7 @@ oversized optional child details are dropped.
 External providers can request `:projection provider` on the structured outcome
 entry point. This keeps typed status, tool identity and media while applying the
 same persistence, feedback and display side channels as direct gptel calls.
-`mevedel-mcp-tools` uses that projection after verifying that the captured root
+`niwa-mcp-tools` uses that projection after verifying that the captured root
 request or retained-child invocation still owns its buffer. Child ownership
 requires the same running invocation and root session, with no borrowed root
 request. Settled, replaced and boundary-stopped owners cannot admit another
@@ -220,7 +220,7 @@ data. Pipeline context carries the owning engine, so Goal tools and nested
 ToolCall retain request authority with either a real gptel FSM or an external
 request. The private asynchronous MCP transport owns connection cleanup and
 pending call and hook-control cancellation. Every server socket lives under one
-owner-only directory, `$XDG_RUNTIME_DIR/mevedel-mcp-UID` (else under
+owner-only directory, `$XDG_RUNTIME_DIR/niwa-mcp-UID` (else under
 `temporary-file-directory`), fixed for the Emacs session once first created;
 local Bubblewrap confinement mounts an empty tmpfs over it, so confined
 children cannot call tools with a turn's authority. When that directory cannot
@@ -233,7 +233,7 @@ context through the shared engine accessor. Their ACP driver uses the same
 transport and projection runner, while the agent runtime owns child terminal
 publication, independently of root-request settlement.
 
-`mevedel-acp-turn` binds that endpoint to one admitted request, publishes ACP text
+`niwa-acp-turn` binds that endpoint to one admitted request, publishes ACP text
 and MCP results through the canonical gptel renderers, and shares final patch
 capture and terminal settlement. Native Claude `PreToolUse`, `PostToolBatch`
 and `SessionStart(compact)` hooks query the same private endpoint for context
@@ -241,7 +241,7 @@ and stop decisions; they are absent from tool discovery. Hook handlers complete
 asynchronously. Event, hook and tool-admission ordering and cancellation follow
 [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md). A process exit warns
 with the agent's last stderr output and appends it to the private
-`agent-stderr.log` under `mevedel-user-dir`, which keeps recent exits after the
+`agent-stderr.log` under `niwa-user-dir`, which keeps recent exits after the
 warning buffer is dismissed; the turn's error names that log, not the text.
 Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
 `gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so
@@ -253,7 +253,7 @@ either hook ends the turn before another call; a post-hook stop retains the
 completed call's evidence. Hook changes are passed to subsequent observers.
 ACP cannot apply gptel's separate `:confirm` UI or rename a native tool call;
 hooks requesting either stop before execution with an actionable error. Use
-mevedel's permission rules or the gptel engine for those controls.
+niwa's permission rules or the gptel engine for those controls.
 The Claude Code provider routes ordinary root submissions through
 this runner. Its usage accounting is described under
 [Goals](goals.md#request-context-and-authority); duplicate terminal replies
@@ -265,13 +265,13 @@ provider-facing result settles.
 
 ### Tool-call identity in transcripts
 
-Mevedel renders completed calls from gptel's authoritative `:tool-use` records,
+Niwa renders completed calls from gptel's authoritative `:tool-use` records,
 which contain the original ID, final arguments and result. For each record, the
 adapter supplies gptel's existing renderer with that single call and its tool
 specification. It restores the complete request call list even if insertion
 fails and keeps the normal insertion markers, result-inclusion settings and
 callback contract. This applies to main and agent conversation buffers carrying
-a mevedel session; unrelated gptel conversations keep their own rendering path.
+a niwa session; unrelated gptel conversations keep their own rendering path.
 
 Results appear in the model's call order, independently of asynchronous
 completion order. Distinct invocations with identical arguments or results
@@ -285,7 +285,7 @@ Its rationale and the prior ID-assignment failure are recorded in
 
 ### Retained provider history
 
-`mevedel-history.el` records the provider message fragment for each fully
+`niwa-history.el` records the provider message fragment for each fully
 rendered tool response and its results. It records neither the system prompt nor
 the native schemas, transport headers or keys. This is a fragment per completed
 response, not a growing full-conversation snapshot. It duplicates response
@@ -300,7 +300,7 @@ properties so later text edits or filtering invalidate replay. Context selection
 must retain both boundaries. Omitted results are never recovered from hidden
 metadata. Model or provider switches use the new backend's normal serialization.
 
-The adapter applies only to mevedel conversations and their prepared prompt
+The adapter applies only to niwa conversations and their prepared prompt
 copies. Other gptel buffers retain their normal behavior. Decoded reminders keep
 separate message boundaries, and the backend's current explicit cache annotation
 is applied to the assembled messages. Stable reconstruction enables cache reuse;
@@ -315,10 +315,10 @@ provider/model/policy changes can still change the cached prefix. History withou
 ### Programmatic Tool Calling
 
 `ToolCall` runs one fresh orchestration script in the closed machine
-documented by its static description and on-demand dialect manual. `mevedel-tool-ptc.el` owns
+documented by its static description and on-demand dialect manual. `niwa-tool-ptc.el` owns
 that description, the request roster, registration, and aggregate rendering;
-`mevedel-ptc-driver.el` owns nested pipeline orchestration and exposes one
-execution entry to the tool adapter; `mevedel-ptc-interpreter.el` remains the
+`niwa-ptc-driver.el` owns nested pipeline orchestration and exposes one
+execution entry to the tool adapter; `niwa-ptc-interpreter.el` remains the
 pipeline-independent guest machine. Nested calls retain the normal validation,
 hook, permission, snapshot, cancellation, and telemetry behavior. They are
 shown as one live aggregate row and one settled ordered audit, not as invented
@@ -351,7 +351,7 @@ arguments, render data, IDs, and supported media retain their ordinary direct-ca
 semantics. Its result and supported media reach the model unchanged
 apart from ordinary output limits and pipeline guidance. Ask, Skill, WaitAgent
 and UpdateGoal are standalone-only; unclassified wrapped tools default to that
-route. `mevedel-ptc-composable-tools` admits additional names for composition.
+route. `niwa-ptc-composable-tools` admits additional names for composition.
 A program that transforms one child result still renders as a script.
 
 Emacs and collaboration projection share the same direct-call selection rule.
@@ -366,7 +366,7 @@ Display metadata remains excluded from provider messages.
 
 The settled envelope's own body carries only what the script returned. On a
 successful completion, a returned value longer than
-`mevedel-tool-ptc-result-collapse-line-threshold` lines moves into a trailing,
+`niwa-tool-ptc-result-collapse-line-threshold` lines moves into a trailing,
 initially collapsed `Returned` row; setting the threshold to zero keeps every
 value inline. Each nested call becomes its own collapsible row rendered by that
 tool's registered renderer, so a nested Grep row gets Grep's header and
@@ -382,7 +382,7 @@ whole. The transcript therefore never grows a second full copy of a child result
 
 The dialect supports sequential dependencies plus bounded `parallel` and
 `parallel-map` joins. The latter accept only one direct tool call per entry;
-the host concurrency cap is `mevedel-ptc-parallelism`, and results retain input
+the host concurrency cap is `niwa-ptc-parallelism`, and results retain input
 order. A denial aborts the envelope with a bounded partial-work summary.
 Ordinary failures remain values the guest can inspect. In-flight interpreter
 state is ephemeral: cancellation or restart interrupts it and it is never
@@ -426,12 +426,12 @@ so a predecessor's late error cannot leave pending side effects. Short chains
 without pending input and batch callers keep synchronous chaining. This does not
 move tool execution into a Lisp thread.
 
-Tool-result media has one focused boundary in `mevedel-tool-media.el`.
+Tool-result media has one focused boundary in `niwa-tool-media.el`.
 It validates and sanitizes captured media records, stores their bytes behind
 opaque transcript references, restores trusted records during replay, removes
 validated media from hook-visible text, preserves marker-shaped ordinary text,
 and converts restored records into each provider's native payload shape.
-`mevedel-pipeline.el` supplies the session's
+`niwa-pipeline.el` supplies the session's
 tool-results directory and calls that boundary from the attach, hook, render,
 and gptel parse steps; it does not construct provider-specific media blocks.
 The transcript reference contains only an opaque record id and its owning tool
@@ -440,12 +440,12 @@ provider-facing tool name, so direct ToolCall dispatch and editing tools retain
 their images. Replay never rereads the original filesystem path. Remote records are
 published and replayed through the session artifact manifest; a fixed-path
 cache is never an authority fallback. In-memory retention is bounded by
-`mevedel-tool-media-cache-max-bytes` (default 25 MiB): the oldest records are
+`niwa-tool-media-cache-max-bytes` (default 25 MiB): the oldest records are
 dropped first and the newest is always kept. Durable records are reread from
 their published copy after eviction; media captured without durable storage is
 unavailable once evicted.
 
-`mevedel-tool-render-data.el` owns render-data serialization, provider
+`niwa-tool-render-data.el` owns render-data serialization, provider
 scrubbing, transcript mutation, and stale execution reconciliation. The
 Pipeline owns only the render-transform and final attachment steps and their
 ordering.
@@ -461,7 +461,7 @@ Important tool metadata:
   `:renderer`
 
 Native and wrapped registrations preserve the same permission metadata.
-`mevedel-define-tool` rejects unrecognized keywords during macro expansion.
+`niwa-define-tool` rejects unrecognized keywords during macro expansion.
 Every registration builds its own provider schema. Per-request updates to a
 registered schema, such as the Agent tool's role and model enums, therefore
 never carry into a later registration, and the authored `:args` stay as
@@ -487,16 +487,16 @@ known coverage gaps. It has no reader for former directive attempts.
 
 ### Tool input validation and repair
 
-`mevedel-tool-repair.el` mediates raw model calls before gptel dispatches
+`niwa-tool-repair.el` mediates raw model calls before gptel dispatches
 them into the pipeline. The temporary provider bridge lives in
-`mevedel-tool-repair-gptel.el`; audit and telemetry live in
-`mevedel-tool-repair-diagnostics.el`. The core first validates the call unchanged. Valid input is
+`niwa-tool-repair-gptel.el`; audit and telemetry live in
+`niwa-tool-repair-diagnostics.el`. The core first validates the call unchanged. Valid input is
 never rewritten. Only invalid model-produced input gets one atomic repair
 attempt; the pipeline then validates the committed arguments again before
 hooks or permissions run. Direct programmatic calls and arguments rewritten
 by `PreToolUse` remain validation-only.
 
-While gptel decodes provider responses, mevedel preserves JSON `null` as a
+While gptel decodes provider responses, niwa preserves JSON `null` as a
 distinct sentinel. Before pre-tool hooks it restores decoded empty objects in
 the common tool-call representation. This temporary adapter covers gptel's
 tool-capable backends in one place to preserve the distinctions required by schema validation.
@@ -581,9 +581,9 @@ on their root session with the actual backend, model, tool, canonical origin
 execution state, and result classification. Argument values, paths, commands,
 prompts, schemas, validation messages, and results are excluded. The in-memory
 and persistent repair logs omit unchanged valid inputs, even during profiling.
-The in-memory `mevedel-session-repair-log` is bounded by
-`mevedel-tool-repair-log-limit` (default 200). When
-`mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
+The in-memory `niwa-session-repair-log` is bounded by
+`niwa-tool-repair-log-limit` (default 200). When
+`niwa-tool-repair-persist-log` is non-nil, materialized sessions also append
 events to `<session>/repair-log.el` in UTF-8 without rereading prior entries or
 checking an already-existing parent directory; bounded events recorded before first
 materialization are backfilled when the session directory is created.
@@ -591,16 +591,16 @@ Remote callback entries wait for session settlement and append only their
 queued delta. A crash may tear the final line; failed appends warn, remain
 queued, and retry after the next successful session save. Telemetry failures
 never block tool execution.
-`mevedel-tool-input-repair-enabled` disables mutation while retaining
+`niwa-tool-input-repair-enabled` disables mutation while retaining
 validation and telemetry.
 
-`mevedel-define-tool :wrap SOURCE` freezes the source argument schema, order,
+`niwa-define-tool :wrap SOURCE` freezes the source argument schema, order,
 and async calling convention exposed to the provider.  Each call resolves the
 current source with `gptel-get-tool`, so a reconnect can replace its function
 without rewrapping when that contract is unchanged.  Contract drift fails the
 call and requires rewrapping.  Re-registering the same wrapped `(category,
-name)` replaces the prior mevedel wrapper, matching native tool registration.
-The Emacs introspection and web tools are native mevedel tools. Introspection
+name)` replaces the prior niwa wrapper, matching native tool registration.
+The Emacs introspection and web tools are native niwa tools. Introspection
 uses Emacs source, documentation and Info APIs, with Orderless symbol matching.
 Source lookup for C primitives and variables requires a configured
 `find-function-C-source-directory`; missing configuration returns a tool error
@@ -666,11 +666,11 @@ descriptions and English captions.
 Web retrieval accepts only `http` and `https` URLs with a host, both as the
 requested URL and as every redirect target, so neither a model-supplied URL nor
 a `Location` header reaches `file:` or other URL handlers. Redirects are followed
-by mevedel rather than by `url-http`: each request binds `url-max-redirections`
+by niwa rather than by `url-http`: each request binds `url-max-redirections`
 to 0 and repeats its method, body and headers, as `url-http` adjusted them for
 the redirect. At most ten redirects are followed. A redirect to the same host is
 followed. WebFetch decides a redirect to another host, including a `www.`
-variant, with `mevedel-tool-permission-decide-now` under the dispatching
+variant, with `niwa-tool-permission-decide-now` under the dispatching
 buffer's policy: a target a fresh WebFetch call could fetch without a prompt is
 followed, a denied target is a tool error, and any other target is returned as
 a `REDIRECT:` result naming the URL, so the model's next WebFetch call gets the
@@ -691,7 +691,7 @@ error.
 shows, as plain data. It takes no arguments and is a read-only, asynchronous
 `util` specialist. It reads the session's backend and every other backend in
 `gptel--known-backends` that is a Codex OAuth or Claude Code backend, in
-parallel, through `mevedel-subscription-usage-provider-readings`. That verb
+parallel, through `niwa-subscription-usage-provider-readings`. That verb
 shares the report's transport, timeouts and validation and returns windows
 instead of display text. The result is a JSON array with one object per
 backend: `backend`, `current`, and either `error` or `readings`. Each reading
@@ -719,17 +719,17 @@ The closed resource resolver accepts the eight documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
 narrow: `Read` accepts every family; `Glob` and `Grep` accept `work://`,
 `artifact://`, `skill://`, `memory://` (including `memory://journal/`),
-`history://saved/`, and `mevedel://`. `Grep` also searches the current projected
+`history://saved/`, and `niwa://`. `Grep` also searches the current projected
 transcript at `history://root` and `history://root/PATH`, with Read-compatible
 line references;
 `ApplyPatch` accepts `work://`, explicit memory file descendants, and ordinary
 filesystem paths. Unsupported combinations fail
 explicitly. Bare addresses list only when the family defines a discovery
-listing. `mevedel://` is always available, including without a session, and
+listing. `niwa://` is always available, including without a session, and
 exposes only packaged Markdown documentation.
 
 Skill tools accept exact `skill://NAME@SOURCE-KEY` locators and explicit
-origin aliases for local Mevedel, local agents, global Mevedel, global agents,
+origin aliases for local Niwa, local agents, global Niwa, global agents,
 bundled, managed, and plugin sources. Bare skill listings expose both forms.
 An alias resolves to the exact current full-hash locator for authority while
 transcripts, errors, and results keep the address the model authored; there is
@@ -767,8 +767,8 @@ get native WriteStdin. Every named role gets native SendMessage, and a default
 agent gets it natively when its inherited catalog permits it, so reporting to a
 parent needs no lookup. Other capabilities, including ListAgents and configured
 wrapped tools, remain discoverable.
-User extras use `mevedel-preset-extra-tool-specs` and
-`mevedel-agent-extra-tool-specs`; an explicitly native extra remains native.
+User extras use `niwa-preset-extra-tool-specs` and
+`niwa-agent-extra-tool-specs`; an explicitly native extra remains native.
 
 Each conversation receives a retained **specialist tool listing**: every catalog
 tool its current role and request may call through ToolCall, excluding native
@@ -777,13 +777,13 @@ tools, as a calling shape and summary such as
 optional; a `[standalone only]` suffix means the call must be the entire
 expression. The listing lets the model call a known specialist without searching
 first; ToolSearch supplies full contracts when argument meaning or usage rules
-matter, and recovers after a failed call. `mevedel-tools-listing-section` renders
+matter, and recovers after a failed call. `niwa-tools-listing-section` renders
 it from the receiving conversation's catalog, so an agent sees its own
 specialists. Retained observations use that conversation's admitted engine and
 actual native tool set, including current root Goal attribution; an unrelated
 callback's engine cannot replace the recipient's context.
 It is delivered like the skill catalog: only when it changes, under
-a budget of `mevedel-tools-listing-budget` (default 2%) of the model's context
+a budget of `niwa-tools-listing-budget` (default 2%) of the model's context
 window. Tools beyond the budget are counted and left to ToolSearch.
 
 Every registered tool has a summary. An omitted `:summary` defaults to the first
@@ -829,10 +829,10 @@ their backend-specific meaning. Discovery no longer invokes this writer.
 
 ### Interaction tool ownership
 
-`mevedel-tool-ui.el` assembles the user-interaction tool surface and owns the
+`niwa-tool-ui.el` assembles the user-interaction tool surface and owns the
 Agent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
-WaitAgent adapters. Ask's questionnaire lives in `mevedel-tool-ask-ui.el`; its
-handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
+WaitAgent adapters. Ask's questionnaire lives in `niwa-tool-ask-ui.el`; its
+handler, renderer, and schema live in `niwa-tool-ask.el`. Exact external-path
 authority is part of the normal permission pipeline, not a model-visible tool.
 
 Ask displays its questions together in the interaction zone, one of them open
@@ -871,7 +871,7 @@ A question whose options carry samples ends in a sample panel, rendered as a
 source block titled with the option it shows. The panel shows the
 sample-bearing option point visited last. Samples are wrapped to the window's
 width into rows, continuation rows marked `↪`, and the panel's height is the
-question's longest sample in rows, capped by `mevedel-ask-sample-height`, so
+question's longest sample in rows, capped by `niwa-ask-sample-height`, so
 comparing options never moves the rest of the form. When the narrowest window
 showing the view changes width, the form lays itself out again at once. With
 point in an open question, `C-v`/`M-v`
@@ -900,7 +900,7 @@ execution escalation uses a separate card because it disables confinement
 rather than adding a named capability.
 
 All direct user interactions share the settlement and cancellation primitive in
-`mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,
+`niwa-interaction-prompt.el`. Domain owners supply their own text, keymaps,
 outcome translation, and persistence effects; the shared primitive owns only
 overlay identity, exactly-once settlement, request-local cancellation, and the
 standard frame. Ask and other child-originated interactions are attributed by
@@ -910,7 +910,7 @@ that request's canceller and leaves sibling interactions queued.
 
 ## Native Tools Surface
 
-The session cockpit `t Tools` row opens the native `*mevedel tools*` surface
+The session cockpit `t Tools` row opens the native `*niwa tools*` surface
 for the current main session. `/tools` and `/tools list` open the same
 surface. The buffer is read-only UI chrome, not transcript content.
 
@@ -929,7 +929,7 @@ views in the view buffer. Function contract:
 Pure function — no I/O, no mutation. Nil falls back to
 the generic renderer.
 
-The view binds `mevedel-tool-render-summary-only` while requesting an initially
+The view binds `niwa-tool-render-summary-only` while requesting an initially
 collapsed row. Renderers may then omit body and child-row construction, while
 retaining the same header, status, visibility, grouping and disclosure decisions.
 An initially expanded rendering must still supply its body. Expansion and browser
@@ -945,7 +945,7 @@ Alist form dispatches on the visible result status:
 ```
 
 The view first uses structured `:status` from render-data, then falls back to
-the visible result: `error` when `mevedel-view--tool-result-error-p` matches,
+the visible result: `error` when `niwa-view--tool-result-error-p` matches,
 otherwise `success`. Lookup tries the exact status first, then `default`, then
 the generic renderer. Built-in count and success-summary renderers register
 only for `success`, so a failed search, fetch, or mutation uses the generic
@@ -982,7 +982,7 @@ and ignores `:body` and `:initially-collapsed-p`. When `:hidden-p` is
 non-nil, the view inserts nothing. Consecutive visible renderings with equal
 coalescing keys retain only the final row and append their call count; any
 other visible rendering ends the run. Validated by
-`mevedel-view--rendering-plist-p`.
+`niwa-view--rendering-plist-p`.
 
 Well-formed tool segments always render through a registered renderer
 or the generic fallback. Malformed or unparseable tool segments keep the
@@ -1026,15 +1026,15 @@ telemetry retain that same classification regardless of displayed result text.
 When a handler
 includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
-hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
-`'gptel 'mevedel-render-data` and `'invisible t`. Parser:
-`mevedel-tool-render-data-extract`.
+hidden block wrapped in `<!-- niwa-render-data -->` delimiters, propertized
+`'gptel 'niwa-render-data` and `'invisible t`. Parser:
+`niwa-tool-render-data-extract`.
 Tool-result blocks carry the owning tool-use ID. Provider scrubbing, view
 extraction, and live metadata updates accept only the block whose owner matches
 the surrounding tool call; other valid marker-shaped blocks remain literal
 result text. Non-tool render records are unbound and are parsed only by their
 dedicated non-tool paths when the complete source span carries live producer
-provenance or the persisted `gptel=mevedel-render-data` property;
+provenance or the persisted `gptel=niwa-render-data` property;
 delimiter-shaped user, assistant, and reasoning text remains ordinary
 transcript content.
 The codec reads one complete Lisp object before checking whitespace and the
@@ -1071,7 +1071,7 @@ Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text
 properties. View-local fragment metadata, collapse state, and renderer caches
 are disposable UI state.
-`mevedel-view--invoke-renderer` `condition-case`s the call; malformed
+`niwa-view--invoke-renderer` `condition-case`s the call; malformed
 output emits a warning and falls through to the one-liner.
 
 Wrapped tools (gptel/MCP) have `render-data` = nil unless they declare a
@@ -1129,7 +1129,7 @@ terminal outcome.
 ## External helper confinement
 
 Native tool implementations launch short-lived external helpers through the
-`mevedel-execution.el` facade, backed by the same opaque process owner used by
+`niwa-execution.el` facade, backed by the same opaque process owner used by
 Bash and fresh Eval.
 The external-helper execution boundary returns an idempotent cancellation
 function. Sessionless request owners can stop their own helper children while
@@ -1159,7 +1159,7 @@ PDF page count.
 
 The caller supplies a structured argv, authorized read paths, and explicit
 writable artifact directories. The facade adds a private scratch working
-directory, applies `mevedel-sandbox-mode`, and removes the scratch directory
+directory, applies `niwa-sandbox-mode`, and removes the scratch directory
 after the callback. The process owner handles timeout/process-group cleanup
 and streams output into a bounded temporary disk spool rather than an Emacs
 process buffer. The one-shot terminal result contains the captured output and
@@ -1179,14 +1179,14 @@ retain their synchronous path. Discovery has a 30-second child timeout and the
 ordinary output bound; a failed or incomplete scan never permits direct execution.
 
 Bubblewrap capability probes are cached independently per execution target.
-Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use
-`mevedel-sandbox-remote-probe-timeout` (10 seconds by default) so transport
+Local probes use the short `niwa-sandbox-probe-timeout`; remote probes use
+`niwa-sandbox-remote-probe-timeout` (10 seconds by default) so transport
 latency does not silently disable best-effort confinement. A successful local
 probe also caches the kernel's Landlock ABI, which decides whether confined
 commands get the [host socket restriction](permissions.md#child-confinement).
 
 All operating-system children receive deterministic defaults for UTF-8 locale,
-no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation
+no color, terminal mode, and pagers, plus `NIWA_EXECUTION=1`. An invocation
 can still override these variables inside its own command. Ordinary one-shot
 stdin is closed immediately. For local Unix execution, a normal main-process
 exit drains any remaining process-group descendants through the same bounded
@@ -1196,9 +1196,9 @@ wrapper behavior described below. Remote direct-async channel overrides are
 scoped to the individual spawn and never change the user's global TRAMP
 connection properties.
 
-`mevedel-tool-fs.el` owns registration and the shared path/resource result
-primitives. `mevedel-tool-fs-read.el` owns text/media decoding and bounded Read
-output; `mevedel-tool-fs-search.el` owns Glob/Grep execution and private
+`niwa-tool-fs.el` owns registration and the shared path/resource result
+primitives. `niwa-tool-fs-read.el` owns text/media decoding and bounded Read
+output; `niwa-tool-fs-search.el` owns Glob/Grep execution and private
 resource-output rewriting. Diff generation belongs to the shared Utilities
 owner, while pre-turn file snapshots belong to Pipeline.
 
@@ -1228,7 +1228,7 @@ any depth. Glob deliberately ignores ignore files. Grep respects ignore rules
 during ordinary traversal, while an explicit `path` or positive `glob` may
 select ignored content; explicit scope takes precedence. Neither sorts results
 or follows symlinks. Both share
-`mevedel-tool-fs-search-timeout` (20 seconds by default). Error, timeout, and
+`niwa-tool-fs-search-timeout` (20 seconds by default). Error, timeout, and
 output-limit facts are settled before exit codes, with captured timeout or
 output-limit text labeled partial and passed through the existing result
 bounds. Result ordering is unspecified. Incomplete and failed searches tell
@@ -1236,17 +1236,17 @@ the model which path or expression fields to narrow before retrying.
 
 ## Managed Bash execution
 
-`mevedel-tool-exec.el` owns Bash/Eval tool registration, execution lifecycle,
+`niwa-tool-exec.el` owns Bash/Eval tool registration, execution lifecycle,
 and rendering. Bash classification and reusable rules live in
-`mevedel-bash-policy.el`; execution-specific permission normalization and
-prompt adaptation live in `mevedel-tool-exec-permission.el`.
+`niwa-bash-policy.el`; execution-specific permission normalization and
+prompt adaptation live in `niwa-tool-exec-permission.el`.
 
 Bash source normally runs through `bash -lc`, so login-shell initialization
 contributes to the requested command's output. Analyzer-proven read-only calls
 instead use `bash --noprofile --norc -p -c` to avoid startup-file and environment
 side effects. Managed Bash has no automatic timeout; use
 the native `timeout` command when the command itself needs a deadline. On Unix,
-Emacs places each child in a dedicated process group, and mevedel sends TERM
+Emacs places each child in a dedicated process group, and niwa sends TERM
 followed by KILL to the whole group. Local descendants that moved into a group
 of their own, as GNU `timeout` does, are found from the process table before
 each signal, pinned by start time, signalled with the group, and keep the record
@@ -1279,7 +1279,7 @@ output fits inline. A command still running at the boundary returns its unread
 output and an opaque owner-scoped execution ID. Local sessions retain a session
 artifact when output does not fit inline. Remote execution spools client-locally
 while live and never exposes that client path to the model. When an observation
-omits output, mevedel stages a complete session artifact at that tool-call
+omits output, niwa stages a complete session artifact at that tool-call
 boundary and returns its target-native logical path; terminal settlement
 updates it with the final bytes. If another session publication is already
 active, the session artifact resolver serves the queued local staging bytes
@@ -1288,9 +1288,9 @@ retirement or session teardown.
 The 64 MiB output cap continues running after yield. Pipe-mode stdin is closed
 from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
 stdin without changing the captured owner, workdir, confinement, or resource
-grants. Native Windows Emacs exposes only pipe subprocesses, so mevedel rejects
+grants. Native Windows Emacs exposes only pipe subprocesses, so niwa rejects
 PTY and Interrupt requests there; Stop remains available for the direct child.
-If the managed spool cannot be written, mevedel records the file error,
+If the managed spool cannot be written, niwa records the file error,
 settles with `output-write-failed`, and starts the same bounded TERM/KILL path;
 unwritten chunks never advance output counters or previews.
 WriteStdin advertises a static 250-300000ms union range. Empty polls default
@@ -1344,7 +1344,7 @@ silent, which keeps its whole-second elapsed time current. Quiet updates share
 whole-second clock ticks with housekeeping and elapsed metadata. The transition
 from an output-driven update to that clock waits 250 ms to 1.25 seconds, preserving
 the four-updates-per-second bound. A longer
-`mevedel-execution-progress-interval` slows both: quiet updates then come at
+`niwa-execution-progress-interval` slows both: quiet updates then come at
 least that long apart, still on whole-second ticks. Output read while a remote operation binds the editor's timer
 list away moves the pending event on the top-level list rather than arming a
 second chain of events. Each event refreshes the row; callbacks due
@@ -1526,7 +1526,7 @@ mutating process can remain armed; one clean settlement cannot clear the latch
 while another armed record remains. A post-attempt launch error, transport loss,
 or failed lease compare-and-set remains unknown. A later target proof that the recorded process group is dead can clear the
 block. A durable latch restored without process identity requires
-`mevedel-retry-target-readiness` and explicit acknowledgement before mutation
+`niwa-retry-target-readiness` and explicit acknowledgement before mutation
 admission reopens.
 Non-read-only tools are rejected while the latch is armed without a live
 provable writer. Lifecycle teardown gives a final KILL one bounded proof
@@ -1556,19 +1556,19 @@ same request-first execution-context resolver.
 
 ### Real transport acceptance
 
-`test/test-mevedel-execution-remote.el` has opt-in cases for each supported
-transport. Set any combination of `MEVEDEL_TEST_SSH_ROOT`,
-`MEVEDEL_TEST_DOCKER_ROOT`, and `MEVEDEL_TEST_PODMAN_ROOT` to existing writable
+`test/test-niwa-execution-remote.el` has opt-in cases for each supported
+transport. Set any combination of `NIWA_TEST_SSH_ROOT`,
+`NIWA_TEST_DOCKER_ROOT`, and `NIWA_TEST_PODMAN_ROOT` to existing writable
 TRAMP directories; authentication and target/container startup remain external
 to the suite. Unset transports skip independently. Once configured, each
 transport must also pass `required` Bubblewrap readiness and its exact-grant
 case; unavailable confinement fails that release gate.
 
 ```bash
-MEVEDEL_TEST_SSH_ROOT=/ssh:user@host:/srv/project/ \
-MEVEDEL_TEST_DOCKER_ROOT=/docker:container:/workspace/ \
-MEVEDEL_TEST_PODMAN_ROOT=/podman:container:/workspace/ \
-npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el
+NIWA_TEST_SSH_ROOT=/ssh:user@host:/srv/project/ \
+NIWA_TEST_DOCKER_ROOT=/docker:container:/workspace/ \
+NIWA_TEST_PODMAN_ROOT=/podman:container:/workspace/ \
+npx @emacs-eask/cli test ert test/test-niwa-execution-remote.el
 ```
 
 The loss cases discard this client's transport and refuse reconnection while
@@ -1776,7 +1776,7 @@ a new session with `note` as its first message. It also requires a one-line
 `name` of at most 80 characters and takes the same `when` forms as a wake-up.
 There is no default expiry; an optional `expires` drops runs after it, and
 `expires` `never` on a change removes it. The
-schedule stores a base `preset` (default `mevedel-implement`) and one
+schedule stores a base `preset` (default `niwa-implement`) and one
 implementation policy in the strict shape accepted plans and Goals use: the
 exact `BACKEND:MODEL` and effort resolved at creation from `model` and
 `effort` (default the session's selection) and `permission_mode` (default
@@ -1793,9 +1793,9 @@ one is refused. `cancel` with a workspace schedule's `id` deletes it and its
 run history without a card, since it removes authority.
 
 The workspace state holds the schedules
-(`.mevedel/schedules/ID/schedule.el`) and one record per run
+(`.niwa/schedules/ID/schedule.el`) and one record per run
 (`runs/SECONDS.el`, keyed by schedule and scheduled time). Every change is
-one target program under a lock on `.mevedel/schedules/` that proves the bytes
+one target program under a lock on `.niwa/schedules/` that proves the bytes
 it read before writing, so Emacs instances sharing the workspace never lose
 each other's updates. A firing exclusively creates its run record in the same
 program that moves the schedule to its next time: exactly one Emacs fires each
@@ -1818,7 +1818,7 @@ after its run; one whose next run would pass its expiry is `expired`. While a
 run's first request is in flight, [Notify](#notify) receipts belong to the
 schedule, so identical text from consecutive runs is suppressed for 24 hours.
 
-Use `M-x mevedel-schedules-list-open` (Standing jobs in the workspace menu)
+Use `M-x niwa-schedules-list-open` (Standing jobs in the workspace menu)
 to see the timing, next run and status. Open a row for its history: each run
 shows when it fired, the outcome, and a link to the run session if one was
 created. `notified` means the run issued a failure notice or a non-duplicate

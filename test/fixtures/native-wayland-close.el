@@ -10,15 +10,15 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'mevedel-view-native)
+(require 'niwa-view-native)
 
-(defun mevedel-native-close--run ()
+(defun niwa-native-close--run ()
   "Close and reopen three real displays, retaining their native handles."
   (let ((status 0) observations handles)
     (condition-case err
         (dotimes (_ 3)
           (let* ((frame (make-frame-on-display
-                         (getenv "MEVEDEL_NATIVE_DISPLAY")
+                         (getenv "NIWA_NATIVE_DISPLAY")
                          '((width . 50) (height . 12)
                            (menu-bar-lines . 0) (tool-bar-lines . 0))))
                  (terminal (frame-terminal frame))
@@ -33,40 +33,40 @@
               (sit-for 0.02 t))
             (redisplay t)
             (let* ((target (cons (copy-marker 12) (copy-marker 22)))
-                   (placement (mevedel-view-native--placement target (selected-window)))
-                   (before (and (mevedel-view-native-available-p frame)
-                                (mevedel-view-native--stats)))
+                   (placement (niwa-view-native--placement target (selected-window)))
+                   (before (and (niwa-view-native-available-p frame)
+                                (niwa-view-native--stats)))
                    (handle (and before placement
-                                (mevedel-view-native--open
+                                (niwa-view-native--open
                                  (frame-parameter frame 'window-id)
                                  (cadr placement) (nth 2 placement) (nth 3 placement)
-                                 (mevedel-view-native--timeline
+                                 (niwa-view-native--timeline
                                   'bounce "Working..." 0.05 'default frame) 0.0))))
-              (unless (and handle (mevedel-view-native--live-p handle))
+              (unless (and handle (niwa-view-native--live-p handle))
                 (error "No live surface on reopened display"))
               (push handle handles)
               (sit-for 0.2 t)
-              (let ((running (mevedel-view-native--stats)))
+              (let ((running (niwa-view-native--stats)))
                 (delete-frame frame t)
                 (delete-terminal terminal t)
                 ;; No event-loop wait between closing and the next connection.
                 (push (list :terminal-closed (not (terminal-live-p terminal))
-                            :active (aref (mevedel-view-native--stats) 0)
+                            :active (aref (niwa-view-native--stats) 0)
                             :submitted (- (aref running 1) (aref before 1))
                             :handles-closed
                             (cl-every (lambda (old)
-                                        (not (mevedel-view-native--live-p old)))
+                                        (not (niwa-view-native--live-p old)))
                                       handles))
                       observations))
               ;; Keep the last successful close observable if reconnection crashes.
-              (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT")
+              (with-temp-file (getenv "NIWA_NATIVE_RESULT")
                 (prin1 observations (current-buffer))))))
       (error (setq status 1 observations
                    (list :error (error-message-string err) :cycles observations))))
-    (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT")
+    (with-temp-file (getenv "NIWA_NATIVE_RESULT")
       (prin1 observations (current-buffer)))
     (kill-emacs status)))
 
-(run-at-time 0.5 nil #'mevedel-native-close--run)
+(run-at-time 0.5 nil #'niwa-native-close--run)
 
 ;;; native-wayland-close.el ends here

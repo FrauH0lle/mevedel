@@ -1,17 +1,17 @@
 ;;; present-wayland-thread.el --- A Lisp thread showing a PGTK frame -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Loaded by a pgtk daemon that `test-mevedel-present-wayland.el' starts
+;; Loaded by a pgtk daemon that `test-niwa-present-wayland.el' starts
 ;; against a headless compositor.  With cheaper presentation enabled, a
 ;; Lisp thread shows a hidden frame: waiting for the map event runs
 ;; GTK's own main loop iteration in that thread, which painted with the
 ;; main thread's GL context and crashed.  The main thread yields the Lisp
 ;; lock without holding GTK's main context while the worker maps its frame.
-;; Observations go to the file named by MEVEDEL_NATIVE_RESULT.
+;; Observations go to the file named by NIWA_NATIVE_RESULT.
 
 ;;; Code:
 
-(require 'mevedel-present)
+(require 'niwa-present)
 
 (defvar present-wayland-thread--results nil
   "Plist of observations.")
@@ -26,7 +26,7 @@
                         :blocker (and worker (thread--blocker worker)))))
     (unless (equal progress present-wayland-thread--progress)
       (setq present-wayland-thread--progress progress)
-      (princ (format "MEVEDEL-CHECKPOINT %S\n" progress)
+      (princ (format "NIWA-CHECKPOINT %S\n" progress)
              #'external-debugging-output))))
 
 (defun present-wayland-thread--wait (seconds &optional predicate)
@@ -54,7 +54,7 @@
      5 (lambda () (and (eq (frame-visible-p frame) t) (frame-focus-state frame))))
     (present-wayland-thread--checkpoint 'enabling-presentation)
     (setq present-wayland-thread--results
-          (list :state (progn (mevedel-present-ensure frame) mevedel-present--state)))
+          (list :state (progn (niwa-present-ensure frame) niwa-present--state)))
     (redraw-frame frame)
     (redisplay t)
     (present-wayland-thread--wait 0.5)
@@ -101,12 +101,12 @@
   "Run the scenario, record what it observed and exit."
   (let ((status 0))
     (condition-case err
-        (present-wayland-thread--scenario (getenv "MEVEDEL_NATIVE_DISPLAY"))
+        (present-wayland-thread--scenario (getenv "NIWA_NATIVE_DISPLAY"))
       (error (setq status 1)
              (setq present-wayland-thread--results
                    (plist-put present-wayland-thread--results
                               :error (error-message-string err)))))
-    (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT")
+    (with-temp-file (getenv "NIWA_NATIVE_RESULT")
       (prin1 present-wayland-thread--results (current-buffer)))
     (kill-emacs status)))
 

@@ -12,7 +12,7 @@ host eval.
 - Composed calls keep intermediate results inside the expression. Tool failures
   return `(:error "message")`; permission denial aborts execution. Completed
   changes are not rolled back.
-- Read `mevedel://ptc-dialect.md` for control forms, pure operations, parallel
+- Read `niwa://ptc-dialect.md` for control forms, pure operations, parallel
   calls, definitions, regular expressions and execution budgets.
 
 ToolCall(expression="(Imenu :file_path \"src/main.el\")") returns the symbol index.

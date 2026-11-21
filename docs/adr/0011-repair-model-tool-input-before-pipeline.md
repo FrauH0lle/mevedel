@@ -1,6 +1,6 @@
 # Repair model tool input before pipeline execution
 
-Mevedel repairs only raw model-produced tool arguments at gptel's pre-tool-call
+Niwa repairs only raw model-produced tool arguments at gptel's pre-tool-call
 seam, using deterministic schema-directed rules, and commits changes only
 after the complete input validates. The existing tool pipeline remains the
 final validation and permission gate, so
@@ -10,7 +10,7 @@ This preserves raw argument distinctions needed for safe repair without a
 global preprocessing pass that could rewrite already-valid content.
 
 Generic repair is a bounded, ordered catalogue rather than a growing set of
-model-specific branches. `path` is a mevedel-internal semantic
+model-specific branches. `path` is a niwa-internal semantic
 schema type lowered to JSON string for providers.
 
 Successful repairs run without a retry and add transparent model feedback.

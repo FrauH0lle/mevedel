@@ -13,38 +13,38 @@
 ;; The view fixture's buffer macro; the runner loads it only in the child.
 (cl-eval-when (compile) (require 'helpers))
 
-(declare-function mevedel-notes-toggle-labels "mevedel-notes" ())
-(declare-function mevedel-tool-render-data-format "mevedel-tool-render-data"
+(declare-function niwa-notes-toggle-labels "niwa-notes" ())
+(declare-function niwa-tool-render-data-format "niwa-tool-render-data"
                   (render-data &optional tool-use-id))
-(declare-function mevedel-view--setup "mevedel-view" (view-buf data-buf &optional options))
-(declare-function mevedel-view--full-rerender "mevedel-view-render"
+(declare-function niwa-view--setup "niwa-view" (view-buf data-buf &optional options))
+(declare-function niwa-view--full-rerender "niwa-view-render"
                   (&optional transcript-buffer source-changed-p))
-(declare-function mevedel-view--interaction-rebuild "mevedel-view-interaction"
+(declare-function niwa-view--interaction-rebuild "niwa-view-interaction"
                   (&optional owned visits))
-(declare-function mevedel-view--spinner-tick "mevedel-view-stream" ())
-(declare-function mevedel-view-table-rerender "mevedel-view-table" (&optional window))
-(declare-function mevedel-view-composer-draft-text "mevedel-view-composer" (&optional view without-properties))
-(declare-function mevedel-tool-exec--register "mevedel-tool-exec-registration" ())
-(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+(declare-function niwa-view--spinner-tick "niwa-view-stream" ())
+(declare-function niwa-view-table-rerender "niwa-view-table" (&optional window))
+(declare-function niwa-view-composer-draft-text "niwa-view-composer" (&optional view without-properties))
+(declare-function niwa-tool-exec--register "niwa-tool-exec-registration" ())
+(declare-function niwa-view-toggle-section "niwa-view-disclosure" ())
 
-(defconst mevedel-graphical-check--root
+(defconst niwa-graphical-check--root
   (file-name-directory
    (directory-file-name
     (file-name-directory (or load-file-name buffer-file-name))))
   "Checkout whose sources and tests the runner uses.")
 
-(defconst mevedel-graphical-check--files
-  '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el"
-    "test-mevedel-view-mouse.el" "test-mevedel-window-graphical.el"
-    "test-mevedel-view-user-state.el" "test-mevedel-view-zone-absent-graphical.el"
-    "test-mevedel-note-conversation.el" "test-mevedel-view-composer-graphical.el"
-    "test-mevedel-view-pair-graphical.el"
-    "test-mevedel-view-pair-surfaces-graphical.el")
+(defconst niwa-graphical-check--files
+  '("test-niwa-view-table-graphical.el" "test-niwa-view-geometry.el"
+    "test-niwa-view-mouse.el" "test-niwa-window-graphical.el"
+    "test-niwa-view-user-state.el" "test-niwa-view-zone-absent-graphical.el"
+    "test-niwa-note-conversation.el" "test-niwa-view-composer-graphical.el"
+    "test-niwa-view-pair-graphical.el"
+    "test-niwa-view-pair-surfaces-graphical.el")
   "Default real-display ERT suites.")
 
-(defun mevedel-graphical-check--options (arguments)
+(defun niwa-graphical-check--options (arguments)
   "Parse script ARGUMENTS into output, grammar paths and deadline."
-  (let ((output (file-name-concat mevedel-graphical-check--root ".scratch"
+  (let ((output (file-name-concat niwa-graphical-check--root ".scratch"
                                  "graphical-check"
                                  (format-time-string "%Y%m%d-%H%M%S-%N")))
         (timeout 300)
@@ -67,10 +67,10 @@
              (setq timeout (string-to-number value)))))))
     (list output (nreverse grammars) timeout)))
 
-(defun mevedel-graphical-check--grammar-paths ()
+(defun niwa-graphical-check--grammar-paths ()
   "Find installed grammar directories before isolating the child."
-  (let* ((home (or (getenv "MEVEDEL_GRAPHICAL_HOST_HOME") (expand-file-name "~")))
-         (config (or (getenv "MEVEDEL_GRAPHICAL_HOST_CONFIG") (getenv "XDG_CONFIG_HOME")))
+  (let* ((home (or (getenv "NIWA_GRAPHICAL_HOST_HOME") (expand-file-name "~")))
+         (config (or (getenv "NIWA_GRAPHICAL_HOST_CONFIG") (getenv "XDG_CONFIG_HOME")))
          (legacy (file-name-concat home ".emacs.d"))
          (xdg (file-name-concat (if (and config (file-name-absolute-p config))
                                     config (file-name-concat home ".config"))
@@ -86,7 +86,7 @@
                     (file-name-concat legacy ".local/etc/tree-sitter")
                     (file-name-concat xdg ".local/etc/tree-sitter")))))))
 
-(defun mevedel-graphical-check--environment (home)
+(defun niwa-graphical-check--environment (home)
   "Return a private process environment rooted at HOME.
 Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
   (let ((process-environment (copy-sequence process-environment))
@@ -114,7 +114,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
     (setenv "DBUS_SESSION_BUS_ADDRESS" nil)
     process-environment))
 
-(defun mevedel-graphical-check--wait (process timeout)
+(defun niwa-graphical-check--wait (process timeout)
   "Wait for PROCESS for at most TIMEOUT seconds, then terminate it."
   (let ((deadline (+ (float-time) timeout)))
     (while (and (process-live-p process) (< (float-time) deadline))
@@ -127,13 +127,13 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (error "Graphical Emacs failed (%s); see ert.log and graphical.log for display, export or grammar diagnostics"
              (process-exit-status process)))))
 
-(defun mevedel-graphical-check-run ()
+(defun niwa-graphical-check-run ()
   "Run graphical fixtures and ERT in a disposable Emacs, never this editor."
   (unless noninteractive (error "Use the Eask graphical-check script, not the live editor"))
   (pcase-let* ((`(,output ,grammars ,timeout)
-                (mevedel-graphical-check--options command-line-args-left))
-               (grammars (or grammars (mevedel-graphical-check--grammar-paths)))
-               (temporary (make-temp-file "mevedel-graphical-" t))
+                (niwa-graphical-check--options command-line-args-left))
+               (grammars (or grammars (niwa-graphical-check--grammar-paths)))
+               (temporary (make-temp-file "niwa-graphical-" t))
                (home (file-name-concat temporary "home"))
                (bootstrap (file-name-concat temporary "bootstrap.el"))
                (log (generate-new-buffer " *graphical-check-log*"))
@@ -157,8 +157,8 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
               (make-directory output t)
               (setq created t)
               (make-directory home t)
-              (let ((process-environment (mevedel-graphical-check--environment home))
-                    (default-directory mevedel-graphical-check--root))
+              (let ((process-environment (niwa-graphical-check--environment home))
+                    (default-directory niwa-graphical-check--root))
                 (with-temp-file bootstrap
                   (insert ";;; Graphical bootstrap -*- lexical-binding: t -*-\n")
                   (prin1 `(condition-case err
@@ -169,9 +169,9 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                                       treesit-auto-install-grammar 'never)
                                 (when (native-comp-available-p)
                                   (startup-redirect-eln-cache ,(file-name-concat home "eln")))
-                                (load ,(file-name-concat mevedel-graphical-check--root
+                                (load ,(file-name-concat niwa-graphical-check--root
                                                          "test" "graphical-check.el") nil t)
-                                (mevedel-graphical-check--child ,output))
+                                (niwa-graphical-check--child ,output))
                             (error
                              (princ (format "Graphical bootstrap error: %s\n"
                                             (error-message-string err))
@@ -181,11 +181,11 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                 (princ (format "Graphical check: %s (deadline %ss)\n" output timeout))
                 (setq process
                       (make-process
-                       :name "mevedel-graphical-check" :buffer log :stderr log
+                       :name "niwa-graphical-check" :buffer log :stderr log
                        :noquery t :connection-type 'pipe
                        :command (list (expand-file-name invocation-name invocation-directory)
                                       "-Q" "--no-splash" "--load" bootstrap)))
-                (mevedel-graphical-check--wait process timeout))
+                (niwa-graphical-check--wait process timeout))
               (princ (with-current-buffer log (buffer-string)))
               (princ (format "Graphical check passed; exports and ERT report: %s\n" output)))
           (error
@@ -207,7 +207,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
         (delete-directory temporary t)))
     (unless (zerop status) (kill-emacs status))))
 
-(defun mevedel-graphical-check--preflight ()
+(defun niwa-graphical-check--preflight ()
   "Reject a non-graphical frame, missing export support or Markdown grammars."
   (unless (and (display-graphic-p) (not noninteractive))
     (error "A real graphical Emacs is required, not batch/terminal Emacs"))
@@ -222,7 +222,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                    (or (treesit-grammar-location language) "library path unavailable"))
            'external-debugging-output)))
 
-(defun mevedel-graphical-check--resize-width (width)
+(defun niwa-graphical-check--resize-width (width)
   "Set the selected frame to WIDTH columns and wait for the compositor."
   (let ((deadline (+ (float-time) 5))
         (unread-command-events nil))
@@ -235,47 +235,47 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (error "Compositor did not resize the capture frame to %d columns (got %d)"
              width (frame-width)))))
 
-(defun mevedel-graphical-check--capture (output)
+(defun niwa-graphical-check--capture (output)
   "Render a real transcript and save fontified frame exports under OUTPUT."
   (require 'helpers)
-  (require 'mevedel-execution)
-  (require 'mevedel-pending-inputs)
-  (require 'mevedel-tool-render-data)
-  (require 'mevedel-view)
-  (require 'mevedel-view-agent)
-  (require 'mevedel-view-render)
-  (unless (file-equal-p (symbol-file 'mevedel-view--full-rerender 'defun)
-                        (file-name-concat mevedel-graphical-check--root
-                                          "mevedel-view-render.el"))
+  (require 'niwa-execution)
+  (require 'niwa-pending-inputs)
+  (require 'niwa-tool-render-data)
+  (require 'niwa-view)
+  (require 'niwa-view-agent)
+  (require 'niwa-view-render)
+  (unless (file-equal-p (symbol-file 'niwa-view--full-rerender 'defun)
+                        (file-name-concat niwa-graphical-check--root
+                                          "niwa-view-render.el"))
     (error "Graphical fixture loaded view code outside this checkout"))
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "Review the graphical fixture.\n\n" nil)
-    (mevedel-view-test--insert-data
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data data-buf "Review the graphical fixture.\n\n" nil)
+    (niwa-view-test--insert-data
      data-buf
      "# Graphical view fixture\n\nA **bold response**, *emphasis*, and `inline code`.\n\n| Check | Result |\n|---|---|\n| Markdown | Fontified |\n| Frame | Exported |\n\n"
      'response)
-    (mevedel-view-test--insert-data
+    (niwa-view-test--insert-data
      data-buf
-     (mevedel-tool-render-data-format
+     (niwa-tool-render-data-format
       (list :kind 'request-summary :elapsed-seconds 157
             :started-at (float-time (encode-time 43 29 14 29 10 2026))
             :finished-at (float-time (encode-time 20 32 14 29 10 2026))))
      'ignore)
     (switch-to-buffer view-buf)
     ;; Font Lock refuses internal buffers whose names begin with a space.
-    (rename-buffer "*mevedel graphical fixture*" t)
+    (rename-buffer "*niwa graphical fixture*" t)
     (delete-other-windows)
     (let* ((inhibit-read-only t)
-           (session (mevedel-session-create
+           (session (niwa-session-create
                      "graphical"
-                     (mevedel-workspace--create
+                     (niwa-workspace--create
                       :type 'file :id "graphical" :name "graphical"
                       :root default-directory)))
            bold-position)
       (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (setq-local mevedel--session session)
-      (mevedel-view-test--insert-composer-draft "> active draft\nsecond line")
+        (setq-local niwa--session session))
+      (setq-local niwa--session session)
+      (niwa-view-test--insert-composer-draft "> active draft\nsecond line")
       (let* ((clock (float-time))
              (original-float-time (symbol-function 'float-time))
              (executions
@@ -289,41 +289,41 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                    (lambda (&optional time)
                      (if time (funcall original-float-time time) clock)))
                   ((symbol-function 'frame-focus-state) (lambda (&optional _) t))
-                  ((symbol-function 'mevedel-execution-count-user) (lambda (_) 2))
-                  ((symbol-function 'mevedel-execution-list-user) (lambda (_) executions))
-                  ((symbol-function 'mevedel-view--agent-status-collect)
+                  ((symbol-function 'niwa-execution-count-user) (lambda (_) 2))
+                  ((symbol-function 'niwa-execution-list-user) (lambda (_) executions))
+                  ((symbol-function 'niwa-view--agent-status-collect)
                    (lambda ()
                      (list (list :path "/root/reviewer" :status 'running
                                  :model-metadata '(:model "opus" :effort "medium")
                                  :started-at (- clock 130))))))
-          (mevedel-view--full-rerender)
+          (niwa-view--full-rerender)
           ;; Reproduce the failure-review queue with the long file mention that
           ;; used to appear in both the expanded header and the detail body.
-          (mevedel-session-enqueue-pending-input
+          (niwa-session-enqueue-pending-input
            session 'steering
            '(:input "@file:/home/roland/Bilder/Bildschirmfotos/Bildschirmfoto_20261024_160228.png Can we add an elapsed time beside the background jobs?"))
-          (mevedel-session-set-pending-input-failure-paused session t)
-          (mevedel-view--interaction-rebuild)
+          (niwa-session-set-pending-input-failure-paused session t)
+          (niwa-view--interaction-rebuild)
           (goto-char (point-min))
           (search-forward "1. [+]")
           (backward-char)
           (let ((last-nonmenu-event nil))
             (call-interactively (key-binding (kbd "RET"))))
-          (mevedel-view--interaction-rebuild)
+          (niwa-view--interaction-rebuild)
           (unless (and (string-search "Steering\n  1. [-]\n    @file:" (buffer-string))
-                       (= 1 (mevedel-view-test--count-substring "@file:" (buffer-string))))
+                       (= 1 (niwa-view-test--count-substring "@file:" (buffer-string))))
             (error "Failure-paused steering fixture duplicates or omits expanded input"))
           (redisplay t)
           ;; Exercise the shared semantic tick, not another full/status render.
           (setq clock (1+ clock))
-          (mevedel-view--spinner-tick)
+          (niwa-view--spinner-tick)
           (dolist (label '("remote · 14m 08s" "events · 1m 06s" "reviewer · 2m 11s"))
             (unless (string-search label (buffer-string))
               (error "Background elapsed fixture did not render %s" label)))))
       ;; Views defer table layout to idle.  Drain that production operation
       ;; explicitly: this bootstrap exits before the ordinary idle loop.
       (redisplay t)
-      (mevedel-view-table-rerender (selected-window))
+      (niwa-view-table-rerender (selected-window))
       ;; -Q has no global font-lock.  Enable it explicitly so the production
       ;; font-lock-face properties are consumed, rather than copying faces.
       (setq-local font-lock-defaults '(nil t))
@@ -338,9 +338,9 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (goto-char (point-min))
       (search-forward "bold response")
       (setq bold-position (match-beginning 0))
-      (unless (text-property-not-all (point-min) (point-max) 'mevedel-view-table-cell nil)
+      (unless (text-property-not-all (point-min) (point-max) 'niwa-view-table-cell nil)
         (error "Fixture table was not laid out"))
-      (unless (equal "> active draft\nsecond line" (mevedel-view-composer-draft-text))
+      (unless (equal "> active draft\nsecond line" (niwa-view-composer-draft-text))
         (error "Fixture redraw changed the composer"))
       (goto-char (point-min))
       (search-forward "── Worked for 2m 37s · Thu 29 Oct 14:32 ")
@@ -366,24 +366,24 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (let ((width (frame-width)))
         (unwind-protect
             (progn
-              (mevedel-graphical-check--resize-width 60)
+              (niwa-graphical-check--resize-width 60)
               (redisplay t)
-              (mevedel-view-table-rerender (selected-window))
+              (niwa-view-table-rerender (selected-window))
               (redisplay t)
               (let ((coding-system-for-write 'no-conversion))
                 (with-temp-file (file-name-concat output "view-narrow.png")
                   (set-buffer-multibyte nil)
                   (insert (x-export-frames nil 'png)))))
-          (mevedel-graphical-check--resize-width width))))))
+          (niwa-graphical-check--resize-width width))))))
 
-(defun mevedel-graphical-check--capture-tool-groups (output)
+(defun niwa-graphical-check--capture-tool-groups (output)
   "Render activity groups and save collapsed and expanded exports under OUTPUT.
 One run mixes Read with Bash calls that ran without confinement; another
 holds failures."
-  (require 'mevedel-tool-exec-registration)
-  (require 'mevedel-view-disclosure)
-  (mevedel-view-test--with-buffers
-    (mevedel-tool-exec--register)
+  (require 'niwa-tool-exec-registration)
+  (require 'niwa-view-disclosure)
+  (niwa-view-test--with-buffers
+    (niwa-tool-exec--register)
     (let ((sandbox '(:attempt-count 1 :started-count 1 :refused-count 0
                      :sandbox off :filesystem unrestricted :network unrestricted
                      :proc nil :additional-read-count 0 :additional-write-count 0))
@@ -400,7 +400,7 @@ holds failures."
                       (when (equal name "Bash")
                         (let ((start (point)))
                           (insert (substring-no-properties
-                                   (mevedel-tool-render-data-format
+                                   (niwa-tool-render-data-format
                                     (list :kind 'bash :command (plist-get args :command)
                                           :state 'completed :termination 'exited
                                           :exit-code (if failed 2 0)
@@ -409,28 +409,28 @@ holds failures."
                                           :status (if failed 'error 'success)
                                           :sandbox-summary sandbox)
                                     tool-id)))
-                          (put-text-property start (point) 'mevedel-render-data t)))
+                          (put-text-property start (point) 'niwa-render-data t)))
                       (insert "#+end_tool\n")))))
-        (mevedel-view-test--insert-data data-buf "Check the build.\n\n" nil)
-        (mevedel-view-test--insert-data data-buf "Reading the build files.\n\n" 'response)
+        (niwa-view-test--insert-data data-buf "Check the build.\n\n" nil)
+        (niwa-view-test--insert-data data-buf "Reading the build files.\n\n" 'response)
         (tool "Read" '(:file_path "Eask"))
         (tool "Bash" '(:command "make check"))
         (tool "Bash" '(:command "git status --short"))
-        (mevedel-view-test--insert-data data-buf "Now the failing cases.\n\n" 'response)
+        (niwa-view-test--insert-data data-buf "Now the failing cases.\n\n" 'response)
         (tool "Bash" '(:command "make test") t)
         (tool "Bash" '(:command "make lint") t)
         (tool "Bash" '(:command "ls test"))
         (tool "Read" '(:file_path "test/helpers.el"))
-        (tool "Grep" '(:pattern "defun mevedel-view--group") t)
-        (mevedel-view-test--insert-data data-buf "Done.\n" 'response))
+        (tool "Grep" '(:pattern "defun niwa-view--group") t)
+        (niwa-view-test--insert-data data-buf "Done.\n" 'response))
       (switch-to-buffer view-buf)
-      (rename-buffer "*mevedel graphical tool groups*" t)
+      (rename-buffer "*niwa graphical tool groups*" t)
       (delete-other-windows)
       ;; The narrow export resized the frame asynchronously; fit group
       ;; headers to the settled width.
       (redisplay t)
       (sit-for 0.2)
-      (mevedel-view--full-rerender)
+      (niwa-view--full-rerender)
       (setq-local font-lock-defaults '(nil t))
       (font-lock-mode 1)
       (cl-flet ((export (name)
@@ -449,27 +449,27 @@ holds failures."
         (export "tool-groups")
         (let (groups (pos (point-min)))
           (while (setq pos (text-property-any pos (point-max)
-                                              'mevedel-view-type 'tool-group))
+                                              'niwa-view-type 'tool-group))
             (push pos groups)
-            (setq pos (or (next-single-property-change pos 'mevedel-view-type)
+            (setq pos (or (next-single-property-change pos 'niwa-view-type)
                           (point-max))))
           (unless groups
             (error "Tool group fixture folded no activity group"))
           ;; Last first, so expanding one leaves earlier positions valid.
           (dolist (group groups)
             (goto-char group)
-            (mevedel-view-toggle-section)))
+            (niwa-view-toggle-section)))
         (export "tool-groups-expanded")))))
 
-(defun mevedel-graphical-check--capture-notes (output)
+(defun niwa-graphical-check--capture-notes (output)
   "Capture source note labels under OUTPUT using real source commands."
-  (require 'mevedel-notes)
-  (require 'mevedel-notes-list)
-  (let* ((directory (make-temp-file "mevedel-graphical-notes-" t))
+  (require 'niwa-notes)
+  (require 'niwa-notes-list)
+  (let* ((directory (make-temp-file "niwa-graphical-notes-" t))
          (file (file-name-concat directory "example.el"))
-         (workspace (mevedel-workspace--create
+         (workspace (niwa-workspace--create
                      :type 'file :id directory :root directory :name "notes"))
-         (mevedel--instruction-states (make-hash-table :test #'equal))
+         (niwa--instruction-states (make-hash-table :test #'equal))
          source list-buffer)
     (unwind-protect
         (progn
@@ -479,22 +479,22 @@ holds failures."
           (setq source (find-file-noselect file))
           (switch-to-buffer source)
           (delete-other-windows)
-          (setq-local mevedel--workspace workspace)
+          (setq-local niwa--workspace workspace)
           (goto-char (point-min))
           (forward-line 3)
           (search-forward "seq-find")
           (let ((transient-mark-mode t))
             (set-mark (- (point) 8))
             (activate-mark)
-            (mevedel-note-create
+            (niwa-note-create
              "Use an index if this lookup becomes frequent. Keep the complete explanation visible when expanded, including why repeated scans could become expensive as the number of users grows."))
           (goto-char (point-min))
           (forward-line 6)
-          (overlay-put (mevedel-note-create "Keep the ordering stable")
-                       'mevedel-note-attention-state 'ready)
+          (overlay-put (niwa-note-create "Keep the ordering stable")
+                       'niwa-note-attention-state 'ready)
           (goto-char (point-max))
           (forward-line -1)
-          (mevedel-note-create)
+          (niwa-note-create)
           (font-lock-ensure)
           (goto-char (point-min))
           (set-window-start nil (point-min))
@@ -504,13 +504,13 @@ holds failures."
             (with-temp-file (file-name-concat output "notes.png")
               (set-buffer-multibyte nil)
               (insert (x-export-frames nil 'png))))
-          (mevedel-notes-toggle-labels)
+          (niwa-notes-toggle-labels)
           (redisplay t)
           (let ((coding-system-for-write 'no-conversion))
             (with-temp-file (file-name-concat output "notes-expanded.png")
               (set-buffer-multibyte nil)
               (insert (x-export-frames nil 'png))))
-          (setq list-buffer (mevedel-notes-list workspace))
+          (setq list-buffer (niwa-notes-list workspace))
           (delete-other-windows)
           (goto-char (point-min))
           (redisplay t)
@@ -522,20 +522,20 @@ holds failures."
       (when (buffer-live-p source) (kill-buffer source))
       (delete-directory directory t))))
 
-(defun mevedel-graphical-check--child (output)
+(defun niwa-graphical-check--child (output)
   "Run the graphical checks, save diagnostics in OUTPUT, and always exit."
   (let ((status 1))
     (condition-case err
         (progn
-          (mevedel-graphical-check--preflight)
+          (niwa-graphical-check--preflight)
           (set-frame-size nil 110 42)
           (sit-for 0.2)
-          (mevedel-graphical-check--capture output)
-          (mevedel-graphical-check--capture-tool-groups output)
-          (mevedel-graphical-check--capture-notes output)
+          (niwa-graphical-check--capture output)
+          (niwa-graphical-check--capture-tool-groups output)
+          (niwa-graphical-check--capture-notes output)
           (require 'ert)
-          (dolist (file mevedel-graphical-check--files)
-            (load (file-name-concat mevedel-graphical-check--root "test" file) nil t))
+          (dolist (file niwa-graphical-check--files)
+            (load (file-name-concat niwa-graphical-check--root "test" file) nil t))
           (let* ((stats (ert-run-tests-batch t))
                  (skipped (ert-stats-skipped stats))
                  (unexpected (ert-stats-completed-unexpected stats)))
@@ -551,8 +551,8 @@ holds failures."
                        `((emacs . ,emacs-version)
                          (window-system . ,(symbol-name window-system))
                          (font . ,(frame-parameter nil 'font))
-                         (checkout . ,mevedel-graphical-check--root)
-                         (view-library . ,(symbol-file 'mevedel-view--full-rerender 'defun))
+                         (checkout . ,niwa-graphical-check--root)
+                         (view-library . ,(symbol-file 'niwa-view--full-rerender 'defun))
                          (grammar-paths . ,(vconcat treesit-extra-load-path))
                          (markdown-grammars . ["markdown" "markdown-inline"])
                          (tests . ,(ert-stats-total stats))

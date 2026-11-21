@@ -85,7 +85,7 @@ discards the offers during teardown, without invoking them; the mail remains
 durable.
 
 Acknowledged registry and mailbox mutations publish only the sidecar once the
-first root snapshot exists. `mevedel-session-checkpoint.el` owns the root fields
+first root snapshot exists. `niwa-session-checkpoint.el` owns the root fields
 as of the last committed transcript: segment, turn count, prompt index, file
 snapshots, chapters, and first/latest user previews. Ordinary metadata writes
 project those committed fields rather than tentative live values. Terminal
@@ -458,5 +458,5 @@ All revisions belong to ADR 0112:
   `auto-save-hook` only after keyboard input. An unattended Goal or agent run
   receives none, so its conversations reached disk only at settlement. A timer
   started at request admission now runs the same coalesced, input-yielding
-  checkpoint every `mevedel-session-checkpoint-interval` seconds until no
+  checkpoint every `niwa-session-checkpoint-interval` seconds until no
   request is in flight.

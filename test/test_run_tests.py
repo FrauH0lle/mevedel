@@ -44,9 +44,9 @@ LIBRARIES = {
 class RunnerTests(unittest.TestCase):
     def test_jobs_default_comes_from_environment_and_explicit_flag_wins(self):
         for environment, arguments, message in (
-            ({'MEVEDEL_TEST_JOBS': '0'}, [], '--jobs must be positive'),
-            ({'MEVEDEL_TEST_JOBS': 'two'}, [], "invalid int value: 'two'"),
-            ({'MEVEDEL_TEST_JOBS': '0'}, ['--jobs', '3'], 'stop after jobs'),
+            ({'NIWA_TEST_JOBS': '0'}, [], '--jobs must be positive'),
+            ({'NIWA_TEST_JOBS': 'two'}, [], "invalid int value: 'two'"),
+            ({'NIWA_TEST_JOBS': '0'}, ['--jobs', '3'], 'stop after jobs'),
         ):
             stderr = io.StringIO()
             with self.subTest(environment=environment, arguments=arguments), \
@@ -79,10 +79,10 @@ class RunnerTests(unittest.TestCase):
         for environment, arguments, pinned, expected in (
             ({}, ['--affected'], 'master', 'master'),
             ({}, ['--affected'], 'pinned', 'pinned'),
-            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'}, ['--affected'], 'pinned', 'branch-point'),
-            ({'MEVEDEL_AFFECTED_BASE': 'branch-point'},
+            ({'NIWA_AFFECTED_BASE': 'branch-point'}, ['--affected'], 'pinned', 'branch-point'),
+            ({'NIWA_AFFECTED_BASE': 'branch-point'},
              ['--affected', 'explicit-revision'], 'pinned', 'explicit-revision'),
-            ({'MEVEDEL_AFFECTED_BASE': ''}, ['--affected'], 'pinned', 'pinned'),
+            ({'NIWA_AFFECTED_BASE': ''}, ['--affected'], 'pinned', 'pinned'),
         ):
             with self.subTest(environment=environment, arguments=arguments), \
                  patch.dict(os.environ, environment, clear=True), \
@@ -97,9 +97,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_affected_environment_does_not_enable_affected_mode(self):
         with tempfile.TemporaryDirectory() as directory, \
-             patch.dict(os.environ, {'MEVEDEL_AFFECTED_BASE': 'branch-point'}), \
+             patch.dict(os.environ, {'NIWA_AFFECTED_BASE': 'branch-point'}), \
              patch.object(sys, 'argv', ['run_tests.py', '--output', directory + '/reports',
-                                       'test/test-mevedel-test-runner.el']), \
+                                       'test/test-niwa-test-runner.el']), \
              patch.object(affected_tests, 'changed_files') as changed, \
              patch.object(run_tests, 'run_logged', return_value=(23, 0)), \
              contextlib.redirect_stderr(io.StringIO()):
@@ -120,7 +120,7 @@ class RunnerTests(unittest.TestCase):
                         test='a', seconds=1, status='ert-test-passed', expected=True)])
                 else:
                     return 0, 1
-                Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(data))
+                Path(env['NIWA_TEST_RESULTS']).write_text(json.dumps(data))
                 return 0, 1
 
             with patch.object(run_tests, 'REPORTS', reports), \
@@ -128,8 +128,8 @@ class RunnerTests(unittest.TestCase):
                  patch.object(run_tests, 'run_logged', side_effect=run), \
                  contextlib.redirect_stdout(io.StringIO()):
                 clock.now.return_value.strftime.return_value = stamp
-                for arguments in (['test/test-mevedel-test-runner.el'],
-                                  ['test/test-mevedel-test-runner.el'],
+                for arguments in (['test/test-niwa-test-runner.el'],
+                                  ['test/test-niwa-test-runner.el'],
                                   ['--replay', str(reports / stamp / '0-partition.json')]):
                     with patch.object(sys, 'argv', ['run_tests.py', '--jobs', '1', *arguments]):
                         self.assertEqual(run_tests.main(), 0)
@@ -153,11 +153,11 @@ import json, os, pathlib, sys
 if sys.argv[1] == 'clean':
     sys.exit(0)
 names = ['failing-' + str(i) for i in range(30)]
-output = pathlib.Path(os.environ['MEVEDEL_TEST_RESULTS'])
-if 'MEVEDEL_TEST_PARTITION' not in os.environ:
+output = pathlib.Path(os.environ['NIWA_TEST_RESULTS'])
+if 'NIWA_TEST_PARTITION' not in os.environ:
     output.write_text(json.dumps(dict(inventory=names, files=[''] * len(names))))
 else:
-    request = json.loads(pathlib.Path(os.environ['MEVEDEL_TEST_PARTITION']).read_text())
+    request = json.loads(pathlib.Path(os.environ['NIWA_TEST_PARTITION']).read_text())
     output.write_text(json.dumps(dict(ert_seconds=1, tests=[dict(
         test=name, seconds=0.01, status='ert-test-failed', expected=False)
         for name in request['tests']])))
@@ -168,7 +168,7 @@ else:
             output = path / 'reports'
             result = subprocess.run(
                 [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'),
-                 'test/test-mevedel-test-runner.el', '--jobs', '1', '--output', str(output)],
+                 'test/test-niwa-test-runner.el', '--jobs', '1', '--output', str(output)],
                 env={**os.environ, 'PATH': str(path)}, capture_output=True, text=True)
             self.assertEqual(result.returncode, 7, result.stderr)
             self.assertEqual(result.stdout.count('FAIL: '), 20)
@@ -178,8 +178,8 @@ else:
             self.assertEqual(json.loads((output / 'summary.json').read_text())['unexpected'], 30)
 
     def test_file_selection_expands_deduplicates_and_rejects_typos(self):
-        expected = ['test/test-mevedel-test-runner.el']
-        self.assertEqual(run_tests.select_files(['test/test-mevedel-test-runne?.el',
+        expected = ['test/test-niwa-test-runner.el']
+        self.assertEqual(run_tests.select_files(['test/test-niwa-test-runne?.el',
                                                 expected[0]]), expected)
         self.assertEqual(run_tests.select_files([str(run_tests.ROOT / expected[0])]), expected)
         for pattern in ('test/not-present*.el', 'README.md', '/etc/passwd'):
@@ -189,7 +189,7 @@ else:
     def test_replay_keeps_order_and_validates_saved_roster(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'partition.json'
-            request = dict(files=['test/test-mevedel-test-runner.el'],
+            request = dict(files=['test/test-niwa-test-runner.el'],
                            inventory=['a', 'b'], tests=['b', 'a'])
             path.write_text(json.dumps(request))
             self.assertEqual(run_tests.read_replay(path), request)
@@ -206,7 +206,7 @@ else:
                 output = path / 'reports'
                 history = path / 'latest-durations.csv'
                 history.write_text('previous timings\n')
-                files = ['test/test-mevedel-test-runner.el']
+                files = ['test/test-niwa-test-runner.el']
                 request = dict(files=files, inventory=['a', 'b'], tests=['b', 'a'])
                 saved = path / 'saved.json'
                 saved.write_text(json.dumps(request))
@@ -219,19 +219,19 @@ else:
                     commands.append(command)
                     log.write_text('native log\n')
                     if log.name == 'inventory.log':
-                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(
+                        Path(env['NIWA_TEST_RESULTS']).write_text(
                             '{"inventory": ["a", "b"], "files": ["", ""]}')
                     elif log.name == '0.log':
                         if lane == 'fresh':
-                            self.assertEqual(env['MEVEDEL_TEST_FRESH_FILE'], '1')
+                            self.assertEqual(env['NIWA_TEST_FRESH_FILE'], '1')
                             names = ['a', 'b']
                         else:
-                            assignment = json.loads(Path(env['MEVEDEL_TEST_PARTITION']).read_text())
+                            assignment = json.loads(Path(env['NIWA_TEST_PARTITION']).read_text())
                             self.assertEqual(assignment['files'], files)
                             names = assignment['tests']
                             if lane == 'replay':
                                 self.assertEqual(assignment, request)
-                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(dict(
+                        Path(env['NIWA_TEST_RESULTS']).write_text(json.dumps(dict(
                             inventory=['a', 'b'], ert_seconds=1,
                             tests=[dict(test=name, seconds=0.5, status='ert-test-failed',
                                         expected=False) for name in names])))
@@ -260,15 +260,15 @@ else:
             def run(command, log, env=None):
                 log.write_text('native log\n')
                 if log.name != 'clean.log':
-                    Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(dict(
+                    Path(env['NIWA_TEST_RESULTS']).write_text(json.dumps(dict(
                         inventory=['duplicate'], ert_seconds=1,
                         tests=[dict(test='duplicate', seconds=1,
                                     status='ert-test-passed', expected=True)])))
                 return 0, 1
 
             with patch.object(sys, 'argv', ['run_tests.py', '--fresh-files', '--output',
-                                           str(output), 'test/test-mevedel-test-runner.el',
-                                           'test/test-mevedel-test-helpers.el']), \
+                                           str(output), 'test/test-niwa-test-runner.el',
+                                           'test/test-niwa-test-helpers.el']), \
                  patch.object(run_tests, 'run_logged', side_effect=run), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(run_tests.main(), 1)
@@ -285,14 +285,14 @@ else:
                 return (3 if log.name == '0.log' else 0), 1
 
             with patch.object(sys, 'argv', ['run_tests.py', '--fresh-files', '--output',
-                                           str(output), 'test/test-mevedel-test-runner.el']), \
+                                           str(output), 'test/test-niwa-test-runner.el']), \
                  patch.object(run_tests, 'run_logged', side_effect=run), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(run_tests.main(), 3)
             summary = json.loads((output / 'summary.json').read_text())
             self.assertTrue(summary['failed'])
             self.assertIsNone(summary['expected_count'])
-            self.assertEqual(summary['workers'][0]['files'], ['test/test-mevedel-test-runner.el'])
+            self.assertEqual(summary['workers'][0]['files'], ['test/test-niwa-test-runner.el'])
 
     def test_default_concurrency_respects_cpu_affinity(self):
         original = os.sched_getaffinity(0)
@@ -303,7 +303,7 @@ else:
                     result = subprocess.run(
                         [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'), '--help'],
                         capture_output=True, text=True, check=True)
-                    self.assertIn(f'default: MEVEDEL_TEST_JOBS, else {min(8, count)}; '
+                    self.assertIn(f'default: NIWA_TEST_JOBS, else {min(8, count)}; '
                                   f'{count} CPUs available',
                                   ' '.join(result.stdout.split()))
         finally:
@@ -474,8 +474,8 @@ else:
                          sorted(affected_tests.SMOKE))
         everything = run_tests.select_files([])
         for selection, expected in (([], sorted(affected_tests.SMOKE)),
-                                    (['test/test-mevedel-test-runner.el'],
-                                     sorted({'test/test-mevedel-test-runner.el',
+                                    (['test/test-niwa-test-runner.el'],
+                                     sorted({'test/test-niwa-test-runner.el',
                                              *affected_tests.SMOKE})),
                                     (None, everything)):
             with self.subTest(selection=selection), tempfile.TemporaryDirectory() as directory:
@@ -520,16 +520,16 @@ else:
                 def run(command, log, env=None):
                     log.write_text('error in process filter: No match data\n')
                     if log.name == 'inventory.log':
-                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(
+                        Path(env['NIWA_TEST_RESULTS']).write_text(
                             '{"inventory": ["a", "b"], "files": ["", ""]}')
                     elif log.name == '0.log':
-                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps({
+                        Path(env['NIWA_TEST_RESULTS']).write_text(json.dumps({
                             'ert_seconds': 1,
                             'tests': [dict(test='a', seconds=1,
                                            status='ert-test-passed', expected=True)]}))
                     elif log.name == '1.log':
                         if broken is not None:
-                            Path(env['MEVEDEL_TEST_RESULTS']).write_text(broken)
+                            Path(env['NIWA_TEST_RESULTS']).write_text(broken)
                         return exit_code, 1
                     return 0, 1
 

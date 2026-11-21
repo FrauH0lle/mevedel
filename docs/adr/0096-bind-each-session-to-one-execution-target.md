@@ -5,9 +5,9 @@ Status: accepted
 Each session owns one immutable execution target: local, a supported remote host, or a supported container. Composite TRAMP targets are experimental. Target-native paths are qualified against that target before authorization, and paths naming the client machine or another target are denied rather than offered as additional authority. Workspace file effects, project command hooks, project-authored executable resources, child processes, dependency probes, Git worktrees, and Bubblewrap confinement execute on the target; user resources and Emacs Lisp remain local according to their origin. This preserves one coherent filesystem, process, permission, and sandbox authority per session instead of making every tool reason about cross-target effects.
 
 Permission files are target-owned configuration at both scopes. The target
-user's `~/.mevedel/permissions.el` and the project's `.mevedel/permissions.el`
+user's `~/.niwa/permissions.el` and the project's `.niwa/permissions.el`
 both contribute rules and resource grants, with paths interpreted on that
-target. Local sessions honor `mevedel-user-dir`; remote sessions never fall
+target. Local sessions honor `niwa-user-dir`; remote sessions never fall
 back to the client's file. The permissions cockpit identifies each source and
 revokes entries in that source. Approval prompts continue remembering only
 session or workspace authority.
@@ -15,7 +15,7 @@ session or workspace authority.
 Workspace-store exact grants may also use bare or `./` relative paths in
 `:resource-grants` and command-profile `:file-system` entries. `.` and `./`
 name the workspace root. Loading binds each relative entry to the store-owning
-workspace's canonical, target-qualified root, not `.mevedel/` or an agent's cwd.
+workspace's canonical, target-qualified root, not `.niwa/` or an agent's cwd.
 A private runtime `:workspace-origin` record retains that root and relative
 spelling. Only origin-marked entries serialize as `./…`; existing absolute and
 home-relative intent is preserved. Global and session exact-path syntax and

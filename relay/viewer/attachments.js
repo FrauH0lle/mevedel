@@ -263,5 +263,5 @@
     }
   }
 
-  window.mevedelAttachments = Object.freeze({create, bind, MAX_FILES, FILE_BUDGET});
+  window.niwaAttachments = Object.freeze({create, bind, MAX_FILES, FILE_BUDGET});
 })();

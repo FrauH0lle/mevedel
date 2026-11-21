@@ -109,7 +109,7 @@ Grouping also skips the unused scaffolding cleanup of a confirmed audit-only
 segment; its audit verdict already determines attachment and preceding-type
 preservation. Other ignored segments still require scaffolding classification.
 The Emacs view and browser projection normalize their decoded activity and share
-`mevedel-activity-group-partition` in `mevedel-activity-group.el` for run
+`niwa-activity-group-partition` in `niwa-activity-group.el` for run
 boundaries, grouping thresholds, summaries, and running/failure/warning facts.
 Only a tool starts a run; leading messages and completion breadcrumbs remain
 standalone, including after a boundary or scope change.
@@ -305,7 +305,7 @@ what changed: the native module has GDK paint each toplevel through GL,
 redirects the Emacs executable's own drawing calls to record their damage, cuts
 Emacs's whole-frame redraws to it, and keeps GLib dispatch on the main thread,
 where the GL context is current. It refuses executables whose imports it cannot
-account for. The October 2026 entry below records why it lives in mevedel.
+account for. The October 2026 entry below records why it lives in niwa.
 
 The headless presentation test separates pending compositor configuration from
 unchanged-content idle measurement. Its test-only module locates the fixture's
@@ -514,7 +514,7 @@ The Emacs view and browser projection had separate grouping rules, with the
 browser borrowing private view summary helpers. An agreement test on unchanged
 code reproduced seven divergences rather than merely assuming the duplication
 was harmful. Both surfaces now normalize their decoded entries and call
-`mevedel-activity-group-partition`; the pure module owns partitioning and summary
+`niwa-activity-group-partition`; the pure module owns partitioning and summary
 facts, while each surface retains rendering and disclosure state.
 
 The shared rule resolves the divergent cases:
@@ -603,7 +603,7 @@ process deadline inside publication, so their complete maxima remain unknown.
 Retain the restart-safe interruption boundary, without claiming bounded callbacks
 or hardware/graphical keyboard latency. Non-quitting C primitives, setup and
 handoff, short state/cache commits, source restoration, publication and GC remain
-limits. The [benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#input-interruptible-preparation-2026-10-24)
+limits. The [benchmark ledger](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md#input-interruptible-preparation-2026-10-24)
 records the populations, raw-evidence locations and correctness checks.
 
 ### October 24, 2026: reject turn preparation plans after measuring reuse
@@ -636,7 +636,7 @@ backlog item with those local fixes (approximately 21–31% faster restored
 projections) and this negative result, rather than retaining a complex cache.
 Reopen only with evidence that identity can be proved substantially more cheaply
 or that source preparation again dominates. The
-[benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#rejected-turn-preparation-plans-2026-10-24)
+[benchmark ledger](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md#rejected-turn-preparation-plans-2026-10-24)
 records the complete warm/cold matrices, retained memory, independent correctness
 fix costs and measurement limits. Complete turns remain reconstructed on every
 projection; existing response, tool and reasoning caches remain in use.
@@ -660,7 +660,7 @@ second projections start zero Markdown jobs instead of 190. Stream and composer
 allocation budgets remain unchanged. The remaining uncached turn share is
 71.55% / 52.70% at default GC and 61.20% / 47.50% at 64 MiB, still above the
 25% materiality gate; it includes insertion and is not a predicted cache speedup.
-The [benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#targeted-full-projection-fixes-2026-10-24)
+The [benchmark ledger](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md#targeted-full-projection-fixes-2026-10-24)
 records the same-stage tables, cold-cache checks, verification and limitations.
 
 ### October 2026: failures and prepared results keep a run's grouping
@@ -778,7 +778,7 @@ batches of four parallel calls) measured the old path at 20.0–20.7 ms median
 per round with 74 zone reconciliations and 518 view modification ticks, and the
 new one at 11.8–12.6 ms with 10 reconciliations and 158 ticks; the number of
 live renders is unchanged, and spinner ticks and tool-segment projection stayed
-at parity. `mevedel-view-pending-tools-visible-max` was removed:
+at parity. `niwa-view-pending-tools-visible-max` was removed:
 the grouping threshold now bounds the rows.
 
 ### October 2026: separate grouped presentation from canonical tool identity
@@ -1337,8 +1337,8 @@ The subprocess experiment's gain was keeping collections out of the editor.
 With collection deferred during typing, the compiled replay's median worst key
 delay is 43-45 ms for every scheduled refresh, and the largest remaining step
 is the insertion of one rendered turn, which must happen in the editor. A
-worker's floor was measured on the same captures with compiled mevedel: 52 ms
-to start Emacs, 194 ms to load mevedel, 215 ms to re-derive text properties
+worker's floor was measured on the same captures with compiled niwa: 52 ms
+to start Emacs, 194 ms to load niwa, 215 ms to re-derive text properties
 the parent already holds (they do not cross a file), and 72 ms to scan and
 group the root capture, about 530 ms before it could return a plan, against
 709 ms for the whole in-process refresh. The grouped turns also reference
@@ -1570,7 +1570,7 @@ selections, window positions and a multiline composer draft.
 ### October 2026: remove pixel-level animation visibility probes
 
 The October 3 session CPU profile attributed 52.3% of nonempty CPU samples to
-`mevedel-view--animation-span-in-window-p`, including 40.0% under the suspended
+`niwa-view--animation-span-in-window-p`, including 40.0% under the suspended
 animation redisplay hook. Pixel-position queries also reentered expensive
 header and mode-line evaluation. Visibility checking accounted for 56.6% of
 samples beneath scheduled rendering; that request recorded five 2.57-6.43 second
@@ -1853,7 +1853,7 @@ fixed: pausing after every read capped a 1.1 MB stream at one pipe read per
 pause (15.6 s instead of 0.02 s), so only reads under 4 KiB pause (0.42 s);
 and a stopped curl outlived `kill-emacs`, so paused processes continued from
 `kill-emacs-hook` and on uninstall (the hook was later replaced by a guard
-process, below). Pacing applies only to mevedel's own streams. An end-of-stream
+process, below). Pacing applies only to niwa's own streams. An end-of-stream
 experiment (100 small events) now finishes 0.18 s after the unpaced run,
 against 0.56 s before. Reading the resumed burst inside
 the resume timer saved only 6 of 94 redisplays and was not kept.
@@ -1893,14 +1893,14 @@ A scripted ACP peer that relays a separate producer, as Claude's adapter
 relays its CLI, streamed text at 8 and 32 chunks a second: 31.6% and 67.4%
 editor CPU after the gptel pacing above, against 19.7% and 22.6% for paced
 gptel streams. Each chunk is its own read and redisplay, and acp.el arms a
-zero-delay drain per message. `mevedel-acp.el` now stops the adapter after a
+zero-delay drain per message. `niwa-acp.el` now stops the adapter after a
 small read holding only `agent_message_chunk` or `agent_thought_chunk` frames
 and continues it at the next batch: 18.5-20.1% and 22.1-23.6%, with every
 streamed word verified in order. The original revision cost 66.8% and 75.4%.
 
 Pausing the adapter can reorder its frames against MCP tool calls, which
 reach Emacs on their own socket: the CLI writes its message receipt through
-the adapter before calling a tool, and mevedel requires that receipt first.
+the adapter before calling a tool, and niwa requires that receipt first.
 Only a steady stream pauses, three streamed-text reads in a row; any other frame
 keeps the adapter running and restarts the count. A tool phase alternates
 short status text with tool frames, and pausing after each text delayed every
@@ -1911,7 +1911,7 @@ MCP call that finds the adapter paused waits up to 50 ms for its frames;
 the continue event alone ends `accept-process-output`, so the wait loops until
 output arrives. Pauses are capped at 0.5 s: a test with a 60-second batch
 stalled the turn. The pause and resume primitives moved to
-`mevedel-transport.el`, shared with the gptel stream bridge.
+`niwa-transport.el`, shared with the gptel stream bridge.
 
 A real Claude Code request (Sonnet, about 1200 words of prose, no tools)
 confirmed the cost and showed that the scripted peer was too simple: the real
@@ -1939,7 +1939,7 @@ child is continued by the terminal hangup, but gptel's curl and acp.el's
 adapter both use pipes, and a remote adapter's local process is an ssh client
 on a pipe.
 
-`mevedel-transport.el` now starts one guard per Emacs on the first pause: a
+`niwa-transport.el` now starts one guard per Emacs on the first pause: a
 `/bin/sh` loop that reads, one line per pause or resume, the IDs paused at
 that moment. Whenever Emacs ends, its pipe closes and the guard continues the
 last set; continued, curl and the adapter find their pipes closed and exit.
@@ -1974,7 +1974,7 @@ about 1 ms.
 Without the native presenter, the final defaults cost 22.7% editor CPU while
 waiting, 21.1% with Bash running and 32.9% for a 32-chunk stream, against 6.2%,
 7.0% and 21.5% with it, and a failed build was silent. A failure is now
-reported once per session with the next step, and `mevedel-view-native-install`
+reported once per session with the next step, and `niwa-view-native-install`
 downloads a prebuilt module from the GitHub release for the current source
 hash. CI builds it on Ubuntu 22.04 against Emacs 27's `emacs-module.h`: Emacs
 only grows the module environment and the module checks for at least the size
@@ -2135,7 +2135,7 @@ pass over its due timers, and `timer_check` runs only the timers that existed
 when the pass began, so the zero-delay timer that rendered a flushed batch ran
 in a second pass after a redisplay; the paced process's resume timer, due at
 its own time, added a third. The batch's timer now runs the render itself once
-the batch is inserted, through `mevedel-gptel-stream-bridge-after-flush`, and
+the batch is inserted, through `niwa-gptel-stream-bridge-after-flush`, and
 continues the paced process feeding it (curl or the Claude Code adapter); its
 resume timer remains the fallback when nothing is queued. The read that paused
 that process started the batch, so the flush continues every process due to
@@ -2207,7 +2207,7 @@ view preparation parses source without invoking frame operations or waiting in
 the event loop. The telemetry worker hands workspace target programs to the
 main thread because synchronous process waits can enter GTK indirectly.
 
-An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
+An Emacs patch did all three and passed niwa's suite, but changes to Emacs
 need a rebuild on every machine and distribution, and LLM-written
 contributions are not accepted upstream. The native module reaches the same
 result in a stock Emacs: `gdk_window_create_gl_context` on each toplevel, and
@@ -2230,7 +2230,7 @@ inserted 8 times a second 12.6% and 2.1%, 32 times 41.1% and 7.0%; a 30-fps
 color label 36.6% and 3.1%; a Lisp thread waking every 100 ms beside 8
 insertions a second 2.5% and 0.3%, without a crash. On the desktop session:
 the timer 15.3% and 0.4%, insertions 13.0% and 1.9%; KWin's own share fell
-from about 6-7% to 1.4%. mevedel streams at 8 and 32 chunks a second cost
+from about 6-7% to 1.4%. niwa streams at 8 and 32 chunks a second cost
 9.6% and 11.8% stock with native animation, 2.7% and 4.0% with the module,
 and 2.7% and 3.2% with the module and text animation. Waiting with the
 default shimmer cost 3.4% stock native, 10.0% stock text, 0.7% module native
@@ -2350,7 +2350,7 @@ fixes passed 20 direct live-terminal closures with a 100 ms event-loop wait
 after each. No installed editor was modified and no presenter change was needed.
 
 Two interleaved 15-second observations per configuration used frozen bytecode,
-real local HTTP/SSE through gptel's curl transport and mevedel's stream bridge,
+real local HTTP/SSE through gptel's curl transport and niwa's stream bridge,
 a 1510x840 logical frame and verified display scales 1 and 2. CPU is a percentage
 of one editor core, excluding the compositor, server and startup. At scale 2,
 the timer/native-wait medians without native presentation were 12.40/0.46% idle,
@@ -2429,8 +2429,8 @@ This does not establish a steady inspector speedup. Four longer alternating
 runs, 119 steady updates each, measured medians 13.00 / 14.27 ms with overlapping
 per-run medians; allocation stayed near 0.221 MB. CPU profiles instead favored
 the new code slightly and put about 60% of steady cost in reader-anchor recovery:
-`mevedel-view--render-anchor-run-end`, `mevedel-view--render-anchor-position`
-and `mevedel-view--position-render-anchor` repeatedly traverse property runs
+`niwa-view--render-anchor-run-end`, `niwa-view--render-anchor-position`
+and `niwa-view--position-render-anchor` repeatedly traverse property runs
 through `next-single-property-change`. Cleanup accounted for practically none
 of those steady samples. That remaining cost was not redesigned here. Batch
 replays exclude graphical redisplay and a larger live heap; they do not identify
@@ -2567,5 +2567,5 @@ the zone allocation budget at 1,832. Keep general draft, anchor, foreign-overlay
 and undo regressions, not implementation-specific minimal-edit assertions.
 Reopen this tradeoff if a C-level property-diff primitive becomes available or
 zones become large enough that whole-zone insertion dominates. The
-[measurement ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#partial-managed-zone-rewrites-2026-10-24)
+[measurement ledger](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md#partial-managed-zone-rewrites-2026-10-24)
 records the controlled comparisons and their limits.

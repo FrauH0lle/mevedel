@@ -14,12 +14,12 @@ class Node {
   addEventListener(type, fn) { this.listeners[type] = fn; }
 }
 const root = new Node('section');
-const window = {mevedelTranscriptRenderer: {markContinuations() {}, groupActivity() {}, fitActivityFailures() {}}};
+const window = {niwaTranscriptRenderer: {markContinuations() {}, groupActivity() {}, fitActivityFailures() {}}};
 vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), {
   window, document: {getElementById: () => root},
 });
 const sent = [];
-const view = window.mevedelHistoryView.create({
+const view = window.niwaHistoryView.create({
   send: frame => { sent.push(frame); return true; }, el: (...args) => new Node(...args),
   renderRecord: record => new Node('p', '', record.text), onArtifacts() {},
 });

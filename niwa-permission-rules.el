@@ -1,0 +1,799 @@
+;;; niwa-permission-rules.el -- Permission rule matching -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Owns permission rule configuration, parsing, matching, precedence buckets,
+;; protected-path policy, and resource-grant construction.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'niwa-utilities)
+
+;; `niwa-execution-target'
+(declare-function niwa-execution-target-expand-path
+                  "niwa-execution-target" (target path &optional directory))
+(autoload 'niwa-execution-target-expand-path "niwa-execution-target")
+
+;; `niwa-tool-registry'
+(declare-function niwa-tool-ensure "niwa-tool-registry" (name))
+(declare-function niwa-tool-get
+                  "niwa-tool-registry" (name &optional category))
+(declare-function niwa-tool-get-domain "niwa-tool-registry" (cl-x) t)
+(declare-function niwa-tool-get-name "niwa-tool-registry" (cl-x) t)
+(declare-function niwa-tool-get-path "niwa-tool-registry" (cl-x) t)
+(declare-function niwa-tool-get-paths "niwa-tool-registry" (cl-x) t)
+(declare-function niwa-tool-get-pattern "niwa-tool-registry" (cl-x) t)
+(autoload 'niwa-tool-ensure "niwa-tool-registry")
+(autoload 'niwa-tool-get "niwa-tool-registry")
+(autoload 'niwa-tool-get-domain "niwa-tool-registry")
+(autoload 'niwa-tool-get-name "niwa-tool-registry")
+(autoload 'niwa-tool-get-path "niwa-tool-registry")
+(autoload 'niwa-tool-get-paths "niwa-tool-registry")
+(autoload 'niwa-tool-get-pattern "niwa-tool-registry")
+
+
+;;
+;;; Customization
+
+(defcustom niwa-permission-rules
+  nil
+  "Permission rules for tools.
+
+Each entry is a list:
+  (TOOL-NAME &key SPECIFIER VALUE :network BOOLEAN
+                   :file-system GRANTS
+                   :sandbox-permissions LEVEL
+                   :action ACTION)
+
+TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"ApplyPatch\"),
+or \"*\" to match all tools.
+
+SPECIFIER is optional and selects what aspect of the invocation the
+rule matches against.  At most one specifier is allowed per rule:
+
+  :path    GLOB  - filesystem path (supports *, **, ?, ~)
+                   Used by Read, ApplyPatch, Glob, Grep, Bash
+                   when it resolves a bare path.
+  :pattern GLOB  - command or expression string (supports *, plus
+                   Bash-style PREFIX:*).  Used by Bash and by qualified
+                   full-escalation Eval rules.
+  :expression TEXT - complete Eval expression, matched literally.
+                   Used by remembered Eval approvals, including execution
+                   profiles and full escalation.  No wildcard expansion.
+  :domain  GLOB  - host name (supports *)
+                   Used by WebFetch, including its redirect targets.
+  :name    GLOB  - match name (supports *)
+                   Used by Agent (task_name).
+
+Rules without a specifier match the tool regardless of context.
+
+The optional `:network t' qualifier records reusable network authority for
+the matching Bash command or Eval expression.  It also authorizes the
+operation; an otherwise identical rule without `:network' leaves network
+isolated.
+
+The optional `:file-system' qualifier records child-process grants as
+`((:path ABSOLUTE-PATH :access ACCESS [:recursive t]) ...)', where ACCESS
+is `read' or `write'.  Grant paths are literal; `*', `**', and `?' carry
+no glob meaning there.  `:recursive t' extends a grant from the exact
+path to the directory and everything beneath it.  A direct user allow
+rule authorizes these grants only for matching executions; no separate
+resource grant is needed, and unrelated tools gain no authority.
+
+The optional :sandbox-permissions qualifier currently accepts
+`require-escalated'.  Such rules participate only in full execution
+escalation decisions; they do not grant ordinary tool permission.  A
+qualified `allow' deliberately authorizes matching code to run directly
+as the Emacs user, without filesystem, network, or process confinement.
+
+ACTION is one of: `allow', `deny', or `ask'.
+
+Precedence within matching rules:
+  1. Specifier-carrying rules > unqualified (generic) rules.
+  2. Within each group: deny > ask > allow.
+
+Example:
+  ((\"Read\" :action allow)
+   (\"ApplyPatch\" :path \"~/projects/**\" :action allow)
+   (\"ApplyPatch\" :path \"~/.ssh/**\" :action deny)
+   (\"Bash\" :pattern \"ls *\" :action allow)
+   (\"Bash\" :pattern \"git log:*\" :action allow)
+   (\"Bash\" :pattern \"npx test*\" :network t :action allow)
+   (\"Bash\" :pattern \"make report\"
+           :file-system ((:path \"/srv/report\" :access write))
+           :action allow)
+   (\"Bash\" :pattern \"rm *\" :action deny)
+   (\"Bash\" :pattern \"curl https://example.com/*\"
+           :sandbox-permissions require-escalated :action allow)
+   (\"Eval\" :pattern \"(my-trusted-batch-job*)\"
+           :sandbox-permissions require-escalated :action allow)
+   (\"WebFetch\" :domain \"*.example.com\" :action allow)
+   (\"Agent\" :name \"explorer\" :action allow))"
+  :type '(repeat sexp)
+  :group 'niwa)
+
+(defcustom niwa-protected-paths
+  '(("**/.git/**" . read-only)
+    ;; The artifact store's bookkeeping changes through niwa only, so an
+    ;; edit cannot bypass item leases, versions and validation.
+    ("**/.niwa/artifacts/.state/**" . read-only)
+    ("**/.niwa/leases/**" . read-only)
+    ("~/.ssh/**" . inaccessible)
+    ("~/.gnupg/**" . inaccessible)
+    ("~/.aws/**" . inaccessible)
+    ("~/.azure/**" . inaccessible)
+    ("~/.config/gcloud/**" . inaccessible)
+    ("~/.kube/**" . inaccessible))
+  "Protected path globs and their child-confinement access modes.
+
+Ask and Edits require authority for inaccessible paths.  Full Access removes
+these default protections; explicit hard denies remain.
+`read-only' keeps matched content visible but immutable;
+`inaccessible' hides it.  This alist is also compiled into the Bubblewrap
+  profile for Bash and fresh Eval."
+  :type '(alist :key-type string
+                :value-type
+                (choice (const inaccessible) (const read-only)))
+  :group 'niwa)
+
+
+;;
+;;; allowed-tools parsing
+
+(defun niwa-permission--tool-specifier-key (tool-name)
+  "Return the specifier keyword for TOOL-NAME, or nil if absent.
+
+Looks the tool up in the registry and returns `:pattern', `:domain',
+`:name', or `:path' based on which `get-*' slot is populated.  Returns
+nil when TOOL-NAME is unknown or declares no getter.
+
+Note: specifier keyword semantics are per-tool, not per-keyword.
+Both `Skill' and `Agent' use `:name', but `Skill :name' matches the
+skill name (invocation identifier) while `Agent :name' matches the
+task_name.  The keyword is a syntactic slot; the matching
+semantics are owned by the tool's `get-name' getter.  Authors of
+permission rules should consult each tool's documentation rather
+than assume cross-tool uniformity for the same keyword."
+  (when-let* ((tool (niwa-tool-get tool-name)))
+    (cond ((niwa-tool-get-pattern tool) :pattern)
+          ((niwa-tool-get-domain  tool) :domain)
+          ((niwa-tool-get-name    tool) :name)
+          ((or (niwa-tool-get-path tool)
+               (niwa-tool-get-paths tool)) :path))))
+
+(defun niwa-permission-rules-parse (entry)
+  "Parse ENTRY (an `allowed-tools' string) into a rule.
+
+Returns a rule plist of the form
+\\=`(TOOL-NAME &key SPECIFIER VALUE :action allow)' suitable for
+`niwa-permission-rules', or signals `user-error' on bad input.
+
+Recognised forms:
+
+- `\"Read\"'              bare tool name
+- `\"ApplyPatch(src/**)\"' qualified by path
+- `\"Bash(git status)\"'  qualified by exact pattern
+- `\"Bash(git status *)\"' qualified by glob pattern
+- `\"WebFetch(example.com)\"' qualified by domain
+- `\"Agent(spec_review)\"' qualified by child task name
+
+Specifier inference is registry-driven via
+`niwa-permission--tool-specifier-key', so a new tool that ships
+with `:get-domain' is automatically qualifiable in skill frontmatter
+without editing the permission layer.
+
+Failure modes:
+
+- malformed syntax (no balanced parens, unrecognized shape) ->
+  `user-error \"Malformed allowed-tools entry: ENTRY\"'
+- unknown tool name -> `user-error'
+- qualifier on a tool with no specifier slot (e.g. `\"Ask(foo)\"') ->
+  `user-error'"
+  (unless (stringp entry)
+    (user-error "Malformed allowed-tools entry: %S (must be a string)" entry))
+  (let ((case-fold-search nil))
+    (cond
+     ;; Bare name: ^Tool$
+     ((string-match "\\`\\([A-Za-z][A-Za-z0-9]*\\)\\'" entry)
+      (let ((tool-name (match-string 1 entry)))
+        (unless (niwa-tool-ensure tool-name)
+          (user-error "Unknown tool in allowed-tools: %s" tool-name))
+        (list tool-name :action 'allow)))
+     ;; Qualified: ^Tool(VALUE)$
+     ((string-match
+       "\\`\\([A-Za-z][A-Za-z0-9]*\\)(\\(.*\\))\\'" entry)
+      (let* ((tool-name (match-string 1 entry))
+             (raw-value (match-string 2 entry))
+             (value raw-value))
+        (unless (niwa-tool-ensure tool-name)
+          (user-error "Unknown tool in allowed-tools: %s" tool-name))
+        (let ((spec-key (niwa-permission--tool-specifier-key tool-name)))
+          (unless spec-key
+            (user-error "Tool %s does not support qualifiers" tool-name))
+          (list tool-name spec-key value :action 'allow))))
+     (t
+     (user-error "Malformed allowed-tools entry: %s" entry)))))
+
+
+;;
+;;; Rule matching
+
+(defun niwa-permission-rules-match-path-p (path pattern &optional target)
+  "Check if PATH matches glob PATTERN.
+
+PATTERN supports:
+  *   - matches any sequence of characters except /
+  **  - matches any sequence of characters including /
+  ?   - matches any single character
+  ~   - expanded to home directory at pattern start
+
+When TARGET is non-nil, expand a leading `~' from that target's probed
+environment.  Absolute patterns remain in the client path domain.
+Returns non-nil if PATH matches PATTERN."
+  (when (and path pattern)
+    (let* ((expanded
+            (cond
+             ((and target (string-prefix-p "~" pattern))
+              (niwa-execution-target-expand-path target pattern))
+             ((or (string-prefix-p "~" pattern)
+                  (file-name-absolute-p pattern))
+              (niwa-expand-file-name pattern))
+             (t pattern)))
+           (expanded-path (niwa-expand-file-name path))
+           (directory-glob-root
+            (when (string-suffix-p "/**" expanded)
+              (substring expanded 0 -3)))
+           (match-pattern (or directory-glob-root expanded))
+           (i 0)
+           (len (length match-pattern))
+           (parts (list "\\`")))
+      (while (< i len)
+        (let ((ch (aref match-pattern i)))
+          (cond
+           ;; ** globstar - matches across directories
+           ((and (eq ch ?*)
+                 (< (1+ i) len)
+                 (eq (aref match-pattern (1+ i)) ?*))
+            (push ".*" parts)
+            (setq i (+ i 2)))
+           ;; * - matches within a single directory
+           ((eq ch ?*)
+            (push "[^/]*" parts)
+            (setq i (1+ i)))
+           ;; ? - matches single character
+           ((eq ch ??)
+            (push "." parts)
+            (setq i (1+ i)))
+           ;; Literal character
+           (t
+            (push (regexp-quote (char-to-string ch)) parts)
+            (setq i (1+ i))))))
+      (push (if directory-glob-root "\\(?:/.*\\)?\\'" "\\'") parts)
+      (string-match-p (apply #'concat (nreverse parts)) expanded-path))))
+
+(defconst niwa-permission--specifier-keys
+  '(:path :pattern :expression :domain :name)
+  "Keys recognised as rule specifiers.
+A rule may carry at most one of these.  The first match wins.")
+
+(defun niwa-permission--rule-specifier (rule)
+  "Return (KEY . VALUE) for RULE's specifier, or (nil . nil) if unqualified."
+  (let ((plist (cdr rule))
+        result)
+    (cl-loop for key in niwa-permission--specifier-keys
+             when (plist-member plist key)
+             do (setq result (cons key (plist-get plist key)))
+             and return nil)
+    (or result (cons nil nil))))
+
+(defun niwa-permission--match-specifier (kind pattern value)
+  "Return non-nil if VALUE matches PATTERN under specifier KIND."
+  (when (and pattern value)
+    (pcase kind
+      (:expression (equal value pattern))
+      (:path (niwa-permission-rules-match-path-p value pattern))
+      (:pattern
+       (if (string-suffix-p ":*" pattern)
+           (let ((prefix (substring pattern 0 -2)))
+             (or (string= value prefix)
+                 (string-prefix-p (concat prefix " ") value)))
+         (string-match-p (wildcard-to-regexp pattern) value)))
+      ((or :domain :name)
+       (string-match-p (wildcard-to-regexp pattern) value)))))
+
+(defconst niwa-permission--shell-syntax-marker #xF0000
+  "Base of the private characters that stand for masked shell syntax.
+Each masked character C becomes this base plus C, so distinct operators stay
+distinct while no ordinary argument text can contain them.")
+
+(defun niwa-permission--mask-shell-syntax (text)
+  "Return TEXT with unquoted command-forming shell syntax masked.
+Separators, pipes, background `&', parentheses, backticks, and `$(' become
+private marker characters, as do unquoted `>' and `<' that open a file;
+see `niwa-permission--shell-syntax-marker'.
+Single-quoted, ANSI-C quoted (`$\\='...\\='') and escaped text stays ordinary.
+Inside double quotes, only command substitution is masked, because the shell
+still runs it there.  Redirections such as `2>&1' and `&>' keep their `&'
+only after an unescaped, unquoted `>' or `<'.  Descriptor copies such as
+`2>&1' and `>&2' stay ordinary: they open no file."
+  (let ((length (length text))
+        (state nil)
+        (escaped nil)
+        (redirect nil)
+        (result nil))
+    (dotimes (index length)
+      (let* ((char (aref text index))
+             (next (and (< (1+ index) length) (aref text (1+ index))))
+             (substitution (or (eq char ?`)
+                               (and (eq char ?$) (eq next ?\())))
+             (after-redirect redirect)
+             (mask
+              (progn
+                (setq redirect nil)
+                (cond
+                 (escaped (setq escaped nil) nil)
+                 ((eq state 'single) (when (eq char ?') (setq state nil)) nil)
+                 ((eq state 'ansi-open) (setq state 'ansi) nil)
+                 ((eq state 'ansi)
+                  (pcase char
+                    (?\\ (setq escaped t))
+                    (?' (setq state nil)))
+                  nil)
+                 ((eq char ?\\) (setq escaped t) nil)
+                 ((eq state 'double)
+                  (when (eq char ?\") (setq state nil))
+                  substitution)
+                 ((eq char ?') (setq state 'single) nil)
+                 ((eq char ?\") (setq state 'double) nil)
+                 ((and (eq char ?$) (eq next ?')) (setq state 'ansi-open) nil)
+                 (substitution t)
+                 ((memq char '(?> ?<))
+                  (setq redirect t)
+                  ;; Only `>&N', `>&N-' and `>&-' copy or close a descriptor;
+                  ;; any other word after `&' names a file.
+                  (not (eq (string-match
+                            "&\\(?:[0-9]+-?\\|-\\)\\(?:[ \t\n;|&()<>]\\|\\'\\)"
+                            text (1+ index))
+                           (1+ index))))
+                 ((memq char '(?\; ?| ?\n ?\( ?\))) t)
+                 ((eq char ?&) (not (or after-redirect (eq next ?>))))))))
+        (push (if mask (+ niwa-permission--shell-syntax-marker char) char)
+              result)))
+    (apply #'string (nreverse result))))
+
+(defun niwa-permission--match-command-grant (pattern command)
+  "Return non-nil when Bash allow PATTERN grants COMMAND.
+Unlike ordinary pattern matching, a wildcard here stands only for ordinary
+argument text: `*', `?', and a trailing `:*' never cover masked shell syntax
+\(see `niwa-permission--mask-shell-syntax').  A pattern that spells that
+syntax out literally still matches it."
+  (when (and pattern command)
+    (let* ((case-fold-search nil)
+           (ordinary (format "[^%c-%c]" niwa-permission--shell-syntax-marker
+                             (+ niwa-permission--shell-syntax-marker 255)))
+           (masked-command (niwa-permission--mask-shell-syntax command))
+           (prefix-p (string-suffix-p ":*" pattern))
+           (masked-pattern (niwa-permission--mask-shell-syntax
+                            (if prefix-p (substring pattern 0 -2) pattern))))
+      (string-match-p
+       (concat "\\`"
+               (if prefix-p
+                   (concat (regexp-quote masked-pattern)
+                           "\\(?: " ordinary "*\\)?")
+                 (mapconcat (lambda (char)
+                              (pcase char
+                                (?* (concat ordinary "*"))
+                                (?? ordinary)
+                                (_ (regexp-quote (string char)))))
+                            masked-pattern ""))
+               "\\'")
+       masked-command))))
+
+(defconst niwa-permission-rules-builtin-safe-env-vars
+  '("GOEXPERIMENT" "GOOS" "GOARCH" "CGO_ENABLED" "GO111MODULE"
+    "RUST_BACKTRACE" "RUST_LOG" "NODE_ENV"
+    "PYTHONUNBUFFERED" "PYTHONDONTWRITEBYTECODE"
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD" "PYTEST_DEBUG"
+    "LANG" "LANGUAGE" "LC_ALL" "LC_CTYPE" "LC_TIME" "CHARSET"
+    "TERM" "COLORTERM" "NO_COLOR" "FORCE_COLOR" "TZ"
+    "LS_COLORS" "LSCOLORS" "GREP_COLOR" "GREP_COLORS" "GCC_COLORS"
+    "TIME_STYLE" "BLOCK_SIZE" "BLOCKSIZE")
+  "Environment variables whose leading assignments Bash allow rules ignore.
+None of them can load code, choose another executable, or change where a
+command reads its configuration.  Permission stores add to this list through
+their `:safe-env-vars' entries.")
+
+(defun niwa-permission-rules-strip-safe-assignments (command names)
+  "Return COMMAND without leading assignments to NAMES in each segment.
+An assignment is removed only when its value is plain text, so a value
+containing an expansion or command substitution keeps it, and with it the
+command's conservative classification.  Other text is unchanged."
+  (if (or (null names) (not (stringp command))
+          (not (string-search "=" command)))
+      command
+    (let* ((marker niwa-permission--shell-syntax-marker)
+           (masked (niwa-permission--mask-shell-syntax command))
+           (unsafe (format "%c-%c" marker (+ marker 255)))
+           ;; Plain text matches one character per repetition: a nested
+           ;; `+' inside the `*' backtracks exponentially when no blank
+           ;; follows the value, as before a `;'.
+           (assignment
+            (concat "\\([A-Za-z_][A-Za-z0-9_]*\\)="
+                    "\\(?:'[^']*'"
+                    "\\|\"[^\"\\\\$`" unsafe "]*\""
+                    "\\|[^ \t'\"\\\\$`" unsafe "]\\)*"
+                    "[ \t]+"))
+           (separators (mapcar (lambda (char) (+ marker char))
+                               '(?\; ?| ?\n ?&)))
+           (length (length command))
+           (index 0)
+           (case-fold-search nil)
+           pieces)
+      (while (< index length)
+        (let ((start index))
+          (while (and (< index length)
+                      (or (memq (aref masked index) separators)
+                          (memq (aref masked index) '(?\s ?\t))))
+            (setq index (1+ index)))
+          (push (substring command start index) pieces))
+        (while (and (eq (string-match assignment masked index) index)
+                    (member (match-string 1 masked) names))
+          (setq index (match-end 0)))
+        (let ((start index))
+          (while (and (< index length)
+                      (not (memq (aref masked index) separators)))
+            (setq index (1+ index)))
+          (push (substring command start index) pieces)))
+      (apply #'concat (nreverse pieces)))))
+
+(cl-defun niwa-permission-rules-find
+    (rules tool-name &key path pattern domain name)
+  "Find all matching rules in RULES for TOOL-NAME under the given values.
+
+RULES is a list in the format of `niwa-permission-rules'.  Rule
+matches are determined by the rule's specifier against PATH, PATTERN,
+DOMAIN, or NAME.  Eval `:expression' rules compare PATTERN literally;
+`:pattern' rules retain wildcard semantics.
+A Bash allow rule grants authority, so its pattern matches with
+`niwa-permission--match-command-grant': wildcards cover ordinary
+arguments, never shell syntax that forms another command.  Deny and ask
+rules restrict, so their wildcards keep matching any text.  A path allow
+rule matches case-sensitively; deny and ask path rules keep folding case.
+Unqualified rules match unconditionally.  Return a list of
+matching rules in order (later entries = higher priority)."
+  (let ((matches nil)
+        (values `((:path    . ,path)
+                  (:pattern . ,pattern)
+                  (:expression . ,(and (equal tool-name "Eval") pattern))
+                  (:domain  . ,domain)
+                  (:name    . ,name))))
+    (dolist (rule rules)
+      (let ((rule-tool (car rule)))
+        (when (and (not (plist-member (cdr rule) :sandbox-permissions))
+                   (or (equal rule-tool "*")
+                       (equal rule-tool tool-name)))
+          (let* ((spec (niwa-permission--rule-specifier rule))
+                 (kind (car spec))
+                 (rule-value (cdr spec)))
+            (cond
+             ;; No specifier: matches unconditionally
+             ((null kind)
+              (push rule matches))
+             ((and (eq kind :pattern)
+                   (equal tool-name "Bash")
+                   (eq (plist-get (cdr rule) :action) 'allow))
+              (when (niwa-permission--match-command-grant rule-value pattern)
+                (push rule matches)))
+             ((and (eq kind :path)
+                   (eq (plist-get (cdr rule) :action) 'allow))
+              (when (let ((case-fold-search nil))
+                      (niwa-permission--match-specifier
+                       kind rule-value path))
+                (push rule matches)))
+             ;; Specifier present: compare against the corresponding value
+             ((niwa-permission--match-specifier
+               kind rule-value (alist-get kind values))
+              (push rule matches)))))))
+    (nreverse matches)))
+
+(cl-defun niwa-permission-rules-action
+    (rules tool-name &key path pattern domain name)
+  "Determine the effective action from RULES for TOOL-NAME and specifiers.
+
+Rules that carry a specifier match PATH, PATTERN, DOMAIN, or NAME
+as described by `niwa-permission-rules-find' and take precedence over
+unqualified rules.  Within each group, deny > ask > allow.  Return
+`allow', `deny', `ask', or nil if no rules match."
+  (let ((matching (niwa-permission-rules-find
+                   rules tool-name
+                   :path path :pattern pattern
+                   :domain domain :name name))
+        (spec-deny nil) (spec-ask nil) (spec-allow nil)
+        (gen-deny nil) (gen-ask nil) (gen-allow nil))
+    (dolist (rule matching)
+      (let ((has-spec (car (niwa-permission--rule-specifier rule))))
+        (pcase (plist-get (cdr rule) :action)
+          ('deny (if has-spec (setq spec-deny t) (setq gen-deny t)))
+          ('ask (if has-spec (setq spec-ask t) (setq gen-ask t)))
+          ('allow (if has-spec (setq spec-allow t) (setq gen-allow t))))))
+    (cond
+     ;; Specifier-carrying rules take precedence
+     (spec-deny 'deny)
+     (spec-ask 'ask)
+     (spec-allow 'allow)
+     ;; Generic rules
+     (gen-deny 'deny)
+     (gen-ask 'ask)
+     (gen-allow 'allow)
+     (t nil))))
+
+
+;;
+;;; Protected paths
+
+(defun niwa-permission-protected-path-policy ()
+  "Return validated entries from `niwa-protected-paths'."
+  (dolist (entry niwa-protected-paths)
+    (unless (and (consp entry)
+                 (stringp (car entry))
+                 (memq (cdr entry) '(read-only inaccessible)))
+      (error "Invalid protected path entry: %S" entry)))
+  niwa-protected-paths)
+
+(defun niwa-permission-rules-path-protected-p (path &optional target access)
+  "Check if PATH matches any pattern in `niwa-protected-paths'.
+
+TARGET supplies the path domain for target-home patterns.  When ACCESS is
+`read', read-only entries permit access; inaccessible entries still protect it.
+A quoted `/:' name and, for a local PATH, the canonical file it reaches
+through symlinks are checked too: a workspace link into a protected tree
+names that tree.
+Returns non-nil if the path is protected."
+  (when path
+    (let* ((expanded (niwa-expand-file-name path))
+           (unquoted (if (and (not (file-remote-p expanded))
+                              (string-prefix-p "/:" expanded))
+                         (niwa-collapse-leading-slashes (substring expanded 2))
+                       expanded))
+           (spellings
+            (delete-dups
+             (list expanded unquoted
+                   (unless (file-remote-p unquoted)
+                     ;; Resolves existing ancestors and keeps a missing tail.
+                     (let ((file-name-handler-alist nil))
+                       (niwa-file-truename unquoted)))))))
+      (cl-loop for (pattern . mode) in
+               (niwa-permission-protected-path-policy)
+               thereis
+               (and (not (and (eq access 'read) (eq mode 'read-only)))
+                    (cl-some (lambda (spelling)
+                               (niwa-permission-rules-match-path-p
+                                spelling pattern target))
+                             spellings))))))
+
+(defun niwa-permission-rules--path-contained-p (path root)
+  "Return non-nil when PATH is ROOT or is contained by it."
+  (when (and path root)
+    (let ((abs-path (niwa-expand-file-name path))
+          (abs-root (niwa-expand-file-name root)))
+      (or (string= (directory-file-name abs-path)
+                   (directory-file-name abs-root))
+          (string-prefix-p (file-name-as-directory abs-root)
+                           abs-path)))))
+
+(defun niwa-permission-rules-path-in-allowed-roots-p (path roots)
+  "Return non-nil when PATH is contained by any root in ROOTS."
+  (when path
+    (cl-loop for root in roots
+             thereis (niwa-permission-rules--path-contained-p path root))))
+
+(defun niwa-permission-rules-path-in-exact-allowed-paths-p (path allowed-paths)
+  "Return non-nil when PATH exactly matches one of ALLOWED-PATHS."
+  (when path
+    (let ((expanded (niwa-expand-file-name path)))
+      (cl-loop for allowed in allowed-paths
+               thereis (string= expanded (niwa-expand-file-name allowed))))))
+
+(defun niwa-permission-rules-resource-granted-p
+    (path access grants &optional recursive)
+  "Return non-nil when GRANTS authorize ACCESS to PATH.
+RECURSIVE non-nil requests authority over PATH and all descendants,
+which only a recursive grant containing PATH provides.  Otherwise an
+exact grant on PATH or a recursive grant containing PATH suffices."
+  (when (and path (memq access '(read write)))
+    (let ((expanded (niwa-expand-file-name path)))
+      (cl-loop for grant in grants
+               when (proper-list-p grant)
+               thereis
+               (and (stringp (plist-get grant :path))
+                    (if (plist-get grant :recursive)
+                        (niwa-permission-rules--path-contained-p
+                         expanded (plist-get grant :path))
+                      (and (not recursive)
+                           (if (plist-get grant :workspace-origin)
+                               (string= (directory-file-name expanded)
+                                        (directory-file-name
+                                         (niwa-expand-file-name (plist-get grant :path))))
+                             (string= expanded
+                                      (niwa-expand-file-name
+                                       (plist-get grant :path))))))
+                    (or (eq (plist-get grant :access) 'write)
+                        (eq (plist-get grant :access) access)))))))
+
+
+;;
+;;; Decision chain -- bucket-aware
+
+(defun niwa-permission-rules-collect-buckets
+    (invocation-rules request-rules session-rules persistent-rules)
+  "Return permission-rule buckets from all rule layers.
+
+INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and PERSISTENT-RULES are
+the dynamic rule layers.
+
+Buckets are listed innermost-first; pass 2 (allow/ask) walks them
+in order and returns the first non-nil decision.  Pass 1 (deny)
+is order-insensitive but reuses the same alist."
+  `((:invocation . ,invocation-rules)
+    (:request    . ,request-rules)
+    (:session    . ,session-rules)
+    (:persistent . ,persistent-rules)
+    (:defcustom  . ,niwa-permission-rules)))
+
+(defun niwa-permission--bucket-action
+    (bucket-rules tool-name path pattern domain name)
+  "Resolve BUCKET-RULES action for TOOL-NAME, PATH, PATTERN, DOMAIN, and NAME."
+  (niwa-permission-rules-action
+   bucket-rules tool-name
+   :path path :pattern pattern :domain domain :name name))
+
+(defun niwa-permission-rules-first-deny-bucket
+    (buckets tool-name path pattern domain name)
+  "Return first BUCKETS key denying TOOL-NAME for PATH, PATTERN, DOMAIN, or NAME."
+  (cl-loop for (key . rules) in buckets
+           when (eq (niwa-permission--bucket-action
+                     rules tool-name path pattern domain name)
+                    'deny)
+           return key))
+
+(defun niwa-permission--any-deny
+    (buckets tool-name path pattern domain name)
+  "Return non-nil if BUCKETS deny TOOL-NAME for PATH, PATTERN, DOMAIN, or NAME.
+BUCKETS is the alist from `niwa-permission-rules-collect-buckets'."
+  (not (null (niwa-permission-rules-first-deny-bucket
+              buckets tool-name path pattern domain name))))
+
+(defun niwa-permission-rules-first-action-with-bucket
+    (buckets tool-name path pattern domain name)
+  "Walk BUCKETS for TOOL-NAME and return (ACTION . BUCKET).
+
+PATH, PATTERN, DOMAIN, and NAME are the specifier values."
+  (cl-loop for (key . rules) in buckets
+           for action = (niwa-permission--bucket-action
+                         rules tool-name path pattern domain name)
+           when action return (cons action key)))
+
+(defun niwa-permission--first-non-nil-action
+    (buckets tool-name path pattern domain name)
+  "Walk BUCKETS for TOOL-NAME and return first non-nil bucket action.
+
+PATH, PATTERN, DOMAIN, and NAME are the specifier values."
+  (car (niwa-permission-rules-first-action-with-bucket
+        buckets tool-name path pattern domain name)))
+
+(defun niwa-permission-rules-bucket-decision
+    (buckets tool-name path pattern domain name)
+  "Resolve BUCKETS with absolute deny precedence, then inner-first authority."
+  (if (niwa-permission--any-deny
+       buckets tool-name path pattern domain name)
+      'deny
+    (niwa-permission--first-non-nil-action
+     buckets tool-name path pattern domain name)))
+
+(defun niwa-permission-rules-qualified-buckets (buckets qualifier value)
+  "Return direct authority in BUCKETS qualified by QUALIFIER and VALUE.
+Delegated buckets retain qualified denies but cannot grant qualified
+authority.  QUALIFIER is removed from the returned rules."
+  (mapcar
+   (lambda (entry)
+     (let ((bucket (car entry)))
+       (cons
+        bucket
+        (cl-loop
+         for rule in (cdr entry)
+         when (and (eq (plist-get (cdr rule) qualifier) value)
+                   (or (memq bucket '(:session :persistent :defcustom))
+                       (eq 'deny (plist-get (cdr rule) :action))))
+         collect
+         (cons
+          (car rule)
+          (cl-loop for (key item) on (cdr rule) by #'cddr
+                   unless (eq key qualifier)
+                   append (list key item)))))))
+   buckets))
+
+(defun niwa-permission-rules-execution-level-decision
+    (buckets tool-name level pattern)
+  "Resolve direct user authority for TOOL-NAME, LEVEL, and PATTERN.
+Qualified denies in any bucket remain final.  Only session, persistent, and
+defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
+  (niwa-permission-rules-bucket-decision
+   (niwa-permission-rules-qualified-buckets
+    buckets :sandbox-permissions level)
+   tool-name nil pattern nil nil))
+
+(defun niwa-permission-rules-network-decision
+    (buckets tool-name pattern)
+  "Resolve direct reusable network authority for TOOL-NAME and PATTERN."
+  (niwa-permission-rules-bucket-decision
+   (niwa-permission-rules-qualified-buckets buckets :network t)
+   tool-name nil pattern nil nil))
+
+
+;;
+;;; Session rule storage
+
+(defun niwa-permission-rules-resource-grant (path access &optional recursive origin)
+  "Return normalized PATH ACCESS resource grant.
+RECURSIVE non-nil marks the grant as covering PATH and all descendants.
+ORIGIN preserves a private workspace-relative bound on runtime authority."
+  (unless (and (stringp path) (not (string-empty-p path)))
+    (error "Invalid resource path: %S" path))
+  (unless (memq access '(read write))
+    (error "Invalid resource access: %s" access))
+  (unless (memq recursive '(t nil))
+    (error "Invalid resource recursive flag: %S" recursive))
+  (append (list :path (niwa-expand-file-name path) :access access)
+          (and recursive '(:recursive t))
+          (and origin (list :workspace-origin origin))))
+
+(defun niwa-permission-rules-merge-resource-grant
+    (grants path access &optional recursive origin)
+  "Return GRANTS with PATH promoted to ACCESS within its RECURSIVE scope.
+Grant identity is the normalized path plus the recursive flag; access
+promotion and deduplication never cross between an exact and a
+recursive grant on the same path.  ORIGIN is part of the grant identity."
+  (let* ((grant (niwa-permission-rules-resource-grant path access recursive origin))
+         (expanded (plist-get grant :path))
+         (same-identity-p
+          (lambda (item)
+            (and (stringp (plist-get item :path))
+                  (equal origin (plist-get item :workspace-origin))
+                 (string= expanded (niwa-expand-file-name (plist-get item :path)))
+                 (eq (and (plist-get item :recursive) t) (and recursive t))))))
+    (if (cl-find-if (lambda (item)
+                      (and (funcall same-identity-p item)
+                           (or (eq (plist-get item :access) 'write)
+                               (eq (plist-get item :access) access))))
+                    grants)
+        grants
+      (append
+       (if (eq access 'write)
+           (cl-remove-if same-identity-p grants)
+         grants)
+       (list grant)))))
+
+(cl-defun niwa-permission-rules-build-rule
+    (tool-name action spec-key spec-value
+               &key network file-system sandbox-permissions)
+  "Build a permission rule list from the given components.
+
+TOOL-NAME is the tool name string or \"*\".  ACTION is `allow', `deny',
+or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:expression', `:domain',
+`:name', or nil for an unqualified rule.  SPEC-VALUE is the literal
+expression or glob associated with
+SPEC-KEY (ignored when SPEC-KEY is nil).  NETWORK and FILE-SYSTEM record a
+matching additive execution profile.  SANDBOX-PERMISSIONS optionally qualifies
+the already requested child-execution level."
+  (append
+   (list tool-name)
+   (and spec-key spec-value (list spec-key spec-value))
+   (and network (list :network t))
+   (and file-system (list :file-system file-system))
+   (and sandbox-permissions
+        (list :sandbox-permissions sandbox-permissions))
+   (list :action action)))
+
+(provide 'niwa-permission-rules)
+;;; niwa-permission-rules.el ends here

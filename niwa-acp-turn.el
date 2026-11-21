@@ -1,0 +1,626 @@
+;;; niwa-acp-turn.el --- ACP turns owned by admitted requests -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Bridges an admitted request to an external conversation and the ordinary
+;; tool, transcript and terminal transactions.  Each turn owns its processes
+;; and private tool endpoint; a retained conversation ID grants no authority.
+
+;;; Code:
+
+(require 'niwa-telemetry)
+(require 'niwa-utilities)
+
+(require 'gptel)
+(require 'niwa-acp)
+(require 'niwa-acp-compaction)
+(require 'niwa-engine)
+(require 'niwa-gptel-stream-bridge)
+(require 'niwa-mcp)
+(require 'niwa-mcp-tools)
+(require 'niwa-presets)
+(require 'niwa-view-stream)
+
+;; `niwa-goal'
+(declare-function niwa-goal-capture-request "niwa-goal" (request))
+
+;; `niwa-telemetry'
+(declare-function niwa-telemetry-record
+                  "niwa-telemetry" (session event &rest props))
+
+(defconst niwa-acp-turn--lost-reply-limit 8
+  "Lost MCP replies one turn records for diagnosis.")
+
+(defconst niwa-acp-turn--announce-wait 2.0
+  "Seconds an MCP call waits for its ACP `tool_call' announcement.
+The call reaches Emacs through the MCP bridge, the text before it through
+the adapter's stdout; the announcement follows that text there.")
+
+(defun niwa-acp-turn--close-reasoning (request)
+  "Close REQUEST's displayed reasoning block, if one is open."
+  (let ((info (niwa-engine-info request))
+        (inhibit-read-only t))
+    (when (plist-get info :niwa-acp-reasoning)
+      (plist-put info :niwa-acp-reasoning nil)
+      (gptel-curl--stream-insert-response '(reasoning . t) info))))
+
+(defun niwa-acp-turn--event (request notification)
+  "Publish owned ACP NOTIFICATION for REQUEST once.
+Tool notifications are observations; only the MCP endpoint executes tools."
+  (let* ((inhibit-read-only t)
+         (info (niwa-engine-info request))
+         (update (alist-get 'update (alist-get 'params notification)))
+         (kind (alist-get 'sessionUpdate update))
+         (content (alist-get 'content update)))
+    (when (member kind '("agent_message_chunk" "agent_thought_chunk"))
+      (when-let* ((id (alist-get 'messageId update))
+                  ((stringp id))
+                  ((string-match-p "\\S-" id)))
+        (setf (niwa-engine-info request)
+              (setq info (plist-put info :niwa-native-message-id id)))))
+    (when (member kind '("compaction_update" "compaction_summary_chunk"))
+      (when (equal kind "compaction_update")
+        (niwa-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
+        (niwa-acp-turn--close-reasoning request))
+      ;; The adapter owns an ephemeral fork's compaction.  Its local side
+      ;; transcript is inspection-only and must never rotate durable segments.
+      (unless (and (niwa-request-p request) (niwa-request-ephemeral-p request))
+        (niwa-acp-compaction-observe request update)))
+    (when (and (member kind '("agent_message_chunk" "agent_thought_chunk"))
+               (equal "text" (alist-get 'type content)))
+      (let ((text (alist-get 'text content)))
+        (when (stringp text)
+          (if (equal kind "agent_thought_chunk")
+              (progn
+                (setf (niwa-engine-info request)
+                      (plist-put info :niwa-acp-reasoning t))
+                (gptel-curl--stream-insert-response (cons 'reasoning text) info))
+            (niwa-acp-turn--close-reasoning request)
+            (gptel-curl--stream-insert-response text info)))))))
+
+(defun niwa-acp-turn--run-tool-hooks (hook request call)
+  "Run the current buffer's tool-call HOOK for REQUEST's CALL, as gptel does.
+Views, collaboration rooms and agent activity observe native calls through
+the same hooks.  Tool repair runs inside the MCP pipeline.  Return merged
+hook decisions, passing changed arguments and results to subsequent hooks.
+A stop decision cannot be hidden by another hook's block decision."
+  (let ((info (niwa-engine-info request))
+        verdict)
+    (setq call (append call (list :buffer (buffer-name)
+                                  :backend (plist-get info :backend)
+                                  :model (plist-get info :model))))
+    (run-hook-wrapped
+     hook
+     (lambda (function)
+       (unless (memq function '(niwa-tool-repair-pre-tool-call
+                                niwa-tool-repair-post-tool-call))
+         (let ((result
+                (condition-case-unless-debug err
+                    (funcall function (copy-sequence call))
+                  (error
+                   (niwa-diagnostic-message
+                    (niwa-diagnostic-scope (plist-get info :buffer))
+                    "Tool hook error: %S" err)
+                   nil))))
+           (when (and (eq hook 'gptel-pre-tool-call-functions)
+                      (or (plist-member result :confirm)
+                          (and (plist-member result :name)
+                               (not (equal (plist-get result :name) (plist-get call :name))))))
+             (setq result
+                   (list :stop t
+                         :stop-reason "ACP cannot apply hook :confirm or tool-name changes; use niwa permission rules or a gptel provider")))
+           (when-let* ((block (plist-get result :block)))
+             (setq result (plist-put result :result
+                                     (if (stringp block) block
+                                       (format "Tool %s blocked" (plist-get call :name))))))
+           (dolist (key '(:args :result :block :stop :stop-reason))
+             (when (and (plist-member result key)
+                        (or (not (memq key '(:block :stop :result))) (plist-get result key)))
+               (setq verdict (plist-put verdict key (plist-get result key)))
+               (when (memq key '(:args :result))
+                 (setq call (plist-put call key (plist-get result key))))))))
+       nil))
+    verdict))
+
+(defun niwa-acp-turn--tool-result (request tool args id outcome)
+  "Publish TOOL's ARGS and OUTCOME with native ID in REQUEST's transcript."
+  (niwa-gptel-stream-bridge--flush-gptel-stream-insert-batch
+   (niwa-engine-info request))
+  (niwa-acp-turn--close-reasoning request)
+  (let* ((info (niwa-engine-info request))
+         ;; The gptel renderer looks up IDs by name.  Give it exactly this
+         ;; completed call, so identical parallel calls retain their own IDs.
+         (render-info (copy-sequence info))
+         (result (gptel--to-string (plist-get outcome :result)))
+         (gptel-include-tool-results t))
+    (setq render-info
+          (plist-put render-info :tool-use
+                     (list (list :name (niwa-tool-name tool) :id id
+                                 :args args :result result))))
+    (gptel--display-tool-results
+     (list (list (niwa-tool-gptel-tool tool) args result))
+     render-info)
+    (dolist (key '(:tracking-marker :tool-marker))
+      (setq info (plist-put info key (plist-get render-info key))))
+    (setf (niwa-engine-info request) info)))
+
+(defun niwa-acp-turn--reply-lost (request diagnostic)
+  "Record that REQUEST's MCP reply named by DIAGNOSTIC lost its client.
+DIAGNOSTIC is (:kind KIND :id ID) for a tool result or hook reply.  The
+turn keeps its local results and continues: its agent reports the outcome.
+The turn info keeps a bounded list, and telemetry correlates the reply with
+the admitted request and, for a child, its agent path."
+  (let* ((info (niwa-engine-info request))
+         (lost (plist-get info :niwa-mcp-lost))
+         (buffer (plist-get info :buffer))
+         (root-p (niwa-request-p request))
+         (admission (if root-p request (plist-get info :niwa-request)))
+         (session (and (buffer-live-p buffer)
+                       (buffer-local-value 'niwa--session buffer))))
+    (when (< (length lost) niwa-acp-turn--lost-reply-limit)
+      (setf (niwa-engine-info request)
+            (plist-put info :niwa-mcp-lost (append lost (list diagnostic)))))
+    (when session
+      (niwa-telemetry-record
+       session 'mcp-reply-lost :kind (plist-get diagnostic :kind)
+       :request-id (and admission (niwa-request-id admission))
+       :agent-path (unless root-p (niwa-agent-invocation-path request))))))
+
+(defun niwa-acp-turn-start (request launch content tools &optional ready terminal settle prepare)
+  "Run admitted REQUEST through ACP with CONTENT and registered TOOLS.
+CONTENT is an ACP vector or a function returning one in the owning buffer
+after READY completes, immediately before dispatch.
+LAUNCH receives the generated MCP server vector and native hook command,
+and returns an ACP launch
+plist.  Its :tool-id-field selects the adapter's native call identity from
+MCP metadata.  Its optional :check-context callback validates REQUEST before
+tool execution and successful settlement; failures end the turn as errors.
+Its optional :complete-prompt callback receives REQUEST and each normalized
+prompt outcome, returning that outcome with cumulative usage and optionally
+:next-prompt content.  A successful continuation keeps this admission open;
+only the final prompt settles the turn.  Cancellation and boundary stops win.
+READY receives the retained conversation ID before the prompt
+is sent; it may persist that identity or signal to prevent dispatch.
+TERMINAL receives the normalized outcome before the terminal transaction saves
+the session, allowing the conversation owner to record its last known state.
+REQUEST may also be a retained-agent invocation; SETTLE then receives its
+terminal status and owns the child terminal transaction.  Root requests use
+ordinary request settlement.  No gptel state machine is created.
+When the launch's :announces-tool-calls is non-nil, the adapter announces
+each MCP call with an ACP `tool_call' whose toolCallId is the call's native
+identity; a call then runs only after its announcement, or after
+`niwa-acp-turn--announce-wait', so text streamed before it stays before it.
+PREPARE, when non-nil, receives a zero-argument continuation.  Startup waits
+for it; duplicate or late continuations cannot start a cancelled turn."
+  (let* ((info (niwa-engine-info request))
+         (buffer (plist-get info :buffer))
+         (scope (niwa-diagnostic-scope buffer))
+         (calls (make-hash-table :test #'equal))
+         (root-p (niwa-request-p request))
+         (admission (if root-p request (plist-get info :niwa-request)))
+         (dispatch-key (list 'acp-prompt (if root-p (niwa-request-id request)
+                                           (gensym "child"))))
+         ;; Resolved once: every event and tool asks whether its target is busy.
+         (dispatch-target (and (buffer-live-p buffer)
+                               (niwa-transport-target
+                                (buffer-local-value 'default-directory buffer))))
+         (event-key (list 'acp-events dispatch-key))
+         ;; Native identities of calls the adapter announced on stdout.
+         (announced (make-hash-table :test #'equal))
+         pending draining server connection configuration finished cancellation-held started terminal-pending
+         last-end last-send send-context)
+    (unless (and (buffer-live-p buffer)
+                 (if root-p
+                     (and (eq request (buffer-local-value 'niwa--current-request buffer))
+                          (not (niwa-request-cancelled-p request)))
+                   (and settle
+                        (eq admission (buffer-local-value 'niwa--current-request buffer))
+                        (not (niwa-request-cancelled-p admission))
+                        (eq request (buffer-local-value 'niwa--agent-invocation buffer))
+                        (not (niwa-agent-invocation-runtime-settled-p request)))))
+      (error "External turn requires the current admitted request"))
+    (with-current-buffer buffer
+      (setf (niwa-engine-info request)
+            (append info
+                    (list :position (copy-marker (point-max))
+                          :include-reasoning t
+                          :callback #'gptel-curl--stream-insert-response
+                          :tools (mapcar #'niwa-tool-gptel-tool tools))))
+      (when root-p (niwa-goal-capture-request request)))
+    (cl-labels
+        ((owned ()
+           (and (buffer-live-p buffer)
+                (eq admission (buffer-local-value 'niwa--current-request buffer))
+                (eq request (buffer-local-value
+                             (if root-p 'niwa--current-request 'niwa--agent-invocation)
+                             buffer))))
+         (cancelled ()
+           (if root-p (niwa-request-cancelled-p request)
+             (or (and admission (niwa-request-cancelled-p admission))
+                 (plist-get (niwa-engine-info request) :niwa-cancelled))))
+         (enqueue (operation &optional terminal reject)
+           (if (or finished (and (not terminal) (cancelled)))
+               (when reject (funcall reject))
+             (setq pending (nconc pending (list (list terminal operation reject))))
+             (unless draining
+               (unless (niwa-transport-run-when-idle
+                        event-key dispatch-target #'drain
+                        (lambda () (finish '(:status interrupted))))
+                 (kill-owner)))))
+         (read-available ()
+           ;; Socket work is handled synchronously while ACP frames wait for
+           ;; the library's drain timer.  Read ACP output that is already
+           ;; available first, so its drain is armed before the caller's timer.
+           (when-let* ((process (and connection
+                                     (alist-get :process (niwa-acp-client connection))))
+                       ((process-live-p process)))
+             (if (not (niwa-transport-process-paused-p process))
+                 (accept-process-output process 0 nil 1)
+               ;; A paced agent holds the frames the CLI wrote before this
+               ;; call; continue it and give them a moment to arrive.  The
+               ;; continue event itself ends a wait, so wait for output.
+               (niwa-acp--wake connection)
+               (let ((deadline (+ (float-time) 0.05)))
+                 (while (and (< (float-time) deadline)
+                             (not (accept-process-output
+                                   process (- deadline (float-time)) nil 1))))))))
+         (enqueue-later (operation &optional terminal reject)
+           (read-available)
+           (niwa-transport-run-at-time
+            0 (lambda () (enqueue operation terminal reject))))
+         (drain ()
+           ;; Only `niwa-transport-run-when-idle' calls this, after its
+           ;; busy check; operations cannot leave the transport busy.
+           (unless draining
+             (setq draining t)
+             (unwind-protect
+                 (while (and pending (not finished) (owned))
+                   (condition-case err
+                       (let ((operation (pop pending)))
+                         (if (or (car operation) (not (cancelled)))
+                             (with-current-buffer buffer (funcall (cadr operation)))
+                           (when-let* ((reject (caddr operation)))
+                             (funcall reject))))
+                     (error (finish (list :status 'error :message (error-message-string err))))))
+               (setq draining nil))
+             ;; The loop leaves work behind only for a turn it no longer owns.
+             (when (and pending (not finished))
+               (finish '(:status interrupted)))))
+         (note (event &rest props)
+           ;; Timing evidence for the adapter's silent exits; metadata only.
+           (when-let* (((buffer-live-p buffer))
+                       (session (buffer-local-value 'niwa--session buffer)))
+             (let ((now (float-time)))
+               (apply #'niwa-telemetry-record session event
+                      :request-id (and admission (niwa-request-id admission))
+                      :since-end-turn-ms (and last-end (round (* 1000 (- now last-end))))
+                      :since-send-ms (and last-send (round (* 1000 (- now last-send))))
+                      props))))
+         (prompt (input &optional outcome)
+           (setq send-context (list :continuation (and outcome t)
+                                    :queued-handover (and (plist-get outcome :queued-handover) t)))
+           (setf (niwa-engine-info request)
+                 (plist-put (niwa-engine-info request) :niwa-acp-prompted t))
+           (niwa-acp-prompt
+            connection input
+            (lambda (event)
+              (let ((update (alist-get 'update (alist-get 'params event))))
+                (when (equal "tool_call" (alist-get 'sessionUpdate update))
+                  (when-let* ((id (alist-get 'toolCallId update)))
+                    (puthash id t announced))))
+              ;; Events describe native history that already happened, so
+              ;; they survive cancellation; only new work is rejected.
+              (enqueue
+               (lambda ()
+                 (when-let* ((observe (plist-get configuration :observe)))
+                   (funcall observe request event))
+                 (niwa-acp-turn--event request event))
+               t))
+            (lambda (outcome)
+              ;; Only a genuine end_turn: failures and the adapter's exit also complete.
+              (when (equal "end_turn" (plist-get outcome :stop-reason))
+                (setq last-end (float-time)))
+              (setq terminal-pending t)
+              (enqueue
+               (lambda ()
+                 (setq terminal-pending nil)
+                 (when (cancelled)
+                   (setq outcome (plist-put outcome :status 'interrupted)))
+                 (when-let* ((complete (plist-get configuration :complete-prompt)))
+                   (setq outcome (funcall complete request outcome)))
+                 (if (and (eq 'success (plist-get outcome :status))
+                          (plist-get outcome :next-prompt)
+                          (not (cancelled))
+                          (not (plist-get (niwa-engine-info request) :niwa-end-turn)))
+                     (prompt (plist-get outcome :next-prompt) outcome)
+                   (finish outcome))) t))))
+         (finish (outcome)
+           (when (and (not finished) (eq 'success (plist-get outcome :status)))
+             (when-let* ((check (plist-get configuration :check-context)))
+               (condition-case err
+                   (funcall check request)
+                 (error (setq outcome (list :status 'error :message (error-message-string err)))))))
+           (unless finished
+             (setq finished t)
+             (setq pending nil)
+             (niwa-transport-cancel-pending event-key)
+             (when cancellation-held
+               (setq cancellation-held nil)
+               (niwa--turn-release admission))
+             (niwa-transport-cancel-pending dispatch-key)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (remove-hook 'kill-buffer-hook #'kill-owner t)))
+             (when connection (niwa-acp-close connection))
+             (when server (niwa-mcp-stop server))
+             (when (owned)
+               (with-current-buffer buffer
+                 (niwa-gptel-stream-bridge--flush-gptel-stream-insert-batch
+                  (niwa-engine-info request))
+                 (niwa-acp-turn--close-reasoning request)
+                 (let* ((info (niwa-engine-info request))
+                        (status (if (or (cancelled)
+                                        (eq 'interrupted (plist-get outcome :status)))
+                                    'aborted (plist-get outcome :status))))
+                   (setq info (plist-put info :niwa-acp-outcome status))
+                   (when-let* ((message (plist-get outcome :message)))
+                     (setq info (plist-put info :error
+                                           (if (plist-get outcome :code)
+                                               (list :message message :code (plist-get outcome :code))
+                                             message))))
+                   (setf (niwa-engine-info request) info)
+                   (when terminal
+                     (condition-case err
+                         (funcall terminal (plist-put (copy-sequence outcome) :status status))
+                       (error
+                        (setq status 'error)
+                        (setf (niwa-engine-info request)
+                              (plist-put (niwa-engine-info request)
+                                         :error (error-message-string err))))))
+                   (condition-case err
+                       (run-hook-with-args 'gptel-post-response-functions
+                                           (marker-position (plist-get info :position))
+                                           (marker-position
+                                            (or (plist-get info :tracking-marker)
+                                                (plist-get info :position))))
+                     (error
+                      (niwa-diagnostic-warning
+                       scope 'niwa (format "Post-response hook failed: %s"
+                                        (error-message-string err)) :warning)))
+                   (setf (niwa-engine-info request)
+                         (plist-put (niwa-engine-info request) :niwa-response-end
+                                    (copy-marker (point-max) nil)))
+                   (if settle
+                       (funcall settle status)
+                     (niwa-preset--final-patch-handler
+                      request
+                      (lambda (owner)
+                        (niwa-preset--settle-terminal
+                         owner (niwa-request-cancelled-p owner) status)))))))))
+         (cancel ()
+           (unless finished
+             (if (and connection
+                      (or (niwa-acp-active connection) terminal-pending))
+                 (progn
+                   ;; Public abort may otherwise clear the request while its
+                   ;; native cancellation reply is still in flight.
+                   (unless cancellation-held
+                     (setq cancellation-held t)
+                     (niwa--turn-hold admission))
+                   (niwa-acp-cancel connection))
+               (finish '(:status interrupted)))))
+         (kill-owner ()
+           (if root-p
+               (niwa-request-cancel request)
+             (setf (niwa-engine-info request)
+                   (plist-put (niwa-engine-info request) :niwa-cancelled t))
+             (when admission (niwa-request-cancel admission)))
+           (finish '(:status interrupted)))
+         (dispatch (name args metadata complete)
+           (let ((id (plist-get metadata (plist-get configuration :tool-id-field)))
+                 (deadline (+ (float-time) niwa-acp-turn--announce-wait))
+                 cancel-call cancelled-call)
+             (cl-labels
+                 ((queue ()
+                    (enqueue-later
+                     (lambda ()
+                       (unless cancelled-call
+                         (condition-case err
+                             (setq cancel-call (dispatch-now name args metadata complete))
+                           (error
+                            (funcall complete
+                                     (list :isError t :content
+                                           (vector (list :type "text" :text (error-message-string err)))))))))
+                     nil
+                     (lambda ()
+                       (funcall complete
+                                (list :isError t :content
+                                      (vector (list :type "text" :text "The owning turn was cancelled")))))))
+                  (attempt ()
+                    ;; The announcement is queued behind the text the adapter
+                    ;; streamed before the call, so queuing after it keeps
+                    ;; that text ahead of the tool row.
+                    (if (or finished cancelled-call
+                            (not (plist-get configuration :announces-tool-calls))
+                            (not (stringp id))
+                            (gethash id announced)
+                            (>= (float-time) deadline))
+                        (queue)
+                      (read-available)
+                      (niwa-transport-run-at-time 0.01 #'attempt))))
+               (attempt))
+             (lambda ()
+               (setq cancelled-call t)
+               (when (functionp cancel-call) (funcall cancel-call)))))
+         (dispatch-now (name args metadata complete)
+           (unless (and (owned) (not finished)
+                        (not (cancelled))
+                        (not (plist-get (niwa-engine-info request) :niwa-end-turn)))
+             (error "The owning turn no longer accepts tools"))
+           (when-let* ((check (plist-get configuration :check-context)))
+             (condition-case err
+                 (funcall check request)
+               (error
+                (finish (list :status 'error :message (error-message-string err)))
+                (signal (car err) (cdr err)))))
+           (let ((tool (cl-find name tools :test #'equal :key #'niwa-tool-name))
+                 (id (plist-get metadata (plist-get configuration :tool-id-field))))
+             (unless (and tool (stringp id) (not (equal id "")))
+               (error "Tool call lacks its admitted tool or native identity"))
+             (when (gethash id calls) (error "Tool call identity was already admitted"))
+             (puthash id t calls)
+             ;; shortcut: one flag per turn owner from its latest call, since a
+             ;; client requests progress for all its calls or none; make it
+             ;; per-call if a client ever mixes them.
+             (setf (niwa-engine-info request)
+                   (plist-put (niwa-engine-info request) :niwa-mcp-idle-bounded
+                              (not (plist-get metadata :progressToken))))
+             (with-current-buffer buffer
+               (let ((verdict (niwa-acp-turn--run-tool-hooks
+                               'gptel-pre-tool-call-functions request
+                               (list :id id :name name :args args))))
+                 (when (plist-get verdict :stop)
+                   (finish (list :status 'error
+                                 :message (or (plist-get verdict :stop-reason)
+                                              (format "Tool %s stopped the turn" name))))
+                   (error "The owning turn no longer accepts tools"))
+                 (when (plist-member verdict :args)
+                   (setq args (plist-get verdict :args)))
+                 (cl-labels
+                     ((deliver (result outcome)
+                        (condition-case err
+                            (when (and (owned) (not finished))
+                              (with-current-buffer buffer
+                                (let* ((post (niwa-acp-turn--run-tool-hooks
+                                              'gptel-post-tool-call-functions request
+                                              (list :id id :name name :args args
+                                                    :result (gptel--to-string (plist-get outcome :result)))))
+                                       (block (plist-get post :block)))
+                                  (when (or block (plist-member post :result))
+                                    ;; A replacement must not retain hidden media
+                                    ;; from the result the hook withheld.
+                                    (setq outcome (copy-sequence outcome))
+                                    (setq outcome (plist-put outcome :media nil))
+                                    (setq outcome (plist-put outcome :result (plist-get post :result)))
+                                    (when block (setq outcome (plist-put outcome :status 'error)))
+                                    (setq result nil))
+                                  (niwa-acp-turn--tool-result request tool args id outcome)
+                                  (funcall complete (or result (niwa-mcp-tools--result outcome)))
+                                  (when (plist-get post :stop)
+                                    (finish (list :status 'error
+                                                  :message (or (plist-get post :stop-reason)
+                                                               (format "Tool %s stopped the turn" name))))))))
+                          (error (finish (list :status 'error :message (error-message-string err)))))))
+                   (if (or (plist-get verdict :block) (plist-member verdict :result))
+                       (let ((block (plist-get verdict :block)))
+                         (deliver nil
+                                  (list :status (if block 'error 'success) :tool-use-id id
+                                        :result (plist-get verdict :result)))
+                         #'ignore)
+                     (niwa-mcp-tools-call request buffer tool args id #'deliver))))))))
+      (when admission (niwa-request-push-canceller admission #'cancel))
+      (unless root-p
+        (setf (niwa-agent-invocation-runtime-cancel request)
+              (lambda ()
+                (setf (niwa-engine-info request)
+                      (plist-put (niwa-engine-info request) :niwa-cancelled t))
+                (when admission (niwa-request-cancel admission))
+                (cancel)
+                (unless finished 'deferred))))
+      (with-current-buffer buffer (add-hook 'kill-buffer-hook #'kill-owner nil t))
+      (cl-labels ((start ()
+                    (when (and (not started) (not finished) (owned) (not (cancelled)))
+                      (setq started t)
+                      (with-current-buffer buffer
+                        (condition-case err
+                            (progn
+                              (setq server
+                                    (niwa-mcp-start
+                                     (lambda () (niwa-mcp-tools-schemas
+                                                 (mapcar #'niwa-tool-gptel-tool tools)))
+                                     #'dispatch
+                                     (lambda (event complete)
+                                       (let (abandoned)
+                                         (enqueue-later
+                                          (lambda ()
+                                            ;; A hook client that gave up never
+                                            ;; delivers what this control prepares.
+                                            (unless abandoned
+                                              (condition-case err
+                                                  (funcall complete
+                                                           (funcall (or (plist-get configuration :control)
+                                                                        (error "Agent has no native hook handler"))
+                                                                    request event))
+                                                (error
+                                                 (funcall complete nil (error-message-string err))
+                                                 (finish (list :status 'error :message (error-message-string err)))))))
+                                          nil
+                                          (lambda ()
+                                            ;; A native hook may block the peer
+                                            ;; that must acknowledge cancellation.
+                                            ;; Reject its authority without running
+                                            ;; the queued control transaction.
+                                            (funcall complete nil "The owning turn was cancelled")))
+                                         (lambda () (setq abandoned t))))
+                                    nil
+                                    (lambda (diagnostic)
+                                      (niwa-acp-turn--reply-lost request diagnostic))))
+                              (setq configuration
+                                    (funcall launch (vector (niwa-mcp-configuration server))
+                                             (niwa-mcp-hook-command server)))
+                              (unless (plist-get (niwa-engine-info request) :niwa-native-isolated)
+                                (setq configuration (plist-put configuration :compaction t)))
+                              (setq configuration
+                                    (plist-put configuration :send-observer
+                                               (lambda (resend)
+                                                 ;; Every physical session/prompt, including the
+                                                 ;; automatic OAuth-contention resend.
+                                                 (apply #'note 'acp-prompt-send :resend (and resend t)
+                                                        send-context)
+                                                 (setq last-send (float-time)))))
+                              (setq configuration
+                                    (plist-put configuration :exit-observer
+                                               (lambda (process)
+                                                 (note 'acp-process-exit
+                                                       :adapter-exit-code (and (eq 'exit (process-status process))
+                                                                               (process-exit-status process))
+                                                       :adapter-signal (and (eq 'signal (process-status process))
+                                                                            (process-exit-status process))))))
+                              (unless (or finished (not (owned)))
+                                (setq connection
+                                      (niwa-acp-open
+                                       configuration
+                                       (lambda (active)
+                                         (condition-case err
+                                             (unless
+                                                 (niwa-transport-run-when-idle
+                                                  dispatch-key dispatch-target
+                                                  (lambda ()
+                                                    (condition-case err
+                                                        (if (or finished (not (owned)))
+                                                            (niwa-acp-close active)
+                                                          (with-current-buffer buffer
+                                                            (when ready
+                                                              (funcall ready (niwa-acp-session-id active))))
+                                                          (when (and (not finished) (owned)
+                                                                     (not (cancelled)))
+                                                            (prompt (if (functionp content)
+                                                                        (with-current-buffer buffer (funcall content))
+                                                                      content))))
+                                                      (error (finish (list :status 'error :message (error-message-string err))))))
+                                                  (lambda () (finish '(:status interrupted))))
+                                               (finish '(:status interrupted)))
+                                           (error (finish (list :status 'error :message (error-message-string err))))))
+                                       (lambda (message code)
+                                         (finish (list :status 'error :code code :message message)))))))
+                          (error (finish (list :status 'error :message (error-message-string err))))
+                          (quit (finish '(:status interrupted)) (signal (car err) (cdr err))))))))
+        (condition-case err
+            (if prepare
+                (with-current-buffer buffer (funcall prepare #'start))
+              (start))
+          (error (finish (list :status 'error :message (error-message-string err))))
+          (quit (finish '(:status interrupted)) (signal (car err) (cdr err)))))
+      connection)))
+
+(provide 'niwa-acp-turn)
+;;; niwa-acp-turn.el ends here

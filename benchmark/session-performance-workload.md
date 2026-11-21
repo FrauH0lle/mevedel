@@ -1,17 +1,17 @@
 # Controlled Session Performance Workload
 
-Use this workload to compare the same mevedel interaction under three
+Use this workload to compare the same niwa interaction under three
 instrumentation modes.  Start each run from a fresh session at the same Git
 HEAD and dirty-content hash.  Approve the expected child-agent Bash request
 once rather than remembering it, so later runs exercise the same interaction.
 
 1. **Normal:** start no instrumentation, submit the prompt, and retain the
    session directory.
-2. **Profiler-only:** run `M-x mevedel-telemetry-profiler-start`, submit the
-   prompt, then run `M-x mevedel-telemetry-profiler-stop`.  Use this run for
+2. **Profiler-only:** run `M-x niwa-telemetry-profiler-start`, submit the
+   prompt, then run `M-x niwa-telemetry-profiler-stop`.  Use this run for
    representative performance comparisons.
-3. **Full debug:** run `M-x mevedel-session-debug`, submit the prompt, then run
-   `M-x mevedel-session-debug` again.  Use this run for detailed request and
+3. **Full debug:** run `M-x niwa-session-debug`, submit the prompt, then run
+   `M-x niwa-session-debug` again.  Use this run for detailed request and
    view diagnosis, not throughput comparisons; gptel debug logging is
    intentionally expensive.
 
@@ -21,7 +21,7 @@ user-authoritative allow rule already exists.
 ## Prompt
 
 ```text
-This is a controlled mevedel performance measurement. Follow the ordered
+This is a controlled niwa performance measurement. Follow the ordered
 workload exactly. Do not optimize away, combine, reorder, or add steps.
 
 Constraints:
@@ -79,10 +79,10 @@ Constraints:
    again until after all five ApplyPatch operations, both Bash test calls, and the
    XrefReferences call have completed.
 
-6. Create `.scratch/mevedel-performance-measurement.md` with ApplyPatch, replacing
+6. Create `.scratch/niwa-performance-measurement.md` with ApplyPatch, replacing
    any existing contents with exactly:
 
-   # Mevedel performance measurement
+   # Niwa performance measurement
 
    ## Baseline
 
@@ -159,14 +159,14 @@ Constraints:
 
 11. Run this as one Bash call:
 
-    npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-mevedel-structs.el
+    npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test ert test/test-niwa-structs.el
 
 12. Run this as a separate Bash call:
 
-    npx @emacs-eask/cli test ert test/test-mevedel-structs.el
+    npx @emacs-eask/cli test ert test/test-niwa-structs.el
 
-13. Call XrefReferences once with identifier `mevedel-current-origin` and file
-    path `mevedel-structs.el`.
+13. Call XrefReferences once with identifier `niwa-current-origin` and file
+    path `niwa-structs.el`.
 
 14. Call ListAgents once more. If either agent is running, wait for agent
     activity using normal retained-agent coordination. Continue until both
@@ -184,7 +184,7 @@ Constraints:
 ## Comparison checks
 
 - The Xref result must contain project references but no ignored
-  `.mevedel/sessions/` or `.scratch/` paths and must not create a five-second
+  `.niwa/sessions/` or `.scratch/` paths and must not create a five-second
   tool span.
 - In the profiler-only memory report, repeated unchanged session-sidecar reads
   should no longer be a leading allocation source after the first render.

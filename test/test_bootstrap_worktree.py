@@ -15,7 +15,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/bootstrap-worktree.py"
 
 class BootstrapTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="mevedel-bootstrap-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="niwa-bootstrap-test-")
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
         self.root = self.base / "primary checkout"
@@ -111,9 +111,9 @@ else:
         self.bootstrap(options=("--base", "integration~2"))
         self.bootstrap()
         self.assertEqual(self.git("-C", str(self.tree), "config", "--worktree", "--get",
-                                  "mevedel.affectedBase").strip(), override)
+                                  "niwa.affectedBase").strip(), override)
         self.assertEqual(self.git("config", "--default=missing", "--get",
-                                  "mevedel.affectedBase").strip(), "missing")
+                                  "niwa.affectedBase").strip(), "missing")
 
     def test_hook_runs_only_in_bootstrapped_worktree(self):
         self.git("config", "core.hooksPath", "primary-hooks")

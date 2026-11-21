@@ -1,0 +1,1378 @@
+;;; test-niwa-session-codec.el --- Session sidecar codec tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Tests for `niwa-session-codec'.
+
+;;; Code:
+
+(require 'niwa-session-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "niwa-session-test-support"))
+(require 'niwa-sandbox)
+(require 'niwa-session-checkpoint)
+
+(niwa-deftest niwa-session-codec-validate-authority-mode ()
+  ,test
+  (test)
+  :doc "only the portable profile may be persisted"
+  (should (eq 'portable
+              (niwa-session-codec-validate-authority-mode 'portable)))
+  (dolist (mode '(nil unknown))
+    (should-error (niwa-session-codec-validate-authority-mode mode)
+                  :type 'error))
+  :doc "obsolete PID authority directs the user to standalone migration"
+  (should (string-match-p
+           "scripts/migrate-sessions\\.el"
+           (error-message-string
+            (should-error
+             (niwa-session-codec-validate-authority-mode 'pid-lock)
+             :type 'error)))))
+
+(niwa-deftest niwa-session-codec-authority-mode-for-path ()
+  ,test
+  (test)
+  :doc "a fresh path requires explicit authority and does not create controls"
+  (let ((root (make-temp-file "niwa-codec-fresh-" t)))
+    (unwind-protect
+        (progn
+          (should-error (niwa-session-codec-authority-mode-for-path root)
+                        :type 'error)
+          (should (eq 'portable
+                      (niwa-session-codec-authority-mode-for-path
+                       root nil 'portable)))
+          (should-not (directory-files root nil directory-files-no-dot-files-regexp)))
+      (delete-directory root t)))
+  :doc "a lease proves portable authority but any legacy lock refuses access"
+  (let* ((root (make-temp-file "niwa-codec-legacy-" t))
+         (lock (file-name-concat root ".lock"))
+         (lease (file-name-concat root ".lease")))
+    (unwind-protect
+        (progn
+          (make-directory lease)
+          (should (eq 'portable
+                      (niwa-session-codec-authority-mode-for-path root)))
+          (dolist (mixed '(t nil))
+            (unless mixed (delete-directory lease))
+            (with-temp-file lock (insert "legacy bytes"))
+            (dolist (mode '(nil portable pid-lock))
+              (should
+               (string-match-p
+                "scripts/migrate-sessions\\.el"
+                (error-message-string
+                 (should-error
+                  (niwa-session-codec-authority-mode-for-path root nil mode)
+                  :type 'error)))))
+            (should (equal "legacy bytes"
+                           (with-temp-buffer
+                             (insert-file-contents lock)
+                             (buffer-string))))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-session-codec-deserialize/checkpoint-seed ()
+  (let ((root (make-temp-file "niwa-checkpoint-restore-" t)))
+    (unwind-protect
+        (let* ((workspace (test-niwa-session-persistence--make-workspace root))
+               (session (test-niwa-session-persistence--make-session root))
+               (_ (setf (niwa-session-turn-count session) 7))
+               (raw (niwa-session-artifacts--live-sidecar session (current-buffer)))
+               (restored (plist-get (niwa-session-codec-deserialize raw workspace) :session)))
+          (setf (niwa-session-turn-count restored) 99)
+          (should (= 7 (plist-get (niwa-session-checkpoint-project
+                                  restored (plist-put (copy-tree raw) :total-turn-count 99))
+                                 :total-turn-count))))
+      (delete-directory root t)
+      (niwa-workspace-clear-registry))))
+
+
+;;
+;;; Workspace round-trip
+
+(niwa-deftest niwa-session-codec--workspace-to-plist ()
+  ,test
+  (test)
+  :doc "captures durable identity and target-native root"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let* ((workspace (test-niwa-session-persistence--make-workspace root))
+               (plist (niwa-session-codec--workspace-to-plist workspace)))
+          (should (eq 'project    (plist-get plist :type)))
+          (should (equal (niwa-workspace-identity-read root)
+                         (plist-get plist :workspace-id)))
+          (should (equal (file-name-as-directory root)
+                         (plist-get plist :target-native-root)))
+          (should (equal (file-name-nondirectory
+                          (directory-file-name root))
+                         (plist-get plist :name))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "returns nil for a nil workspace"
+  (should (null (niwa-session-codec--workspace-to-plist nil))))
+
+
+(niwa-deftest niwa-session-codec--workspace-from-plist ()
+  ,test
+  (test)
+  :doc "accepts the currently opened matching workspace"
+  (let ((root (make-temp-file "niwa-workspace-match-" t)))
+    (unwind-protect
+        (let* ((workspace
+                (test-niwa-session-persistence--make-workspace root))
+               (plist
+                (niwa-session-codec--workspace-to-plist workspace)))
+          (should
+           (equal (cons workspace nil)
+                  (niwa-session-codec--workspace-from-plist
+                   plist workspace))))
+      (delete-directory root t)
+      (niwa-workspace-clear-registry)))
+  :doc "requires confirmation for a different project-owned identity"
+  (let ((saved-root (make-temp-file "niwa-workspace-saved-" t))
+        (opened-root (make-temp-file "niwa-workspace-opened-" t)))
+    (unwind-protect
+        (let* ((saved
+                (test-niwa-session-persistence--make-workspace saved-root))
+               (plist
+                (niwa-session-codec--workspace-to-plist saved))
+               (opened
+                (progn
+                  (niwa-workspace-clear-registry)
+                  (test-niwa-session-persistence--make-workspace
+                   opened-root))))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) nil)))
+            (should-error
+             (niwa-session-codec--workspace-from-plist plist opened)
+             :type 'user-error))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) t)))
+            (should
+             (equal (cons opened t)
+                    (niwa-session-codec--workspace-from-plist
+                     plist opened)))))
+      (delete-directory saved-root t)
+      (delete-directory opened-root t)
+      (niwa-workspace-clear-registry))))
+
+
+;;
+;;; Permission rule hygiene
+
+(niwa-deftest niwa-session-codec--filter-permission-rules ()
+  ,test
+  (test)
+  :doc "keeps allow / deny / ask rules"
+  (let ((rules '(("Read" :path "/x" :action allow)
+                 ("Bash" :pattern "rm" :action deny)
+                 ("Write" :path "/y" :action ask))))
+    (should (equal rules
+                   (niwa-session-codec--filter-permission-rules rules))))
+  :doc "drops rules with unknown actions"
+  (let* ((rules '(("Read"  :path "/x" :action allow)
+                  ("Write" :path "/y" :action future-action)
+                  ("Bash"  :pattern "ls" :action allow)))
+         (filtered (niwa-session-codec--filter-permission-rules rules)))
+    (should (= 2 (length filtered)))
+    (should (equal "Read" (caar filtered)))
+    (should (equal "Bash" (caadr filtered))))
+  :doc "drops malformed entries"
+  (let ((rules '(("Read" :path "/x" :action allow)
+                 nil
+                 "not a rule"
+                 ("Bash" :pattern "echo" :action allow))))
+    (should (= 2 (length
+                  (niwa-session-codec--filter-permission-rules rules))))))
+
+
+(niwa-deftest niwa-session-codec--filter-resource-grants ()
+  ,test
+  (test)
+  :doc "keeps exact read and write grants"
+  (let ((grants '((:path "/tmp/read" :access read)
+                  (:path "/tmp/write" :access write))))
+    (should (equal grants
+                   (niwa-session-codec--filter-resource-grants
+                    grants))))
+  :doc "drops malformed grants and unknown access levels"
+  (should
+   (equal '((:path "/tmp/read" :access read))
+          (niwa-session-codec--filter-resource-grants
+           '((:path "/tmp/read" :access read)
+             (:path "/tmp/future" :access execute)
+             (:access write)
+             "not a grant"))))
+  :doc "keeps recursive grants and drops non-boolean recursive flags"
+  (should
+   (equal '((:path "/tmp/tree" :access read :recursive t))
+          (niwa-session-codec--filter-resource-grants
+           '((:path "/tmp/tree" :access read :recursive t)
+             (:path "/tmp/bad" :access read :recursive yes))))))
+
+
+;;
+;;; Goal round-trip
+
+(niwa-deftest niwa-session-codec--goal-to-plist ()
+  ,test
+  (test)
+  :doc "captures the strict phase-free Goal schema"
+  (let* ((goal (niwa-goal--create
+                :id "g1" :objective "Ship" :status 'blocked
+                :reason "Need an API credential."
+                :token-budget 1000 :tokens-used 345 :tokens-incomplete-p nil
+                :time-used-seconds 12 :turns-run 4
+                :plan-reference "local/plans/accepted.md"
+                :created-at "created" :updated-at "updated"))
+         (plist (niwa-session-codec--goal-to-plist goal)))
+    (should (equal "g1" (plist-get plist :id)))
+    (should (eq 'blocked (plist-get plist :status)))
+    (should (plist-member plist :implementation-policy))
+    (should-not (plist-get plist :implementation-policy))
+    (should (= 1000 (plist-get plist :token-budget)))
+    (should (= 345 (plist-get plist :tokens-used)))
+    (should (= 12 (plist-get plist :time-used-seconds)))
+    (should (= 4 (plist-get plist :turns-run)))
+    (should (equal "local/plans/accepted.md" (plist-get plist :plan-reference)))
+    (should (equal "Need an API credential." (plist-get plist :reason)))))
+
+
+(niwa-deftest niwa-session-codec--goal-from-plist ()
+  ,test
+  (test)
+  :doc "round-trips the optional diagnostic marker without changing public reasons"
+  (let* ((goal (niwa-goal--create
+                :id "g" :objective "Ship" :status 'paused :reason "Private diagnostic"
+                :reason-diagnostic t :tokens-used 0 :time-used-seconds 0 :turns-run 0
+                :created-at "created" :updated-at "updated"))
+         (plist (niwa-session-codec--goal-to-plist goal)))
+    (should (eq t (plist-get plist :reason-diagnostic)))
+    (should (niwa-goal-reason-diagnostic
+             (niwa-session-codec--goal-from-plist plist)))
+    (dolist (invalid '(nil "true" public))
+      (should-error (niwa-session-codec--goal-from-plist
+                     (plist-put (copy-sequence plist) :reason-diagnostic invalid))))
+    (setf (niwa-goal-reason-diagnostic goal) nil)
+    (setq plist (niwa-session-codec--goal-to-plist goal))
+    (should-not (plist-member plist :reason-diagnostic))
+    (should-not (niwa-goal-reason-diagnostic
+                 (niwa-session-codec--goal-from-plist plist))))
+  :doc "rebuilds the current strict Goal schema"
+  (let ((goal (niwa-session-codec--goal-from-plist
+               '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy nil
+                 :token-budget 1000 :tokens-used 25 :tokens-incomplete-p nil
+                 :time-used-seconds 7 :turns-run 2
+                 :plan-reference "local/plans/accepted.md"
+                 :created-at "created" :updated-at "updated"))))
+    (should (niwa-goal-p goal))
+    (should-not (niwa-goal-implementation-policy goal))
+    (should (equal "Ship" (niwa-goal-objective goal)))
+    (should (= 1000 (niwa-goal-token-budget goal)))
+    (should (= 25 (niwa-goal-tokens-used goal)))
+    (should (= 7 (niwa-goal-time-used-seconds goal)))
+    (should (= 2 (niwa-goal-turns-run goal))))
+  :doc "round-trips a budget-limited Goal with its exact usage and reason"
+  (let ((goal (niwa-session-codec--goal-from-plist
+               '(:id "g2" :objective "Ship" :status budget-limited
+                 :reason "Token budget reached: 110/100 tokens used"
+                 :implementation-policy nil
+                 :token-budget 100 :tokens-used 110 :tokens-incomplete-p nil
+                 :time-used-seconds 9 :turns-run 3
+                 :plan-reference nil
+                 :created-at "created" :updated-at "updated"))))
+    (should (eq 'budget-limited (niwa-goal-status goal)))
+    (should (= 100 (niwa-goal-token-budget goal)))
+    (should (= 110 (niwa-goal-tokens-used goal)))
+    (should (equal "Token budget reached: 110/100 tokens used"
+                   (niwa-goal-reason goal))))
+  :doc "round-trips an optional completion note and rejects a blank one or an active reason"
+  (let ((complete '(:id "g3" :objective "Ship" :status complete
+                    :reason "Completed with PARTIAL verification"
+                    :implementation-policy nil
+                    :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
+                    :time-used-seconds 0 :turns-run 1 :plan-reference nil
+                    :created-at "created" :updated-at "updated")))
+    (should (equal "Completed with PARTIAL verification"
+                   (niwa-goal-reason
+                    (niwa-session-codec--goal-from-plist complete))))
+    (should-not (niwa-goal-reason
+                 (niwa-session-codec--goal-from-plist
+                  (plist-put (copy-sequence complete) :reason nil))))
+    (should-error (niwa-session-codec--goal-from-plist
+                   (plist-put (copy-sequence complete) :reason " ")))
+    (should-error (niwa-session-codec--goal-from-plist
+                   (plist-put (copy-sequence complete) :status 'active))))
+  :doc "retains incomplete usage across a sidecar round trip"
+  (let* ((goal (niwa-goal--create
+                :id "incomplete" :objective "Ship" :status 'budget-limited
+                :reason "Native usage unavailable" :token-budget 100
+                :tokens-used 12 :tokens-incomplete-p t
+                :time-used-seconds 2 :turns-run 1
+                :created-at "created" :updated-at "updated"))
+         (restored (niwa-session-codec--goal-from-plist
+                    (niwa-session-codec--goal-to-plist goal))))
+    (should (niwa-goal-tokens-incomplete-p restored))
+    (should (= 12 (niwa-goal-tokens-used restored))))
+  :doc "round-trips policy through a real file without resolving an unavailable provider"
+  (let* ((policy '(:model-provider "Unavailable:implementer"
+                   :reasoning-effort nil :permission-mode edits))
+         (goal (niwa-goal--create
+                :id "policy" :objective "Ship" :status 'blocked :reason "Need input"
+                :implementation-policy policy :token-budget 50
+                :tokens-used 12 :time-used-seconds 2 :turns-run 1
+                :created-at "created" :updated-at "updated"))
+         (path (make-temp-file "niwa-goal-policy-sidecar-")))
+    (unwind-protect
+        (progn
+          (niwa-session-codec-write
+           path (niwa-session-codec--goal-to-plist goal))
+          (let ((restored (niwa-session-codec--goal-from-plist
+                           (niwa-session-codec-read path))))
+            (should (equal policy (niwa-goal-implementation-policy restored)))
+            (should (= 50 (niwa-goal-token-budget restored)))
+            (should (eq 'blocked (niwa-goal-status restored)))))
+      (delete-file path)))
+  :doc "rejects malformed policy rather than discarding only its authority fields"
+  (let ((valid '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy nil :token-budget nil
+                 :tokens-used 0 :tokens-incomplete-p nil
+                 :time-used-seconds 0 :turns-run 0 :plan-reference nil
+                 :created-at "created" :updated-at "updated")))
+    (dolist (policy '(42
+                      (:model-provider "Unavailable:implementer")
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode unknown)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort "high" :permission-mode ask)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode ask :extra t)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode ask
+                       :permission-mode full-auto)))
+      (let ((plist (copy-tree valid)))
+        (plist-put plist :implementation-policy policy)
+        (should-error (niwa-session-codec--goal-from-plist plist)))))
+  :doc "keeps sessions without a Goal empty"
+  (should-not (niwa-session-codec--goal-from-plist nil))
+  :doc "rejects old, incomplete, and unsafe Goal records"
+  (let ((valid '(:id "g1" :objective "Ship" :status active
+                 :reason nil :implementation-policy nil
+                 :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
+                 :time-used-seconds 0 :turns-run 0 :plan-reference nil
+                 :created-at "created" :updated-at "updated")))
+    (dolist (change '((:id "../escape")
+                      (:status unknown)
+                      (:tokens-used -1)
+                      (:plan-reference "../escape.md")
+                      (:reason 42)))
+      (let ((plist (copy-tree valid)))
+        (setq plist (plist-put plist (car change) (cadr change)))
+        (should-error
+         (niwa-session-codec--goal-from-plist plist)
+         :type 'error)))
+    (let ((missing-policy (copy-tree valid)))
+      (cl-remf missing-policy :implementation-policy)
+      (should-error (niwa-session-codec--goal-from-plist missing-policy)))
+    (should-error
+     (niwa-session-codec--goal-from-plist
+      '(:id "old" :objective "Ship" :status active :phase planning)))))
+
+
+;;
+;;; Task round-trip
+
+(niwa-deftest niwa-session-codec--task-to-plist ()
+  ,test
+  (test)
+  :doc "captures all task fields"
+  (let* ((task (niwa-task--create
+                :id 7 :subject "S" :description "D"
+                :status 'pending :owner "explorer"
+                :blocked-by '(5 6)
+                :completed-turn 12
+                :metadata '(:priority low :tag "x")))
+         (plist (niwa-session-codec--task-to-plist task)))
+    (should (= 7 (plist-get plist :id)))
+    (should (equal "S" (plist-get plist :subject)))
+    (should (equal "D" (plist-get plist :description)))
+    (should (eq 'pending (plist-get plist :status)))
+    (should (equal "explorer" (plist-get plist :owner)))
+    (should (equal '(5 6) (plist-get plist :blocked-by)))
+    (should (= 12 (plist-get plist :completed-turn)))
+    (should (equal '(:priority low :tag "x")
+                   (plist-get plist :metadata)))))
+
+
+(niwa-deftest niwa-session-codec--task-from-plist ()
+  ,test
+  (test)
+  :doc "rebuilds a task struct from plist"
+  (let* ((plist (list :id 3 :subject "X" :description nil
+                      :status 'completed :owner nil
+                      :blocked-by nil
+                      :completed-turn 9 :metadata nil))
+         (task (niwa-session-codec--task-from-plist plist)))
+    (should (niwa-task-p task))
+    (should (= 3 (niwa-task-id task)))
+    (should (equal "X" (niwa-task-subject task)))
+    (should (eq 'completed (niwa-task-status task)))
+    (should (= 9 (niwa-task-completed-turn task))))
+
+  :doc "normalizes empty owner to nil"
+  (let* ((plist (list :id 4 :subject "Y" :description nil
+                      :status 'pending :owner ""
+                      :blocked-by nil :metadata nil))
+         (task (niwa-session-codec--task-from-plist plist)))
+    (should (niwa-task-p task))
+    (should (null (niwa-task-owner task)))))
+
+
+;;
+;;; Top-level round-trip
+
+(niwa-deftest niwa-session-codec--sanitize-ptc-checkpoints ()
+  ,test
+  (test)
+  :doc "keeps only bounded read-safe checkpoint records"
+  (let* ((valid '(:id "p" :conversation "/root/worker" :state running :args (:expression "(+ 1 2)")
+                  :result nil :render-data (:kind ptc :calls nil)
+                  :unknown "discard me"))
+         (unsafe '(:id "bad" :conversation "/root" :state running :args (:expression "1")
+                   :render-data #s(hash-table)))
+         (wrong-state '(:id "old" :conversation "/root" :state paused :args (:expression "1")))
+         (missing-conversation '(:id "missing" :state running :args (:expression "1")))
+         (bad-conversation '(:id "wrong" :conversation "worker" :state running :args (:expression "1")))
+         (result
+          (niwa-session-codec--sanitize-ptc-checkpoints
+           (list valid unsafe wrong-state missing-conversation bad-conversation))))
+    (should (= 1 (length result)))
+    (should (equal "p" (plist-get (car result) :id)))
+    (should (equal "/root/worker" (plist-get (car result) :conversation)))
+    (should (equal "(+ 1 2)"
+                   (plist-get (plist-get (car result) :args) :expression)))
+    (should-not (plist-member (car result) :unknown))))
+
+
+(niwa-deftest niwa-session-codec-sanitize-agent-transcripts ()
+  ,test
+  (test)
+  :doc "preserves canonical metadata and known statuses"
+  (let* ((entry '("agent--one"
+                  :agent-path "/root/one"
+                  :path "agents/one.chat.org"
+                  :status completed
+                  :updated-at "2026-07-19T10-00-00"))
+         (out (niwa-session-codec-sanitize-agent-transcripts
+               (list entry))))
+    (should (equal out (list entry))))
+
+  :doc "coerces unknown historical status to incomplete"
+  (let ((out
+         (niwa-session-codec-sanitize-agent-transcripts
+          '(("agent--one" :agent-path "/root/one"
+             :path "agents/one.chat.org" :status bogus)))))
+    (should (eq 'incomplete (plist-get (cdar out) :status))))
+
+  :doc "keeps the newest metadata for a duplicate internal id"
+  (let ((out
+         (niwa-session-codec-sanitize-agent-transcripts
+          '(("agent--one" :agent-path "/root/one" :status completed
+             :updated-at "2026-07-19T10-00-00")
+            ("agent--one" :agent-path "/root/one" :status aborted
+             :updated-at "2026-07-19T11-00-00")))))
+    (should (= 1 (length out)))
+    (should (eq 'aborted (plist-get (cdar out) :status))))
+
+  :doc "drops the retired activity history"
+  (let* ((raw '(("agent--one" :agent-path "/root/one" :status completed
+                 :activity ((:type tool-start :summary "Read")))))
+         (out (niwa-session-codec-sanitize-agent-transcripts raw)))
+    (should-not (plist-member (cdar out) :activity))
+    (should (eq 'completed (plist-get (cdar out) :status)))
+    ;; The sidecar value read from disk is not modified.
+    (should (plist-member (cdar raw) :activity))))
+
+(niwa-deftest niwa-session-codec-serialize ()
+  ,test
+  (test)
+  :doc "serializes a fully populated session"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let* ((session (test-niwa-session-persistence--make-session root))
+               (_ (setf (niwa-session-plan-mode session) t
+                        (niwa-session-preset-name session) 'test-preset
+                        (niwa-session-model-provider session)
+                        "Test:test-model"
+                        (niwa-session-reasoning-effort session) 'high))
+               (plist (niwa-session-codec-serialize
+                       session
+                       :first-user-message "Refactor X"
+                       :latest-user-message "Ship Y"
+                       :additional-roots '(("alt" . "/tmp/alt")))))
+          (should (equal niwa-session-codec-format-version
+                         (plist-get plist :version)))
+          (should (equal "main-2026-04-23T14-30-a9f2"
+                         (plist-get plist :session-id)))
+          (should (equal "main" (plist-get plist :session-name)))
+          (should (equal (file-name-as-directory
+                          (file-name-concat root "packages" "api"))
+                         (plist-get plist :working-directory)))
+          (should (plist-member plist :target-incarnation))
+          (should (stringp (plist-get plist :target-incarnation)))
+          (should (equal 'ask (plist-get plist :permission-mode)))
+          (should (equal 'required (plist-get plist :sandbox-mode)))
+          (should (eq t (plist-get plist :plan-mode)))
+          (should (eq 'test-preset (plist-get plist :preset-name)))
+          (should (equal "Test:test-model"
+                         (plist-get plist :model-provider)))
+          (should (eq 'high (plist-get plist :reasoning-effort)))
+          (should-not (plist-member plist :preset-settings))
+          (should (= 2 (plist-get plist :current-segment)))
+          (should (= 5 (plist-get plist :total-turn-count)))
+          (should (= 4 (plist-get plist :last-task-write-turn)))
+          (should (equal '((nil :note "Main status" :updated-turn 4
+                                :updated-at "2026-04-23T18:20:00+0200")
+                           ("main" :note "Agent status" :updated-turn 4
+                            :updated-at "2026-04-23T18:21:00+0200"))
+                         (plist-get plist :task-status-notes)))
+          (should (equal "Refactor X" (plist-get plist :first-user-message)))
+          (should (equal "Ship Y" (plist-get plist :latest-user-message)))
+          (should (equal '(("alt" . "/tmp/alt"))
+                         (plist-get plist :additional-roots)))
+          (should (equal (niwa-session-workspace-instruction-hashes session)
+                         (plist-get plist :workspace-instruction-hashes)))
+          (should (= 3 (length (plist-get plist :permission-rules))))
+          (should (= 2 (length (plist-get plist :resource-grants))))
+          (should (= 2 (length (plist-get plist :tasks))))
+          (should (plist-get plist :workspace))
+          (should (plist-get plist :prompt-index))
+          (should (plist-get plist :file-snapshots)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "stores project identity and target-native workspace paths"
+  (let* ((identity (make-string 64 ?a))
+         (workspace
+          (niwa-workspace--create
+           :type 'project
+           :id "/ssh:first:/srv/project/"
+           :root "/ssh:first:/srv/project/"
+           :name "project"))
+         (session (niwa-session-create "main" workspace)))
+    (setf (niwa-execution-target-incarnation
+           (niwa-session-execution-target session))
+          "remote-host-a")
+    (cl-letf (((symbol-function 'niwa-workspace-identity-read)
+               (lambda (_root) identity)))
+      (let* ((sidecar (niwa-session-codec-serialize session))
+             (saved-workspace (plist-get sidecar :workspace)))
+        (should (equal identity
+                       (plist-get saved-workspace :workspace-id)))
+        (should (equal "/srv/project/"
+                       (plist-get saved-workspace :target-native-root)))
+        (should (equal "/srv/project/"
+                       (plist-get sidecar :working-directory)))
+        (should (equal "remote-host-a"
+                       (plist-get sidecar :target-incarnation)))
+        (should-not (file-remote-p
+                     (plist-get saved-workspace :target-native-root))))))
+  :doc "stores remote session authority without a client TRAMP prefix"
+  (let* ((identity (make-string 64 ?a))
+         (workspace
+          (niwa-workspace--create
+           :type 'project
+           :id "/ssh:first:/srv/project/"
+           :root "/ssh:first:/srv/project/"
+           :name "project"))
+         (session (niwa-session-create "main" workspace)))
+    (setf (niwa-execution-target-incarnation
+           (niwa-session-execution-target session))
+          "remote-host-a")
+    (setf (niwa-session-permission-rules session)
+          '(("Read" :path "/ssh:first:/srv/project/src/**" :action allow)
+            ("Bash" :pattern "git status"
+             :file-system
+             ((:path "/ssh:first:/srv/shared/input" :access read))
+             :action allow))
+          (niwa-session-resource-grants session)
+          '((:path "/ssh:first:/srv/project/out" :access write)))
+    (cl-letf (((symbol-function 'niwa-workspace-identity-read)
+               (lambda (_root) identity)))
+      (let ((sidecar (niwa-session-codec-serialize session)))
+        (should
+         (equal
+          '(("Read" :path "/srv/project/src/**" :action allow)
+            ("Bash" :pattern "git status"
+             :file-system ((:path "/srv/shared/input" :access read))
+             :action allow))
+          (plist-get sidecar :permission-rules)))
+        (should
+         (equal '((:path "/srv/project/out" :access write))
+                (plist-get sidecar :resource-grants)))
+        (should-not
+         (string-match-p "/ssh:first:"
+                         (prin1-to-string sidecar))))))
+  :doc "fork fields default nil for a non-fork session"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let* ((session (test-niwa-session-persistence--make-session root))
+               (plist (niwa-session-codec-serialize session)))
+          (should (null (plist-get plist :forked-from-session-id)))
+          (should (null (plist-get plist :forked-from-turn)))
+          (should (null (plist-get plist :fork-type)))
+          (should (null (plist-get plist :forked-from-fork-point-id)))
+          (should (null (plist-get plist :worktree-directory))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "serializes durable fork type and stable fork-point lineage"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let ((session
+               (test-niwa-session-persistence--make-session root)))
+          (setf (niwa-session-forked-from-session-id session) "source"
+                (niwa-session-forked-from-turn session) 3
+                (niwa-session-fork-type session) 'worktree
+                (niwa-session-forked-from-fork-point-id session)
+                "stable-point"
+                (niwa-session-worktree-source-root session) "/repo/"
+                (niwa-session-worktree-directory session)
+                "/repo/.worktrees/main-fork-1/"
+                (niwa-session-worktree-branch session)
+                "worktree/main-fork-1"
+                (niwa-session-worktree-base-commit session) "abc123")
+          (let ((plist (niwa-session-codec-serialize session)))
+            (should (eq 'worktree (plist-get plist :fork-type)))
+            (should (equal "stable-point"
+                           (plist-get plist
+                                      :forked-from-fork-point-id)))
+            (should (equal "/repo/.worktrees/main-fork-1/"
+                           (plist-get plist :worktree-directory)))
+            (should (equal "worktree/main-fork-1"
+                           (plist-get plist :worktree-branch)))
+            (should (equal "abc123"
+                           (plist-get plist :worktree-base-commit)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "materializes the canonical global mode when the session inherits it"
+  (let ((root (make-temp-file "niwa-test-proj-" t))
+        (saved-mode (default-toplevel-value 'niwa-permission-mode)))
+    (unwind-protect
+        (let ((session
+               (test-niwa-session-persistence--make-session root)))
+          (setf (niwa-session-permission-mode session) nil)
+          (set-default-toplevel-value 'niwa-permission-mode 'edits)
+          (should (eq 'edits
+                      (plist-get
+                       (niwa-session-codec-serialize session)
+                       :permission-mode))))
+      (set-default-toplevel-value 'niwa-permission-mode saved-mode)
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "refuses to persist retired permission modes"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let ((session
+               (test-niwa-session-persistence--make-session root)))
+          (setf (niwa-session-permission-mode session) 'default)
+          (should-error (niwa-session-codec-serialize session)
+                        :type 'error))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "materializes and validates the canonical global sandbox mode"
+  (let ((root (make-temp-file "niwa-test-proj-" t))
+        (saved-mode (default-toplevel-value 'niwa-sandbox-mode)))
+    (unwind-protect
+        (let ((session
+               (test-niwa-session-persistence--make-session root)))
+          (setf (niwa-session-sandbox-mode session) nil)
+          (set-default-toplevel-value 'niwa-sandbox-mode 'off)
+          (should (eq 'off
+                      (plist-get
+                       (niwa-session-codec-serialize session)
+                       :sandbox-mode)))
+          (setf (niwa-session-sandbox-mode session) 'auto)
+          (should-error (niwa-session-codec-serialize session)
+                        :type 'error))
+      (set-default-toplevel-value 'niwa-sandbox-mode saved-mode)
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+
+(niwa-deftest niwa-session-codec-validate-current-sidecar ()
+  ,test
+  (test)
+  :doc "accepts a complete current sidecar"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (should (eq plist
+                (niwa-session-codec-validate-current-sidecar
+                 plist))))
+  :doc "validates the artifact store fields"
+  (dolist (bad '((:attached-artifacts "board") (:attached-artifacts (board))
+                 (:dedicated-artifact board) (:dedicated-artifact ("board"))))
+    (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+      (should-error (niwa-session-codec-validate-current-sidecar
+                     (plist-put plist (car bad) (cadr bad))))))
+  (let ((plist (test-niwa-session-persistence--complete-sidecar
+                '(:attached-artifacts ("board") :dedicated-artifact "board"))))
+    (should (eq plist (niwa-session-codec-validate-current-sidecar plist))))
+  :doc "validates closed-chat records"
+  (dolist (bad '((:chapters ((:segment 0 :title nil :closed-at "t")))
+                 (:chapters ((:segment 2 :title title :closed-at "t")))
+                 (:chapters ((:segment 2 :title "T")))
+                 (:chapters (:segment 2))))
+    (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+      (should-error (niwa-session-codec-validate-current-sidecar
+                     (plist-put plist (car bad) (cadr bad))))))
+  (let* ((chapters '((:segment 2 :title "Planning" :closed-at "t1")
+                     (:segment 3 :title nil :closed-at "t2")))
+         (plist (test-niwa-session-persistence--complete-sidecar
+                 (list :chapters chapters))))
+    (should (eq plist (niwa-session-codec-validate-current-sidecar plist))))
+  :doc "rejects a current-version sidecar with a missing required key"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (cl-remf plist :working-directory)
+    (should-error
+     (niwa-session-codec-validate-current-sidecar plist)
+     :type 'error))
+  :doc "requires resource grants even when none are stored"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (cl-remf plist :resource-grants)
+    (should-error
+     (niwa-session-codec-validate-current-sidecar plist)
+     :type 'error))
+  :doc "requires a nonblank target incarnation field"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (cl-remf plist :target-incarnation)
+    (should-error
+     (niwa-session-codec-validate-current-sidecar plist)
+     :type 'error)
+    (dolist (incarnation '(42 "" "   "))
+      (should-error
+       (niwa-session-codec-validate-current-sidecar
+        (plist-put plist :target-incarnation incarnation))
+       :type 'error))
+    (should
+     (niwa-session-codec-validate-current-sidecar
+      (plist-put plist :target-incarnation "remote-host-a"))))
+  :doc "requires one of the three persisted naming states"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (dolist (state '(pending attempted explicit))
+      (should (eq plist
+                  (niwa-session-codec-validate-current-sidecar
+                   (plist-put plist :naming-state state)))))
+    (dolist (state '(nil t unknown "pending"))
+      (should-error
+       (niwa-session-codec-validate-current-sidecar
+        (plist-put plist :naming-state state))))
+    (cl-remf plist :naming-state)
+    (should-error (niwa-session-codec-validate-current-sidecar plist)))
+  :doc "requires bounded plain naming input only for a consumed automatic attempt"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (dolist (state '(pending attempted explicit))
+      (should (niwa-session-codec-validate-current-sidecar
+               (plist-put (plist-put plist :naming-state state) :naming-input nil))))
+    (setq plist (plist-put plist :naming-state 'attempted))
+    (should (niwa-session-codec-validate-current-sidecar
+             (plist-put plist :naming-input (make-string 2000 ?x))))
+    (dolist (input (list "" "  \n" (make-string 2001 ?x) 'text 42
+                         (propertize "styled" 'face 'bold)))
+      (should-error (niwa-session-codec-validate-current-sidecar
+                     (plist-put plist :naming-input input))))
+    (dolist (state '(pending explicit))
+      (should-error (niwa-session-codec-validate-current-sidecar
+                     (plist-put (plist-put plist :naming-state state)
+                                :naming-input "Fix this"))))
+    (cl-remf plist :naming-input)
+    (should-error (niwa-session-codec-validate-current-sidecar plist)))
+  :doc "accepts only canonical persisted permission modes"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(ask edits full-auto))
+      (should (eq plist
+                  (niwa-session-codec-validate-current-sidecar
+                   (plist-put plist :permission-mode mode)))))
+    (dolist (mode '(default accept-edits trust-all edit))
+      (should-error
+       (niwa-session-codec-validate-current-sidecar
+       (plist-put plist :permission-mode mode))
+       :type 'error)))
+  :doc "accepts only canonical persisted sandbox modes"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(best-effort required off))
+      (should (eq plist
+                  (niwa-session-codec-validate-current-sidecar
+                   (plist-put plist :sandbox-mode mode)))))
+    (should-error
+     (niwa-session-codec-validate-current-sidecar
+      (plist-put plist :sandbox-mode 'auto))
+     :type 'error))
+  :doc "accepts only boolean persisted Plan mode"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(nil t))
+      (should (eq plist
+                  (niwa-session-codec-validate-current-sidecar
+                   (plist-put plist :plan-mode mode)))))
+    (should-error
+     (niwa-session-codec-validate-current-sidecar
+     (plist-put plist :plan-mode 'plan))
+     :type 'error))
+  :doc "accepts only exact model labels and symbolic effort"
+  (let ((plist (test-niwa-session-persistence--complete-sidecar nil)))
+    (should
+     (niwa-session-codec-validate-current-sidecar
+      (plist-put
+       (plist-put plist :model-provider "OpenAI:gpt-5")
+       :reasoning-effort 'high)))
+    (dolist (provider '("gpt-5" openai 42))
+      (should-error
+       (niwa-session-codec-validate-current-sidecar
+        (plist-put plist :model-provider provider))))
+    (should-error
+     (niwa-session-codec-validate-current-sidecar
+      (plist-put
+       (plist-put plist :model-provider nil)
+       :reasoning-effort "high"))))
+  :doc "rejects prompt entries without current turn coordinates"
+  (let ((plist
+         (test-niwa-session-persistence--complete-sidecar
+          '(:prompt-index ((1 . ((:turn 1 :cum-turn 1))))))))
+    (should-error
+     (niwa-session-codec-validate-current-sidecar plist)
+     :type 'error)))
+
+
+(niwa-deftest niwa-session-codec-deserialize ()
+  ,test
+  (test)
+  :doc "round-trips a populated session"
+  (let ((root (make-temp-file "niwa-test-proj-" t)))
+    (unwind-protect
+        (let* ((source (test-niwa-session-persistence--make-session root))
+               (_ (setf (niwa-session-plan-mode source) t
+                        (niwa-session-naming-state source) 'attempted
+                        (niwa-session-naming-input source) "Fix the chooser"
+                        (niwa-session-preset-name source) 'test-preset
+                        (niwa-session-model-provider source)
+                        "Test:test-model"
+                        (niwa-session-reasoning-effort source) 'high
+                        (niwa-session-pending-steering source)
+                                       '((:id 1 :category steering :input "steer"
+                                          :request-id "in-flight"))
+                        (niwa-session-pending-follow-ups source)
+				       '((:id 2 :category follow-up :input "later"))
+                        (niwa-session-pending-input-next-id source) 3
+                        (niwa-session-pending-input-paused source) t
+                        (niwa-session-pending-input-failure-paused source)
+                        t
+                        (niwa-session-agent-transcripts source)
+                        '(("agent--one" :agent-path "/root/one"
+                           :description "Historical agent"
+                           :path "agents/one.chat.org"
+                           :status completed :parent-turn 3))
+                        (niwa-session-messages source)
+                        '((:id "result-1" :type RESULT :sender "/root/worker"
+                           :recipient "/root" :outcome completed
+                           :payload "done" :timestamp (12345 67890 0 0))
+                          (:id "mail-1" :type MAIL :sender "/root/reviewer"
+                           :recipient "/root" :payload "note"
+                           :timestamp (12345 67891 0 0)))))
+               (plist (niwa-session-codec-serialize
+                       source
+                       :first-user-message "Hi"
+                       :latest-user-message "Later"))
+               (result
+                (niwa-session-codec-deserialize
+                 plist (niwa-session-workspace source)))
+               (session (plist-get result :session)))
+          (should (niwa-session-p session))
+          (should (equal "main" (niwa-session-name session)))
+          (should (eq 'attempted (niwa-session-naming-state session)))
+          (should (equal "Fix the chooser" (niwa-session-naming-input session)))
+          (should (equal (file-name-as-directory
+                          (file-name-concat root "packages" "api"))
+                         (niwa-session-working-directory session)))
+          (should (equal "main-2026-04-23T14-30-a9f2"
+                         (niwa-session-session-id session)))
+          (should (eq 'ask (niwa-session-permission-mode session)))
+          (should (eq 'required (niwa-session-sandbox-mode session)))
+          (should (niwa-session-plan-mode session))
+          (should (eq 'test-preset (niwa-session-preset-name session)))
+          (should (equal "Test:test-model"
+                         (niwa-session-model-provider session)))
+          (should (eq 'high
+                      (niwa-session-reasoning-effort session)))
+          (should (= 5 (niwa-session-turn-count session)))
+          (should (= 4 (niwa-session-last-task-write-turn session)))
+          (should (equal
+                   (niwa-session-workspace-instruction-hashes source)
+                   (niwa-session-workspace-instruction-hashes session)))
+          (should (equal '((nil :note "Main status" :updated-turn 4
+                                :updated-at "2026-04-23T18:20:00+0200")
+                           ("main" :note "Agent status" :updated-turn 4
+                            :updated-at "2026-04-23T18:21:00+0200"))
+                         (niwa-session-task-status-notes session)))
+          (should (= 2 (niwa-session-current-segment session)))
+          (should (= 2 (length (niwa-session-tasks session))))
+          (should
+           (equal (niwa-session-agent-transcripts source)
+                  (niwa-session-agent-transcripts session)))
+          (let ((messages (niwa-session-messages session)))
+            (should (= 2 (length messages)))
+            (should (equal "/root/worker"
+                           (plist-get (car messages) :sender)))
+            (should (eq 'completed
+                        (plist-get (car messages) :outcome)))
+            (should (equal "done" (plist-get (car messages) :payload)))
+            (should (equal "/root/reviewer"
+                           (plist-get (cadr messages) :sender)))
+            (should (equal "note"
+                           (plist-get (cadr messages) :payload))))
+          (should (= 3 (niwa-task-completed-turn
+                        (car (niwa-session-tasks session)))))
+          (should (= 3 (length (niwa-session-permission-rules session))))
+          (should (equal '((:path "/tmp/exact-read" :access read)
+                           (:path "/tmp/exact-write" :access write))
+                         (niwa-session-resource-grants session)))
+          (should (equal "Hi" (plist-get result :first-user-message)))
+          (should (equal "Later" (plist-get result :latest-user-message)))
+			 (should (equal "later" (plist-get (car (niwa-session-pending-follow-ups session)) :input)))
+			 (should (eq 'failed-turn (plist-get (car (niwa-session-pending-steering session)) :state)))
+			 (should (= 3 (niwa-session-pending-input-next-id session)))
+			 (should (niwa-session-pending-input-paused session))
+			 (should (niwa-session-pending-input-failure-paused session))
+          ;; touched-files / mentions-shown reset to empty hash tables
+          (should (hash-table-p (niwa-session-touched-files session)))
+          (should (zerop (hash-table-count (niwa-session-touched-files session))))
+          (should (hash-table-p (niwa-session-mentions-shown session)))
+          (should (zerop (hash-table-count (niwa-session-mentions-shown session))))
+          ;; workspace identity recovered
+          (let ((workspace (niwa-session-workspace session)))
+            (should (eq 'project (niwa-workspace-type workspace)))
+            (should (equal "test-id" (niwa-workspace-id workspace))))
+          (should
+           (equal
+            (niwa-execution-target-incarnation
+             (niwa-session-execution-target session))
+            (plist-get plist :target-incarnation)))
+          (should (niwa-session-execution-target session)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "rejects the superseded session format without a compatibility reader"
+  (let ((sidecar
+         (test-niwa-session-persistence--complete-sidecar
+          '(:version "v0.5.0"))))
+    (should-error
+     (niwa-session-codec-deserialize
+      sidecar
+      (niwa-workspace--create
+       :type 'project :id "/tmp/old-format/"
+       :root "/tmp/old-format/" :name "old-format"))
+     :type 'error))
+
+  :doc "identity rebinding drops copied authority and additional roots"
+  (let ((saved-root (make-temp-file "niwa-rebind-saved-" t))
+        (opened-root (make-temp-file "niwa-rebind-opened-" t)))
+    (unwind-protect
+        (let* ((saved
+                (test-niwa-session-persistence--make-workspace saved-root))
+               (saved-plist
+                (niwa-session-codec--workspace-to-plist saved))
+               (opened
+                (progn
+                  (niwa-workspace-clear-registry)
+                  (test-niwa-session-persistence--make-workspace
+                   opened-root)))
+               (opened-identity
+                (niwa-workspace-identity-read opened-root))
+               (sidecar
+                (test-niwa-session-persistence--complete-sidecar
+                 (list
+                  :workspace saved-plist
+                  :working-directory saved-root
+                  :permission-rules
+                  `(("Read" :path ,(file-name-concat saved-root "src/**")
+                            :action allow))
+                  :resource-grants
+                  `((:path ,(file-name-concat saved-root "out")
+                            :access write))
+                  :additional-roots '(("shared" . "/srv/shared/"))))))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) nil)))
+            (should-error
+             (niwa-session-codec-deserialize sidecar opened)
+             :type 'user-error))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) t)))
+            (let* ((result
+                    (niwa-session-codec-deserialize sidecar opened))
+                   (session (plist-get result :session))
+                   (saved-again
+                    (niwa-session-codec-serialize session)))
+              (should-not (niwa-session-permission-rules session))
+              (should-not (niwa-session-resource-grants session))
+              (should-not (plist-get result :additional-roots))
+              (should
+               (equal opened-identity
+                      (plist-get (plist-get saved-again :workspace)
+                                 :workspace-id))))))
+      (delete-directory saved-root t)
+      (delete-directory opened-root t)
+      (niwa-workspace-clear-registry)))
+
+  :doc "requalifies target-native authority through the opened remote alias"
+  (let* ((identity (make-string 64 ?a))
+         (workspace
+          (niwa-workspace--create
+           :type 'project
+           :id "/ssh:second:/srv/project/"
+           :root "/ssh:second:/srv/project/"
+           :name "project"))
+         (sidecar
+          (test-niwa-session-persistence--complete-sidecar
+           (list
+            :workspace
+            (list :type 'project
+                  :workspace-id identity
+                  :target-native-root "/srv/project/"
+                  :name "project")
+            :working-directory "/srv/project/"
+            :target-incarnation "remote-host-a"
+            :permission-rules
+            '(("Read" :path "/srv/project/src/**" :action allow)
+              ("Bash" :pattern "git status"
+               :file-system ((:path "/srv/shared/input" :access read))
+               :action allow))
+            :resource-grants
+            '((:path "/srv/project/out" :access write))))))
+    (cl-letf (((symbol-function 'niwa-workspace-identity-read)
+               (lambda (_root) identity))
+              ((symbol-function 'file-in-directory-p)
+               (lambda (_file _directory) t)))
+      (let ((session
+             (plist-get
+              (niwa-session-codec-deserialize sidecar workspace)
+              :session)))
+        (should
+         (equal "remote-host-a"
+                (niwa-execution-target-incarnation
+                 (niwa-session-execution-target session))))
+        (should
+         (equal
+          '(("Read" :path "/ssh:second:/srv/project/src/**" :action allow)
+            ("Bash" :pattern "git status"
+             :file-system
+             ((:path "/ssh:second:/srv/shared/input" :access read))
+             :action allow))
+          (niwa-session-permission-rules session)))
+        (should
+         (equal
+          '((:path "/ssh:second:/srv/project/out" :access write))
+          (niwa-session-resource-grants session))))))
+
+  :doc "drops persisted opaque and unknown agent task owners"
+  (let ((root (make-temp-file "niwa-task-owner-roundtrip-" t)))
+    (unwind-protect
+        (progn
+          (niwa-tools-register)
+          (let* ((source
+                (test-niwa-session-persistence--make-session root))
+               (configuration
+                (test-niwa-session-persistence--agent-configuration))
+               (worker-id
+                "worker--0123456789abcdef0123456789abcdef")
+               (reviewer-id
+                "reviewer--fedcba9876543210fedcba9876543210")
+               (valid-owner "/root/worker/reviewer"))
+          (setf
+           (niwa-session-agent-registry source)
+           (list
+            (cons
+             "/root/worker"
+             (niwa-agent-record--create
+              :id worker-id
+              :path "/root/worker"
+              :parent-path "/root"
+              :role "default"
+              :configuration configuration
+              :activity 'idle
+              :conversation-location "agents/worker.chat.org"))
+            (cons
+             valid-owner
+             (niwa-agent-record--create
+              :id reviewer-id
+              :path valid-owner
+              :parent-path "/root/worker"
+              :role "default"
+              :configuration configuration
+              :activity 'idle
+              :conversation-location "agents/reviewer.chat.org")))
+           (niwa-session-tasks source)
+           (list
+            (niwa-task--create
+             :id 1 :subject "valid nested" :status 'pending
+             :owner valid-owner :blocked-by '(3))
+            (niwa-task--create
+             :id 2 :subject "opaque" :status 'pending
+             :owner worker-id)
+            (niwa-task--create
+             :id 3 :subject "unknown" :status 'pending
+             :owner "/root/ghost"))
+           (niwa-session-task-status-notes source)
+           (list
+            (list valid-owner :note "valid")
+            (list worker-id :note "opaque")
+            (list "/root/ghost" :note "unknown")))
+          (let* ((sidecar (niwa-session-codec-serialize source))
+                 (restored
+                  (plist-get
+                   (niwa-session-codec-deserialize
+                    sidecar (niwa-session-workspace source))
+                   :session)))
+            (should
+             (equal (list valid-owner)
+                    (mapcar #'niwa-task-owner
+                            (niwa-session-tasks restored))))
+            (should-not
+             (niwa-task-blocked-by
+              (car (niwa-session-tasks restored))))
+            (should
+             (equal (list valid-owner)
+                    (mapcar #'car
+                            (niwa-session-task-status-notes restored))))
+            (should (= 2 (length
+                          (niwa-session-agent-registry restored)))))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (niwa-tool-clear-registry)
+      (niwa-workspace-clear-registry)))
+
+  :doc "preserves an accepted standalone Plan implementation retry"
+  (let* ((retry
+          '(:step submit
+            :selection (:location here :context summary
+                        :execution direct :mode edits)
+            :accepted (:path "local/plans/accepted.md"
+                       :absolute-path "/tmp/session/local/plans/accepted.md"
+                       :hash "abc")
+            :summary "# Handoff"
+            :failure "Transport refused"))
+         (metadata (list :status 'accepted :implementation-retry retry))
+         (result
+          (test-niwa-session-persistence--deserialize-sidecar
+           (list :plan-metadata metadata)))
+         (session (plist-get result :session)))
+    (should (equal metadata (niwa-session-plan-metadata session))))
+
+  :doc "preserves a fork-first Worktree retry with its reservation and published fork"
+  (let* ((retry
+          '(:step prepare-worktree
+            :selection (:location worktree :context fresh
+                        :execution direct :mode full-auto
+                        :branch "plan/topic")
+            :accepted (:path "local/plans/source.md" :hash "abc")
+            :fork-point-id "reply-7"
+            :worktree-reservation
+            (:branch "plan/topic" :directory "/tmp/repo/.worktrees/topic/")
+            :target-save-path "/tmp/repo/.niwa/sessions/fork/"))
+         (metadata (list :status 'accepted :implementation-retry retry))
+         (result
+          (test-niwa-session-persistence--deserialize-sidecar
+           (list :plan-metadata metadata)))
+         (session (plist-get result :session)))
+    (should (equal metadata (niwa-session-plan-metadata session))))
+
+  :doc "demotes a persisted active Goal to paused on session resume"
+  (let* ((goal '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy
+                 (:model-provider "Unavailable:implementer"
+                  :reasoning-effort high :permission-mode edits)
+                 :token-budget nil :tokens-used 9 :tokens-incomplete-p nil :time-used-seconds 4
+                 :turns-run 2 :plan-reference nil
+                 :created-at "created" :updated-at "updated"))
+         (result
+          (test-niwa-session-persistence--deserialize-sidecar
+           (list :goal goal)))
+         (restored (niwa-session-goal (plist-get result :session))))
+    (should (eq 'paused (niwa-goal-status restored)))
+    (should (equal "session resumed" (niwa-goal-reason restored)))
+    (should (equal (plist-get goal :implementation-policy)
+                   (niwa-goal-implementation-policy restored)))
+    (should (= 9 (niwa-goal-tokens-used restored))))
+
+  :doc "loads an old Goal schema as no Goal"
+  (let* ((old '(:id "g1" :objective "Ship" :status active
+                :phase planning :approval-policy supervised))
+         (result
+          (test-niwa-session-persistence--deserialize-sidecar
+           (list :goal old))))
+    (should-not (niwa-session-goal (plist-get result :session))))
+  :doc "drops permission rules with unknown actions"
+  (let* ((plist (list :version niwa-session-codec-format-version
+                      :session-name "x"
+                      :permission-rules
+                      '(("Read"  :path "/x" :action allow)
+                        ("Write" :path "/y" :action future-action))
+                      :tasks nil
+                      :prompt-index nil
+                      :chapters nil
+                      :file-snapshots nil))
+         (session
+          (plist-get
+           (test-niwa-session-persistence--deserialize-sidecar plist)
+           :session)))
+    (should (= 1 (length (niwa-session-permission-rules session)))))
+  :doc "preserves relocated working directories under the new workspace root"
+  (let* ((old-root (make-temp-file "niwa-old-root-" t))
+         (new-root (make-temp-file "niwa-new-root-" t))
+         (old-cwd (file-name-concat old-root "packages/api"))
+         (new-cwd (file-name-concat new-root "packages/api")))
+    (unwind-protect
+        (progn
+          (make-directory old-cwd t)
+          (make-directory new-cwd t)
+          (let* ((saved-workspace
+                  (test-niwa-session-persistence--make-workspace old-root))
+                 (saved-plist
+                  (niwa-session-codec--workspace-to-plist
+                   saved-workspace)))
+            (make-directory (file-name-concat new-root ".niwa") t)
+            (copy-file
+             (file-name-concat old-root ".niwa" "workspace-id")
+             (file-name-concat new-root ".niwa" "workspace-id"))
+            (niwa-workspace-clear-registry)
+            (let* ((opened-workspace
+                    (niwa-workspace-get-or-create
+                     'project new-root new-root "relocated-proj"))
+                   (sidecar
+                    (test-niwa-session-persistence--complete-sidecar
+                     (list :workspace saved-plist
+                           :working-directory old-cwd)))
+                   (session
+                    (plist-get
+                     (niwa-session-codec-deserialize
+                      sidecar opened-workspace)
+                     :session)))
+            (should (equal (file-name-as-directory new-cwd)
+                           (niwa-session-working-directory session))))))
+      (niwa-workspace-clear-registry)
+      (when (file-directory-p old-root)
+        (delete-directory old-root t))
+      (when (file-directory-p new-root)
+        (delete-directory new-root t))))
+
+  :doc "preserves saved working directories already under a nested current root"
+  (let* ((old-root (file-name-as-directory
+                    (make-temp-file "niwa-old-root-" t)))
+         (new-root (file-name-as-directory
+                    (file-name-concat old-root "packages" "api")))
+         (saved-cwd new-root))
+    (unwind-protect
+        (progn
+          (make-directory new-root t)
+          (let* ((saved-workspace
+                  (test-niwa-session-persistence--make-workspace old-root))
+                 (saved-plist
+                  (niwa-session-codec--workspace-to-plist
+                   saved-workspace)))
+            (make-directory (file-name-concat new-root ".niwa") t)
+            (copy-file
+             (file-name-concat old-root ".niwa" "workspace-id")
+             (file-name-concat new-root ".niwa" "workspace-id"))
+            (niwa-workspace-clear-registry)
+            (let* ((opened-workspace
+                    (niwa-workspace-get-or-create
+                     'project new-root new-root "nested-proj"))
+                   (sidecar
+                    (test-niwa-session-persistence--complete-sidecar
+                     (list :workspace saved-plist
+                           :working-directory saved-cwd)))
+                   (session
+                    (plist-get
+                     (niwa-session-codec-deserialize
+                      sidecar opened-workspace)
+                     :session)))
+              (should (equal new-root
+                             (niwa-session-working-directory session))))))
+      (niwa-workspace-clear-registry)
+      (when (file-directory-p old-root)
+        (delete-directory old-root t))))
+
+  :doc "rejects restored working directories outside the workspace"
+  (let ((root (make-temp-file "niwa-restore-root-" t))
+        (outside (make-temp-file "niwa-restore-outside-" t)))
+    (unwind-protect
+        (let* ((workspace
+                (test-niwa-session-persistence--make-workspace root))
+               (sidecar
+                (test-niwa-session-persistence--complete-sidecar
+                 (list
+                  :workspace
+                  (niwa-session-codec--workspace-to-plist workspace)
+                  :working-directory outside))))
+          (should-error
+           (niwa-session-codec-deserialize sidecar workspace)
+           :type 'user-error))
+      (delete-directory root t)
+      (delete-directory outside t)
+      (niwa-workspace-clear-registry)))
+
+  :doc "rejects restored symlink working directories outside the workspace"
+  (let* ((root (make-temp-file "niwa-restore-root-" t))
+         (outside (make-temp-file "niwa-restore-outside-" t))
+         (link (file-name-concat root "linked-cwd")))
+    (unwind-protect
+        (let* ((workspace
+                (test-niwa-session-persistence--make-workspace root))
+               (sidecar
+                (test-niwa-session-persistence--complete-sidecar
+                 (list
+                  :workspace
+                  (niwa-session-codec--workspace-to-plist workspace)
+                  :working-directory link))))
+          (make-symbolic-link outside link)
+          (should-error
+           (niwa-session-codec-deserialize sidecar workspace)
+           :type 'user-error))
+      (when (file-symlink-p link)
+        (delete-file link))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (when (file-directory-p outside)
+        (delete-directory outside t))
+      (niwa-workspace-clear-registry))))
+
+
+;;
+;;; Sidecar IO
+
+(niwa-deftest niwa-session-codec-write ()
+  ,test
+  (test)
+  :doc "atomic write produces a readable plist"
+  (let ((tmp (make-temp-file "niwa-session-meta-test-" nil ".el")))
+    (unwind-protect
+        (let* ((plist `(:version ,niwa-session-codec-format-version
+                                 :session-name "main"
+                                 :tasks nil
+                                 :permission-rules nil)))
+          (niwa-session-codec-write tmp plist)
+          (should (file-exists-p tmp))
+          (let ((readback (niwa-session-codec-read tmp)))
+            (should (equal "main" (plist-get readback :session-name)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+  :doc "atomic write preserves shared objects as readable circle syntax"
+  (let* ((tmp (make-temp-file "niwa-session-meta-test-" nil ".el"))
+         (shared (propertize "prompt" 'niwa-mention-binding
+                             (list :token "prompt")))
+         (plist (list :history (list shared shared))))
+    (unwind-protect
+        (progn
+          (niwa-session-codec-write tmp plist)
+          (let* ((readback (niwa-session-codec-read tmp))
+                 (history (plist-get readback :history)))
+            (should (eq (car history) (cadr history)))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(provide 'test-niwa-session-codec)
+;;; test-niwa-session-codec.el ends here

@@ -16,7 +16,7 @@ host. Confinement itself never gains SSH keys, the ssh-agent, `known_hosts` or
 SSH configuration.
 
 - **When.** Local Bubblewrap confinement starts a per-command broker
-  (`scripts/mevedel-git-ssh.py serve`) when the command text names `git`, the
+  (`scripts/niwa-git-ssh.py serve`) when the command text names `git`, the
   working directory uses the primary root's own repository (below), and that
   repository has fetch remotes that may use SSH. Every other command gets none.
 - **How.** Inside confinement `GIT_SSH_COMMAND` runs the client half of the

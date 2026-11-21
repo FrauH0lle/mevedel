@@ -3,9 +3,9 @@
 ## Journal and consolidation overview
 
 Journal storage is separate from curated memory. The internal
-`mevedel-journal-store` module publishes immutable workspace digests and
+`niwa-journal-store` module publishes immutable workspace digests and
 completed-review and proposal-decision records, and
-`mevedel-journal-claim` provides bounded work ownership and recoverable
+`niwa-journal-claim` provides bounded work ownership and recoverable
 outcomes. Completed-turn capture and sealing are connected to session
 lifecycle. Capture reads each turn from its committed segment; a turn whose
 indexed bounds lie outside those bytes appears in the evidence as unavailable
@@ -13,8 +13,8 @@ and is covered with the rest, instead of failing the checkpoint. A session
 damaged by an earlier rotation bug otherwise failed every later capture. Background generation and accepted-result recovery run from
 lifecycle opportunities; completed, saved root turns, session opening and idle
 maintenance recover abandoned checkpoints.
-Public entries live in `.mevedel/journal/`; private bookkeeping and recovery
-evidence live in `.mevedel/state/journal/`.
+Public entries live in `.niwa/journal/`; private bookkeeping and recovery
+evidence live in `.niwa/state/journal/`.
 Public-entry discovery batches fresh expiry-marker checks and bounded reads in
 groups of 16. Completed-turn coverage uses the same bounded read batching;
 malformed coverage fails closed. These observations are not cached across calls.
@@ -72,7 +72,7 @@ bodies and complete terminal decision/write history.
 Shared files are not journal input: consolidation reviews them directly. A
 checkpoint captures only the session's own `work://` notes and plan titles.
 
-With `mevedel-journal-enabled` (default `t`), a successful completed root-turn
+With `niwa-journal-enabled` (default `t`), a successful completed root-turn
 save freezes a checkpoint before generation collection. One immutable private
 record contains projected evidence, notes, their hashes, stable completed-turn
 identities, and serializable journal model selection. It pins the source
@@ -133,7 +133,7 @@ still own its lease; closing does not reacquire authority. Neither path
 snapshots incomplete streaming output. Exit starts no model request.
 
 A session that stays open is sealed after it goes quiet. Each completed, saved
-root turn restarts a per-session period of `mevedel-journal-seal-idle-minutes`
+root turn restarts a per-session period of `niwa-journal-seal-idle-minutes`
 (default 20; nil disables). When it ends with no newer completed root turn and
 no running request, the ready checkpoints are sealed with the `idle` trigger
 once the workspace transport is idle, and a processing opportunity is queued. A
@@ -158,7 +158,7 @@ processing opportunity. Opening or resuming a root session also queues
 abandoned-capture recovery and a consolidation offer, so work sealed at exit is
 processed without waiting for a turn; it only queues work. While any root
 session is open, a maintenance timer runs every
-`mevedel-journal-idle-maintenance-minutes` (default 10; nil disables) once Emacs
+`niwa-journal-idle-maintenance-minutes` (default 10; nil disables) once Emacs
 has had no input for 30 seconds. For each local Linux workspace with a live root
 session it queues a processing opportunity with recovery, a consolidation
 offer, and the hourly-throttled journal and artifact cleanup, so the backlog
@@ -206,7 +206,7 @@ workspace admission claim permits one digest request at a time; the capture's
 own claim accepts its result. Both share a 120-second target-clock deadline.
 Failed jobs get at most three automatic attempts on separate opportunities.
 When a capture exhausts them, the next opportunity shows one warning per capture
-and Emacs session naming it and pointing to `M-x mevedel-journal-jobs`, where it
+and Emacs session naming it and pointing to `M-x niwa-journal-jobs`, where it
 can be retried or discarded.
 
 Generation records dated evidence supporting qualifying user, feedback, project,
@@ -263,7 +263,7 @@ Journaling adds no server token limit. Explicit output limits from the resolved
 policy or originating buffer's `gptel-max-tokens` are frozen and honored where
 the provider supports them, without an automatic 4,000-token ceiling. Omitting
 a limit uses provider defaults, not unlimited generation. Input admission uses
-the ordinary model context reserve (`mevedel-model-reserve-tokens`) and any
+the ordinary model context reserve (`niwa-model-reserve-tokens`) and any
 configured output allowance. Accepted digest text remains limited to 16 KiB,
 with a 120-second client deadline. Streaming overflow cancels the request;
 oversized final output is rejected. These client guards do not bound internal
@@ -297,11 +297,11 @@ markers prevent an old completed-turn set from recreating its retired capture.
 
 ## Journal jobs and inspection
 
-`M-x mevedel-journal-jobs` lists pending checkpoints and jobs, including failed,
+`M-x niwa-journal-jobs` lists pending checkpoints and jobs, including failed,
 exhausted, unavailable, and unreadable captures. `RET` inspects the frozen
 evidence, `r` retries the selected sealed job once, `d` discards it, and `g`
-refreshes the list. The corresponding commands are `mevedel-journal-inspect`,
-`mevedel-journal-retry`, and `mevedel-journal-discard`. They work from a session
+refreshes the list. The corresponding commands are `niwa-journal-inspect`,
+`niwa-journal-retry`, and `niwa-journal-discard`. They work from a session
 or workspace buffer as well as the job list. Pending jobs and overdue retained
 evidence have separate headings. Capture inspection uses a section navigator for
 diagnostics and exact frozen evidence. Inspection starts no inference.
@@ -341,7 +341,7 @@ model recall or unconditional deletion.
 
 ## Journal recall and retention
 
-`mevedel-journal-max-age-days` defaults to 14; nil disables ordinary recall age
+`niwa-journal-max-age-days` defaults to 14; nil disables ordinary recall age
 filtering. It does not disable storage cleanup.
 The clock starts at the immutable public entry `created` timestamp in UTC.
 For a digest, this is the execution target time when its completed-turn capture
@@ -368,7 +368,7 @@ end, including when they are younger than 14 days. One decision does not discard
 notes still needed by another candidate or review. Exact evidence remains in the
 private review history for inspection and undo.
 
-`mevedel-memory-history-max-age-days` is an independent nonnegative setting,
+`niwa-memory-history-max-age-days` is an independent nonnegative setting,
 defaulting to 14 days after the latest terminal decision, or completion of a
 review with no proposals. Reversal restarts that window. Expired history is
 removed as a complete public/private dependency group. Curated memories remain.
@@ -436,7 +436,7 @@ memory files are never deleted by journal expiry. Readers skip retired history
 even when cleanup was interrupted before it removed the private records.
 Prompt and cockpit observations are invalidated after cleanup.
 
-Private `.mevedel/state/journal/` directories serve separate purposes:
+Private `.niwa/state/journal/` directories serve separate purposes:
 
 | Directory | Purpose and retention |
 | --- | --- |

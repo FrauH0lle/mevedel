@@ -37,7 +37,7 @@ test(
   'real room: concurrent browsers, deterministic agent, isolation, laser, and host recovery',
   { timeout: 180000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'mevedel-editing-browser-')),
+    const directory = await mkdtemp(join(tmpdir(), 'niwa-editing-browser-')),
       port = await freePort();
     const logs = [],
       errors = [];
@@ -71,8 +71,8 @@ test(
         XDG_CACHE_HOME: join(directory, 'cache'),
         XDG_DATA_HOME: join(directory, 'data'),
         XDG_STATE_HOME: join(directory, 'state'),
-        MEVEDEL_EDITING_TEST_ROOT: directory,
-        MEVEDEL_EDITING_RELAY: `ws://127.0.0.1:${port}`,
+        NIWA_EDITING_TEST_ROOT: directory,
+        NIWA_EDITING_RELAY: `ws://127.0.0.1:${port}`,
       };
       host = spawn(
         'emacs',
@@ -528,7 +528,7 @@ test(
       assert.equal((await agent('InspectTest')).queue.length, 1, 'human replies do not queue a model turn');
       // Each discussion keeps its own draft through a reload.
       const stored = () => pages[0].evaluate(() => Object.keys(localStorage)
-        .filter(k => k.startsWith('mevedel-editing:')).map(k => JSON.parse(localStorage[k]).assistant?.replies || {}));
+        .filter(k => k.startsWith('niwa-editing:')).map(k => JSON.parse(localStorage[k]).assistant?.replies || {}));
       await box(f0).fill('> Private reply draft\nsecond line');
       await openWhole(f0);
       await box(f0).fill('Separate private AI question');
@@ -660,9 +660,9 @@ test(
       await pages[0].keyboard.press('Control+a');
       await frame(pages[0]).locator('#discuss-selection').click();
       await box(frame(pages[0])).fill('Private recovered question');
-      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.start?.text === 'Private recovered question'));
+      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('niwa-editing:') && JSON.parse(localStorage[k]).assistant?.start?.text === 'Private recovered question'));
       const attached = () => pages[0].evaluate(() => JSON.stringify(Object.keys(localStorage)
-        .filter(k => k.startsWith('mevedel-editing:'))
+        .filter(k => k.startsWith('niwa-editing:'))
         .map(k => JSON.parse(localStorage[k]).assistant?.start?.attachment)
         .find(Boolean)?.snapshot));
       const capturedContext = await attached();
@@ -671,7 +671,7 @@ test(
         await pages[0].reload();
         await frame(pages[0]).locator('[data-tool="rectangle"]').waitFor({state:'visible'});
         if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-        assert.equal(await box(frame(pages[0])).inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
+        assert.equal(await box(frame(pages[0])).inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('niwa-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
         assert.equal(await attached(),capturedContext);
       }
       await frame(pages[0]).locator('#assistant-close').click();
@@ -681,7 +681,7 @@ test(
       async function forged(link, args) {
         return pages[2].evaluate(
           async ({ link, args }) => {
-            const api = window.mevedelViewerTransport,
+            const api = window.niwaViewerTransport,
               c = api.parseFragment(new URL(link).hash),
               key = await api.importKey(c.keyBytes);
             return new Promise((resolve, reject) => {
@@ -1131,7 +1131,7 @@ test(
       await ownerPage.evaluate(() => {
         window.originalSetItem = Storage.prototype.setItem;
         Storage.prototype.setItem = function (key, value) {
-          if (key.startsWith('mevedel-editing:'))
+          if (key.startsWith('niwa-editing:'))
             throw new DOMException('Quota exceeded', 'QuotaExceededError');
           return window.originalSetItem.call(this, key, value);
         };

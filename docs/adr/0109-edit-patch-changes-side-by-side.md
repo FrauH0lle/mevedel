@@ -66,7 +66,7 @@ editor. See the
 - Matching context for a regenerated hunk is machine-generated. Hand-tuning a
   hunk's context is no longer possible, and no longer meaningful: the context is
   derived from the baseline the hunk is matched against.
-- `mevedel-tool-patch.el` owns the content-to-hunks derivation, so it is
+- `niwa-tool-patch.el` owns the content-to-hunks derivation, so it is
   testable from two strings with no UI.
 - One editor at a time, per session; a second request is refused.
 
@@ -77,11 +77,11 @@ session. The following failures and source observations determined that change.
 
 The former editor asked the user to write diff syntax. Every line of a hunk
 buffer had to begin with a space, `+`, or `-`, because that is all
-`mevedel-tool-patch-parse-update-lines` accepts. Fixing a character inside an
+`niwa-tool-patch-parse-update-lines` accepts. Fixing a character inside an
 existing `+` line was fine; adding a line was a trap. An added line of indented
 code starts with whitespace, so the leading space was consumed as the context
 marker and the rest became "this unchanged line must already exist in the
-file" — caught at commit by `mevedel-tool-patch--match-start` and reported as a
+file" — caught at commit by `niwa-tool-patch--match-start` and reported as a
 hunk that does not match, which names neither the missing `+` nor the line. An
 editor whose most common operation has a silent failure mode reported as
 something else is not worth keeping alongside one that has no markers at all.
@@ -94,7 +94,7 @@ because a Delete carries no `:content` to prefill.
 
 Two facts moved the cost estimate enough to decide the shape. Deriving hunks
 from an edited whole file initially looked like it had to consume hunk
-selection, since the planned result is built by `mevedel-tool-patch-apply-hunks`,
+selection, since the planned result is built by `niwa-tool-patch-apply-hunks`,
 which skips deselected hunks — so a deselected change is absent from the result
 and absent from the regenerated diff. Reading `--match-start` showed its
 `after` argument is only an ambiguity tiebreaker and not a positional floor, so

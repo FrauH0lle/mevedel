@@ -479,7 +479,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#shape-text').fill('Discard');
       await page.keyboard.press('Escape');
       assert.equal(await frame.locator('#scene text').textContent(), 'Database');
-      if (process.env.MEVEDEL_EDITOR_SCREENSHOTS)
+      if (process.env.NIWA_EDITOR_SCREENSHOTS)
         await page.screenshot({
           path: '.scratch/shared-collaborative-editing/board-revised.png',
         });
@@ -833,7 +833,7 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('[data-tool="select"]').getAttribute('aria-pressed'), 'true');
       await frame.locator('#scene [data-shape]:not([data-shape="ellipse"])').dblclick();
       await frame.locator('#shape-text').fill('Frontend');
-      if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/inline-text.png'});
+      if (process.env.NIWA_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/inline-text.png'});
       assert.equal(await frame.locator('#scene [data-shape]').count(), 3, 'the ellipse, the rectangle and its label');
       await page.keyboard.press('Control+Enter');
       assert.equal(await frame.locator('#scene text').textContent(), 'Frontend');
@@ -889,7 +889,7 @@ test('editor interaction regressions', async (t) => {
       assert.deepEqual([arrow.x, arrow.x + arrow.points.at(-1)[0]].map(Math.round), [406, 554],
         'the file stores the ends where they are drawn');
       assert.deepEqual(exported.elements.find(e => e.id === 'target').boundElements, [{id:'arrow', type:'arrow'}]);
-      if (process.env.MEVEDEL_CONNECTOR_SCREENSHOTS)
+      if (process.env.NIWA_CONNECTOR_SCREENSHOTS)
         await page.screenshot({path:'.scratch/connector-borders/editor.png'});
       await page.close();
     });
@@ -1115,7 +1115,7 @@ test('editor interaction regressions', async (t) => {
           window.port.postMessage(window.agentChange);
         },kind);
         await highlighted.waitFor();
-        if (process.env.MEVEDEL_EXPORT_SCREENSHOTS)
+        if (process.env.NIWA_EXPORT_SCREENSHOTS)
           await page.screenshot({path:`.scratch/editor-polish/${kind}-highlight.png`});
         const before = await page.evaluate(async () => (await window.apply({action:'read'})).content);
         await page.clock.runFor(5000);
@@ -1127,7 +1127,7 @@ test('editor interaction regressions', async (t) => {
         await page.clock.runFor(100);
         assert.equal(await highlighted.count(),0,'old contribution does not light up again');
         assert.deepEqual(await page.evaluate(async () => (await window.apply({action:'read'})).content),before);
-        if (process.env.MEVEDEL_EXPORT_SCREENSHOTS)
+        if (process.env.NIWA_EXPORT_SCREENSHOTS)
           await page.screenshot({path:`.scratch/editor-polish/${kind}-expired.png`});
         assert.match(await frame.locator('#contributions').textContent(),/Agent: \/root/,'attribution remains available');
         for (const actor of ['Agent: /root', 'Guest: Bob']) {

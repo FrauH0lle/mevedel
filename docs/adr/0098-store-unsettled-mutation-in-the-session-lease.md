@@ -15,7 +15,7 @@ refusing a later mutation it asks the target again; only an affirmative `dead`
 clears the block. Live, unreachable, ambiguous, or incomplete identity stays
 blocked. Busy transport defers proof to a later attempt rather than nesting I/O.
 A latch restored after restart carries no process identity and still requires
-`mevedel-retry-target-readiness` plus explicit acknowledgement.
+`niwa-retry-target-readiness` plus explicit acknowledgement.
 
 ## Rationale and consequences
 

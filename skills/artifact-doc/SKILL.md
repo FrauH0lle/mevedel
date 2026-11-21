@@ -29,7 +29,7 @@ such controls would promise persistence this document does not provide.
 1. Read the template:
 
    ```
-   ${MEVEDEL_SKILL_DIR}template.html
+   ${NIWA_SKILL_DIR}template.html
    ```
 
 2. Copy it as your starting point and replace each `<!-- SLOT: ... -->` marker

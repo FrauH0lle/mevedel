@@ -19,7 +19,7 @@ const parser = new Marked({
   },
 });
 
-window.mevedelMarkdown = Object.freeze({
+window.niwaMarkdown = Object.freeze({
   render(text) {
     if (!DOMPurify.isSupported) throw new Error('Markdown sanitization is not supported by this browser');
     return DOMPurify.sanitize(parser.parse(String(text || '')), {

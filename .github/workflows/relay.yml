@@ -51,9 +51,9 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags="-s -w" \
-              -o "dist/mevedel-relay-linux-$arch" .
+              -o "dist/niwa-relay-linux-$arch" .
           done
-          (cd dist && sha256sum mevedel-relay-* > SHA256SUMS)
+          (cd dist && sha256sum niwa-relay-* > SHA256SUMS)
 
       - name: Release
         env:
@@ -65,14 +65,14 @@ jobs:
           {
             echo "Built from $GITHUB_SHA. Static Linux binaries, no libc dependency."
             echo
-            echo 'Run with `-host-token` to require `X-Mevedel-Host-Token` on room'
-            echo 'creation, and set `mevedel-collaboration-relay-host-token` to match.'
+            echo 'Run with `-host-token` to require `X-Niwa-Host-Token` on room'
+            echo 'creation, and set `niwa-collaboration-relay-host-token` to match.'
           } > dist/NOTES.md
           # A re-run on the same commit refreshes the artifacts rather than
           # failing on the tag it already created.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/mevedel-relay-* dist/SHA256SUMS --clobber
+            gh release upload "$TAG" dist/niwa-relay-* dist/SHA256SUMS --clobber
           else
-            gh release create "$TAG" dist/mevedel-relay-* dist/SHA256SUMS \
+            gh release create "$TAG" dist/niwa-relay-* dist/SHA256SUMS \
               --title "$TAG" --notes-file dist/NOTES.md
           fi

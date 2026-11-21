@@ -50,7 +50,7 @@ entry point. Permanent activity deletion would also need rules for broken
 session links and Rewind resurrection.
 
 The instruction registry owns workspace buckets, IDs, lookup, and links;
-the source coordinator (now `mevedel-note-source.el`) coordinated durable records
+the source coordinator (now `niwa-note-source.el`) coordinated durable records
 and presentations;
 overlay UI owns actions/redraw; overlay core owns geometry and prompt context.
 This localizes record/presentation consistency instead of distributing it across

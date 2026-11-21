@@ -1,7 +1,7 @@
 # ToolCall dialect manual
 
-ToolCall lets a model make a data-dependent sequence of ordinary mevedel
-tool calls inside one model turn. The script is interpreted by mevedel; it is
+ToolCall lets a model make a data-dependent sequence of ordinary niwa
+tool calls inside one model turn. The script is interpreted by niwa; it is
 never evaluated as Emacs Lisp. Every nested tool call still goes
 through normal validation, hooks, permissions, snapshots, telemetry, and
 rendering.
@@ -292,7 +292,7 @@ separator uses a fixed whitespace regexp; it never reads Emacs configuration.
 ToolSearch returns current tool contracts and their exact keyword arguments:
 
 ```elisp
-(Read :file_path "mevedel.el" :offset 1 :limit 80)
+(Read :file_path "niwa.el" :offset 1 :limit 80)
 (Grep :pattern "TODO" :path "." :output_mode "files_with_matches")
 ```
 
@@ -393,7 +393,7 @@ roster. Unknown names fail closed.
 
 The guest cannot evaluate host Lisp or access buffers, processes, files,
 environment variables, user identity, time, or package state directly. It can
-reach external state only through nested tools, where normal mevedel authority
+reach external state only through nested tools, where normal niwa authority
 and audit rules apply.
 
 Host `macroexpand-all` is never run on guest text. The closed syntax

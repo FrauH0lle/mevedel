@@ -2,14 +2,14 @@
 
 (require 'cl-lib)
 (require 'ert)
-(require 'mevedel-native)
-(require 'mevedel-structs)
+(require 'niwa-native)
+(require 'niwa-structs)
 
-(defvar mevedel-test-native-root)
+(defvar niwa-test-native-root)
 
-(let ((mevedel-user-dir mevedel-test-native-root))
-  (should (mevedel-native-load))
-  (should (mevedel-native--timed-wait-available-p)))
+(let ((niwa-user-dir niwa-test-native-root))
+  (should (niwa-native-load))
+  (should (niwa-native--timed-wait-available-p)))
 
 (cl-labels
     ((await (predicate)
@@ -54,7 +54,7 @@
                      (with-mutex mutex
                        (dotimes (_ 3)
                          (make-string 100000 ?y)
-                         (mevedel-native--condition-wait condition 0.01)))
+                         (niwa-native--condition-wait condition 0.01)))
                      (setq completed t)))
                  "native-wait-gc" 'silently))
           (await (lambda () completed))
@@ -71,7 +71,7 @@
         (progn
           (advice-add 'condition-wait :override advice)
           (with-mutex mutex
-            (mevedel-native--condition-wait condition 0.0)
+            (niwa-native--condition-wait condition 0.0)
             (should-error (condition-wait condition))))
       (advice-remove 'condition-wait advice)))
 
@@ -87,7 +87,7 @@
                            (backtrace-frames))
               (setq entered t)))))
     (condition-case nil
-        (mevedel-native--condition-wait nil 0.01)
+        (niwa-native--condition-wait nil 0.01)
       (error (setq signaled t)))
     (should signaled)
     (should-not entered))
@@ -107,9 +107,9 @@
                    (with-mutex lock
                      (with-mutex lock
                        (setq entered t)
-                       (mevedel-native--condition-wait condition 60.0)
-                       (mevedel-native--condition-wait condition 0.0))
-                     (mevedel-native--condition-wait condition 0.0))
+                       (niwa-native--condition-wait condition 60.0)
+                       (niwa-native--condition-wait condition 0.0))
+                     (niwa-native--condition-wait condition 0.0))
                    (setq completed t))
                  "native-wait-long" 'silently))
           (await (lambda () entered))
@@ -117,7 +117,7 @@
                 (make-thread
                  (lambda ()
                    (with-mutex other-lock
-                     (mevedel-native--condition-wait other-condition 0.02))
+                     (niwa-native--condition-wait other-condition 0.02))
                    (setq short-completed t))
                  "native-wait-short" 'silently))
           (await (lambda () short-completed))
@@ -143,12 +143,12 @@
                 (make-thread
                  (lambda ()
                    (with-mutex mutex
-                     (should-error (mevedel-native--condition-wait nil 0.01))
+                     (should-error (niwa-native--condition-wait nil 0.01))
                      (setq ordinary 'after-error)
                      (condition-wait condition)
                      (setq entered t)
                      (condition-case nil
-                         (mevedel-native--condition-wait condition 60.0)
+                         (niwa-native--condition-wait condition 60.0)
                        (error (setq interrupted t)))
                      (setq ordinary 'after-signal)
                      (condition-wait condition)

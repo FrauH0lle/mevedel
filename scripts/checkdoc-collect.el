@@ -10,7 +10,7 @@
 (require 'json)
 (require 'cl-lib)
 
-(defun mevedel-checkdoc--collect (file)
+(defun niwa-checkdoc--collect (file)
   "Return checkdoc diagnostics for FILE without loading its code."
   (with-temp-buffer
     (insert-file-contents file)
@@ -38,7 +38,7 @@
 
 (let* ((args (delete "--" command-line-args-left))
        (files (json-read-file (car args)))
-       (results (mapcar #'mevedel-checkdoc--collect files)))
+       (results (mapcar #'niwa-checkdoc--collect files)))
   (with-temp-file (cadr args)
     (insert (json-encode (vconcat results))))
   (setq command-line-args-left nil))

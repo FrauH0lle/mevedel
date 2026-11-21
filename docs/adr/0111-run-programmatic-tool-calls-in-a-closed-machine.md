@@ -4,10 +4,10 @@ Status: accepted
 
 ## Current decision
 
-Mevedel exposes programmatic tool calling as one hybrid model tool named
+Niwa exposes programmatic tool calling as one hybrid model tool named
 `ToolCall`. The name is model-facing prompt surface, so it states what the
 tool does rather than abbreviating it; the original `PTC` acronym survives only
-as the internal `mevedel-ptc-*` namespace and the `ptc-primitives` skill key.
+as the internal `niwa-ptc-*` namespace and the `ptc-primitives` skill key.
 Its JSON `expression` argument runs in a fresh, in-process explicit
 continuation machine, never through host `eval` or `macroexpand-all`. Guest
 text is read into a private obarray. Special forms, syntax transformers, and
@@ -20,10 +20,10 @@ the guest bounded. Atomic operand accounting counts each use of shared
 aggregates before host execution; final-value accounting does the same before
 serialization. Fuel pauses return control to Emacs between slices.
 
-The implementation keeps three ownership seams: `mevedel-ptc-interpreter.el`
-owns the pipeline-independent guest machine, `mevedel-ptc-driver.el` owns the
+The implementation keeps three ownership seams: `niwa-ptc-interpreter.el`
+owns the pipeline-independent guest machine, `niwa-ptc-driver.el` owns the
 nested pipeline lifecycle behind one execution entry, and
-`mevedel-tool-ptc.el` owns request roster policy, the adapter, registration,
+`niwa-tool-ptc.el` owns request roster policy, the adapter, registration,
 and aggregate rendering. This split keeps the security-sensitive evaluator
 cohesive while isolating asynchronous orchestration state from model-facing
 tool policy.
@@ -85,7 +85,7 @@ guest media-emission helpers.
 
 It also rejects the alternative of running full Elisp in a child
 `emacs -Q --batch` confined by an OS sandbox, which is what the Eval tool's
-fresh mode does. That boundary is conditional: `mevedel-sandbox-mode` defaults
+fresh mode does. That boundary is conditional: `niwa-sandbox-mode` defaults
 to `best-effort`, so a failed Bubblewrap probe -- no `bwrap`, no user
 namespaces, macOS or Windows, or a TRAMP target that lacks it -- runs the child
 unconfined with a disclosure rather than refusing. A process boundary without a

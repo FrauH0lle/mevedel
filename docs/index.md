@@ -1,6 +1,6 @@
-# mevedel documentation
+# niwa documentation
 
-mevedel is an Emacs Lisp package that provides a visual, overlay-based
+niwa is an Emacs Lisp package that provides a visual, overlay-based
 workflow for interacting with LLMs while programming, with direct gptel
 integration.
 
@@ -9,13 +9,13 @@ codebase. The sidebar groups workflows, architecture, tool reference, and
 development guidance. [Decision records](adr/README.md) explain architectural
 choices and their history; [the backlog](backlog.md) is the sole future-work
 section. The repository root
-[`AGENTS.md`](https://github.com/FrauH0lle/mevedel/blob/master/AGENTS.md) is
+[`AGENTS.md`](https://github.com/FrauH0lle/niwa/blob/master/AGENTS.md) is
 the agent entry point. The documentation map below locates area contracts;
 [module-map.md](module-map.md) locates implementation modules.
 
 Good starting points:
 
-- [Claude subscription setup](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions) — use an installed Claude Pro/Max login through the guided setup.
+- [Claude subscription setup](https://github.com/FrauH0lle/niwa/blob/master/README.md#claude-promax-subscriptions) — use an installed Claude Pro/Max login through the guided setup.
 - [Architecture](architecture.md) — data structures, workspace context chain,
   gptel integration, persistence layout
 - [Tools](tools.md) and [Permissions](permissions.md) — the tool pipeline and
@@ -30,7 +30,7 @@ Good starting points:
 Read the relevant contracts before planning or changing an unfamiliar area.
 
 - [`architecture.md`](architecture.md) — key data structures
-  (`mevedel-workspace`, `-session`, `-request`, `-tool`), workspace
+  (`niwa-workspace`, `-session`, `-request`, `-tool`), workspace
   context chain, gptel integration, persistent memory layout, chat
   buffer formatting
 - [`address-to-resource.md`](address-to-resource.md) — closed

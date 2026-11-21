@@ -1,23 +1,23 @@
 # Skills
 
 Skills are reusable prompt packages loaded from `SKILL.md` files.
-`mevedel-skills-core.el` owns the skill model, discovery, persisted enablement,
+`niwa-skills-core.el` owns the skill model, discovery, persisted enablement,
 session installation, path-scoped activation state, and hot reload.
-`mevedel-tool-skills.el` registers the model-visible Skill tool schemas.
-`mevedel-skills-preparation.el` owns argument substitution and body injection
-execution. `mevedel-skills-syntax.el` owns shared authored Markdown and
-required-skill syntax. `mevedel-skills-invoke.el` owns request-scoped context, preparation
+`niwa-tool-skills.el` registers the model-visible Skill tool schemas.
+`niwa-skills-preparation.el` owns argument substitution and body injection
+execution. `niwa-skills-syntax.el` owns shared authored Markdown and
+required-skill syntax. `niwa-skills-invoke.el` owns request-scoped context, preparation
 policy, invocation, fork dispatch, and model-tool behavior.
-`mevedel-skills-input.el` owns user token binding, raw `gptel-send` dispatch,
+`niwa-skills-input.el` owns user token binding, raw `gptel-send` dispatch,
 inline attachment projection, and direct fork response insertion.
-`mevedel-skills-plan.el` owns deterministic composer invocation plans.
-`mevedel-mention-bindings.el` owns the atomic text-property lifecycle shared
+`niwa-skills-plan.el` owns deterministic composer invocation plans.
+`niwa-mention-bindings.el` owns the atomic text-property lifecycle shared
 with direct reference, file, and MCP mentions; skill resolution remains in the
 skill modules.
-`mevedel-turn.el` owns the canonical terminal transaction shared by
+`niwa-turn.el` owns the canonical terminal transaction shared by
 ordinary responses and direct fork completion.
-`mevedel-skills-prompt.el` owns prompt roster rendering, event-shaped reminders,
-and path-activation notices. `mevedel-skills-ui.el` owns local commands, the
+`niwa-skills-prompt.el` owns prompt roster rendering, event-shaped reminders,
+and path-activation notices. `niwa-skills-ui.el` owns local commands, the
 skills cockpit, command/skill completion, font-lock, and send-dispatch
 composition.
 
@@ -26,10 +26,10 @@ detailed profiling. Rendering can also be requested for prompt sizing or an
 unchanged retained-context observation, so it does not prove a new delivery.
 
 Plugin ownership follows its existing trust boundaries:
-`mevedel-plugin-registry.el` owns manifests, discovery, activation state, and
-hook consent; `mevedel-plugin-lifecycle.el` owns managed Git installation,
-update, and removal; `mevedel-plugin-ui.el` owns the cockpit and `/plugin`
-parser. `mevedel-plugins.el` retains only the session/workspace projection used
+`niwa-plugin-registry.el` owns manifests, discovery, activation state, and
+hook consent; `niwa-plugin-lifecycle.el` owns managed Git installation,
+update, and removal; `niwa-plugin-ui.el` owns the cockpit and `/plugin`
+parser. `niwa-plugins.el` retains only the session/workspace projection used
 by skill discovery and cockpit refresh.
 
 ## Skill flow
@@ -68,21 +68,21 @@ host checks each selected name at receipt and queued delivery. See
 ## Discovery
 
 Skills are scanned from configured user/project/managed/plugin dirs plus
-bundled skills under `skills/` when `mevedel-skills-include-bundled` is
+bundled skills under `skills/` when `niwa-skills-include-bundled` is
 non-nil. The bundled `frontend` skill preserves product UI guidance outside
 the shared baseline. Its description is discoverable with the other skills;
 the body loads through `Skill(name="frontend")` or an explicit `$frontend`
 invocation, without automatically activating for every source-file read.
-The default search order is `.mevedel/skills/`,
-`.agents/skills/`, `skills/` under `mevedel-user-dir` (default
-`~/.mevedel/`), then `~/.agents/skills/`.
+The default search order is `.niwa/skills/`,
+`.agents/skills/`, `skills/` under `niwa-user-dir` (default
+`~/.niwa/`), then `~/.agents/skills/`.
 Unique names stay unqualified. When non-plugin skills from different
 sources share a name, all colliding entries are exposed with the shortest
-deterministic prefix that disambiguates them, such as `mevedel:review`,
+deterministic prefix that disambiguates them, such as `niwa:review`,
 `agents:review`, `local:review`, `global:review`, or
 `bundled:review`. If all four ordinary roots contain the same name, the
-visible names are `local-mevedel:review`, `local-agents:review`,
-`global-mevedel:review`, and `global-agents:review`. Same-source
+visible names are `local-niwa:review`, `local-agents:review`,
+`global-niwa:review`, and `global-agents:review`. Same-source
 duplicates keep the first entry.
 
 Recursive discovery does not follow directory symlinks.  A linked skill tree
@@ -103,12 +103,12 @@ are prefixed with the plugin name from the manifest, so
 and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
 unchanged. New installs live under `~/.agents/plugins/`, including
 GitHub installs below `github.com/OWNER/REPO`. Plugin roots are
-discovered from workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, global `~/.mevedel/plugins/`, global
-`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Plugin
+discovered from workspace `.niwa/plugins/`, workspace
+`.agents/plugins/`, global `~/.niwa/plugins/`, global
+`~/.agents/plugins/`, then `niwa-plugin-extra-roots`. Plugin
 activation is workspace-scoped: plugins are inactive by default in each
 project until enabled, and the state is stored in that workspace's
-`.mevedel/plugins.el`. Activating a plugin enables all implemented plugin
+`.niwa/plugins.el`. Activating a plugin enables all implemented plugin
 components for that workspace; plugins with executable hooks require a
 concise consent summary before those hooks are enabled. The summary shows
 the plugin identity/source, exposed skills, each executable hook handler's
@@ -126,11 +126,11 @@ live session's lease and use the same disclosed, serialized publication
 path as other durability-critical state.  They never write through TRAMP
 before storage disclosure or from a read-only inspector.
 
-When multiple plugin roots contain the same manifest name, mevedel keeps
+When multiple plugin roots contain the same manifest name, niwa keeps
 the highest-precedence plugin and reports shadowed duplicates in
-`/plugin list`. Precedence is workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, global `~/.mevedel/plugins/`, global
-`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Activation is
+`/plugin list`. Precedence is workspace `.niwa/plugins/`, workspace
+`.agents/plugins/`, global `~/.niwa/plugins/`, global
+`~/.agents/plugins/`, then `niwa-plugin-extra-roots`. Activation is
 bound to the plugin name and source root, so a higher-precedence plugin
 with the same name does not silently inherit enabled state from a
 different source. `/plugin list` reports the conflict so the user can
@@ -142,7 +142,7 @@ when an update changes hook files, events, matchers, commands, or functions,
 skills remain enabled but hooks require consent again before running.
 Plugin runtime data stays workspace-scoped and keyed by plugin name, so
 switching an activation between roots with the same manifest name reuses
-the same `<workspace>/.mevedel/state/plugin-data/<plugin-name>` directory.
+the same `<workspace>/.niwa/state/plugin-data/<plugin-name>` directory.
 
 Bundled skills currently include:
 
@@ -150,7 +150,7 @@ Bundled skills currently include:
   `/review` command uses the same reviewer contract but dispatches its
   task directly so user/project skills named `review` cannot override the
   review workflow. A skill named `review` remains selectable through its
-  generated visible name, for example `local:review` or `mevedel:review`.
+  generated visible name, for example `local:review` or `niwa:review`.
 - `git-worktree` — model-only guidance for checking Git worktree
   isolation and mirroring the `/worktree` defaults when explicit
   model-driven fallback is needed.
@@ -201,7 +201,7 @@ Bundled skills currently include:
   and checking guidance; does not attach the HTML-specific artifact skills.
 
 The four artifact leaf skills each build from a `template.html` beside their
-`SKILL.md`, reached through `${MEVEDEL_SKILL_DIR}`, and attach `artifact` plus
+`SKILL.md`, reached through `${NIWA_SKILL_DIR}`, and attach `artifact` plus
 `artifact-design`; `artifact-explainer` additionally attaches
 `artifact-diagramming`. Together they are the worked example of the
 required-attachment contract in bundled skills: the bases carry the rules once
@@ -215,7 +215,7 @@ test/artifact-templates-test.js`); like the viewer's JavaScript tests, it is
 not part of the ERT run.
 
 `/remember [focus]` is a local command that starts a bounded sessionless memory
-review and opens the proposals cockpit. `M-x mevedel-remember` does the same;
+review and opens the proposals cockpit. `M-x niwa-remember` does the same;
 a prefix argument asks for focus. In manual mode, proposals wait for explicit
 decisions through the captured-state application checks. The table provides
 full body/diff/evidence inspection, accept/reject, and checked recovery or
@@ -228,7 +228,7 @@ names may include a generated `source:` or plugin prefix.
 
 Hot reload marks consuming chat buffers dirty when watched skill
 directories change. A configured directory that does not exist yet is
-watched through its nearest existing ancestor, such as `.mevedel/` or the
+watched through its nearest existing ancestor, such as `.niwa/` or the
 workspace root, where a change counts only on the path to that directory;
 the files a turn writes there do not mark buffers dirty. Completion,
 reminders and the retained skills observation rescan on demand when
@@ -263,8 +263,8 @@ the raw prepared body; the collapsed Skill row and user command Prompt drawer
 also use that raw body, so delivery headers do not inflate their line counts.
 
 Bare `skill://` listings also expose readable origin aliases alongside exact
-addresses: `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
-`skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,
+addresses: `skill://local-niwa/SKILL`, `skill://local-agents/SKILL`,
+`skill://global-niwa/SKILL`, `skill://global-agents/SKILL`,
 `skill://bundled/SKILL`, `skill://managed/SKILL`, and
 `skill://plugin/PLUGIN/SKILL`, each with optional descendants. An alias resolves
 to the exact current full-hash locator; the exact locator remains the authority,
@@ -273,8 +273,8 @@ There is no unqualified `skill://NAME` alias.
 
 Remote skill directories use TRAMP file notifications when the execution
 target provides either `inotifywait` or `gio`.  Without either program,
-mevedel reports the limitation once per target capability state and leaves
-save-triggered checks plus `M-x mevedel-skills-rescan` available.  After
+niwa reports the limitation once per target capability state and leaves
+save-triggered checks plus `M-x niwa-skills-rescan` available.  After
 installing a notifier, refresh target readiness and rescan to install the
 watcher.  `stat-when-checking` remains an explicit opt-in because it adds one
 remote stat per known skill at each pull check. Notification filtering uses
@@ -290,13 +290,13 @@ Local slash commands are separate from `$skill` lookup. Built-ins include
 `/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
-and mevedel hooks. `/edits` toggles the current session between `ask` and
+and niwa hooks. `/edits` toggles the current session between `ask` and
 `edits`; it never grants `full-auto` execution. `/mode` accepts only the
 canonical `ask`, `edits`, and `full-auto` values. Entering and leaving
 `full-auto` installs the corresponding boundary
 reminders.
 
-`/usage` calls `mevedel-subscription-usage-show`, also available as cockpit `U`.
+`/usage` calls `niwa-subscription-usage-show`, also available as cockpit `U`.
 It inspects the selected backend's account-wide subscription quotas in a separate
 read-only report, including while a model request is active. It does not enter
 conversation admission, history, token accounting, or Goal continuation.
@@ -341,18 +341,18 @@ Plugin management:
   manifest validates, so a failed clone or an unusable manifest leaves
   nothing at the destination and can simply be retried.
 - `/plugin update NAME` runs `git pull --ff-only` for global managed
-  installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
+  installs under `~/.niwa/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
-  mevedel never updates plugins by itself; updating is always this explicit
+  niwa never updates plugins by itself; updating is always this explicit
   command or the cockpit action.
 - Update notifications are opt-in. With the default
-  `mevedel-plugins-update-check-interval` of nil nothing checks. Set it to a
+  `niwa-plugins-update-check-interval` of nil nothing checks. Set it to a
   number of days and, once the registry is first used in a session and Emacs
-  is idle, mevedel runs `git ls-remote origin HEAD` asynchronously, one
+  is idle, niwa runs `git ls-remote origin HEAD` asynchronously, one
   managed Git clone at a time, and compares the result with local `HEAD`.
   Nothing touches the network at load or startup, and the last check time is
-  stored in `plugin-update-check.el` under `mevedel-user-dir`, so restarts
+  stored in `plugin-update-check.el` under `niwa-user-dir`, so restarts
   inside the interval do not check again. Results are cached per plugin:
   the cockpit shows "update available" (or "check failed") after the source
   path, and one echo-area message ("updates available for N plugins;
@@ -364,14 +364,14 @@ Plugin management:
   in place when it finishes. A successful update clears the cached result.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
   global managed installed plugin. If the current workspace activation
-  points at that source, mevedel clears that activation. Workspace plugin
+  points at that source, niwa clears that activation. Workspace plugin
   data is not deleted by default because it is shared by plugin name
   across source switches. Plugins discovered from workspace
-  `.mevedel/plugins/`, `.agents/plugins/`, or
-  `mevedel-plugin-extra-roots` must be removed manually. Use `/plugin
+  `.niwa/plugins/`, `.agents/plugins/`, or
+  `niwa-plugin-extra-roots` must be removed manually. Use `/plugin
   disable NAME` for project-only deactivation.
 - `/plugin` and `/plugin list` open the session-owned plugin cockpit for
-  the current workspace in a dedicated `*mevedel plugins*` buffer. The
+  the current workspace in a dedicated `*niwa plugins*` buffer. The
   cockpit is a `tabulated-list-mode` table with one selected plugin at a
   time; it is not added to the chat transcript. The buffer supports
   refresh, adaptive enable/disable, hook override, install, update,
@@ -384,7 +384,7 @@ Plugin management:
   action still routes through an explicit switch confirmation. Plugin details are available from the management buffer.
 - `/plugin enable NAME` activates all implemented plugin components for
   the current workspace. If the plugin contributes executable hooks,
-  mevedel shows a concise consent summary of the risky/executable surface
+  niwa shows a concise consent summary of the risky/executable surface
   before enabling them.
 - `/plugin disable NAME` disables plugin skills and hooks in the current
   workspace.
@@ -407,7 +407,7 @@ whose hooks still need new consent; hooks remain withheld until consent is
 reviewed per plugin.
 
 Codex plugin manifest fields `apps` and `mcpServers` are not loaded
-today; mevedel does not start plugin apps or bundled MCP servers yet.
+today; niwa does not start plugin apps or bundled MCP servers yet.
 
 `/skills` manages visible skills:
 
@@ -421,7 +421,7 @@ Disabled skills stay on the session for inspection, but they are omitted
 from `$` completion, rejected by explicit `$skill` invocation and
 `Skill(name=...)`, and omitted from model-facing skill discovery and
 `skill://` resources. The denylist is stored as
-`(:disabled-keys (...))` in `<workspace>/.mevedel/skills-state.el`; a missing
+`(:disabled-keys (...))` in `<workspace>/.niwa/skills-state.el`; a missing
 file leaves every skill enabled. Project-contained skill sources use portable
 workspace-relative identities, while external user, bundled, managed, and
 plugin skill sources use canonical absolute identities. Visible names and
@@ -434,7 +434,7 @@ normal storage disclosure and lease checks; a sessionless inspector cannot
 mutate it. A scan reads state once and caches effective enablement on the
 session's skill objects. A command or cockpit toggle updates every live session
 in that workspace immediately. The former global
-`~/.mevedel/skills-state.el` is no longer read and is left untouched for manual
+`~/.niwa/skills-state.el` is no longer read and is left untouched for manual
 reference.
 
 Completion offers local command names at leading `/` and user-invocable
@@ -478,7 +478,7 @@ Current fields include:
 false.
 
 Command hooks retain their skill resource origin.  Project skill hooks are
-omitted until `mevedel-hooks-trust-project` records the exact workspace, path,
+omitted until `niwa-hooks-trust-project` records the exact workspace, path,
 and `SKILL.md` content hash; editing the manifest invalidates that consent for
 both user- and model-origin invocation.  Trusted project skill commands and
 same-target remote project-plugin commands run on the session target.  User,
@@ -508,7 +508,7 @@ ListSkills without a query includes active path-scoped skills; a query also
 searches dormant ones. Explicit invocation is independent of path activity.
 Authored configuration changes deliver a fresh retained catalog update.
 
-The model-aware roster budget (`mevedel-skills-listing-budget`, default 0.02)
+The model-aware roster budget (`niwa-skills-listing-budget`, default 0.02)
 uses the effective request model's context window and estimates four characters
 per token. It shortens descriptions before omitting entries.
 Its stable usage contract always advertises `ListSkills(query)`, including when
@@ -637,7 +637,7 @@ missing, disabled, malformed on disk, or no longer user-invocable emits a
 warning and becomes a temporary `[skill:foo -- unavailable]` annotation for
 that request; the stored prompt remains unchanged and the turn continues.
 A structurally malformed live binding still blocks submission because its
-intended target cannot be trusted. Mevedel prepares every unique available
+intended target cannot be trusted. Niwa prepares every unique available
 skill before dispatching anything; the first injection, permission,
 validation, or hook failure sends neither a partial request nor a child and
 leaves the direct draft or queued entry editable.
@@ -724,7 +724,7 @@ the skill is missing; `Skill` still rejects them.
 
 ## Review and Verify Commands
 
-`/review` / `M-x mevedel-review` and `/verify` / `M-x mevedel-verify` are
+`/review` / `M-x niwa-review` and `/verify` / `M-x niwa-verify` are
 local commands, not ordinary skill resolution. They share a target picker
 for uncommitted changes, a base branch, a specific commit, the last
 commit, or custom instructions. Inline `/review` and `/verify` arguments
@@ -756,7 +756,7 @@ the agent runs. This handle is sourced from a hidden canonical collaboration
 event, updates as the agent calls tools, and remains separate from the final
 summary.
 
-At dispatch time, `mevedel-review.el` keeps target/result semantics local,
+At dispatch time, `niwa-review.el` keeps target/result semantics local,
 creates a unique path such as `/root/review` or `/root/verify_2`, and attaches
 the workflow result consumer before provider dispatch. It spawns the bundled
 agent it resolved rather than naming a role, so the request-local role
@@ -767,7 +767,7 @@ narrowed one behind that refuses a later spawn. A forked skill's synthetic
 agent is dispatched the same way, for the same reason. After the parent
 submission passes its mutation-authority checks, concrete Git targets receive
 a collision-free package under
-`.mevedel/state/review-packages/`; the command tells the reviewer or verifier to
+`.niwa/state/review-packages/`; the command tells the reviewer or verifier to
 read that file before rerunning broad repository inspection. Package collection
 uses one fixed Git runner that disables pagers, replacement objects,
 filesystem monitors, external diffs, and text conversion. It supplies
@@ -820,7 +820,7 @@ discoverable tools. Composition admission is a separate restriction.
 ## Hooks
 
 Skill frontmatter `hooks` uses the same event -> matcher -> handler shape
-as `.mevedel/hooks.el` and `.mevedel/hooks.json`. Command skills install
+as `.niwa/hooks.el` and `.niwa/hooks.json`. Command skills install
 those rules on their request or child invocation. Instruction invocations
 ignore their declared hooks; non-skill hook layers may still observe and
 rewrite or block instruction body preparation. For fork commands, a
@@ -850,7 +850,7 @@ and effort stay unchanged. Switching engines after root history exists starts
 a visibly labelled excerpt continuation from the effective canonical history;
 it does not replay tools or reuse another engine's hidden conversation.
 
-The existing `mevedel-model-workloads` map can tune an external skill without
+The existing `niwa-model-workloads` map can tune an external skill without
 editing its `SKILL.md`. The key must be an Emacs symbol consisting of `$`
 followed by the skill's final visible name; string keys and unprefixed symbols
 do not address skills. Qualified names keep their qualification:
@@ -880,7 +880,7 @@ Policy is applied only at a request-owner boundary:
 | Plan implementation skill or instruction mention | Ignored; the accepted session snapshot applies |
 | Model-side inline `Skill` call | Ignored; the parent request is already realized |
 
-Mevedel resolves and validates provider-dependent policy only for the first two
+Niwa resolves and validates provider-dependent policy only for the first two
 owner cases. Effort is checked against the selected model's
 `:reasoning-effort` metadata before dispatch; unsupported explicit effort
 fails the owning command instead of being dropped or downgraded. Ignored
@@ -914,9 +914,9 @@ placeholders are `$ARGUMENTS` for the raw argument string,
 
 Claude-compatible literal substitutions are supported for imported skills:
 `${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`, and `${CLAUDE_EFFORT}`.
-Mevedel-native aliases are also available and preferred for new
-mevedel-specific skills: `${MEVEDEL_SESSION_ID}`, `${MEVEDEL_SKILL_DIR}`,
-and `${MEVEDEL_EFFORT}`. Effort substitutions reflect the parsed skill
+Niwa-native aliases are also available and preferred for new
+niwa-specific skills: `${NIWA_SESSION_ID}`, `${NIWA_SKILL_DIR}`,
+and `${NIWA_EFFORT}`. Effort substitutions reflect the parsed skill
 `effort`. Literal `${...}` substitutions do not suppress the
 automatic `ARGUMENTS: ...` fallback when invocation arguments are supplied
 but no argument placeholder is present.
@@ -960,7 +960,7 @@ the surrounding elisp expression. Substitution is textual, so skill
 authors must quote or escape interpolated values correctly before using
 them inside shell scripts or elisp strings.
 
-Each invocation records a `mevedel-skill-invocation-record` on the
+Each invocation records a `niwa-skill-invocation-record` on the
 live session. Compaction includes the recorded prepared body and source
 identity as historical evidence even if `SKILL.md` changes later. The record
 does not assert that the skill is still applicable: task completion, authored

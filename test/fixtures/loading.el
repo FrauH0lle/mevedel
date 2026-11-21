@@ -9,27 +9,27 @@
 (require 'gptel-openai)
 (require 'json)
 
-(defconst mevedel-test-loading--root
+(defconst niwa-test-loading--root
   (expand-file-name "../.." (file-name-directory load-file-name)))
-(defconst mevedel-test-loading--deferred
-  '(mevedel-tool-exec mevedel-tool-exec-permission mevedel-tool-patch
-    mevedel-tool-web mevedel-tool-fs-read mevedel-tool-fs-search
-    mevedel-shared-editing mevedel-shared-library mevedel-view
-    mevedel-collaboration-guest mevedel-collaboration-files
-    mevedel-collaboration-artifact mevedel-collaboration-editing
-    mevedel-collaboration-transport mevedel-claude-code mevedel-acp acp
-    mevedel-mcp mevedel-claude-code-usage))
+(defconst niwa-test-loading--deferred
+  '(niwa-tool-exec niwa-tool-exec-permission niwa-tool-patch
+    niwa-tool-web niwa-tool-fs-read niwa-tool-fs-search
+    niwa-shared-editing niwa-shared-library niwa-view
+    niwa-collaboration-guest niwa-collaboration-files
+    niwa-collaboration-artifact niwa-collaboration-editing
+    niwa-collaboration-transport niwa-claude-code niwa-acp acp
+    niwa-mcp niwa-claude-code-usage))
 
-(defconst mevedel-test-loading--answer "cold stub answer")
+(defconst niwa-test-loading--answer "cold stub answer")
 
-(defun mevedel-test-loading--provider ()
+(defun niwa-test-loading--provider ()
   "Serve a local OpenAI-compatible endpoint and select it as the backend.
-Every request receives `mevedel-test-loading--answer', streamed when asked."
+Every request receives `niwa-test-loading--answer', streamed when asked."
   (let* ((reply
           (lambda (process request)
             (let* ((stream (string-match-p "\"stream\": *true" request))
                    (message `((role . "assistant")
-                              (content . ,mevedel-test-loading--answer)))
+                              (content . ,niwa-test-loading--answer)))
                    (body
                     (if stream
                         (concat
@@ -51,7 +51,7 @@ Every request receives `mevedel-test-loading--answer', streamed when asked."
               (process-send-eof process))))
          (server
           (make-network-process
-           :name "mevedel-loading-provider" :server t :host 'local :service t
+           :name "niwa-loading-provider" :server t :host 'local :service t
            :family 'ipv4 :noquery t :coding 'binary
            :filter
            (lambda (process input)
@@ -75,367 +75,367 @@ Every request receives `mevedel-test-loading--answer', streamed when asked."
             :protocol "http" :stream t :key "unused")
           gptel-model 'gpt-4o-mini)))
 
-(defun mevedel-test-loading--await (predicate)
+(defun niwa-test-loading--await (predicate)
   "Process events until PREDICATE holds."
   (with-timeout (15 (ert-fail "Cold scenario timed out"))
     (while (not (funcall predicate)) (accept-process-output nil 0.02))))
 
-(defun mevedel-test-loading--session ()
+(defun niwa-test-loading--session ()
   "Return the live session's data buffer."
   (seq-find (lambda (buffer)
-              (and (buffer-local-value 'mevedel--session buffer)
+              (and (buffer-local-value 'niwa--session buffer)
                    (not (provided-mode-derived-p
-                         (buffer-local-value 'major-mode buffer) 'mevedel-view-mode))))
+                         (buffer-local-value 'major-mode buffer) 'niwa-view-mode))))
             (buffer-list)))
 
-(defun mevedel-test-loading--answers ()
+(defun niwa-test-loading--answers ()
   "Return how often the session transcript holds the stub answer."
-  (with-current-buffer (mevedel-test-loading--session)
-    (how-many (regexp-quote mevedel-test-loading--answer) (point-min) (point-max))))
+  (with-current-buffer (niwa-test-loading--session)
+    (how-many (regexp-quote niwa-test-loading--answer) (point-min) (point-max))))
 
-(defun mevedel-test-loading--settle (answers)
+(defun niwa-test-loading--settle (answers)
   "Wait until the session is idle with ANSWERS stub answers."
-  (mevedel-test-loading--await
+  (niwa-test-loading--await
    (lambda ()
-     (and (mevedel-test-loading--session)
-          (not (mevedel-turn-busy-p (mevedel-test-loading--session)))
-          (= answers (mevedel-test-loading--answers))))))
+     (and (niwa-test-loading--session)
+          (not (niwa-turn-busy-p (niwa-test-loading--session)))
+          (= answers (niwa-test-loading--answers))))))
 
-(defun mevedel-test-loading--send (text)
+(defun niwa-test-loading--send (text)
   "Submit TEXT from the session view composer and await its answer."
-  (let ((answers (mevedel-test-loading--answers)))
+  (let ((answers (niwa-test-loading--answers)))
     (with-current-buffer (buffer-local-value
-                          'mevedel--view-buffer (mevedel-test-loading--session))
-      (mevedel-view-composer-insert text)
-      (with-current-buffer (mevedel-view-composer-buffer)
-        (mevedel-view-send)))
-    (mevedel-test-loading--settle (1+ answers))))
+                          'niwa--view-buffer (niwa-test-loading--session))
+      (niwa-view-composer-insert text)
+      (with-current-buffer (niwa-view-composer-buffer)
+        (niwa-view-send)))
+    (niwa-test-loading--settle (1+ answers))))
 
-(defun mevedel-test-loading--entry-points ()
+(defun niwa-test-loading--entry-points ()
   "Return documented and `;;;###autoload' command candidates."
   (let (names)
     (with-temp-buffer
-      (insert-file-contents (file-name-concat mevedel-test-loading--root "README.md"))
-      (while (re-search-forward "^| `\\(mevedel[[:alnum:]-]*\\)`" nil t)
+      (insert-file-contents (file-name-concat niwa-test-loading--root "README.md"))
+      (while (re-search-forward "^| `\\(niwa[[:alnum:]-]*\\)`" nil t)
         (push (intern (match-string 1)) names)))
-    (dolist (file (directory-files mevedel-test-loading--root t "\\`mevedel.*\\.el\\'"))
+    (dolist (file (directory-files niwa-test-loading--root t "\\`niwa.*\\.el\\'"))
       (with-temp-buffer
         (insert-file-contents file)
         (while (re-search-forward "^;;;###autoload\n(\\(?:defun\\|define-[a-z-]*mode\\) \\([^ ()]+\\)" nil t)
           (push (intern (match-string 1)) names))))
     (delete-dups names)))
 
-(defun mevedel-test-loading (scenario &optional state)
+(defun niwa-test-loading (scenario &optional state)
   "Exercise cold SCENARIO through installed entry points.
 STATE names a directory that outlives the process; it defaults to a
 temporary one."
-  (let* ((root (or state (make-temp-file "mevedel-loading-state-" t)))
+  (let* ((root (or state (make-temp-file "niwa-loading-state-" t)))
          (default-directory (file-name-as-directory root))
          (user-emacs-directory (file-name-concat root "emacs/"))
          (inhibit-message t))
     (unwind-protect
         (progn
-          (require 'mevedel)
-          (setq mevedel-user-dir (file-name-concat root "user/"))
+          (require 'niwa)
+          (setq niwa-user-dir (file-name-concat root "user/"))
           (pcase scenario
             ('commands
              ;; Documented commands and autoload cookies are M-x entry points
              ;; as soon as the package loads, also from a source checkout.
-             (let ((unreachable (seq-remove #'commandp (mevedel-test-loading--entry-points)))
+             (let ((unreachable (seq-remove #'commandp (niwa-test-loading--entry-points)))
                    stale)
                ;; README tables also name options; every module tells them apart.
-               (dolist (file (directory-files mevedel-test-loading--root nil
-                                              "\\`mevedel.*\\.el\\'"))
+               (dolist (file (directory-files niwa-test-loading--root nil
+                                              "\\`niwa.*\\.el\\'"))
                  (require (intern (file-name-base file))))
                (ert-info ((format "Unreachable commands: %S" unreachable))
                  (should-not (seq-filter #'commandp unreachable)))
                (mapatoms (lambda (symbol)
-                           (when (and (string-prefix-p "mevedel" (symbol-name symbol))
+                           (when (and (string-prefix-p "niwa" (symbol-name symbol))
                                       (autoloadp (symbol-function symbol)))
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
             ('notes
              (call-process "git" nil nil nil "init" "-q")
-             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region ".niwa/\n" nil ".gitignore" nil 'silent)
              (write-region "noted code\n" nil "source.el" nil 'silent)
-             (should-not (featurep 'mevedel-notes))
+             (should-not (featurep 'niwa-notes))
              ;; A user's init enables visit restoration without loading notes.
-             (mevedel-notes-global-mode 1)
-             (should-not (featurep 'mevedel-notes))
+             (niwa-notes-global-mode 1)
+             (should-not (featurep 'niwa-notes))
              (let ((source (find-file-noselect "source.el")))
-               (with-current-buffer source (mevedel-note-create "Cold note"))
-               (should (file-exists-p ".mevedel/instructions.el"))
+               (with-current-buffer source (niwa-note-create "Cold note"))
+               (should (file-exists-p ".niwa/instructions.el"))
                (kill-buffer source))
              (with-current-buffer (find-file-noselect "source.el")
                (should (seq-some (lambda (ov)
                                    (string-search "Note 1 · You  Cold note"
                                                   (or (overlay-get ov 'after-string) "")))
                                  (overlays-in (point-min) (point-max))))
-               (mevedel-notes-toggle-labels)
+               (niwa-notes-toggle-labels)
                (should (seq-some
                         (lambda (ov)
                           (string-match-p "Cold note" (or (overlay-get ov 'after-string) "")))
                         (overlays-in (point-min) (point-max)))))
-             (should-not (featurep 'mevedel-chat))
-             (should-not (featurep 'mevedel-buddy)))
+             (should-not (featurep 'niwa-chat))
+             (should-not (featurep 'niwa-buddy)))
             ('note-lifecycle
              ;; Lifecycle verbs reach the conversation hint through a real
              ;; autoload, and persistence reaches the Rewind rule the same way.
              (call-process "git" nil nil nil "init" "-q")
-             (write-region ".mevedel/\n" nil ".gitignore" nil 'silent)
+             (write-region ".niwa/\n" nil ".gitignore" nil 'silent)
              (write-region "noted code\n" nil "source.el" nil 'silent)
-             (should-not (featurep 'mevedel-note-conversation))
+             (should-not (featurep 'niwa-note-conversation))
              (with-current-buffer (find-file-noselect "source.el")
-               (let ((note (mevedel-note-create "Cold note"))
-                     (workspace (mevedel--instruction-buffer-workspace (current-buffer))))
-                 (mevedel-note-mark-sent (list note) "cold-session")
-                 (mevedel-note-hold-change (list note) '(:id "cold" :session-id "cold-session" :turn 1))
-                 (should (featurep 'mevedel-note-conversation))
-                 (should (eq 'ready (mevedel-notes-attention-state note)))
-                 (mevedel-notes-rewind-live workspace "cold-session" 0)
-                 (should (eq 'unsent (overlay-get note 'mevedel-note-state)))
-                 (should-not (overlay-get note 'mevedel-note-prepared-change)))))
+               (let ((note (niwa-note-create "Cold note"))
+                     (workspace (niwa--instruction-buffer-workspace (current-buffer))))
+                 (niwa-note-mark-sent (list note) "cold-session")
+                 (niwa-note-hold-change (list note) '(:id "cold" :session-id "cold-session" :turn 1))
+                 (should (featurep 'niwa-note-conversation))
+                 (should (eq 'ready (niwa-notes-attention-state note)))
+                 (niwa-notes-rewind-live workspace "cold-session" 0)
+                 (should (eq 'unsent (overlay-get note 'niwa-note-state)))
+                 (should-not (overlay-get note 'niwa-note-prepared-change)))))
             ('handoff-progress
-             (require 'mevedel-plan-handoff)
-             (require 'mevedel-view)
-             (require 'mevedel-view-composer)
-             (should-not (featurep 'mevedel-view-render))
-             (should (autoloadp (symbol-function 'mevedel-view-stream-end-progress)))
+             (require 'niwa-plan-handoff)
+             (require 'niwa-view)
+             (require 'niwa-view-composer)
+             (should-not (featurep 'niwa-view-render))
+             (should (autoloadp (symbol-function 'niwa-view-stream-end-progress)))
              ;; Exercise the live-buffer path before any view setup can supply
              ;; the stream owner's renderer dependency.
              (with-temp-buffer
-               (mevedel-view-stream-end-progress (current-buffer))
-               (should mevedel-view--request-progress-suppressed)
-               (should-not mevedel-view--spinner-status)
-               (mevedel-view-stream-show-progress
+               (niwa-view-stream-end-progress (current-buffer))
+               (should niwa-view--request-progress-suppressed)
+               (should-not niwa-view--spinner-status)
+               (niwa-view-stream-show-progress
                 (current-buffer) "Preparing plan..." 'plan-preparation)
-               (should-not mevedel-view--request-progress-suppressed)
-               (should (equal "Preparing plan..." mevedel-view--spinner-status))
-               (let ((token (mevedel-view-stream-claim-progress
+               (should-not niwa-view--request-progress-suppressed)
+               (should (equal "Preparing plan..." niwa-view--spinner-status))
+               (let ((token (niwa-view-stream-claim-progress
                              (current-buffer) "Hook..." 'hook)))
-                 (should (eq 'hook mevedel-view--spinner-owner))
-                 (mevedel-view-stream-release-progress (current-buffer) token)
-                 (should (eq 'plan-preparation mevedel-view--spinner-owner))
-                 (should (equal "Preparing plan..." mevedel-view--spinner-status)))
-               (mevedel-view-stream-end-progress (current-buffer))
-               (should mevedel-view--request-progress-suppressed)
-               (should-not mevedel-view--spinner-status)
-               (should-not mevedel-view--spinner-timer)))
+                 (should (eq 'hook niwa-view--spinner-owner))
+                 (niwa-view-stream-release-progress (current-buffer) token)
+                 (should (eq 'plan-preparation niwa-view--spinner-owner))
+                 (should (equal "Preparing plan..." niwa-view--spinner-status)))
+               (niwa-view-stream-end-progress (current-buffer))
+               (should niwa-view--request-progress-suppressed)
+               (should-not niwa-view--spinner-status)
+               (should-not niwa-view--spinner-timer)))
             ('request-progress
              (require 'gptel-request)
-             (require 'mevedel-view-stream)
-             (should-not (featurep 'mevedel-view-composer))
-             (should-not (featurep 'mevedel-agents))
+             (require 'niwa-view-stream)
+             (should-not (featurep 'niwa-view-composer))
+             (should-not (featurep 'niwa-agents))
              (with-temp-buffer
                (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
-                 (should-not (mevedel-view-stream-ensure-progress-for-fsm fsm))
-                 (should (featurep 'mevedel-view-composer))
-                 (should-not (featurep 'mevedel-agents))
-                 (should (autoloadp (symbol-function 'mevedel-agent-invocation-p)))
+                 (should-not (niwa-view-stream-ensure-progress-for-fsm fsm))
+                 (should (featurep 'niwa-view-composer))
+                 (should-not (featurep 'niwa-agents))
+                 (should (autoloadp (symbol-function 'niwa-agent-invocation-p)))
                  ;; The same predicate must recognize agents after first use,
                  ;; whether identified by request info or buffer-local state.
-                 (require 'mevedel-agents)
-                 (let ((invocation (mevedel-agent-invocation--create)))
-                   (should (mevedel-view--agent-fsm-p
-                            (list :mevedel-agent-invocation invocation) nil))
-                   (should-not (mevedel-view--agent-fsm-p
-                                '(:mevedel-agent-invocation invalid) nil))
-                   (setq-local mevedel--agent-invocation invocation)
-                   (should (mevedel-view--agent-fsm-p nil (current-buffer)))))))
+                 (require 'niwa-agents)
+                 (let ((invocation (niwa-agent-invocation--create)))
+                   (should (niwa-view--agent-fsm-p
+                            (list :niwa-agent-invocation invocation) nil))
+                   (should-not (niwa-view--agent-fsm-p
+                                '(:niwa-agent-invocation invalid) nil))
+                   (setq-local niwa--agent-invocation invocation)
+                   (should (niwa-view--agent-fsm-p nil (current-buffer)))))))
             ('stop-shares
-             (should (commandp 'mevedel-collaboration-stop-all))
-             (should-not (featurep 'mevedel-collaboration-lobby))
+             (should (commandp 'niwa-collaboration-stop-all))
+             (should-not (featurep 'niwa-collaboration-lobby))
              ;; A saved intent can exist before installation/startup restores
              ;; lobbies.  Stop all must forget it without opening a transport.
-             (make-directory mevedel-user-dir t)
-             (let ((intent (file-name-concat mevedel-user-dir "lobbies.el")))
+             (make-directory niwa-user-dir t)
+             (let ((intent (file-name-concat niwa-user-dir "lobbies.el")))
                (with-temp-file intent (prin1 (list root) (current-buffer)))
                (cl-letf (((symbol-function 'message) #'ignore))
-                 (call-interactively 'mevedel-collaboration-stop-all))
+                 (call-interactively 'niwa-collaboration-stop-all))
                (should-not (file-exists-p intent))
-               (should (zerop (hash-table-count mevedel-collaboration-lobby--lobbies)))))
+               (should (zerop (hash-table-count niwa-collaboration-lobby--lobbies)))))
             ('artifacts
              (call-process "git" nil nil nil "init" "-q")
-             (should-not (featurep 'mevedel-artifacts-list))
-             (call-interactively #'mevedel-artifacts)
-             (should (derived-mode-p 'mevedel-artifacts-list-mode))
-             (should-not (featurep 'mevedel-shared-editing))
-             (let* ((workspace (mevedel-workspace))
-                    (session (mevedel-session--create :workspace workspace))
-                    (file (file-name-concat root ".mevedel/artifacts/cold/index.html")))
+             (should-not (featurep 'niwa-artifacts-list))
+             (call-interactively #'niwa-artifacts)
+             (should (derived-mode-p 'niwa-artifacts-list-mode))
+             (should-not (featurep 'niwa-shared-editing))
+             (let* ((workspace (niwa-workspace))
+                    (session (niwa-session--create :workspace workspace))
+                    (file (file-name-concat root ".niwa/artifacts/cold/index.html")))
                (make-directory (file-name-directory file) t)
                (write-region "<p>cold</p>" nil file nil 'silent)
-               (mevedel-artifact-store-note-writes
+               (niwa-artifact-store-note-writes
                 session (list (list :action 'write :path file)))
-               (should (equal '("cold") (mevedel-session-attached-artifacts session)))
-               (should (= 1 (length (mevedel-artifact-store-versions workspace "cold"))))
-               (mevedel-cockpit-surface-refresh)
+               (should (equal '("cold") (niwa-session-attached-artifacts session)))
+               (should (= 1 (length (niwa-artifact-store-versions workspace "cold"))))
+               (niwa-cockpit-surface-refresh)
                (should (= 1 (length tabulated-list-entries)))
-               (should-not (featurep 'mevedel-shared-editing))
+               (should-not (featurep 'niwa-shared-editing))
                ;; Creating asks to share before anything is queued; declining
                ;; leaves no item and no editing helper behind.
                (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Document"))
                          ((symbol-function 'read-string) (lambda (&rest _) "Cold"))
                          ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
-                 (should-error (call-interactively #'mevedel-artifacts-new-shared-item)
+                 (should-error (call-interactively #'niwa-artifacts-new-shared-item)
                                :type 'user-error))
-               (should (equal '("cold") (mevedel-artifact-store-ids workspace)))
+               (should (equal '("cold") (niwa-artifact-store-ids workspace)))
                (should-not (seq-filter #'process-live-p (process-list))))
              (kill-buffer (current-buffer)))
             ('live-execution
-             (require 'mevedel-view)
+             (require 'niwa-view)
              (let ((data (generate-new-buffer " *cold-execution-data*"))
                    (view (generate-new-buffer " *cold-execution-view*")))
                (unwind-protect
                    (progn
                      (with-current-buffer data (org-mode))
-                     (mevedel-view--setup view data)
-                     (should-not (featurep 'mevedel-view-audit))
+                     (niwa-view--setup view data)
+                     (should-not (featurep 'niwa-view-audit))
                      (with-current-buffer view
                        ;; The call can yield before its source row arrives.
                        ;; Explicit navigation cold-loads the evidence owner.
-                       (mevedel-view-execution-show-in-conversation
+                       (niwa-view-execution-show-in-conversation
                         '(:execution-id "cold-exec" :tool-use-id "cold-tool"
                           :owner "/root" :command "printf cold"
                           :execution-output "cold retained output")))
-                     (should (featurep 'mevedel-view-audit))
-                     (with-current-buffer "*mevedel execution result*"
+                     (should (featurep 'niwa-view-audit))
+                     (with-current-buffer "*niwa execution result*"
                        (should buffer-read-only)
                        (should (equal "printf cold\n\ncold retained output"
                                       (buffer-string)))))
-                 (when (get-buffer "*mevedel execution result*")
-                   (kill-buffer "*mevedel execution result*"))
+                 (when (get-buffer "*niwa execution result*")
+                   (kill-buffer "*niwa execution result*"))
                  (kill-buffer view)
                  (kill-buffer data))))
             ('send
              (call-process "git" nil nil nil "init" "-q")
-             (mevedel-install)
-             (mevedel-test-loading--provider)
-             (mevedel)
-             (mevedel-test-loading--send "first cold message")
+             (niwa-install)
+             (niwa-test-loading--provider)
+             (niwa)
+             (niwa-test-loading--send "first cold message")
              ;; Memory writes load the patch implementation on demand.
-             (should-not (featurep 'mevedel-tool-patch))
-             (with-current-buffer (mevedel-test-loading--session)
-               (call-interactively #'mevedel-save-session)))
+             (should-not (featurep 'niwa-tool-patch))
+             (with-current-buffer (niwa-test-loading--session)
+               (call-interactively #'niwa-save-session)))
             ('resume
-             (mevedel-install)
-             (mevedel-test-loading--provider)
+             (niwa-install)
+             (niwa-test-loading--provider)
              (cl-letf (((symbol-function 'completing-read)
                         (lambda (_prompt table &rest _)
                           (let ((rows (all-completions "" table)))
                             (or (seq-find (lambda (entry) (string-prefix-p "Resume" entry))
                                           rows)
                                 (error "Expected ordinary cold Resume; rows: %S" rows))))))
-               (mevedel))
-             (should (= 1 (mevedel-test-loading--answers)))
-             (mevedel-test-loading--send "resumed cold message")
-             (with-current-buffer (mevedel-test-loading--session)
+               (niwa))
+             (should (= 1 (niwa-test-loading--answers)))
+             (niwa-test-loading--send "resumed cold message")
+             (with-current-buffer (niwa-test-loading--session)
                (should (string-search "first cold message" (buffer-string)))))
             ('installation
-             (mevedel-uninstall)
+             (niwa-uninstall)
              (dotimes (_ 2)
-               (mevedel-install)
-               (should (commandp 'mevedel-compact))
-               (should (commandp 'mevedel-buddy-mode))
-               (should (commandp 'mevedel-buddy-global-mode))
-               (should-not (featurep 'mevedel-buddy))
-               (should (commandp 'mevedel-claude-code-setup))
-               (should (memq #'mevedel-journal-idle-session-opened mevedel-session-start-hook))
-               (dolist (tool (mevedel-tool-all))
-                 (should (functionp (mevedel-tool-handler tool)))
-                 (should (stringp (mevedel-tool-prompt tool))))
-               (should (> (length (mevedel-tool-all)) 35))
+               (niwa-install)
+               (should (commandp 'niwa-compact))
+               (should (commandp 'niwa-buddy-mode))
+               (should (commandp 'niwa-buddy-global-mode))
+               (should-not (featurep 'niwa-buddy))
+               (should (commandp 'niwa-claude-code-setup))
+               (should (memq #'niwa-journal-idle-session-opened niwa-session-start-hook))
+               (dolist (tool (niwa-tool-all))
+                 (should (functionp (niwa-tool-handler tool)))
+                 (should (stringp (niwa-tool-prompt tool))))
+               (should (> (length (niwa-tool-all)) 35))
                (when after-focus-change-function (funcall after-focus-change-function))
                (set-face-attribute 'default nil :foreground (face-attribute 'default :foreground))
                (run-hook-with-args 'enable-theme-functions 'user)
-               (dolist (feature mevedel-test-loading--deferred)
+               (dolist (feature niwa-test-loading--deferred)
                  (ert-info ((format "Unexpected eager feature: %s" feature))
                    (should-not (featurep feature))))
-               (dolist (spec mevedel-tool-repair--shape-advice)
+               (dolist (spec niwa-tool-repair--shape-advice)
                  (should (advice-member-p (nth 2 spec) (car spec))))
-               (mevedel-uninstall)
-               (dolist (spec mevedel-tool-repair--shape-advice)
+               (niwa-uninstall)
+               (dolist (spec niwa-tool-repair--shape-advice)
                  (should-not (advice-member-p (nth 2 spec) (car spec))))
-               (dolist (feature mevedel-test-loading--deferred)
+               (dolist (feature niwa-test-loading--deferred)
                  (should-not (featurep feature)))))
             ('gptel
-             (mevedel-install)
+             (niwa-install)
              (with-temp-buffer
                (setq-local gptel-backend (gptel-make-openai "Cold native" :key "unused")
                            gptel-model 'gpt-4o-mini)
                (let ((fsm (gptel-request "hello" :dry-run t)))
                  (should (plist-get (gptel-fsm-info fsm) :data))))
-             (dolist (feature '(acp mevedel-acp mevedel-mcp mevedel-claude-code))
+             (dolist (feature '(acp niwa-acp niwa-mcp niwa-claude-code))
                (should-not (featurep feature))))
             ((or 'chat 'chat-in-directory)
-             (mevedel-install)
+             (niwa-install)
              (if (eq scenario 'chat-in-directory)
-                 (mevedel-in-directory default-directory)
-               (mevedel))
-             (should (featurep 'mevedel-view))
+                 (niwa-in-directory default-directory)
+               (niwa))
+             (should (featurep 'niwa-view))
              (should (cl-some (lambda (buffer)
                                 (with-current-buffer buffer
-                                  (derived-mode-p 'mevedel-view-mode)))
+                                  (derived-mode-p 'niwa-view-mode)))
                               (buffer-list)))
-             (should (featurep 'mevedel-journal-idle))
-             (require 'mevedel-readiness)
-             (dolist (feature '(acp mevedel-acp mevedel-mcp mevedel-claude-code
-                               mevedel-claude-code-usage))
+             (should (featurep 'niwa-journal-idle))
+             (require 'niwa-readiness)
+             (dolist (feature '(acp niwa-acp niwa-mcp niwa-claude-code
+                               niwa-claude-code-usage))
                (should-not (featurep feature))))
             ('tools
-             (mevedel-install)
+             (niwa-install)
              ;; Persisted references recover the catalog before implementations.
-             (mevedel-tool-clear-registry)
+             (niwa-tool-clear-registry)
              (dolist (name '("Bash" "Eval" "Read" "Glob" "ApplyPatch" "WebFetch"))
-               (should (mevedel-tool-ensure name)))
-             (dolist (feature mevedel-test-loading--deferred)
+               (should (niwa-tool-ensure name)))
+             (dolist (feature niwa-test-loading--deferred)
                (should-not (featurep feature)))
-             (require 'mevedel-permission-mode)
-             (require 'mevedel-permission-rules)
-             (let ((mevedel-permission-mode 'full-auto)
-                   (mevedel-permission-rules nil) outcome)
-               (funcall (mevedel-tool-check-permission-async (mevedel-tool-get "Eval"))
+             (require 'niwa-permission-mode)
+             (require 'niwa-permission-rules)
+             (let ((niwa-permission-mode 'full-auto)
+                   (niwa-permission-rules nil) outcome)
+               (funcall (niwa-tool-check-permission-async (niwa-tool-get "Eval"))
                         nil '(:expression "(+ 1 2)")
                         (lambda (value) (setq outcome value)))
                (should (eq 'allow outcome)))
-             (let ((session (mevedel-session--create :name "cold"))
+             (let ((session (niwa-session--create :name "cold"))
                    result)
                (with-temp-buffer
-                 (setq-local mevedel--session session)
+                 (setq-local niwa--session session)
                  (funcall (gptel-tool-function
-                           (mevedel-tool-gptel-tool (mevedel-tool-ensure "ListExecutions")))
+                           (niwa-tool-gptel-tool (niwa-tool-ensure "ListExecutions")))
                           (lambda (value) (setq result value))))
                (should (stringp result))
                (should-not (string-prefix-p "Error:" result)))
-             (should (featurep 'mevedel-tool-exec))
+             (should (featurep 'niwa-tool-exec))
              (let ((file (file-name-concat root "sample.txt")))
                (write-region "cold read evidence\n" nil file nil 'silent)
                (let (result)
-                 (funcall (mevedel-tool-handler (mevedel-tool-ensure "Read"))
+                 (funcall (niwa-tool-handler (niwa-tool-ensure "Read"))
                           (lambda (value) (setq result value)) (list :file_path file))
                  (should (string-match-p "cold read evidence" (plist-get result :result)))))
-             (let ((tool (mevedel-tool-ensure "ApplyPatch")))
-               (should (listp (funcall (mevedel-tool-get-paths tool)
+             (let ((tool (niwa-tool-ensure "ApplyPatch")))
+               (should (listp (funcall (niwa-tool-get-paths tool)
                                       '(:patch "*** Begin Patch\n*** Add File: cold.txt\n+hello\n*** End Patch")))))
-             (let ((tool (mevedel-tool-ensure "WebFetch")))
+             (let ((tool (niwa-tool-ensure "WebFetch")))
                (should (equal "example.com"
-                              (funcall (mevedel-tool-get-domain tool)
+                              (funcall (niwa-tool-get-domain tool)
                                        '(:url "https://example.com/path"))))))
             ('renderers
-             (mevedel-install)
+             (niwa-install)
              (dolist (row '(("Read" (:file_path "sample.txt") nil)
                             ("Glob" (:pattern "*.el") nil)
                             ("Bash" (:command "printf hello") nil)
                             ("ApplyPatch" nil (:kind patch :files nil))
                             ("WebFetch" (:url "https://example.com") nil)))
-               (let* ((tool (mevedel-tool-ensure (car row)))
-                      (renderer (mevedel-tool-renderer tool)))
+               (let* ((tool (niwa-tool-ensure (car row)))
+                      (renderer (niwa-tool-renderer tool)))
                  (when (listp renderer) (setq renderer (cdr (assq 'success renderer))))
                  (should (plist-get (funcall renderer (car row) (cadr row) "hello" (caddr row))
                                     :header)))))
             ('worker-teardown
-             (require 'mevedel-journal-worker)
+             (require 'niwa-journal-worker)
              ;; A maintenance Emacs can be inside a synchronous control-fs
              ;; shell.  Killing Emacs does not wait for that shell to finish.
              (let* ((ready (file-name-concat root "worker-ready"))
@@ -451,28 +451,28 @@ temporary one."
                              `(call-process "sh" nil nil nil "-c"
                                             "touch \"$1\"; sleep 0.5; touch \"$2\""
                                             "loading-worker" ,ready ,finished))))))
-               (push process mevedel-journal-worker--processes)
-               (mevedel-test-loading--await (lambda () (file-exists-p ready)))
-               (advice-add 'mevedel-journal-worker-stop-all :before
+               (push process niwa-journal-worker--processes)
+               (niwa-test-loading--await (lambda () (file-exists-p ready)))
+               (advice-add 'niwa-journal-worker-stop-all :before
                            (lambda () (should (file-exists-p finished))))))
             ('native-btw
-             (mevedel-install)
-             (setq gptel-backend (mevedel-claude-code-register) gptel-model 'sonnet)
-             (mevedel)
-             (let* ((parent (mevedel-test-loading--session))
+             (niwa-install)
+             (setq gptel-backend (niwa-claude-code-register) gptel-model 'sonnet)
+             (niwa)
+             (let* ((parent (niwa-test-loading--session))
                     (parent-file (file-name-concat root "fixture-session.json"))
                     (fork-file (file-name-concat root "fixture-fork.json"))
                     side)
-               (setenv "MEVEDEL_ACP_TEST_HISTORY" root)
+               (setenv "NIWA_ACP_TEST_HISTORY" root)
                (with-temp-file parent-file (insert "[\"cold native history\"]"))
-               (should-not (featurep 'mevedel-claude-code-btw))
+               (should-not (featurep 'niwa-claude-code-btw))
                ;; Replace only the paid executable at its real loading boundary.
-               (autoload 'mevedel-claude-code-launch "mevedel-claude-code")
+               (autoload 'niwa-claude-code-launch "niwa-claude-code")
                (advice-add
-                'mevedel-claude-code-launch :override
+                'niwa-claude-code-launch :override
                 (lambda (_system mcp _model _effort &optional id &rest _)
                   (list :command (executable-find "python3")
-                        :args (list (file-name-concat mevedel-test-loading--root
+                        :args (list (file-name-concat niwa-test-loading--root
                                                      "test/fixtures/acp-agent.py"))
                         :cwd root :session-id id :mcp-servers mcp)))
                (with-current-buffer parent
@@ -480,57 +480,57 @@ temporary one."
                  (insert "*** Accepted parent prompt\n"
                          (propertize "Visible parent answer\n" 'gptel 'response))
                  ;; Expand the struct setter only after the cold entry loaded it.
-                 (eval '(setf (mevedel-session-external-conversations mevedel--session)
+                 (eval '(setf (niwa-session-external-conversations niwa--session)
                               (list (list "root" :engine 'claude-code :id "fixture-session"
-                                          :host (system-name) :directory mevedel-claude-code-directory
+                                          :host (system-name) :directory niwa-claude-code-directory
                                           :state 'ready))) t))
-               (with-current-buffer (buffer-local-value 'mevedel--view-buffer parent)
-                 (mevedel-view-composer-insert "/btw")
-                 (with-current-buffer (mevedel-view-composer-buffer)
-                   (mevedel-view-send)))
-               (mevedel-test-loading--await
+               (with-current-buffer (buffer-local-value 'niwa--view-buffer parent)
+                 (niwa-view-composer-insert "/btw")
+                 (with-current-buffer (niwa-view-composer-buffer)
+                   (niwa-view-send)))
+               (niwa-test-loading--await
                 (lambda ()
-                  (setq side (buffer-local-value 'mevedel-side-conversation--side-buffer parent))
+                  (setq side (buffer-local-value 'niwa-side-conversation--side-buffer parent))
                   (and (buffer-live-p side)
-                       (buffer-live-p (buffer-local-value 'mevedel--view-buffer side)))))
-               (with-current-buffer (buffer-local-value 'mevedel--view-buffer side)
-                 (mevedel-view-composer-insert "cold side question")
-                 (with-current-buffer (mevedel-view-composer-buffer)
-                   (mevedel-view-send)))
-               (mevedel-test-loading--await (lambda () (not (mevedel-turn-busy-p side))))
-               (with-current-buffer (buffer-local-value 'mevedel--view-buffer side)
+                       (buffer-live-p (buffer-local-value 'niwa--view-buffer side)))))
+               (with-current-buffer (buffer-local-value 'niwa--view-buffer side)
+                 (niwa-view-composer-insert "cold side question")
+                 (with-current-buffer (niwa-view-composer-buffer)
+                   (niwa-view-send)))
+               (niwa-test-loading--await (lambda () (not (niwa-turn-busy-p side))))
+               (with-current-buffer (buffer-local-value 'niwa--view-buffer side)
                  (should (string-search "cold native history" (buffer-string)))
-                 (mevedel-side-conversation-close))
-               (mevedel-test-loading--await (lambda () (not mevedel-claude-code-btw--forks)))
+                 (niwa-side-conversation-close))
+               (niwa-test-loading--await (lambda () (not niwa-claude-code-btw--forks)))
                (should-not (file-exists-p fork-file))
                (should (equal "[\"cold native history\"]"
                               (with-temp-buffer
                                 (insert-file-contents parent-file) (buffer-string))))))
             ('claude
-             (let* ((backend (mevedel-claude-code-register))
+             (let* ((backend (niwa-claude-code-register))
                     (gptel-backend backend) (gptel-model 'sonnet)
                     (gptel-tools nil) response)
-               (should (mevedel-engine-external-p backend))
+               (should (niwa-engine-external-p backend))
                (should-not (featurep 'acp))
                ;; Substitute the paid launcher only; real generic dispatch,
                ;; transport loading, ACP protocol, and callbacks run unchanged.
-               (autoload 'mevedel-claude-code-launch "mevedel-claude-code")
-               (require 'mevedel-claude-code-backend)
+               (autoload 'niwa-claude-code-launch "niwa-claude-code")
+               (require 'niwa-claude-code-backend)
                (advice-add
-                'mevedel-claude-code-launch :override
+                'niwa-claude-code-launch :override
                 (lambda (&rest _)
                   (list :command (executable-find "python3")
-                        :args (list (file-name-concat mevedel-test-loading--root
+                        :args (list (file-name-concat niwa-test-loading--root
                                                      "test/fixtures/acp-agent.py"))
                         :cwd root)))
-               (mevedel-engine-request-text
+               (niwa-engine-request-text
                 backend "hello" "system" (lambda (text _info) (setq response text)))
                (with-timeout (5 (ert-fail "Claude fixture timed out"))
                  (while (not response) (accept-process-output nil 0.01)))
                (should (equal "answer:hello" response))
                (should (featurep 'acp))
                (let (done text)
-                 (mevedel-claude-code-request-workload
+                 (niwa-claude-code-request-workload
                   "workload" "system" nil
                   (lambda (value _info)
                     (if (eq value t) (setq done t)
@@ -539,52 +539,52 @@ temporary one."
                    (while (not done) (accept-process-output nil 0.01)))
                  (should (equal "answer:workload" (apply #'concat (nreverse text)))))))
             ('room
-             (mevedel-install)
-             (mevedel)
-             (require 'mevedel-collaboration)
-             (require 'mevedel-collaboration-transport)
-             (should-not (featurep 'mevedel-collaboration-task))
-             (let ((data (mevedel-collaboration--current-data-buffer)))
+             (niwa-install)
+             (niwa)
+             (require 'niwa-collaboration)
+             (require 'niwa-collaboration-transport)
+             (should-not (featurep 'niwa-collaboration-task))
+             (let ((data (niwa-collaboration--current-data-buffer)))
                (should (buffer-live-p data))
                (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
-                         ((symbol-function 'mevedel-collaboration--transport-open)
+                         ((symbol-function 'niwa-collaboration--transport-open)
                           (lambda (&rest _) (list :state 'down)))
-                         ((symbol-function 'mevedel-collaboration--transport-stop) #'ignore))
-                 (let ((room (car (mevedel-collaboration--room-or-start data))))
+                         ((symbol-function 'niwa-collaboration--transport-stop) #'ignore))
+                 (let ((room (car (niwa-collaboration--room-or-start data))))
                    (unwind-protect
                        (progn
-                         (mevedel-collaboration--publish-timer data)
-                         (should (featurep 'mevedel-collaboration-task))
+                         (niwa-collaboration--publish-timer data)
+                         (should (featurep 'niwa-collaboration-task))
                          (should (equal "tasks" (plist-get (plist-get room :tasks) :t)))
                          (should (= 0 (plist-get (plist-get room :tasks) :total))))
-                     (mevedel-collaboration--stop-internal room 'user-stop))))))
+                     (niwa-collaboration--stop-internal room 'user-stop))))))
             ('lobby
-             (require 'mevedel-collaboration-lobby)
-             (mevedel-collaboration-lobby-restore)
-             (make-directory mevedel-user-dir t)
+             (require 'niwa-collaboration-lobby)
+             (niwa-collaboration-lobby-restore)
+             (make-directory niwa-user-dir t)
              (dolist (text '("" "nil" "(" "42"))
-               (with-temp-file (mevedel-collaboration-lobby--intent-path) (insert text))
-               (mevedel-collaboration-lobby-restore)
-               (should-not (featurep 'mevedel-collaboration-guest)))
-             (mevedel-collaboration-lobby--set-intended default-directory t)
-             (autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
-             (advice-add 'mevedel-collaboration--transport-open :override
+               (with-temp-file (niwa-collaboration-lobby--intent-path) (insert text))
+               (niwa-collaboration-lobby-restore)
+               (should-not (featurep 'niwa-collaboration-guest)))
+             (niwa-collaboration-lobby--set-intended default-directory t)
+             (autoload 'niwa-collaboration--transport-open "niwa-collaboration-transport")
+             (advice-add 'niwa-collaboration--transport-open :override
                          (lambda (&rest _) (error "Fixture relay unavailable")))
              (let (warnings)
                (cl-letf (((symbol-function 'display-warning)
                           (lambda (&rest args) (push args warnings))))
-                 (mevedel-collaboration-lobby-restore))
-               (should (featurep 'mevedel-collaboration-guest))
+                 (niwa-collaboration-lobby-restore))
+               (should (featurep 'niwa-collaboration-guest))
                (should warnings)
-               (should (equal (list default-directory) (mevedel-collaboration-lobby--intended))))
+               (should (equal (list default-directory) (niwa-collaboration-lobby--intended))))
              (let ((opened 0))
-               (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+               (cl-letf (((symbol-function 'niwa-collaboration--transport-open)
                           (lambda (&rest _) (cl-incf opened) nil)))
-                 (mevedel-collaboration-lobby-restore)
-                 (mevedel-collaboration-lobby-restore)
+                 (niwa-collaboration-lobby-restore)
+                 (niwa-collaboration-lobby-restore)
                  (should (= opened 1))
-                 (mevedel-collaboration-lobby-stop)
-                 (should-not (mevedel-collaboration-lobby--intended)))))
+                 (niwa-collaboration-lobby-stop)
+                 (should-not (niwa-collaboration-lobby--intended)))))
             ('lobby-open
              ;; A lobby restored at startup opens a session saved by an
              ;; earlier Emacs for a browser guest.  Nothing has loaded the
@@ -596,30 +596,30 @@ temporary one."
                          (lambda (&rest _)
                            (when inhibit-interaction (read-event nil nil 0.001))
                            (signal 'dbus-error '("No fixture bus"))))
-             (mevedel-install)
-             (should-not (featurep 'mevedel-view-stream))
+             (niwa-install)
+             (should-not (featurep 'niwa-view-stream))
              (should-not (featurep 'dbus))
-             (let* ((workspace (mevedel-workspace))
-                    (id (plist-get (plist-get (car (mevedel-session-persistence-list-sessions
+             (let* ((workspace (niwa-workspace))
+                    (id (plist-get (plist-get (car (niwa-session-persistence-list-sessions
                                                     workspace))
                                               :summary)
                                    :session-id))
                     sent)
                (should (stringp id))
-               (autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
-               (advice-add 'mevedel-collaboration--transport-open :override
+               (autoload 'niwa-collaboration--transport-open "niwa-collaboration-transport")
+               (advice-add 'niwa-collaboration--transport-open :override
                            (lambda (&rest _) (list :state 'down)))
-               (advice-add 'mevedel-collaboration--transport-stop :override #'ignore)
-               (advice-add 'mevedel-collaboration--transport-send :override
+               (advice-add 'niwa-collaboration--transport-stop :override #'ignore)
+               (advice-add 'niwa-collaboration--transport-send :override
                            (lambda (_transport peer frame) (push (cons peer frame) sent) t))
-               (require 'mevedel-collaboration-lobby)
-               (mevedel-collaboration-lobby--set-intended default-directory t)
-               (mevedel-collaboration-lobby-restore)
-               (let ((lobby (mevedel-collaboration-lobby--find workspace)))
+               (require 'niwa-collaboration-lobby)
+               (niwa-collaboration-lobby--set-intended default-directory t)
+               (niwa-collaboration-lobby-restore)
+               (let ((lobby (niwa-collaboration-lobby--find workspace)))
                  (should lobby)
                  (puthash 2 '(:name "Writer" :writable t) (plist-get lobby :guests))
-                 (mevedel-collaboration-lobby--on-frame
-                  (mevedel-workspace-root workspace) 2
+                 (niwa-collaboration-lobby--on-frame
+                  (niwa-workspace-root workspace) 2
                   (list :t "open-session" :reqId 7 :id id)))
                (let ((reply (cdr (seq-find (lambda (entry)
                                              (equal "open-session" (plist-get (cdr entry) :t)))
@@ -628,40 +628,40 @@ temporary one."
                  (should (equal nil (plist-get reply :message)))
                  (should (eq t (plist-get reply :ok)))
                  (should (stringp (plist-get reply :link))))
-               (should (mevedel-test-loading--session))
+               (should (niwa-test-loading--session))
                ;; Power policy belongs to animation, not to restoring a view.
                (should-not (featurep 'battery))
                (should-not (featurep 'dbus))
-               (mevedel-collaboration-lobby-stop))
+               (niwa-collaboration-lobby-stop))
              ;; The first animation's deferred poll, outside the guest frame,
              ;; loads the power backend and samples it.
-             (let ((view (buffer-local-value 'mevedel--view-buffer
-                                             (mevedel-test-loading--session)))
+             (let ((view (buffer-local-value 'niwa--view-buffer
+                                             (niwa-test-loading--session)))
                    (queries 0) (refreshes 0))
                (setq battery-status-function
                      (lambda () (cl-incf queries) '((?L . "AC") (?B . "charging"))))
-               (mevedel-view-power-watch view (lambda () (cl-incf refreshes)))
+               (niwa-view-power-watch view (lambda () (cl-incf refreshes)))
                (should-not (featurep 'battery))
-               (mevedel-test-loading--await (lambda () (> queries 0)))
+               (niwa-test-loading--await (lambda () (> queries 0)))
                (should (featurep 'battery))
                (should (= 1 queries))
                (should (= 1 refreshes))
-               (should (= 60 (mevedel-view-power-framerate 60 15 'auto t)))
-               (mevedel-view-power-unwatch view)))))
+               (should (= 60 (niwa-view-power-framerate 60 15 'auto t)))
+               (niwa-view-power-unwatch view)))))
       (dolist (buffer (buffer-list))
-        (when (buffer-local-value 'mevedel--session buffer)
+        (when (buffer-local-value 'niwa--session buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
-      (mevedel-uninstall)
+      (niwa-uninstall)
       ;; Cancelling a maintenance Emacs can leave its synchronous control-fs
       ;; shell running.  Let it finish before stopping delivery and removing
       ;; its workspace; accept only that process, not timers or callbacks.
-      (when (featurep 'mevedel-journal-worker)
-        (dolist (process (copy-sequence mevedel-journal-worker--processes))
+      (when (featurep 'niwa-journal-worker)
+        (dolist (process (copy-sequence niwa-journal-worker--processes))
           (let ((deadline (+ (float-time) 15)))
             (while (process-live-p process)
               (when (> (float-time) deadline)
                 (ert-fail "Maintenance child did not exit"))
               (accept-process-output process 0.02 nil 1))))
-        (mevedel-journal-worker-stop-all))
+        (niwa-journal-worker-stop-all))
       (unless state (delete-directory root t)))))

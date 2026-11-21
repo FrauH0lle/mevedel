@@ -17,4 +17,4 @@ stop; its stop notice never wakes you.
   expected output; a quiet interval is not completion or failure evidence.
 - Returns new unread output and execution state. Keep the same ID for further
   observations when needed. Only this agent's yielded executions are addressable;
-  monitors belong to root. For lifecycle details, read `mevedel://tools/execution.md`.
+  monitors belong to root. For lifecycle details, read `niwa://tools/execution.md`.

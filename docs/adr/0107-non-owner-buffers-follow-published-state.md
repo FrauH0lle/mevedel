@@ -15,7 +15,7 @@ head triggers validated publication and sidecar loading, staged transcript
 installation, and session-state replacement. A locally modified buffer is left
 alone; a background observer cannot discard the user's edits.
 
-`mevedel-session-follow-published` can be set per buffer. Explicit refresh can
+`niwa-session-follow-published` can be set per buffer. Explicit refresh can
 bypass that opt-out. Following does not require a pending control-transfer
 request and grants no write authority. The [session manual](../sessions.md)
 owns the user workflow and transfer procedures.

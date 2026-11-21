@@ -4,7 +4,7 @@ name: Native module
 # 3/Wayland development files.  Each source revision gets a release
 # `native-HASH` (HASH: first 16 hex digits of the SHA-256 of native/*.c,
 # concatenated in byte order) and its module checksums are pinned in
-# native/prebuilt.eld, which `mevedel-native-install' verifies before loading
+# native/prebuilt.eld, which `niwa-native-install' verifies before loading
 # a download.
 
 on:
@@ -82,17 +82,17 @@ jobs:
             exit 0
           fi
           for arch in x86_64 aarch64; do
-            test -f "dist/mevedel-native-$arch.so" || { echo "No $arch module built" >&2; exit 1; }
+            test -f "dist/niwa-native-$arch.so" || { echo "No $arch module built" >&2; exit 1; }
           done
           # An unpinned release was never installable, so an earlier run's
           # assets, complete or not, are replaced by this build's.
           gh release view "$tag" >/dev/null 2>&1 \
             || gh release create "$tag" --title "Native module $hash" \
                  --notes "Prebuilt native modules for source $hash."
-          gh release upload "$tag" dist/mevedel-native-*.so --clobber
+          gh release upload "$tag" dist/niwa-native-*.so --clobber
           entry="(\"$hash\""
-          for file in dist/mevedel-native-*.so.sha256; do
-            arch=$(basename "$file" .so.sha256 | sed 's/^mevedel-native-//')
+          for file in dist/niwa-native-*.so.sha256; do
+            arch=$(basename "$file" .so.sha256 | sed 's/^niwa-native-//')
             entry="$entry (\"$arch\" . \"$(cut -c1-64 "$file")\")"
           done
           entry="$entry)"
@@ -102,7 +102,7 @@ jobs:
           lines = path.read_text().splitlines()
           head = [line for line in lines if line.startswith(";;")]
           # Only the current source's entry is kept: older revisions of
-          # mevedel ship their own pins.
+          # niwa ship their own pins.
           path.write_text("\n".join(head) + "\n(" + sys.argv[1] + ")\n")
           PY
           git config user.name "github-actions[bot]"

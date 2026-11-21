@@ -16,17 +16,17 @@ report lessons through their existing results or available SendMessage; they
 gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.
 
-Shared files (`.mevedel/shared/`) are untracked, machine-local and temporary.
+Shared files (`.niwa/shared/`) are untracked, machine-local and temporary.
 Only files below `work://shared/` participate in this working-file expiry;
 maintained source, documentation, trackers and curated memory do not. Journal
 retention has its own separate policy.
-`mevedel-memory-notes.el` owns their lifecycle: general consolidation reviews
+`niwa-memory-notes.el` owns their lifecycle: general consolidation reviews
 extract lasting knowledge from age-ready files into memory and then dispose of
 them. Focused reviews do not include notes. Accepted reviews and decisions are
 the only processing record.
 
 **Readiness.** Use the target clock and actual last modification time, not the
-authored creation timestamp. One defcustom, `mevedel-working-note-max-age-days`,
+authored creation timestamp. One defcustom, `niwa-working-note-max-age-days`,
 sets a flat **14 elapsed days** by default for every note and attachment, and
 empty-folder housekeeping. Fourteen days is the chosen safety margin for use
 that the editor cannot observe, not a guarantee of recovery. Users may lower
@@ -73,7 +73,7 @@ attachments, including readable scripts, JSON and plain text. At most 16 ordinar
 oldest first, each at most 32 KiB; the review request admits them beside
 digests (one of each when both fit, then oldest first). A larger text note is
 captured alone, leaving eligible digests unpinned for the next batch, up to
-`mevedel-memory-notes-max-review-bytes` (default 512 KiB, about sixteen chunks).
+`niwa-memory-notes-max-review-bytes` (default 512 KiB, about sixteen chunks).
 It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
 running summary capped at 16 KiB. The summary carries candidate durable lessons,
 source attribution and uncertainty across chunks, not an open-work resolution
@@ -89,12 +89,12 @@ output budgets, guarded during streaming; cancellation retains incurred usage.
 Files beyond the configured bound stay blocked with an explicit request to split, delete
 or move them manually; unreadable files and links also stay blocked with a reason.
 The latest observation of ready, waiting and blocked items is
-recorded in `.mevedel/state/shared-notes/observation.el`; it counts every
+recorded in `.niwa/state/shared-notes/observation.el`; it counts every
 blocked item and lists at most 64 with reasons. `s` in the memory cockpit
 shows it, and review completion messages report the counts.
 
 **Citations.** Memory topics and instruction files are captured first. A file
-they cite, by `work://shared/` address or `.mevedel/shared/` path, including
+they cite, by `work://shared/` address or `.niwa/shared/` path, including
 through a named folder below the shared root, is never removed as housekeeping.
 The generic shared-root address in policy or navigation is not a dependency on
 every child; the shared root itself is retained. A cited note is
@@ -170,7 +170,7 @@ discovery remains age-readiness-only with safety checks explicitly pending.
 
 **Permanent application.** Note decisions use checked decisions, write
 intents and interrupted-write reconciliation with a shared-notes target whose
-coordination lives in `.mevedel/state/shared-notes/`, outside the folder it
+coordination lives in `.niwa/state/shared-notes/`, outside the folder it
 cleans. Final use, unsaved-buffer, age, extraction and reference checks guard
 actual forward mutation. A locked target program repeats ownership and the
 reviewed hash/mode (or empty-directory state), then deletes plainly and removes

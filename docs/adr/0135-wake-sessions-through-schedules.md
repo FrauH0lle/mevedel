@@ -4,7 +4,7 @@ Status: accepted.
 
 ## Decision
 
-mevedel can act later through one concept, the **schedule**: a due time plus a
+niwa can act later through one concept, the **schedule**: a due time plus a
 note or prompt with exactly one target. A **wake-up** targets the session
 that created it: "check CI in 20 minutes and tell me only if it failed" makes
 the conversation continue itself when the time comes. A **workspace
@@ -56,7 +56,7 @@ starts a fresh session for each run.
   sessions hold pending wake-ups and arms one timer for the earliest due time.
   Every create, cancel, firing, resume and buffer kill re-arms it; with nothing
   pending no timer exists. Every decision reads one injectable clock,
-  `mevedel-schedule-clock`, so tests advance time without sleeping.
+  `niwa-schedule-clock`, so tests advance time without sleeping.
 - **Delivery through the mailbox.** A due wake-up becomes one `WAKE_UP` record
   in the root mailbox, carrying the note, `scheduled_at`, `fired_at` and, at
   least a minute late, `overdue_by`. Its removal from the store and the record
@@ -80,9 +80,9 @@ starts a fresh session for each run.
   a recurring schedule and announces the pause in the same notice; success or
   an explicit resume resets the count. This keeps a broken job from spending
   indefinitely without sending two alerts for one failure.
-- **Sessions that are not open.** An Emacs-wide index under `mevedel-user-dir`
+- **Sessions that are not open.** An Emacs-wide index under `niwa-user-dir`
   names every saved session holding a pending wake-up, one file per session.
-  It is a cache: once Emacs is idle after startup, `mevedel-schedule-restore` reads each indexed
+  It is a cache: once Emacs is idle after startup, `niwa-schedule-restore` reads each indexed
   session's committed sidecar, drops only entries proven stale (session
   directory provably missing, or a readable sidecar with no pending wake-up),
   keeps unreadable ones for the next start, and schedules the rest. Closing a
@@ -103,7 +103,7 @@ starts a fresh session for each run.
   lose a wake-up, never duplicate it, as the firing commit already ensures.
 - **Workspace schedules.** `create` with `target` `workspace` stores a name,
   the run prompt, the same timing forms, an optional expiry (no default), a
-  base preset (default `mevedel-implement`) and one implementation policy in
+  base preset (default `niwa-implement`) and one implementation policy in
   the strict shape of accepted plans and Goals. At most 50 are active or
   paused per workspace. Creating or changing one always goes through a
   `schedule` permission card, also in Full Access and never settled by
@@ -127,7 +127,7 @@ starts a fresh session for each run.
   fell back to whatever the session had selected. A session that cannot
   start is recorded as a setup error under the
   same key. Run sessions are ordinary sessions under automatic cleanup.
-- **Workspace restore.** An index under `mevedel-user-dir`, separate from the
+- **Workspace restore.** An index under `niwa-user-dir`, separate from the
   wake-up index, names workspaces with active schedules; startup restore arms
   them and, like the wake-up index, prunes only entries proven stale: the
   workspace is provably gone, or its readable store holds no active schedule
@@ -184,7 +184,7 @@ indexed sidecar once after startup so stale entries never arm a timer; for a
 session on a remote target that read is a network round trip, so restore
 waits for the first idle moment instead of lengthening startup. In a batch
 measurement with 20 local indexed sessions it took about 220 ms, which
-`mevedel-install` no longer spends; a wake-up already due fires at that idle
+`niwa-install` no longer spends; a wake-up already due fires at that idle
 moment.
 Pruning deletes an entry and then reads the store again, recreating the entry
 when a wake-up appeared: the lease holder commits before it checks its entry,

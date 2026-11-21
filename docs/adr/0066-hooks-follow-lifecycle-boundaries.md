@@ -2,7 +2,7 @@
 
 ## Current decision
 
-Expose mevedel event plists at domain boundaries rather than exposing provider
+Expose niwa event plists at domain boundaries rather than exposing provider
 request internals. `SubagentStart` runs once before a retained identity is
 published; prompt, tool, compaction, and terminal hooks run for their respective
 turn or attempt. `SessionStart` begins root context epochs, including startup,
@@ -94,7 +94,7 @@ and the runner's existing cancellation and transport-idle boundaries.
 ADR 0066 established lifecycle boundaries and observational Stop semantics.
 The original hook design notes compared declarative command hooks, trusted
 plugin callbacks, and direct gptel extension points. Their retained tradeoff is
-stable mevedel events plus command/Elisp handlers; this record does not assert
+stable niwa events plus command/Elisp handlers; this record does not assert
 that those external products still expose the APIs described in that research.
 The notes did not record a separate date or measurement for that choice.
 

@@ -296,7 +296,7 @@ sandbox seam; they do not promise atomic native filesystem operations.
 An October 2026 review of 62 session permission logs (about 106,000 decisions,
 96 human prompts) found that this repository's `npx @emacs-eask/cli *` profile
 rarely matched how agents ran Eask, and a reproduction through
-`mevedel-bash-policy-check-permission` and the profile resolver showed why the
+`niwa-bash-policy-check-permission` and the profile resolver showed why the
 opposite failure was also possible. Rule wildcards became `.*`, so the rule
 matched `npx @emacs-eask/cli test && rm -rf build` as a whole: Ask allowed the
 dangerous compound without a prompt, and the `rm` segment ran with the npm

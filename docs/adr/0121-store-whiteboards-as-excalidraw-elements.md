@@ -18,7 +18,7 @@ Board content is now Excalidraw elements: Excalidraw's types, field names and
 values in the Yjs `elements` map, and its image files in a `files` map.
 Rendering follows Excalidraw's renderer, using roughjs and perfect-freehand
 with the element's seed, Excalidraw's text metrics and its fonts. The editor
-UI remains mevedel's, because its comments, area questions, presence,
+UI remains niwa's, because its comments, area questions, presence,
 movement previews, assistant highlights and Revert sit on that UI, and the
 board was not a pain point; only the data layer and its drawing changed.
 
@@ -55,7 +55,7 @@ board was not a pain point; only the data layer and its drawing changed.
   The `.excalidraw` file keeps the original so a crop stays editable. An SVG
   download re-renders a cropped image to its visible pixels, preserving ADR
   0120's rule that a download does not reveal what a crop hides.
-- **The native whiteboard file is `.excalidraw`.** `mevedel-editable-1`
+- **The native whiteboard file is `.excalidraw`.** `niwa-editable-1`
   remains for documents. Import applies Excalidraw's restore rules: legacy
   fields migrate, invisible and unknown elements are dropped, unusable values
   fall back to defaults. Unsupported image types become placeholders with a
@@ -64,8 +64,8 @@ board was not a pain point; only the data layer and its drawing changed.
   Keeping one as a private type would break files opened elsewhere, so the
   database shape is a built-in group of an ellipse and lines.
 - **Element libraries belong to the host.** A directory of `.excalidrawlib`
-  files, `mevedel-shared-library-directory`, holds the personal library and
-  installed ones; mevedel ships a built-in library. They are offered to
+  files, `niwa-shared-library-directory`, holds the personal library and
+  installed ones; niwa ships a built-in library. They are offered to
   writable editors in every room and to the model. Excalidraw keeps its
   library in the browser, apart from scenes; a host directory gives the same
   separation while surviving browsers and sessions. Emacs fetches the public
@@ -91,7 +91,7 @@ board was not a pain point; only the data layer and its drawing changed.
   feature the record lacked was lost on import, and libraries would have needed
   the same translation.
 - **Embed Excalidraw's React editor.** It brings its whole editor, but not
-  the layers mevedel depends on: it has no Yjs or host-authoritative mode, its
+  the layers niwa depends on: it has no Yjs or host-authoritative mode, its
   export needs a browser so the host still needs its own renderer, it loads
   assets from a CDN that the editor's CSP forbids, and comments, area
   questions and previews would need re-integration on its API. The element
@@ -131,7 +131,7 @@ bends where leaving by another side takes two, so detours choose their sides.
 On a 10×8 board with 80 elbow arrows, a drag frame resolves in about 1.2 ms
 (0.4 ms with the fixed route); searching every frame without reuse took 4.5 ms.
 
-The first version kept one personal library file, `mevedel-shared-library-file`,
+The first version kept one personal library file, `niwa-shared-library-file`,
 and "Add all to my library" merged public libraries into it. In use, the user
 wanted a few public libraries installed on the host and always available, as
 separate collections. The library directory replaces the single file;

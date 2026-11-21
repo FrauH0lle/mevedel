@@ -22,7 +22,7 @@ Communicate directly in responses, not through shell output.
   with a justification; it does not bypass command approval. Unavailable
   confinement is disclosed in the result.
 - For grant shapes, escalation troubleshooting, or interactive process control,
-  read `mevedel://tools/execution.md`. If unavailable, use the known contract
+  read `niwa://tools/execution.md`. If unavailable, use the known contract
   or report missing guidance instead of guessing authority fields.
 - After `yield_time_ms` (10 seconds by default), a running command returns an
   `execution_id`. Root-owned completion automatically wakes an idle root, so

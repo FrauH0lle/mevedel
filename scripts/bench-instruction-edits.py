@@ -20,7 +20,7 @@ import tarfile
 import tempfile
 
 
-FIXTURE = "mevedel-instruction-edit-bench.el"
+FIXTURE = "niwa-instruction-edit-bench.el"
 ISOLATE = r'''
 (setq native-comp-jit-compilation nil)
 (when (native-comp-available-p)
@@ -28,20 +28,20 @@ ISOLATE = r'''
 '''
 COMPILE = r'''
 (require 'bytecomp)
-(let* ((source (getenv "MEVEDEL_BENCH_SOURCE"))
-       (destination (getenv "MEVEDEL_BENCH_BUILD"))
+(let* ((source (getenv "NIWA_BENCH_SOURCE"))
+       (destination (getenv "NIWA_BENCH_BUILD"))
        (load-path (append (list source) load-path))
        (byte-compile-error-on-warn t)
        (byte-compile-dest-file-function
         (lambda (file)
           (file-name-concat destination (concat (file-name-base file) ".elc")))))
-  (dolist (file (directory-files source t "\\`mevedel.*\\.el\\'"))
+  (dolist (file (directory-files source t "\\`niwa.*\\.el\\'"))
     (unless (byte-compile-file file)
       (error "Compilation failed: %s" file))))
 '''
 MEASURE = r'''
-(require 'mevedel-instruction-edit-bench)
-(mevedel-instruction-bench-run (getenv "MEVEDEL_BENCH_BUILD"))
+(require 'niwa-instruction-edit-bench)
+(niwa-instruction-bench-run (getenv "NIWA_BENCH_BUILD"))
 '''
 
 
@@ -93,7 +93,7 @@ def snapshot_sources(root, temporary, baseline):
         source.extractall(master, filter="data")
     current = temporary / "current"
     current.mkdir()
-    for path in root.glob("mevedel*.el"):
+    for path in root.glob("niwa*.el"):
         shutil.copyfile(path, current / path.name)
     # Tool definitions expand prompt files at compile time.
     if (root / "prompts").is_dir():
@@ -124,8 +124,8 @@ def measure(emacs, source, directory, packages, dependency_root):
     build = directory / "compiled"
     build.mkdir()
     env = isolated_environment(directory)
-    env.update(MEVEDEL_BENCH_SOURCE=str(source), MEVEDEL_BENCH_BUILD=str(build),
-               MEVEDEL_BENCH_DEPS=str(dependency_root))
+    env.update(NIWA_BENCH_SOURCE=str(source), NIWA_BENCH_BUILD=str(build),
+               NIWA_BENCH_DEPS=str(dependency_root))
     dependency_args = [arg for package in packages for arg in ("-L", str(package))]
     command = [emacs, "--batch", "-Q", "--eval", f"(progn {ISOLATE})"] + dependency_args
     compiled = run(command + ["--eval", f"(progn {COMPILE})"], directory,
@@ -147,7 +147,7 @@ def measure(emacs, source, directory, packages, dependency_root):
         hotpath["bytecode_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     report["source_manifest"] = {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(source.glob("mevedel*.el"))}
+        for path in sorted(source.glob("niwa*.el"))}
     if (source / "prompts").is_dir():
         report["source_manifest"].update({f"prompts/{path}": digest for path, digest
                                           in digest_files(source / "prompts").items()})
@@ -218,7 +218,7 @@ def main(argv=None):
         elpa = args.elpa or (candidates[0] if len(candidates) == 1 else None)
         if elpa is None:
             raise RuntimeError("Pass --elpa: could not select one .eask/*/elpa directory")
-        with tempfile.TemporaryDirectory(prefix="mevedel-instruction-bench-") as name:
+        with tempfile.TemporaryDirectory(prefix="niwa-instruction-bench-") as name:
             temporary = Path(name)
             sources = snapshot_sources(root, temporary, baseline)
             dependencies = temporary / "dependencies"

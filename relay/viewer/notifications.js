@@ -3,7 +3,7 @@
 
 (() => {
   function create({state, button, send, flash, decode}) {
-    const baseTitle = document.title || 'mevedel live session';
+    const baseTitle = document.title || 'niwa live session';
     let registration = null;
     let pushWork = Promise.resolve();
 
@@ -24,7 +24,7 @@
       let optedIn = false;
       try {
         optedIn = state.fragment
-          && localStorage.getItem(`mevedel-notify:${state.fragment}`) === 'on';
+          && localStorage.getItem(`niwa-notify:${state.fragment}`) === 'on';
       }
       catch (_error) { /* storage unavailable: stay off */ }
       return optedIn && supported() && Notification.permission === 'granted';
@@ -37,7 +37,7 @@
 
     function markTitle(on) {
       const title = state.editorTitle
-        || (state.sessionName ? `${state.sessionName} · mevedel` : baseTitle);
+        || (state.sessionName ? `${state.sessionName} · niwa` : baseTitle);
       document.title = on ? `\u25cf ${title}` : title;
     }
 
@@ -77,21 +77,21 @@
 
     function persistShare() {
       if (!state.fragment) return;
-      try { localStorage.setItem('mevedel-last-share', state.fragment); }
+      try { localStorage.setItem('niwa-last-share', state.fragment); }
       catch (_error) { /* storage unavailable */ }
     }
 
     function forgetShare() {
       try {
-        if (localStorage.getItem('mevedel-last-share') === state.fragment) {
-          localStorage.removeItem('mevedel-last-share');
+        if (localStorage.getItem('niwa-last-share') === state.fragment) {
+          localStorage.removeItem('niwa-last-share');
         }
       } catch (_error) { /* storage unavailable */ }
     }
 
     function forgetPreference() {
       if (!state.fragment) return;
-      try { localStorage.removeItem(`mevedel-notify:${state.fragment}`); }
+      try { localStorage.removeItem(`niwa-notify:${state.fragment}`); }
       catch (_error) { /* storage unavailable */ }
     }
 
@@ -205,7 +205,7 @@
             const permission = await Notification.requestPermission();
             if (!available()) return;
             try {
-              localStorage.setItem(`mevedel-notify:${state.fragment}`,
+              localStorage.setItem(`niwa-notify:${state.fragment}`,
                                    permission === 'granted' ? 'on' : 'off');
             } catch (_error) { /* opt-in then lasts for this page only */ }
             if (permission === 'granted') {
@@ -257,9 +257,9 @@
     const fromUrl = String(window.location.hash || '').replace(/^#/, '');
     let tab = '';
     let stored = '';
-    try { tab = sessionStorage.getItem('mevedel-tab-share') || ''; }
+    try { tab = sessionStorage.getItem('niwa-tab-share') || ''; }
     catch (_error) { /* storage unavailable */ }
-    try { stored = localStorage.getItem('mevedel-last-share') || ''; }
+    try { stored = localStorage.getItem('niwa-last-share') || ''; }
     catch (_error) { /* storage unavailable */ }
     for (const candidate of [fromUrl, fromHistory, tab, stored]) {
       if (parse(`#${candidate}`)) return candidate;
@@ -270,5 +270,5 @@
     return parse(`#${pasted}`) ? pasted : '';
   }
 
-  window.mevedelViewerNotifications = Object.freeze({create, resolveShare});
+  window.niwaViewerNotifications = Object.freeze({create, resolveShare});
 })();

@@ -37,17 +37,17 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
         const model = 'provider-model-'.repeat(10);
         const href = destination => '#room.secret?agent=' + encodeURIComponent(destination.agent.path);
         window.agentSent = [];
-        window.agentView = window.mevedelAgentView.create({el, href, send(frame) { window.agentSent.push(frame); }});
+        window.agentView = window.niwaAgentView.create({el, href, send(frame) { window.agentSent.push(frame); }});
         window.agentView.show([
           {path, status: 'running', model, effort: 'high'},
           {path: path + '/finished', status: 'done', model, effort: 'high'},
         ]);
-        window.mevedelBackgroundView.create({el, href, send() {}, state: {connected: true, writable: true},
+        window.niwaBackgroundView.create({el, href, send() {}, state: {connected: true, writable: true},
           openAgent: row => window.agentView.open(row), openExecution() {}, showConversation() {}}).show({rows: [
           {key: 'running', kind: 'agent', path, owner: path, status: 'running', statusLabel: 'Running', description: path, model, effort: 'high'},
           {key: 'finished', kind: 'agent', path: path + '/finished', status: 'done', statusLabel: 'Finished', description: path + '/finished', model, terminal: true},
         ]});
-        window.mevedelTaskView.create({el, summarize() {}}).show({t: 'tasks',
+        window.niwaTaskView.create({el, summarize() {}}).show({t: 'tasks',
           total: 1, completed: 0, omitted: 0, omittedActive: 0,
           tasks: [{id: 1, subject: 'Review', status: 'in-progress', owner: path,
             note: 'unbroken_status_note_'.repeat(10)}]});

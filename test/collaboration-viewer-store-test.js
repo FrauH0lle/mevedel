@@ -15,7 +15,7 @@ function build({writable = true, owner = false, room = false, connected = true,
   const empty = new Element('p');
   const creation = new Element('div');
   const document = {createElement: tag => new Element(tag)};
-  const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
+  const window = {niwaTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
                   addEventListener() {}, prompt};
   const context = {window, document, console, Date};
   const href = navigation(context);
@@ -28,7 +28,7 @@ function build({writable = true, owner = false, room = false, connected = true,
   const confirmed = {value: false};
   const copied = [];
   const state = {writable, owner};
-  const store = window.mevedelStoreView.create({
+  const store = window.niwaStoreView.create({
     send: frame => (connected ? sent.push(frame) : Promise.resolve(false)),
     el: (tag, className, text) => element(document, tag, className, text),
     list, empty, creation, state, room, href,

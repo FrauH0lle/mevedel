@@ -2307,7 +2307,7 @@ async function start(event) {
   if (
     initialized ||
     event.source !== parent ||
-    event.data?.type !== 'mevedel-editor' ||
+    event.data?.type !== 'niwa-editor' ||
     !event.ports[0]
   )
     return;
@@ -2521,8 +2521,8 @@ async function start(event) {
         ? { text: serializeScene(shapeList(), filesOf(doc), { background: doc.getMap('meta').get('background') }),
             mime: 'application/vnd.excalidraw+json',
             extension: 'recovery.excalidraw' }
-        : { text: JSON.stringify({ format: 'mevedel-editable-1', ...inspect(doc) }),
-            mime: 'application/json', extension: 'recovery.mevedel.json' },
+        : { text: JSON.stringify({ format: 'niwa-editable-1', ...inspect(doc) }),
+            mime: 'application/json', extension: 'recovery.niwa.json' },
     });
   };
 

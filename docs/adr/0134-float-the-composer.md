@@ -11,7 +11,7 @@ While the selected view window is scrolled away from the composer, a
 floating composer shows the same composer in a child frame over the bottom
 of that window, the host. It is a second window on the view buffer, not a
 copy and not a separate buffer: draft, rail, mode badge, keymaps and live
-progress are the view buffer's own. `mevedel-floating-composer` (default on)
+progress are the view buffer's own. `niwa-floating-composer` (default on)
 turns it off; turning it off removes every floating composer and returns a
 cursor it held to the inline draft. Setting it with `setq` does the same at
 the view's next command.
@@ -32,7 +32,7 @@ the view's next command.
   On the left it shows `↑ N more` in `shadow` while N draft lines of a
   capped draft are scrolled out above (counting costs nothing while none
   are); on the right a `↓ Back to bottom` button
-  (`mevedel-floating-composer-back-to-bottom`, mouse-1) in a theme-derived
+  (`niwa-floating-composer-back-to-bottom`, mouse-1) in a theme-derived
   tint of the background. Clicking it selects the host at the floating
   composer's draft position and scrolls the host so the buffer end shows on
   its last row (or, for a draft taller than the window, the cursor's line);
@@ -67,13 +67,13 @@ the view's next command.
   the floating composer (view killed, option off) clears the redirect it set,
   wherever it points by then, unless another view floating over the same
   frame redirected it since: the frame records the last view to redirect it
-  (`mevedel-floating-composer-owner`). When the host window is deleted or shows
+  (`niwa-floating-composer-owner`). When the host window is deleted or shows
   another buffer, a window-buffer change hook, installed with the first
   floating composer and removed when the option goes off, clears the
   redirect in that redisplay, before the next keystroke, and a timer then deletes the orphaned
   floating composer.
 - **Excluded from view geometry.** The floating composer's window carries
-  `mevedel-view-geometry-excluded`, so `mevedel-view--windows`' geometry
+  `niwa-view-geometry-excluded`, so `niwa-view--windows`' geometry
   answer omits it. Viewport capture and restoration (ADR 0126), composer
   anchoring, blank-space repair and narrowest-window chrome fitting (rail,
   panel rows, mail notices) ignore it, and its own resizes do not refit the
@@ -81,12 +81,12 @@ the view's next command.
   taller than the cap scrolls with its cursor, never above the rail.
 - **Still counted for visibility.** The rail is on screen in the floating
   composer, so animation visibility keeps counting its window, and its frame
-  carries `mevedel-view-animate-as-parent` so animation's frame choice treats
+  carries `niwa-view-animate-as-parent` so animation's frame choice treats
   it as its parent.
 - **Slower rail animation in the floating composer.** While every attended
   window showing the request label is a floating composer, the label
   animates at the battery frame-rate ceiling
-  (`mevedel-view-spinner-battery-framerate`, the rate the `save` power policy
+  (`niwa-view-spinner-battery-framerate`, the rate the `save` power policy
   always applies), in the Lisp timer and in native presentation alike. The
   Lisp painter repaints the label only once its own period has passed, even
   when a pending-tool row wakes the shared timer sooner. When
@@ -163,7 +163,7 @@ the view's next command.
 Keys act on the selected window; with the cursor in the transcript they keep
 their transcript meaning (`n`, `p`, `t`, `TAB`, `RET`).
 
-- `C-c C-SPC` (`mevedel-floating-composer-toggle`) moves the cursor between
+- `C-c C-SPC` (`niwa-floating-composer-toggle`) moves the cursor between
   the composer and the transcript: between the floating composer and its
   host while it is shown, else between the inline draft and the transcript,
   each toggle returning to where the previous one left the window's cursor.

@@ -10,15 +10,15 @@
 
 (require 'ert)
 
-(defconst mevedel-test-eask--startup-state
+(defconst niwa-test-eask--startup-state
   (list (getenv "HOME")
         (when (native-comp-available-p) (copy-sequence native-comp-eln-load-path))
         (featurep 'gptel-request))
   "HOME, native cache paths, and dependency load state before ERT starts.")
 
-(ert-deftest mevedel-eask-startup/native-cache ()
+(ert-deftest niwa-eask-startup/native-cache ()
   (pcase-let ((`(,home ,paths ,gptel-loaded)
-               mevedel-test-eask--startup-state))
+               niwa-test-eask--startup-state))
     (should-not gptel-loaded)
     (when (native-comp-available-p)
       (should (file-in-directory-p (car paths) home))

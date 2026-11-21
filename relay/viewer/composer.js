@@ -72,5 +72,5 @@
     });
   }
 
-  window.mevedelComposer = Object.freeze({bind, expandable, setExpanded});
+  window.niwaComposer = Object.freeze({bind, expandable, setExpanded});
 })();

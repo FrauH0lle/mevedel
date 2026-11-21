@@ -54,7 +54,7 @@ const windowListeners = {};
 const window = {
   confirm: () => confirmAnswer,
   addEventListener: (type, callback) => (windowListeners[type] ||= []).push(callback),
-  mevedelTranscriptRenderer: {
+  niwaTranscriptRenderer: {
     formatBytes: size => `${size} B`,
     renderMarkdown: text => element(document, 'article', 'prose', text),
   },
@@ -80,7 +80,7 @@ const sent = [];
 let sendOk = true;
 const pages = [];
 let summary;
-const controller = window.mevedelArtifactView.create({
+const controller = window.niwaArtifactView.create({
   href,
   send(frame) { sent.push(frame); return Promise.resolve(sendOk); },
   onPage: () => pages.push('changed'),

@@ -10,7 +10,7 @@
    the tab keeps each room's link in its own storage, which dies with the
    tab; going back to a room finds the key the tab used there. */
 (() => {
-  const SHARES = 'mevedel-tab-shares';
+  const SHARES = 'niwa-tab-shares';
 
   function shares() {
     try {
@@ -325,5 +325,5 @@
                           entry, openMenu});
   }
 
-  window.mevedelNav = Object.freeze({create, historyShare, link, roomURL});
+  window.niwaNav = Object.freeze({create, historyShare, link, roomURL});
 })();

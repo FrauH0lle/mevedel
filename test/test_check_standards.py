@@ -69,20 +69,20 @@ class StandardsTests(unittest.TestCase):
         self.assertEqual(standards.lisp_boundaries('.dir-locals.el', '((nil))'), [])
 
     def test_only_composer_core_can_access_input_marker(self):
-        owner = library('mevedel-view-composer').replace(
-            '(provide', '(defvar mevedel-view--input-marker nil "Inline input marker.")\n(provide')
-        self.write('mevedel-view-composer.el', owner)
+        owner = library('niwa-view-composer').replace(
+            '(provide', '(defvar niwa-view--input-marker nil "Inline input marker.")\n(provide')
+        self.write('niwa-view-composer.el', owner)
         self.commit()
         self.check(0)
 
-        for name, symbol in [('demo', 'mevedel-view--input-marker'),
-                             ('benchmark/demo', 'mevedel-view--input-marker-position')]:
+        for name, symbol in [('demo', 'niwa-view--input-marker'),
+                             ('benchmark/demo', 'niwa-view--input-marker-position')]:
             source = library('demo').replace('  value)', f'  (ignore value)\n  {symbol})')
             self.write(f'{name}.el', source)
         _, errors = self.check(1)
-        self.assertIn('demo.el:8: composer-marker: mevedel-view--input-marker ', errors)
+        self.assertIn('demo.el:8: composer-marker: niwa-view--input-marker ', errors)
         self.assertIn('benchmark/demo.el:8: composer-marker: '
-                      'mevedel-view--input-marker-position ', errors)
+                      'niwa-view--input-marker-position ', errors)
 
     def test_markdown_links(self):
         self.write('docs/target.md', '# A `code` heading\n# Duplicate\n# Duplicate\n'
@@ -304,7 +304,7 @@ class StandardsTests(unittest.TestCase):
     def test_generated_test_names_collide_with_literal_names(self):
         self.write('test/test-one.el', library('test-one').replace(
             "(provide 'test-one)",
-            '(mevedel-deftest example () ,test (test) :doc "One" (should t) '
+            '(niwa-deftest example () ,test (test) :doc "One" (should t) '
             ':doc "Two" (should t))'))
         self.write('test/test-two.el', library('test-two').replace(
             "(provide 'test-two)", '(ert-deftest example/test@2 () (should t))'))
@@ -312,7 +312,7 @@ class StandardsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('duplicate ERT test name example/test@2', errors[0])
         self.write('test/test-two.el', library('test-two').replace(
-            "(provide 'test-two)", '(mevedel-deftest example () ,test (test) (should t))'))
+            "(provide 'test-two)", '(niwa-deftest example () ,test (test) (should t))'))
         self.assertEqual(standards.test_integrity_errors(
             self.root, standards.inventory(self.root)), [])
 
@@ -416,8 +416,8 @@ class StandardsTests(unittest.TestCase):
         sentinel = self.root / 'must-not-exist'
         data = standards.test_inventory(self.root, [('test/test-demo.el',
                 f'(write-region "bad" nil "{sentinel}")\n'
-                '(mevedel-deftest single () (should t))\n'
-                '(mevedel-deftest many () (should ,value) (value) t :doc "Two" nil)')])
+                '(niwa-deftest single () (should t))\n'
+                '(niwa-deftest many () (should ,value) (value) t :doc "Two" nil)')])
         self.assertFalse(sentinel.exists())
         self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
                          ['single/test', 'many/test@1', 'many/test@2'])
@@ -438,7 +438,7 @@ class StandardsTests(unittest.TestCase):
 
     def test_same_file_duplicates_and_empty_templates(self):
         data = standards.test_inventory(self.root, [('test/test-demo.el',
-                '(mevedel-deftest empty ())\n'
+                '(niwa-deftest empty ())\n'
                 '(ert-deftest shared () (should t))\n'
                 '(ert-deftest shared () (should t))\n'
                 '["fixture.py" (ert-deftest vector-data () nil)]')])
@@ -536,13 +536,13 @@ class StandardsTests(unittest.TestCase):
             "(cl-letf* (((symbol-function 'demo-value) #'ignore)"
             " ((symbol-function 'external) (progn (require 'demo) #'ignore))) nil)")), 1)
 
-    def test_stub_mevedel_cases_and_fixture_options(self):
+    def test_stub_niwa_cases_and_fixture_options(self):
         stub = "(cl-letf (((symbol-function 'demo-value) #'ignore)) nil)"
 
         def collect(options, template):
             text = library('test-demo').replace(
                 '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',
-                f'(mevedel-deftest demo-value ({options}) {template})')
+                f'(niwa-deftest demo-value ({options}) {template})')
             return standards.test_stubs(self.root, [('demo.el', library()),
                                                      ('test/test-demo.el', text)])[
                                                          'test/test-demo.el']

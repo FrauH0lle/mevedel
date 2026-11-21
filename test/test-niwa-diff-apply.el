@@ -1,0 +1,677 @@
+;;; test-niwa-diff-apply.el --- Transactional diff application tests -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'niwa-notes)
+
+(require 'niwa)
+(require 'niwa-diff-apply)
+(require 'niwa-structs)
+(require 'niwa-workspace)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "niwa-instruction-test-support"))
+
+
+;;
+;;; Helpers
+
+(defun niwa-test--create-diff-buffer
+    (modified file-buffer &optional workspace-root)
+  "Return a unified diff buffer from FILE-BUFFER to MODIFIED.
+Resolve labels relative to WORKSPACE-ROOT when non-nil."
+  (let* ((original-file (buffer-file-name file-buffer))
+         (original
+          (if (file-exists-p original-file)
+              (with-temp-buffer
+                (insert-file-contents-literally original-file)
+                (buffer-string))
+            ""))
+         (source-file
+          (if (file-exists-p original-file)
+              original-file
+            (make-temp-file "niwa-test-original-" nil ".txt")))
+         (modified-file
+          (make-temp-file "niwa-test-modified-" nil ".txt"))
+         (relative
+          (file-relative-name original-file
+                              (or workspace-root temporary-file-directory)))
+         (buffer (generate-new-buffer " *niwa-test-diff*")))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (insert modified)
+            (let ((coding-system-for-write
+                   (buffer-local-value 'buffer-file-coding-system file-buffer)))
+              (write-region (point-min) (point-max) modified-file nil 'silent)))
+          (with-current-buffer buffer
+            (insert (format "diff --git a/%s b/%s\n" relative relative))
+            (cond
+             ((and (string-empty-p original)
+                   (not (string-empty-p modified)))
+              (insert "new file mode 100644\n"))
+             ((and (not (string-empty-p original))
+                   (string-empty-p modified))
+              (insert "deleted file mode 100644\n")))
+            (let ((coding-system-for-read
+                   (buffer-local-value 'buffer-file-coding-system file-buffer)))
+              (call-process "diff" nil t nil "-u"
+                            "--label" (if (string-empty-p original)
+                                          "/dev/null"
+                                        (concat "a/" relative))
+                            "--label" (if (string-empty-p modified)
+                                          "/dev/null"
+                                        (concat "b/" relative))
+                            source-file modified-file))
+            (diff-mode)
+            (read-only-mode +1)))
+      (delete-file modified-file)
+      (unless (equal source-file original-file)
+        (delete-file source-file)))
+    buffer))
+
+(defun niwa-test--create-multi-diff-buffer (entries &optional workspace-root)
+  "Return one diff buffer for ENTRIES of (MODIFIED FILE-BUFFER).
+Resolve labels relative to WORKSPACE-ROOT when non-nil."
+  (let ((result (generate-new-buffer " *niwa-test-multi-diff*")))
+    (dolist (entry entries)
+      (let ((part (niwa-test--create-diff-buffer
+                   (car entry) (cadr entry) workspace-root)))
+        (unwind-protect
+            (with-current-buffer result
+              (insert-buffer-substring part))
+          (kill-buffer part))))
+    (with-current-buffer result
+      (diff-mode)
+      (read-only-mode +1))
+    result))
+
+(defun niwa-test--overlay-on-text (buffer text)
+  "Create a note on TEXT in BUFFER."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (unless (re-search-forward (regexp-quote text) nil t)
+        (error "Fixture text not found in %s" (buffer-name)))
+      (niwa-instruction-test--create-note-in
+       buffer (match-beginning 0) (match-end 0)))))
+
+(defun niwa-test--overlay-text (overlay)
+  "Return the text OVERLAY currently covers."
+  (with-current-buffer (overlay-buffer overlay)
+    (buffer-substring-no-properties
+     (overlay-start overlay) (overlay-end overlay))))
+
+(defun niwa-test--apply-diff
+    (diff-buffer workspace-file &optional workspace-root)
+  "Apply DIFF-BUFFER in a temporary workspace identified by WORKSPACE-FILE.
+Use WORKSPACE-ROOT as its root when non-nil."
+  (let ((workspace-root (or workspace-root temporary-file-directory)))
+    (cl-letf (((symbol-function #'niwa-workspace)
+               (lambda (&rest _)
+                 (niwa-workspace-get-or-create
+                  'file workspace-file workspace-root
+                  (file-name-nondirectory workspace-file)))))
+      (with-current-buffer diff-buffer
+        (let ((default-directory workspace-root)
+              (inhibit-message t))
+          (niwa-diff-apply-buffer))))))
+
+
+;;
+;;; niwa--path-has-suffix-p
+
+(niwa-deftest niwa--path-has-suffix-p ()
+  ,test
+  (test)
+  :doc "matches a complete trailing path"
+  (should (niwa--path-has-suffix-p "/tmp/dev/null" "dev/null"))
+  :doc "rejects a partial component match"
+  (should-not (niwa--path-has-suffix-p "/tmp/notdev/null" "dev/null")))
+
+
+;;
+;;; niwa-diff-apply--stage-buffer
+
+(niwa-deftest niwa-diff-apply--stage-buffer ()
+  ,test
+  (test)
+  :doc "applies resolved edits from the end of a snapshot"
+  (with-temp-buffer
+    (insert "one\ntwo\nthree\n")
+    (should
+     (equal "one\nTWO\nTHREE\n"
+            (niwa-diff-apply--stage-buffer
+             (current-buffer)
+             '((:pos (9 . 15) :dst ("THREE\n"))
+               (:pos (5 . 9) :dst ("TWO\n")))))))
+  :doc "stages the complete source despite narrowing"
+  (with-temp-buffer
+    (insert "before\ninside\nafter\n")
+    (narrow-to-region 8 15)
+    (should
+     (equal "before\nchanged\nafter\n"
+            (niwa-diff-apply--stage-buffer
+             (current-buffer)
+             '((:pos (8 . 15) :dst ("changed\n"))))))))
+
+
+;;
+;;; niwa-diff-apply-buffer
+
+(niwa-deftest niwa-diff-apply-buffer
+  (:before-each
+   (niwa-workspace-clear-registry)
+   (setf (niwa--instruction-alist) nil)
+   (setf (niwa--instruction-id-counter) 0)
+   (setf (niwa--instruction-id-usage-map) (make-hash-table))
+   (setf (niwa--instruction-retired-ids) nil)
+   (setq niwa--instruction-states (make-hash-table :test #'equal))
+   (setq niwa--instruction-current-state-key :global)
+   :after-each
+   (niwa-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "keeps a whole-line note at bol when a diff rewrites its prefix"
+  (let* ((niwa-note-labels 'expanded)
+         (file (make-temp-file "niwa-overlay-prefix-" nil ".txt"
+                               "before\nProvision old\nafter\n"))
+         (buffer (find-file-noselect file))
+         (reference (niwa-test--overlay-on-text
+                     buffer "Provision old\n"))
+         (diff (niwa-test--create-diff-buffer
+                "above\nbefore\n# Provision new\nafter\nbelow\n" buffer)))
+    (unwind-protect
+        (progn
+          (niwa-test--apply-diff diff file)
+          (should (equal "# Provision new\n"
+                         (niwa-test--overlay-text reference)))
+          (with-current-buffer buffer
+            (goto-char (overlay-start reference))
+            (should (bolp)))
+          (let ((label (overlay-get reference 'niwa-label-overlay)))
+            (should (overlayp label))
+            (should (eq buffer (overlay-buffer label)))
+            (should (string-match-p "Note [0-9]+"
+                                    (substring-no-properties
+                                     (overlay-get label 'after-string))))))
+      (kill-buffer diff)
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (delete-file file)))
+
+  ;; MUST-WORK USER CASE.  This fixture is a real change a user made in an
+  ;; R/Shiny module: three renamed `renderUI' outputs across separate hunks,
+  ;; with one note spanning the layout block and one note
+  ;; on each renamed definition line.  Do not delete this case when the diff
+  ;; application implementation changes -- port it.  Change what it expects
+  ;; only when the product requirement itself changes.
+  :doc "keeps a block note and line notes on their text across a real-world multi-hunk rename"
+  (let* ((buffer-text "
+      # plots is to high too display on one page and thus, it makes sense to
+      # have a division between multiple pages.
+      shiny$div(
+        # Dynamic layout - columns adjust based on which cards are visible
+        shiny$uiOutput(ns(\"dynamic_layout_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))
+      )
+    )
+  )
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    # Create entire layout dynamically based on checkbox states
+    output$dynamic_layout_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    ### Intervention costs -----------------------------------------------------
+
+    output$dynamic_layout_ui_pt2 <- shiny$renderUI({
+      ns <- session$ns
+
+      if (input$show_costs) {
+        costs$ui(id = ns(\"costs\"))
+      }
+    })
+
+    ### Impact maps ------------------------------------------------------------
+
+    output$dynamic_layout_ui_pt3 <- shiny$renderUI({
+      ns <- session$ns
+
+
+")
+         (block-text "      shiny$div(\n        # Dynamic layout - columns adjust based on which cards are visible\n        shiny$uiOutput(ns(\"dynamic_layout_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))\n      )\n")
+         (reference-1-text "    output$dynamic_layout_ui <- shiny$renderUI({\n")
+         (reference-2-text "    output$dynamic_layout_ui_pt2 <- shiny$renderUI({\n")
+         (reference-3-text "    output$dynamic_layout_ui_pt3 <- shiny$renderUI({\n")
+         (new-text "
+      # plots is to high too display on one page and thus, it makes sense to
+      # have a division between multiple pages.
+      shiny$div(
+        # Main plots and maps layout
+        shiny$uiOutput(ns(\"main_plots_maps_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"costs_analysis_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"impact_maps_ui\"))
+      )
+    )
+  )
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    # Create main plots and maps layout dynamically based on checkbox states
+    output$main_plots_maps_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    ### Intervention costs -----------------------------------------------------
+
+    output$costs_analysis_ui <- shiny$renderUI({
+      ns <- session$ns
+
+      if (input$show_costs) {
+        costs$ui(id = ns(\"costs\"))
+      }
+    })
+
+    ### Impact maps ------------------------------------------------------------
+
+    output$impact_maps_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+")
+         (expected-block "      shiny$div(\n        # Main plots and maps layout\n        shiny$uiOutput(ns(\"main_plots_maps_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"costs_analysis_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"impact_maps_ui\"))\n      )\n")
+         (expected-ref1 "    output$main_plots_maps_ui <- shiny$renderUI({\n")
+         (expected-ref2 "    output$costs_analysis_ui <- shiny$renderUI({\n")
+         (expected-ref3 "    output$impact_maps_ui <- shiny$renderUI({\n")
+         (file (make-temp-file "niwa-test-real-world-" nil ".R" buffer-text))
+         (file-buffer (find-file-noselect file))
+         block reference-1 reference-2 reference-3 diff-buffer)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'niwa-workspace)
+                     (lambda (&rest _)
+                       (niwa-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (setq block (niwa-test--overlay-on-text
+                         file-buffer block-text)
+                  reference-1 (niwa-test--overlay-on-text
+                               file-buffer reference-1-text)
+                  reference-2 (niwa-test--overlay-on-text
+                               file-buffer reference-2-text)
+                  reference-3 (niwa-test--overlay-on-text
+                               file-buffer reference-3-text)
+                  diff-buffer (niwa-test--create-diff-buffer
+                               new-text file-buffer))
+            (with-current-buffer diff-buffer
+              (goto-char (point-min))
+              (should (< 1 (how-many "^@@"))))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (niwa-diff-apply-buffer))))
+          (with-current-buffer file-buffer
+            (should (equal new-text (buffer-string)))
+            (should (equal expected-block
+                           (niwa-test--overlay-text block)))
+            (should (equal expected-ref1
+                           (niwa-test--overlay-text reference-1)))
+            (should (equal expected-ref2
+                           (niwa-test--overlay-text reference-2)))
+            (should (equal expected-ref3
+                           (niwa-test--overlay-text reference-3))))
+          (should (equal new-text
+                         (niwa-test--read-file file))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "rejects ambiguous hunks without changing the diff or target"
+  (let* ((original "alpha\nold\nomega\n")
+         (file (make-temp-file "niwa-test-ambiguous-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer
+          (niwa-test--create-diff-buffer "alpha\nnew\nomega\n" file-buffer))
+         patch-before
+         first-error)
+    (unwind-protect
+        (progn
+          (with-current-buffer diff-buffer
+            (let ((inhibit-read-only t))
+              (goto-char (point-min))
+              (re-search-forward "^ alpha$")
+              (beginning-of-line)
+              (delete-char 1)
+              (goto-char (point-max))
+              (dotimes (_ 1000) (insert " \n"))
+              (goto-char (point-min))
+              (re-search-forward (regexp-quote "@@ -1,3 +1,3 @@"))
+              (replace-match "@@ -1,1003 +1,1003 @@" t t))
+            (setq patch-before (buffer-string)))
+          (cl-letf (((symbol-function #'niwa-workspace)
+                     (lambda (&rest _)
+                       (niwa-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file))))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (error "Unexpected prompt"))))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory))
+                (setq first-error
+                      (error-message-string
+                       (should-error (niwa-diff-apply-buffer t)))))))
+          (should (string-match-p "Rejected ambiguous diff hunk" first-error))
+          (with-current-buffer diff-buffer
+            (should (equal patch-before (buffer-string))))
+          (with-current-buffer file-buffer
+            (should (equal original (buffer-string)))
+            (should-not (buffer-modified-p)))
+          (should (equal original
+                         (niwa-test--read-file file))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "writes full final bytes from a narrowed source and retains a reference"
+  (let* ((original
+          "head\none\ntwo\nthree\nfour\nfive\ntarget\nsix\nseven\neight\nnine\nten\ntail\n")
+         (expected
+          "HEAD\none\ntwo\nthree\nfour\nfive\ntarget\nsix\nseven\neight\nnine\nten\nTAIL\n")
+         (file (make-temp-file "niwa-test-reference-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         reference
+         diff-buffer)
+    (unwind-protect
+        (progn
+          (with-current-buffer file-buffer
+            (goto-char (point-min))
+            (re-search-forward "^target$")
+            (setq reference
+                  (niwa-instruction-test--create-note-in
+                   file-buffer (line-beginning-position) (line-beginning-position 2)))
+            (narrow-to-region (overlay-start reference) (overlay-end reference)))
+          (setq diff-buffer
+                (niwa-test--create-diff-buffer expected file-buffer))
+          (with-current-buffer diff-buffer
+            (goto-char (point-min))
+            (should (= 2 (how-many "^@@"))))
+          (niwa-test--apply-diff diff-buffer file)
+          (with-current-buffer file-buffer
+            (should (= (point-min) (overlay-start reference)))
+            (should (= (point-max) (overlay-end reference)))
+            (save-restriction
+              (widen)
+              (should (equal expected (buffer-string))))
+            (should (equal "target\n"
+                           (buffer-substring-no-properties
+                            (overlay-start reference) (overlay-end reference)))))
+          (should (equal expected
+                         (niwa-test--read-file file))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "whole-range deletion keeps an empty note at the deleted code"
+  (let* ((original "before\nremove me\nafter\n")
+         (file (make-temp-file "niwa-test-note-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         note
+         diff-buffer)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'niwa-workspace)
+                     (lambda (&rest _)
+                       (niwa-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (setq note (niwa-instruction-test--create-note-in file-buffer 8 18))
+            (setq diff-buffer
+                  (niwa-test--create-diff-buffer "before\nafter\n" file-buffer))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (niwa-diff-apply-buffer))))
+          (should (eq file-buffer (overlay-buffer note)))
+          (should (= 8 (overlay-start note) (overlay-end note))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "preserves literal bytes for a non-default file coding system"
+  (let* ((original
+          ";; -*- coding: iso-latin-1 -*-\nold: \u00e4\nkeep: \u00f6\n")
+         (expected
+          ";; -*- coding: iso-latin-1 -*-\nnew: \u00e4\nkeep: \u00f6\n")
+         (file (make-temp-file "niwa-test-coding-" nil ".el"))
+         file-buffer diff-buffer coding)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'iso-latin-1))
+            (with-temp-file file (insert original)))
+          (setq file-buffer (find-file-noselect file)
+                coding (buffer-local-value 'buffer-file-coding-system
+                                           file-buffer)
+                diff-buffer
+                (niwa-test--create-diff-buffer expected file-buffer))
+          (niwa-test--apply-diff diff-buffer file)
+          (should
+           (equal (encode-coding-string expected coding)
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally file)
+                    (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p file-buffer) (kill-buffer file-buffer))
+      (delete-file file)))
+  :doc "creates a new file through the shared transaction"
+  (let* ((file (make-temp-name
+                (expand-file-name "niwa-test-created-"
+                                  temporary-file-directory)))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer
+          (niwa-test--create-diff-buffer "created\n" file-buffer)))
+    (unwind-protect
+        (progn
+          (niwa-test--apply-diff diff-buffer file)
+          (should (equal "created\n"
+                         (niwa-test--read-file file)))
+          (with-current-buffer file-buffer
+            (should (equal "created\n" (buffer-string)))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (when (file-exists-p file) (delete-file file))))
+  :doc "deleting a file keeps its note live in the open buffer"
+  (let* ((file (make-temp-file "niwa-test-deleted-" nil ".txt" "old\n"))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer (niwa-test--create-diff-buffer "" file-buffer))
+         note)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'niwa-workspace)
+                     (lambda (&rest _)
+                       (niwa-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (setq note (niwa-instruction-test--create-note-in file-buffer 1 4))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (niwa-diff-apply-buffer))))
+          (should-not (file-exists-p file))
+          (should (buffer-live-p file-buffer))
+          (should (eq file-buffer (overlay-buffer note))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (when (file-exists-p file) (delete-file file))))
+  :doc "rolls back create placeholders when a later write fails"
+  (dolist (visit-sibling '(t nil))
+    (let* ((root (make-temp-file "niwa-test-write-rollback-" t))
+           (first-dir (file-name-concat root "created" "first"))
+           (sibling-dir (file-name-concat root "created" "sibling"))
+           (second-dir (file-name-concat root "second"))
+           (first (file-name-concat first-dir "one.txt"))
+           (sibling (file-name-concat sibling-dir "sibling.txt"))
+           (second (file-name-concat second-dir "two.txt"))
+           first-buffer sibling-buffer second-buffer diff-buffer first-modtime
+           prompted)
+      (unwind-protect
+          (progn
+            (make-directory second-dir)
+            (write-region "two\n" nil second nil 'silent)
+            (setq first-buffer (find-file-noselect first)
+                  sibling-buffer (find-file-noselect sibling)
+                  second-buffer (find-file-noselect second)
+                  first-modtime
+                  (with-current-buffer first-buffer (visited-file-modtime))
+                  diff-buffer
+                  (niwa-test--create-multi-diff-buffer
+                   `(("ONE\n" ,first-buffer)
+                     ("SIBLING\n" ,sibling-buffer)
+                     ("TWO\n" ,second-buffer))
+                   root))
+            (unless visit-sibling (kill-buffer sibling-buffer))
+            (niwa-workspace-clear-registry)
+            (set-file-modes second-dir #o500)
+            (cl-letf (((symbol-function 'read-file-name)
+                       (lambda (&rest _)
+                         (setq prompted t)
+                         first)))
+              (should-error (niwa-test--apply-diff diff-buffer first root)))
+            (should-not prompted)
+            (should (eq (buffer-live-p sibling-buffer) visit-sibling))
+            (should (eq (find-buffer-visiting sibling)
+                        (and visit-sibling sibling-buffer)))
+            (should-not (file-exists-p first))
+            (should-not (file-exists-p sibling))
+            (should-not (file-exists-p (file-name-concat root "created")))
+            (should (equal "two\n"
+                           (niwa-test--read-file second)))
+            (with-current-buffer first-buffer
+              (should (equal "" (buffer-string)))
+              (should (equal first-modtime (visited-file-modtime)))
+              (should (verify-visited-file-modtime first-buffer)))
+            (with-current-buffer second-buffer
+              (should (equal "two\n" (buffer-string)))))
+        (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
+        (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+        (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+        (when (buffer-live-p sibling-buffer) (kill-buffer sibling-buffer))
+        (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+        (when (file-directory-p root) (delete-directory root t)))))
+  :doc "restores earlier deletions when a later deletion fails"
+  (let* ((root (make-temp-file "niwa-test-delete-rollback-" t))
+         (first-dir (file-name-concat root "first"))
+         (second-dir (file-name-concat root "second"))
+         (first (file-name-concat first-dir "one.txt"))
+         (second (file-name-concat second-dir "two.txt"))
+         first-buffer second-buffer diff-buffer)
+    (unwind-protect
+        (progn
+          (make-directory first-dir)
+          (make-directory second-dir)
+          (write-region "one\n" nil first nil 'silent)
+          (write-region "two\n" nil second nil 'silent)
+          (setq first-buffer (find-file-noselect first)
+                second-buffer (find-file-noselect second)
+                diff-buffer
+                (niwa-test--create-multi-diff-buffer
+                 `(("" ,first-buffer) ("" ,second-buffer))))
+          (set-file-modes second-dir #o500)
+          (should-error (niwa-test--apply-diff diff-buffer first))
+          (should (equal "one\n"
+                         (niwa-test--read-file first)))
+          (should (equal "two\n"
+                         (niwa-test--read-file second))))
+      (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+      (when (file-directory-p root) (delete-directory root t))))
+  :doc "rolls back files and note geometry when a later buffer hook fails"
+  (let* ((root (make-temp-file "niwa-test-sync-rollback-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt"))
+         first-buffer second-buffer diff-buffer note)
+    (unwind-protect
+        (progn
+          (write-region "one\n" nil first nil 'silent)
+          (write-region "two\n" nil second nil 'silent)
+          (setq first-buffer (find-file-noselect first)
+                second-buffer (find-file-noselect second)
+                diff-buffer
+                (niwa-test--create-multi-diff-buffer
+                 `(("" ,first-buffer) ("TWO\n" ,second-buffer))))
+          (cl-letf (((symbol-function #'niwa-workspace)
+                     (lambda (&rest _)
+                       (niwa-workspace-get-or-create
+                        'file first root (file-name-nondirectory first)))))
+            (setq note (niwa-instruction-test--create-note-in first-buffer 1 4))
+            (with-current-buffer second-buffer
+              (add-hook 'before-change-functions
+                        (lambda (&rest _) (error "Sync failure")) nil t))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (should-error (niwa-diff-apply-buffer))))
+            (with-current-buffer first-buffer
+              (should
+               (memq note
+                     (alist-get first-buffer
+                                (niwa--instruction-alist-value))))))
+          (should (equal "one\n"
+                         (niwa-test--read-file first)))
+          (should (equal "two\n"
+                         (niwa-test--read-file second)))
+          (with-current-buffer first-buffer
+            (should (equal "one\n" (buffer-string)))
+            (should (eq first-buffer (overlay-buffer note)))
+            (should (= 1 (overlay-start note)))
+            (should (= 4 (overlay-end note))))
+          (with-current-buffer second-buffer
+            (should (equal "two\n" (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+      (when (file-directory-p root) (delete-directory root t)))))
+
+(provide 'test-niwa-diff-apply)
+
+;;; test-niwa-diff-apply.el ends here

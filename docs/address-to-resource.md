@@ -1,6 +1,6 @@
 # Address-to-resource
 
-Resource addresses are the model-facing way to name Mevedel-owned content
+Resource addresses are the model-facing way to name Niwa-owned content
 through the existing filesystem-shaped tools. They are consumed by `Read`,
 `Glob`, `Grep`, and `ApplyPatch` only where the operation matrix below allows
 it; they do not add another model tool or replace ordinary target-native paths.
@@ -32,12 +32,12 @@ resource URI.
 | Workspace notes | `notes://`, `notes://UUID.md` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 | Shared item | `shared://`, `shared://ID[/PART]`, `shared://library[/NAME][/sheet.png]` | yes | no | text views | no |
-| Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
+| Packaged documentation | `niwa://`, `niwa://RELATIVE-PATH` | yes | yes | yes | no |
 
 ## Prompt availability
 
 The main and built-in agent prompts render a compact request-time roster.
-`mevedel://` is always advertised because packaged documentation needs no
+`niwa://` is always advertised because packaged documentation needs no
 session. A valid request session advertises `work://` and `artifact://` as
 normal session capabilities: local state is materialized on its first write,
 and artifact output may arise during the request, so neither family requires
@@ -58,7 +58,7 @@ current resource metadata has a usable surface:
 - `shared://` requires at least one shared whiteboard or document in the
   workspace.
 
-With no valid request session, the roster still contains `mevedel://` but no
+With no valid request session, the roster still contains `niwa://` but no
 session-owned families. The roster reports request-time availability metadata; it does not itself
 authorize an operation or replace resolver validation. It does not change the operation matrix, permissions, or lifecycle rules below.
 
@@ -113,8 +113,8 @@ The address forms have these identity rules:
   persisted output; there is no artifact index or generated ID allocator.
 - `skill://NAME@SOURCE-KEY` uses the full lowercase SHA-256 digest of the
   canonical skill source key. `NAME` labels the source; the digest is the
-  authority. Readable aliases are `skill://local-mevedel/SKILL`,
-  `skill://local-agents/SKILL`, `skill://global-mevedel/SKILL`,
+  authority. Readable aliases are `skill://local-niwa/SKILL`,
+  `skill://local-agents/SKILL`, `skill://global-niwa/SKILL`,
   `skill://global-agents/SKILL`, `skill://bundled/SKILL`,
   `skill://managed/SKILL`, and `skill://plugin/PLUGIN/SKILL`, each with optional
   descendants. An alias resolves to the exact current full-hash locator without
@@ -129,17 +129,17 @@ The address forms have these identity rules:
   `segment-NNNN.chat.org` name. It does not accept retained agent paths or
   arbitrary files inside session storage.
 - `memory://root` is a dynamic union/index query. A listed topic uses its
-  root's key in `memory://ROOT-KEY/RELATIVE-PATH`. A configured `.mevedel` or
+  root's key in `memory://ROOT-KEY/RELATIVE-PATH`. A configured `.niwa` or
   `.agents` root that is the only one of its kind uses the readable key
-  `local-mevedel`, `local-agents`, `global-mevedel`, or `global-agents`; every
+  `local-niwa`, `local-agents`, `global-niwa`, or `global-agents`; every
   other root, and any readable key claimed twice, uses the root's full
   lowercase SHA-256 digest. Both key forms resolve to the same root, and the
   digest remains the authority a readable key resolves to.
 - `mcp://ENCODED-SERVER/ENCODED-URI` encodes the complete server name and
   native resource URI as separate components. Internal slashes, colons,
   fragments, percent signs, spaces, and Unicode are encoded.
-- `mevedel://RELATIVE-PATH` names a packaged Markdown document relative to the
-  installed `docs/` root. Bare `mevedel://` is a dynamic documentation listing.
+- `niwa://RELATIVE-PATH` names a packaged Markdown document relative to the
+  installed `docs/` root. Bare `niwa://` is a dynamic documentation listing.
 - `notes://UUID.md` names a note by its lowercase UUID in the session's
   workspace, not by its display number or a source-file path. It is a
   workspace-relative locator; bare `notes://` is dynamic discovery. There
@@ -211,15 +211,15 @@ capture/application safety checks remain pending. Directory discovery does not
 mark all returned files used or refresh their modification age. Glob/Grep and
 direct-file Read retain their existing output and access contracts.
 
-- `work://shared/...` maps to `WORKSPACE-ROOT/.mevedel/shared/`. All agents and
+- `work://shared/...` maps to `WORKSPACE-ROOT/.niwa/shared/`. All agents and
   sessions in that workspace see the same files. The directory is created only
   by a permitted write and has no prescribed children. Working notes, drafts,
   findings and handoffs default here: search before creating and update relevant
   existing files. Separate workspaces have separate shared areas. Worktree
-  sessions created through mevedel retain the parent workspace and share its
+  sessions created through niwa retain the parent workspace and share its
   files; a worktree opened as a separate workspace has its own shared area.
   Use `work://shared/...` to address the workspace's files: a literal relative
-  `.mevedel/shared/...` path follows the session's working directory instead.
+  `.niwa/shared/...` path follows the session's working directory instead.
   There is no cross-project publication mechanism.
 - Other descendants map to the session's lazily materialized `local/` directory.
   The parent and retained agents share this session scope. First write establishes
@@ -241,7 +241,7 @@ provides the note's address to the receiving agent.
 
 Shared Markdown notes (`.md`, case-insensitive) are ordinary authored files.
 ApplyPatch neither adds nor validates note headers. One setting,
-`mevedel-working-note-max-age-days` (default 14, nil disables disposal), controls
+`niwa-working-note-max-age-days` (default 14, nil disables disposal), controls
 modification-age readiness for every note and attachment.
 See the [note-authoring contract](memory-notes.md#shared-working-note-lifecycle).
 
@@ -417,7 +417,7 @@ Saved-history access does not repair corrupted stored bounds.
 `memory://root` is a read-only, dynamic union of configured persistent-memory
 roots. Its bare read uses the same ordered and labeled index content as the
 system prompt. `Glob` and `Grep` inspect every existing configured root; collision
-precedence remains the existing local/global and `.mevedel`/`.agents` policy,
+precedence remains the existing local/global and `.niwa`/`.agents` policy,
 while search results disclose root-bound addresses and source labels for
 shadowed matches. Listed topics and disclosed search results use the readable
 root key when the configured roots make it unambiguous, and the digest key
@@ -442,10 +442,10 @@ new destination. Authored addresses remain in patch results and review headings.
 curated-memory root keys. Its root spelling includes the final slash; descendants
 name one public entry.
 
-The workspace owns `.mevedel/journal/` on its execution target. Root Read lists
+The workspace owns `.niwa/journal/` on its execution target. Root Read lists
 validated published records within the ordinary recall age limit, newest first; an exact filename reads the full
 public Markdown with ordinary Read pagination. Timestamp colons use canonical
-`%3A` encoding in addresses. Private `.mevedel/state/journal/`, nested names, traversal, malformed
+`%3A` encoding in addresses. Private `.niwa/state/journal/`, nested names, traversal, malformed
 records, and symlink escapes are excluded. ApplyPatch is unsupported.
 Completed consolidation reviews are public records alongside digests; their
 metadata names examined digest IDs, focus, reference checks, and proposal IDs.
@@ -529,7 +529,7 @@ item missing from the session is unavailable.
 Preparation, authorization and availability are synchronous. The content is
 computed by the session's editing host, which answers asynchronously: the
 resolver returns a descriptor naming the components, and Read and Grep fetch
-the view through `mevedel-tool-editing-view` before paging or searching it.
+the view through `niwa-tool-editing-view` before paging or searching it.
 Text follows the ordinary virtual-text Read bounds. Oversized overview entries
 explicitly point to their full-element address instead of hiding a truncated
 suffix. Full elements are structurally formatted; long strings, discussion
@@ -571,9 +571,9 @@ distinguished from a response containing no usable text, and both notices name
 the requested address. Failures also name that address and preserve the server
 or provider reason.
 
-### `mevedel://`
+### `niwa://`
 
-`mevedel://` is a read-only view of the Markdown files packaged under `docs/`.
+`niwa://` is a read-only view of the Markdown files packaged under `docs/`.
 It is available without a session. Bare Read returns a sorted recursive listing
 of canonical documentation addresses; descendant Read, Glob, and Grep stay
 contained under the packaged documentation root and report logical addresses.
@@ -642,7 +642,7 @@ Addresses in the transcript view are buttons (see [the view](view.md)).
 Rendering only recognizes their spelling; a click validates and normalizes
 the address before routing shared items or agent transcripts. File-backed
 addresses resolve through the same Read preparation and containment, and
-`mevedel-resource-visit-path` returns the backing file of a file-backed
+`niwa-resource-visit-path` returns the backing file of a file-backed
 address. No attempt outlives the click.
 
 ## Execution target and Plan mode

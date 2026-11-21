@@ -88,7 +88,7 @@ cannot be resumed.
 
 ## Request context and authority
 
-Before an active root request, mevedel derives current Goal facts from the
+Before an active root request, niwa derives current Goal facts from the
 durable record: objective, token budget, and accepted-plan reference. Live
 token usage and the turn count are left out because they move with every charge
 or turn and each change would re-send the whole block. Crossing reminders report
@@ -236,12 +236,12 @@ the budget, and `GetGoal` reports current usage, or only its known lower bound
 when usage is incomplete.
 
 `CreateGoal` accepts an optional positive `token_budget`, supplied only when
-explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
+explicitly requested. Omission uses `niwa-goal-token-budget`; the tool cannot
 invent a limit or change the configured default.
 
 An accepted Plan supplies its selected budget directly to the Goal record,
 including `nil` for Unlimited. That selection does not change
-`mevedel-goal-token-budget` in either a Here or Worktree session.
+`niwa-goal-token-budget` in either a Here or Worktree session.
 
 Crossing the limit never aborts an in-flight request or tool. At each root
 tool-result boundary, durable usage plus the turn's known provider usage is
@@ -303,7 +303,7 @@ schedules no continuation for one. A turn started for a scheduled wake-up
 is not captured or charged to an active Goal, even when it delivers other
 mail in the same batch. A turn started for other mail alone still counts.
 
-All mevedel-admitted native gptel backends first use
+All niwa-admitted native gptel backends first use
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery):
 10 retries plus the initial attempt per model sample, independently for root
 and child requests, including note and shared-item requests, without
@@ -311,11 +311,11 @@ rerunning preparation, replaying completed tools, or charging extra Goal turns.
 Claude Code/ACP remains separate and self-retrying; unadmitted background
 gptel retry policies are unchanged. An exhausted controller marks its terminal
 FSM info with
-`:mevedel-retry-exhausted`; settlement charges known usage and one failed Goal
+`:niwa-retry-exhausted`; settlement charges known usage and one failed Goal
 turn, then pauses the affected active Goal with the provider's concrete reason.
 It does not use Goal's settled-turn retry allowance to multiply the 11-attempt
 bound. An owned provider error classified as nonretryable similarly carries
-`:mevedel-retry-permanent` and pauses the Goal even if its message resembles a
+`:niwa-retry-permanent` and pauses the Goal even if its message resembles a
 transient capacity or network failure. Structured quota/authentication or other
 permanent errors cannot acquire extra settled-turn retries through misleading
 text. Missing attempt usage remains unknown under the existing incomplete
@@ -378,7 +378,7 @@ ends the root turn at that tool boundary. The rejected attempt therefore settles
 it is counted, captured by the journal, and checkpointed, queued follow-ups get
 their turn, and ordinary continuation starts the next attempt with the report
 in its history. The rejection that reaches
-`mevedel-goal-max-rejected-completions` consecutive rejected claims (default
+`niwa-goal-max-rejected-completions` consecutive rejected claims (default
 3) instead blocks the Goal, naming the count and last outcome in its reason.
 The count is not persisted; starting, resuming, or clearing a Goal restarts
 it, and a restored Goal is paused anyway. An unreadable accepted

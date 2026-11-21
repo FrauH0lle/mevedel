@@ -1,59 +1,59 @@
 # View Buffer
 
 The view modules render a compact user-facing projection of the authoritative
-gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
-coordination. `mevedel-view-composer.el` owns the editable composer,
+gptel data buffer. `niwa-view.el` owns the mode, zones, and session
+coordination. `niwa-view-composer.el` owns the editable composer,
 submission hooks, root dispatch, and send/fork coordination.
-`mevedel-view-pair.el` owns the paired windows, their command rules, and repair.
-`mevedel-view-input-files.el` owns local file drops and clipboard-image input.
-`mevedel-pending-inputs.el` owns steering, queued follow-ups, automatic
+`niwa-view-pair.el` owns the paired windows, their command rules, and repair.
+`niwa-view-input-files.el` owns local file drops and clipboard-image input.
+`niwa-pending-inputs.el` owns steering, queued follow-ups, automatic
 delivery, and the Pending Inputs cockpit.
-`mevedel-surface-mode`, derived from `text-mode`, supplies shared ephemeral
+`niwa-surface-mode`, derived from `text-mode`, supplies shared ephemeral
 buffer behavior for non-transcript surfaces.  Save-state enforcement clears
 the modified flag only after a modification; ordinary cursor movement does
 not force a mode-line redisplay, which can misplace the cursor on hidden
 Markdown at a wrapped line boundary.
-`mevedel-view-agent.el` owns agent transcript inspection, live agent status
-rows, and targeted handle refresh. `mevedel-view-execution.el` owns the
-background-work panel. `mevedel-view-interaction.el` owns interaction
+`niwa-view-agent.el` owns agent transcript inspection, live agent status
+rows, and targeted handle refresh. `niwa-view-execution.el` owns the
+background-work panel. `niwa-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
-`mevedel-view-control-transfer.el` owns cooperative transfer polling,
+`niwa-view-control-transfer.el` owns cooperative transfer polling,
 presentation, commands, and view registration.
-On view closure, `mevedel-view-control-transfer-stop-polling` stops the timer
+On view closure, `niwa-view-control-transfer-stop-polling` stops the timer
 and prevents rearming while retaining the root registration needed for journal
 sealing. Full transfer teardown removes the registrations after sealing.
-`mevedel-view-disclosure.el` owns source-backed disclosure identity, state,
+`niwa-view-disclosure.el` owns source-backed disclosure identity, state,
 and expand/collapse actions. It also locates contiguous section bounds for
 source disclosures, hook context, user-input folds, and turns using each
-caller's identity property; equal but distinct source objects remain separate. `mevedel-view-render.el` owns transcript
+caller's identity property; equal but distinct source objects remain separate. `niwa-view-render.el` owns transcript
 projection, source mapping, and live transcript navigation.
-`mevedel-view-segments.el` owns archived segment buffers, switching, and
+`niwa-view-segments.el` owns archived segment buffers, switching, and
 ephemeral projection state.
-`mevedel-view-stream.el` owns request progress and streaming redraw scheduling;
-`mevedel-gptel-stream-bridge.el` owns private gptel stream compatibility.
-`mevedel-view-animation.el` prepares bounded time-based status frames;
-`mevedel-view-native.el` optionally presents those samples through independent
+`niwa-view-stream.el` owns request progress and streaming redraw scheduling;
+`niwa-gptel-stream-bridge.el` owns private gptel stream compatibility.
+`niwa-view-animation.el` prepares bounded time-based status frames;
+`niwa-view-native.el` optionally presents those samples through independent
 Wayland surfaces, owning setup, placement, fallback and teardown;
-`mevedel-present.el` makes PGTK frames present only what changed;
-`mevedel-native.el` builds and loads the native module both use;
-`mevedel-view-power.el` shares local battery observations and computes the
+`niwa-present.el` makes PGTK frames present only what changed;
+`niwa-native.el` builds and loads the native module both use;
+`niwa-view-power.el` shares local battery observations and computes the
 effective animation ceiling. The stream owner decides when visible frames
 and semantic progress metadata need updating; these modules do not own the
 authoritative transcript.
-`mevedel-side-conversation.el` owns transient
+`niwa-side-conversation.el` owns transient
 `/btw` conversations. The data buffer remains the model-visible transcript;
 `C-c C-z` closes the ephemeral side and returns its resources to the parent.
 
 ## Buffer Roles
 
-- **Data buffer**: org-mode gptel buffer. Holds `mevedel--session`,
-  `mevedel--workspace`, the canonical transcript (including any old
+- **Data buffer**: org-mode gptel buffer. Holds `niwa--session`,
+  `niwa--workspace`, the canonical transcript (including any old
   directive turns), tool results, hidden render-data blocks, and persisted
   gptel metadata.
-- **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
+- **View buffer**: `niwa-view-mode`. Holds `niwa--data-buffer`,
   compact Markdown-rendered turns, and the status and interaction zones at its
   end. It does not hold an editable draft.
-- **Composer buffer**: `mevedel-composer-mode`. Its first line is the read-only
+- **Composer buffer**: `niwa-composer-mode`. Its first line is the read-only
   rail (mode badge, request activity, and pending actions). Below it are the input
   prefix and one editable draft per view, with its own caret, undo, history,
   and completion. Each eligible window showing an editable view gets a composer
@@ -102,20 +102,20 @@ when a display rule puts it in a native side window. See
 
 ### Transcript inspection
 
-Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
-`*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
+Root data buffers keep visible names (`*niwa:SESSION@WORKSPACE*`, view
+`*niwa:SESSION@WORKSPACE:view*`): `t` (`niwa-view-toggle-transcript`)
 opens them as editable Org, and Emacs disables font-lock in buffers whose
 names start with a space and creates them without undo. Agent conversation
-buffers are hidden (` *mevedel-agent-ID*`, keeping that name after their
-transcript file is attached; cold ones load as ` *mevedel artifact FILE*`), so
+buffers are hidden (` *niwa-agent-ID*`, keeping that name after their
+transcript file is attached; cold ones load as ` *niwa artifact FILE*`), so
 one sub-agent adds no `.chat.org` entry to buffer lists. Open them through
 the agent transcript view and `t`, or type a leading space at
 `switch-to-buffer`.
 
 An open running-agent transcript view follows the main view's update cadence:
-streamed text uses `mevedel-view-stream-render-delay` (a batch flushed by the
+streamed text uses `niwa-view-stream-render-delay` (a batch flushed by the
 stream bridge renders in the flush's own wakeup), tool boundaries use
-`mevedel-view-tool-boundary-render-delay`, and terminal settlement renders
+`niwa-view-tool-boundary-render-delay`, and terminal settlement renders
 immediately. It shows running tool calls the same way as the main view,
 but not the main foreground-request spinner; the transcript header already
 shows that the agent is running. Live updates keep the window at the bottom
@@ -143,7 +143,7 @@ does not add multi-view window management. Transcript buffer identities include
 the owning session, so equal canonical agent paths in different sessions never
 reuse or repurpose one another's inspection view.
 
-The default is a right-side window. Set `mevedel-agent-view-display-action` to
+The default is a right-side window. Set `niwa-agent-view-display-action` to
 `(display-buffer-same-window)` for same-window inspection; this does not change
 the observation-only contract. Close an existing inspector before changing its
 placement. The header's **← Parent** action and `q` close inspection and return
@@ -181,7 +181,7 @@ lookups do not open buffers or read files, and roster collection stays linear.
 
 Live transcript rendering is an observer side effect and cannot alter agent
 execution or the parent view. If a refresh fails, the last good projection
-remains visible, mevedel emits a warning, and a later event or terminal
+remains visible, niwa emits a warning, and a later event or terminal
 settlement may retry.
 
 Opening a live transcript performs the synchronous full render needed to attach
@@ -313,17 +313,17 @@ that agent's previous notice; refused retries and other agents' notices remain.
 These changes preserve an active composer draft, including multiline input.
 
 Full rerenders parse the data buffer through
-`mevedel-transcript-segments`, after skipping gptel-org leading
+`niwa-transcript-segments`, after skipping gptel-org leading
 metadata and any leading compaction summary, which
-`mevedel-transcript-summary-source` locates for the view and the browser
+`niwa-transcript-summary-source` locates for the view and the browser
 projection alike. The summary appears as a `compaction-summary` disclosure
 row, collapsed by default: `--- conversation compacted --- ▸` opens to the
-summary the model received, with `▾` while open. `mevedel-view.el` owns the
-surrounding view coordination, while `mevedel-view-render.el` owns turn
-grouping and projection and `mevedel-view-disclosure.el` owns source-backed
+summary the model received, with `▾` while open. `niwa-view.el` owns the
+surrounding view coordination, while `niwa-view-render.el` owns turn
+grouping and projection and `niwa-view-disclosure.el` owns source-backed
 fold state and actions. Transcript span classification, tool block recovery,
 and mailbox, reminder, hook-context, render-data, prompt, and ignored-range recognition live in
-`mevedel-transcript.el` so persistence and compaction use the same structural
+`niwa-transcript.el` so persistence and compaction use the same structural
 view of the buffer. Container payloads are opaque to that scan: an inline-skill
 render-data block carries the prepared root prompt and attachment names and
 bodies, reasoning and mailbox bodies are model- and agent-authored, and a prompt
@@ -345,7 +345,7 @@ Independently, no generated control block ever lands inside gptel's streamed
 `response` run, so markup found there is prose the model quoted and renders as
 prose. What remains unguarded is markup that opens a run: a response or user
 prompt whose very first line is `<system-reminder>` still reads as structure.
-Hidden audit record grammar and attachment spans live in `mevedel-transcript-audit.el`; the view consumes
+Hidden audit record grammar and attachment spans live in `niwa-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
 Attributed shared questions keep the authored question visible and place the
 generated snapshot and attachment links in a **Shared context** disclosure,
@@ -452,7 +452,7 @@ Agent transcript inspection uses the same projection ownership rather than a
 second renderer.
 
 Scheduled transcript flushes and history batches, and live tool-row refreshes
-are attention-gated (`mevedel-view--unattended-p`). When every window
+are attention-gated (`niwa-view--unattended-p`). When every window
 showing the view sits on an invisible or iconified frame, or on an unfocused
 graphical frame, the row refresh does nothing and a scheduled
 render keeps its pending kind without running. Skipped tool-row refreshes
@@ -549,7 +549,7 @@ between sweeps the view schedules no frames. Tool rows
 shimmer their tool name ("Bash", not its arguments), and a running group its
 `N running` count, in the same frames as the label, so they add no wakeups of
 their own. The sweep fades the span's own face (the tool-name or metadata
-face, recorded as `mevedel-view-tool-animation-face`), so a name keeps the
+face, recorded as `niwa-view-tool-animation-face`), so a name keeps the
 color it has once settled; banks stay one per label. Glyph styles animate the row's marker instead, and `static` keeps
 the running `●`. Color styles use 64 theme-derived shades;
 breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
@@ -603,19 +603,19 @@ paused view to another display frame also repaints its frozen color sample for t
 destination palette (or the portable multi-frame fallback) on visibility
 resume, without starting a decorative timer or discarding reusable color banks.
 
-The normal `mevedel-view-spinner-framerate` ceiling defaults to 30 fps.
+The normal `niwa-view-spinner-framerate` ceiling defaults to 30 fps.
 With ordinary text animation, each decorative frame is a redisplay, and the
 measured pgtk build presents its whole surface. Native presentation avoids that
 path: GLib timers draw prepared Pango samples into small Wayland shared-memory
 surfaces. Breathe/bounce then use the configured ceiling rather than the ordinary
 8-fps compromise. Glyph cadence and shimmer sweep/rest timing remain unchanged.
 Equal adjacent samples share an interval. Native callbacks never call Emacs APIs.
-`mevedel-view-spinner-power-policy` defaults to `auto`: external power uses
+`niwa-view-spinner-power-policy` defaults to `auto`: external power uses
 that ceiling; battery/backup power or unknown/stale readings use the lower of
-it and `mevedel-view-spinner-battery-framerate` (default 15). `full` always
+it and `niwa-view-spinner-battery-framerate` (default 15). `full` always
 uses the normal ceiling; `save` always uses the battery ceiling. Battery 0
 freezes decorative motion for both indicator types, while the global
-`mevedel-view-spinner-animate` switch disables all motion without suppressing
+`niwa-view-spinner-animate` switch disables all motion without suppressing
 semantic status or elapsed updates. The policy reads the Emacs UI host, not a
 remote workspace. One shared `battery.el` observer consumes existing battery
 notifications without enabling battery mode; when subscribed automatic views
@@ -638,11 +638,11 @@ frame rates reduce
 scheduled animation work, not necessarily battery drain proportionally.
 
 The view enables cheaper PGTK presentation when its mode starts on a PGTK
-frame (`mevedel-present-ensure`), once per session and for all frames. Stock
+frame (`niwa-present-ensure`), once per session and for all frames. Stock
 PGTK queues a whole-widget redraw for every frame at the end of each redisplay,
 and GTK 3's shared-memory path then allocates and backfills a whole-window
 buffer per frame while the compositor holds the last one. The native module
-(`native/mevedel-present.c`) creates a GL paint context for each frame's
+(`native/niwa-present.c`) creates a GL paint context for each frame's
 toplevel, so GDK presents through EGL, and redirects the Emacs executable's GOT
 entries for its drawing calls (`cairo_fill`, `cairo_fill_preserve`,
 `cairo_stroke`, `cairo_paint`, `cairo_mask`, `cairo_show_glyphs`) to record
@@ -659,12 +659,12 @@ context can be current on one thread only, so each dispatch and each
 loop itself while it waits for the map event. Moving an animation surface
 redraws one pixel of its frame, enough for the parent commit that applies the
 position. The module refuses, with a
-reason kept in `mevedel-present--state`, on displays other than Wayland,
+reason kept in `niwa-present--state`, on displays other than Wayland,
 architectures other than x86_64 and aarch64, and executables that do not
 import the calls it requires or that import a drawing call it does not track
 (`cairo_show_text`, `cairo_paint_with_alpha` and the like). While it is active,
 text breathe/bounce use the power-aware ceiling instead of 8 fps.
-`test/test-mevedel-present-wayland.el` checks the protocol on a headless nested
+`test/test-niwa-present-wayland.el` checks the protocol on a headless nested
 KWin with both the default renderer and software EGL: no fresh shared-memory
 buffers during steady presentation, no commits for redisplays that drew
 nothing, and painting while a Lisp thread waits. Software EGL uses reusable
@@ -680,19 +680,19 @@ reconnects immediately; direct close followed by an event-loop wait requires
 fixing those Emacs teardown bugs. Native display teardown itself releases its
 surfaces and registry bindings.
 
-The native module (`mevedel-native.el`) requires Linux, Emacs module support,
+The native module (`niwa-native.el`) requires Linux, Emacs module support,
 `cc`, `pkg-config`, and Emacs/GTK 3/Wayland development headers. Its rendering
 features require PGTK/Wayland; its timed condition wait for
 [telemetry sampling](telemetry.md) also works without a graphical frame.
 It compiles every `native/*.c` into one library once, at the first view,
 eligible animation or telemetry sampling window, and caches it by source/build identity under
-`mevedel-user-dir/native/`. The build looks for `emacs-module.h` beside the
+`niwa-user-dir/native/`. The build looks for `emacs-module.h` beside the
 running Emacs (its prefix's `include` directory or its build tree) before the
 compiler's default path, and does not treat warnings as errors, so newer headers
-cannot disable the module. `mevedel-view-native-enabled` disables the
+cannot disable the module. `niwa-view-native-enabled` disables the
 presenter; unsupported displays or build/placement failures retain ordinary
 text animation. A downloaded prebuilt module that matches its pin is loaded
-first, then a cached local build, then a new local build. `mevedel-native-install` downloads the
+first, then a cached local build, then a new local build. `niwa-native-install` downloads the
 prebuilt module for the current source revision and architecture from the
 project's GitHub release `native-HASH` (HASH is the first 16 hex digits of the
 SHA-256 of `native/*.c` concatenated in byte order) and loads it only when
@@ -702,7 +702,7 @@ package recipes that list `native/*.c` build it. CI
 Ubuntu 22.04 against its older `emacs-module.h`, so they load into any newer
 Emacs with glibc 2.34 or later, and records their checksums there. A failure is
 reported once per session in the echo area, naming the next step; the internal
-`mevedel-native--load-state` retains its reason, and setting it to nil
+`niwa-native--load-state` retains its reason, and setting it to nil
 retries. Installing after a failed build allows presentation to retry on the
 next view. Installing while a module is already loaded leaves that module
 active until Emacs exits, preserving its surfaces and presentation hooks.
@@ -727,7 +727,7 @@ frames run independently, preventing a brief image at the initial `(0, 0)`. A
 move while that callback is pending waits for the commit carrying the new
 position instead, so frames never run free at the old one. When a Wayland
 display closes, the module closes its surfaces and releases that display's
-globals; a later display binds its own. `test/test-mevedel-view-native-wayland.el`
+globals; a later display binds its own. `test/test-niwa-view-native-wayland.el`
 exercises the module on a headless nested KWin where one is installed.
 
 Projection writers inhibit redisplay while deleting and reconstructing rows.
@@ -740,7 +740,7 @@ owner keeps metadata cadence, power policy and the last presented phase for free
 the native presenter owns pixels and placement. Stopping the view releases surfaces,
 timers, observers, pending parent callbacks and pending presentation.
 
-Before rendering a restored transcript, `mevedel-transcript-restore.el`
+Before rendering a restored transcript, `niwa-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
 canonical transcript grammar. Successful whole-buffer normalization is reused
 until text or properties change; narrowing alone does not invalidate it.
@@ -774,7 +774,7 @@ so redraws retain one heading and the same body inset.
 Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:
 one summary header and the same audit face survive both full and live redraws.
 Agent paths in launch handles use link highlighting. Delivery headers use
-`mevedel-view-mailbox-header`, a keyword face with no added bold weight.
+`niwa-view-mailbox-header`, a keyword face with no added bold weight.
 
 Background deliveries show subject-first one-line notices: **● Agent /root/name
 finished**, **● Background command "Run tests" completed (exit code 0)**,
@@ -808,11 +808,11 @@ polling calls do not inherit that approval. Browser tool presentations carry
 the same bounded tooltip and row-local hint, preserving disclosure choices.
 
 Background notice bodies always start collapsed. Ordinary message bodies start
-collapsed above `mevedel-view-mailbox-collapse-line-threshold`.
+collapsed above `niwa-view-mailbox-collapse-line-threshold`.
 
 Long user prompts fold to a one-line summary — the truncated first line plus
 a hidden line count such as `Please analyze this trace... (+83 lines)` —
-once they exceed `mevedel-view-user-input-collapse-line-threshold` (default
+once they exceed `niwa-view-user-input-collapse-line-threshold` (default
 15, 0 disables). The fold expands in place. The full text travels in a text
 property rather than being re-read from the data buffer, so the send-path
 echo folds identically before the turn has data-buffer coordinates; only
@@ -838,11 +838,11 @@ names, and the row shows that body under a header naming the dependencies.
 
 An assistant turn closes with one rule. Once the request summary is known the
 rule carries it, as in `── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`: the label uses
-`mevedel-view-separator`, and a strike-through on its extended newline
-(`mevedel-view-request-summary-rule`) continues it to the window edge, so split
+`niwa-view-separator`, and a strike-through on its extended newline
+(`niwa-view-request-summary-rule`) continues it to the window edge, so split
 and narrow windows need no width calculation. One blank row separates it from
 the next heading. A turn without a summary line, such as a running turn,
-closes with the plain overlined `mevedel-view-turn-rule` row after a blank line.
+closes with the plain overlined `niwa-view-turn-rule` row after a blank line.
 When those two rows would sit directly above the composer, the paired
 transcript window hides them. They reappear when another turn follows; a
 labelled request summary remains visible. A user turn that
@@ -862,7 +862,7 @@ the duration, without inventing dates. Running turns and headings stay untimed.
 
 Inside a turn, activity hangs below the prose that announced it, separated by a
 blank line only. Prose that follows activity starts with a quiet rule: two
-undecorated columns, then `mevedel-view-activity-rule`, whose overline is
+undecorated columns, then `niwa-view-activity-rule`, whose overline is
 blended from the active theme at about half the strength of `shadow`, so it
 stays lighter than the turn's closing rule. Each section therefore reads as
 intent followed by its actions. Activity is any non-prose row of the same
@@ -874,9 +874,9 @@ activity is never rewritten. The search stops at turn-closing chrome, so a
 response never takes a rule from the user turn before it. Activity that ends a
 turn is closed by the turn's rule.
 
-`mevedel-activity-group.el` alone decides which activity folds, for this view
+`niwa-activity-group.el` alone decides which activity folds, for this view
 and the browser projection alike. Runs of more than
-`mevedel-view-tool-group-collapse-threshold` (default 2; zero disables)
+`niwa-view-tool-group-collapse-threshold` (default 2; zero disables)
 plain tool rows fold into one grouped activity row such as
 `✓ 11 calls: searched 5 patterns, read 1 file, ran 5 commands ▸`; tools
 without a verb mapping — MCP tools included — appear as `NAME ×N`. The
@@ -1041,7 +1041,7 @@ On reload, nested Bash calls whose process is gone show a lost state and error
 marker rather than inheriting the ToolCall's earlier successful call status.
 
 Expanding a group rebuilds its rows from the folded run alone:
-`mevedel-transcript-segments` expands its end bound to the
+`niwa-transcript-segments` expands its end bound to the
 containing property run, so the segment beginning where the run ended is
 dropped instead of being summarized as one more reasoning occurrence.
 
@@ -1081,7 +1081,7 @@ of truth. The zones and rail are display and interaction chrome.
 
 Terminology:
 
-- **History region**: rendered transcript above `mevedel-view--status-marker`.
+- **History region**: rendered transcript above `niwa-view--status-marker`.
   Running tool calls such as `● Read: path` are part of the in-flight turn's
   history, not status-zone content. Empty-input `WriteStdin` polls with
   a nonempty execution ID do not add running rows or a separate pre-tool
@@ -1089,13 +1089,13 @@ Terminology:
   arguments and compound or ambiguous ToolCall scripts keep their running row.
   The request progress row remains visible, and a failed poll control appears
   in the settled transcript.
-- **Status zone**: session status chrome between `mevedel-view--status-marker`
-  and `mevedel-view--interaction-marker`. Task, live-execution, and
+- **Status zone**: session status chrome between `niwa-view--status-marker`
+  and `niwa-view--interaction-marker`. Task, live-execution, and
   aggregate-agent rows appear here. The agent roster lists every active agent,
   even when its launch handle also appears earlier in the transcript. Opening
   an agent transcript or folding history does not change roster membership.
 - **Interaction zone**: user-action chrome between
-  `mevedel-view--interaction-marker` and the transcript tail; it is for
+  `niwa-view--interaction-marker` and the transcript tail; it is for
   pending input and controls that require user response.
 - **Rail**: the permanent first line of the composer buffer. It shows the mode
   badge, pending-action counts with an actionable `C-c C-j` hint, and foreground
@@ -1164,11 +1164,11 @@ the composer only while it still holds the captured draft. A submission that
 captured no draft clears unconditionally: a drained pending input already
 required an empty composer, and a buffer with no composer has none to protect.
 
-The interaction-zone painter in `mevedel-view-interaction.el` renders
+The interaction-zone painter in `niwa-view-interaction.el` renders
 descriptor bodies as `interaction` fragments. Descriptor overlays may still
 span those fragments as callback handles for prompt settlement and preview
 cleanup; they are not independent renderers. Register controls with
-`mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
+`niwa-view--interaction-register`; do not direct-insert ad hoc UI near the
 composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
 Cards stack in arrival order, the newest farthest from the composer, so an
@@ -1186,7 +1186,7 @@ A descriptor whose UI holds live editable state supplies `:body` as a
 function returning fresh text and recreates its buffer markers in
 `:after-render`; a registration-time snapshot would be redrawn verbatim by
 foreign rebuilds (the control-transfer poll, queue events) and destroy what
-the user typed. `mevedel-view--interaction-rebuild` drops and re-registers
+the user typed. `niwa-view--interaction-rebuild` drops and re-registers
 queue-backed descriptors without rendering the intermediate states: one
 final render reconciles the zone, and a descriptor re-registered under the
 same id reuses its overlay object, so an unchanged rebuild is a no-op that
@@ -1211,7 +1211,7 @@ if the window is still inside the visited card. A reader who navigates away,
 and other windows showing the same view, are not pulled back.
 
 Portable sessions also render cooperative lease-transfer controls in this
-zone; `mevedel-view-control-transfer.el` supplies their descriptors while the
+zone; `niwa-view-control-transfer.el` supplies their descriptors while the
 generic interaction owner places them.
 The owner sees the requester label with `Grant` and `Keep` actions; a granted
 transfer remains quiescing until current requests, executions, prompts, pending
@@ -1239,7 +1239,7 @@ context. There is no special card, history inspector, or old-data conversion.
 ## Note frame
 
 The retained frame surface displays a note's conversation, anchored at the note's
-source position through `mevedel-note-frame.el`.
+source position through `niwa-note-frame.el`.
 It shows
 the real view buffer, so permissions, Ask, patch review, streaming, and the
 composer work in it unmodified and no second renderer exists. See
@@ -1295,15 +1295,15 @@ scrolling without displacing the operational state or shifting the transcript.
 The border is painted by setting a background on `internal-border` and
 `child-frame-border` for that frame. A border width alone draws nothing: without
 an explicit background the border takes the default background and is invisible.
-`mevedel-note-frame-border` and `mevedel-note-frame-border-inactive`
+`niwa-note-frame-border` and `niwa-note-frame-border-inactive`
 distinguish whether the frame holds focus, which is how a dispatch-opened frame
 that deliberately did not take focus reads as unfocused. Both are derived from
 the active theme (the background tinted 65% and 25% toward the foreground) and
 shown frames, including the share panel, repaint on a theme change; a face the
 user or a theme styles is left alone.
 
-Frame height fits its content between `mevedel-note-frame-min-height` and
-`mevedel-note-frame-height`, refitted on the view's throttled render
+Frame height fits its content between `niwa-note-frame-min-height` and
+`niwa-note-frame-height`, refitted on the view's throttled render
 cadence rather than per streamed token. Only height is fitted; width stays as
 computed from the parent frame at open, because fitting both dimensions sizes
 the frame to the longest unwrapped line in the transcript and readily exceeds
@@ -1344,7 +1344,7 @@ numbers worth counting, and they cost four columns of an already narrow frame.
 
 ## Status Strip And Cockpit Routing
 
-The view buffer tab line is mevedel-owned chrome. It shows session
+The view buffer tab line is niwa-owned chrome. It shows session
 orientation on the left as `SESSION  WORKSPACE-ROOT` and operational
 state on the right as `MODE · REQUEST-STATE · MODEL · TOOL-COUNT`.
 When a user prompt has scrolled above a window's top edge,
@@ -1359,7 +1359,7 @@ inside hidden text counts from the first visible position, so a hidden prompt is
 pinned and a visible header at the top pins nothing. Hidden prompt headers are
 skipped as well, so a top reached past a trailing hidden turn pins the last
 visible prompt above it. The preview
-is at most `mevedel-view-sticky-prompt-max-width` columns (80 by default; nil
+is at most `niwa-view-sticky-prompt-max-width` columns (80 by default; nil
 uses the window width), so a long prompt does not run across a wide window. In
 tight windows, it truncates to its own row's width, without taking
 space from the operational controls. Its stored text is capped at 512 characters,
@@ -1435,7 +1435,7 @@ the live view/data pair once and routes each action to the owner buffer.
 Session ownership and window return state are separate: calling an action in
 the data buffer does not display that buffer or change where quitting returns.
 
-Tables and information panels use `mevedel-window.el` for their temporary
+Tables and information panels use `niwa-window.el` for their temporary
 display lifecycle. Opening records the invoking window and the configuration
 of the frame actually used by `display-buffer`; a note conversation's frame
 can redirect a popup to its parent frame. Quitting uses
@@ -1524,7 +1524,7 @@ text remains available. `g` refreshes reports with a live refresh source.
 originating session. The report opens with a loading state and retrieves the
 current backend's account-wide quotas on opening or `g`, without polling. It
 shows the provider, available account/plan details and last successful retrieval
-time, and explains that activity outside mevedel counts toward these quotas.
+time, and explains that activity outside niwa counts toward these quotas.
 Missing fields are unavailable, never inferred as zero. A failed refresh retains
 previous successful data only with a STALE label and its original timestamp.
 Changing backends clears that data. Refresh supersedes any pending retrieval;
@@ -1532,7 +1532,7 @@ Changing backends clears that data. Refresh supersedes any pending retrieval;
 The composer, transcript, Goal state, and model accounting stay untouched.
 
 Codex OAuth uses gptel's token restoration, account selection and authentication
-header. A stale token starts mevedel's asynchronous renewal instead of a request;
+header. A stale token starts niwa's asynchronous renewal instead of a request;
 the report then asks for a refresh once renewal finishes, or for
 `gptel-openai-oauth-login` when no renewal is possible. Quota retrieval never
 enters gptel's synchronous login flow. The quota HTTP request to
@@ -1603,8 +1603,8 @@ the settled assistant response at point; arming a Fork temporarily reveals the
 dock for the new prompt. Cancelling hides it again, keeps the draft, and
 returns to the prior position in the archived segment.
 
-`mevedel-view-segments.el` owns this ephemeral inspection lifecycle and consumes
-the segment descriptors and verified bytes from `mevedel-session-artifacts.el`;
+`niwa-view-segments.el` owns this ephemeral inspection lifecycle and consumes
+the segment descriptors and verified bytes from `niwa-session-artifacts.el`;
 it does not implement another storage or transcript parser.
 
 Arming a Fork adds a temporary interaction row naming the selected assistant
@@ -1663,7 +1663,7 @@ The inherited context stays in the side data buffer for gptel but is below the
 view's projection boundary, so the side opens with only its origin header and
 new turns visible. The side has its own transient session, request lifecycle,
 permission queue, stream rendering, and composer. It has no session/input
-history, persistence, mevedel-managed compaction, queued follow-ups, slash commands, skills,
+history, persistence, niwa-managed compaction, queued follow-ups, slash commands, skills,
 Goal/Plan/task state, or ordinary session hooks. `C-c RET` sends only while the
 side is idle and `C-c C-k` aborts the current side response. With gptel this does
 not close the conversation. Aborting appends the same structural incomplete boundary so a
@@ -1681,7 +1681,7 @@ adapter-owned history behind. Process shutdown alone is not deletion. Native
 side dispatch uses the frozen restricted tool roster and ephemeral request
 settlement, not root preset refresh, context receipts or durable history publication.
 Provider compaction stays inside the native fork and does not rotate or archive
-the temporary side transcript in mevedel.
+the temporary side transcript in niwa.
 
 A parent owns at most one side. Bare `/btw` focuses it; `/btw PROMPT` submits
 only when its composer is empty and no side response is active. Refused inline
@@ -1698,7 +1698,7 @@ sandbox uses one annotated Eval execution row instead of a separate service row.
 Idle sandbox rows do not arm periodic redraw timers or count as active work.
 Sandbox call and idle rows replace one another directly, without a finished row.
 Other finished items stay in place for ten seconds
-(`mevedel-view-execution-grace-seconds`) as an inert `✓ Completed` (or
+(`niwa-view-execution-grace-seconds`) as an inert `✓ Completed` (or
 `✓ Finished` for an agent) line, so a glance shows what just ended; its
 transcript notice remains the durable record. The glyph and state label use
 the theme's success or error face for a known successful or failed outcome;
@@ -1724,7 +1724,7 @@ ten-second grace period. Time spent expanded does not count, and an explicitly
 expanded execution inspector stays open independently of passive protection.
 
 Every row, finished line, preview line and rule fits one screen row of the
-narrowest window showing the view (`mevedel-view-zone-width`, leaving one
+narrowest window showing the view (`niwa-view-zone-width`, leaving one
 column for a fringeless window's continuation glyph). A row's name gives way
 first, down to twenty columns, then its metadata is cut. The panel sits above
 the anchored composer, so a wrapped row changed the panel's height whenever
@@ -1736,7 +1736,7 @@ in a narrow window rather than wrapping a button label. Completion reserves
 the same control-row budget: the execution's Stop slot becomes inert space,
 and a held agent's controls become a finished notice padded to the live row
 count. Model detail lines fit identically in live and held states. When that
-width changes, the zone runs `mevedel-view-zone-width-change-functions`
+width changes, the zone runs `niwa-view-zone-width-change-functions`
 once with the view current. The status zone re-renders from it, so a split
 window does not keep stale wrapped rules until an unrelated redraw changes
 their height. The interaction zone rebuilds from it too, re-fitting its
@@ -1863,7 +1863,7 @@ including Markdown, rather than interface labels or rendered formatting.
 ## Artifact store
 
 Artifacts live in the workspace artifact store,
-`<workspace>/.mevedel/artifacts/`, owned by `mevedel-artifact-store.el`.
+`<workspace>/.niwa/artifacts/`, owned by `niwa-artifact-store.el`.
 Each artifact has a directory whose name is its stable id. Authored files
 (HTML mockups, Markdown, images and assets) stay in that directory. Host
 bookkeeping lives separately under `.state/ID/`: metadata, saved versions,
@@ -1875,7 +1875,7 @@ Discovery includes ids from both subtrees, so boards and documents remain
 visible after cloning a Git repository that omits their empty authored directories.
 
 ```
-.mevedel/artifacts/
+.niwa/artifacts/
   ID/
     <name>           ; authored artifact file and optional assets
   .state/ID/
@@ -1902,7 +1902,7 @@ holds, is reported and keeps the old name. The two name each other: `meta.el`
 records the session's id and the
 session records the artifact's (`:dedicated-artifact`). A saved session is
 hidden from the session chooser and the lobby listing and kept from expiry
-only while both agree; an open one goes by its own record, so a `meta.el` copied outside mevedel never makes another
+only while both agree; an open one goes by its own record, so a `meta.el` copied outside niwa never makes another
 artifact's conversation its own, and one whose artifact is gone is an
 ordinary session again. A fork or Save As of it is an ordinary chat. Deleting the artifact deletes its
 dedicated session too. One open in this Emacs is closed first, ending its
@@ -1911,7 +1911,7 @@ that cannot be deleted yet, because another client holds it or journal
 capture is pending, stays as an ordinary session and expires like one.
 
 The model writes artifacts with ordinary ApplyPatch; there is no artifact
-tool. After a settled ApplyPatch, `mevedel-tool-patch-apply` reports its
+tool. After a settled ApplyPatch, `niwa-tool-patch-apply` reports its
 writes to the store:
 
 - a write into a new id directory creates the artifact; the host writes its
@@ -1929,8 +1929,8 @@ version until a supported save does; the sandbox keeps it out of `.state/`. Only
 first written into the id directory, is versioned; other files there (assets)
 change without versions.
 
-Versions are capped per artifact by `mevedel-artifact-store-max-versions`
-(default 20) and `mevedel-artifact-store-max-version-bytes` (default 64 MiB).
+Versions are capped per artifact by `niwa-artifact-store-max-versions`
+(default 20) and `niwa-artifact-store-max-version-bytes` (default 64 MiB).
 The oldest are dropped first; the latest always stays. Restoring a version
 copies it back as a new version.
 
@@ -1945,9 +1945,9 @@ rooms.
 The bundled `artifact` skill carries the conventions (start an artifact in a
 new id directory, self-contained, keep it small) and resolves the store
 directory at invocation. Whether the store is committed to Git is the
-project's choice; mevedel adds no ignore rule for it.
+project's choice; niwa adds no ignore rule for it.
 
-In Emacs, the artifacts cockpit (cockpit `A`, or `M-x mevedel-artifacts` from
+In Emacs, the artifacts cockpit (cockpit `A`, or `M-x niwa-artifacts` from
 any project buffer) lists the store by title, with each artifact's kind, attachment to
 the current session, version count, modification time and size, sorting
 versions and sizes by their numbers; `t` toggles between all and attached
@@ -1958,7 +1958,7 @@ attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, discussions and dedicated session (`d`).
 `n` (also the session menu's `n New shared item`, or
-`M-x mevedel-artifacts-new-shared-item`) creates a whiteboard or document; see
+`M-x niwa-artifacts-new-shared-item`) creates a whiteboard or document; see
 [shared editing](shared-editing.md).
 Whiteboards and documents are store artifacts too: `o` opens one in its editor
 in the session's room, or without a session in its dedicated session's room
@@ -1975,7 +1975,7 @@ on-demand transfer, sandboxed HTML, and supported formats.
 
 ## Managed-zone chrome
 
-`mevedel-view-zone.el` owns the four fixed fragment-backed regions of
+`niwa-view-zone.el` owns the four fixed fragment-backed regions of
 view-owned chrome. Producers submit a complete desired fragment set for a
 named zone. The module owns region identity, overlay lifetime, marker
 choreography during mutation, uniform composer/point/window preservation,
@@ -2007,7 +2007,7 @@ or restoring window state. So does a zone with no fragments, no live region and
 no text in its namespace. Property-only updates and stale-region cleanup retain
 the normal mutation transaction.
 
-Fragment metadata lives in `mevedel-view-zone-*` text properties. Those
+Fragment metadata lives in `niwa-view-zone-*` text properties. Those
 properties are valid for view navigation, activation, collapse, and targeted
 refresh decisions, but they are UI cache only. Durable conversation state
 continues to live in the data buffer and session structures. The zone module
@@ -2017,7 +2017,7 @@ they are not parallel renderers.
 
 Zone reconciliation keeps point, mark, window points and window starts inside
 a fragment on the same content. A producer tags sub-parts of a fragment body
-with a `mevedel-view-zone-anchor` text property whose value is `equal` across
+with a `niwa-view-zone-anchor` text property whose value is `equal` across
 redraws, such as a row key. A position in tagged text keeps its anchor and its
 offset within that anchor's run, so text before it can change length without
 moving it. An anchor `(PARENT PART)` whose PARENT is itself a list anchor names
@@ -2033,13 +2033,13 @@ re-wrapped text above it does not shift the view by a row. The
 background-work panel tags its header, every row, each inspector's preview
 and action line, and its controls. Before this, a cursor on one execution's
 row landed on another execution's `[Stop]` when 35 characters of output
-arrived in an inspector above it. `mevedel-view-zone-position-anchor` and
-`mevedel-view-zone-anchor-position` expose the same identity to other redraw
+arrived in an inspector above it. `niwa-view-zone-position-anchor` and
+`niwa-view-zone-anchor-position` expose the same identity to other redraw
 paths. Full transcript redraws use that pair too, including screen-row offsets
 for managed-zone window starts, rather than replacing semantic identities with
 raw fragment offsets.
 
-`mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
+`niwa-interaction-prompt.el` owns the common lifecycle for those opaque
 handles: exactly-once settlement, request-local cancellation, buffer-kill
 cleanup, weak request-registration bookkeeping, and standard prompt framing.
 Ask, permission, plan, and preview code retain their domain-specific
@@ -2078,7 +2078,7 @@ model even when they are clickable or collapsible. They are projections of
 the authoritative data buffer and keep source-coordinate disclosure state.
 Provider failures are expanded by default and preserve the complete provider
 message and error payload for manual retry. Bounded sample retries across all
-mevedel-admitted native gptel backends show transient root/agent status
+niwa-admitted native gptel backends show transient root/agent status
 (for example, a capacity failure with `retry 3/10 in 4s`)
 without intermediate failure blocks. Failed provisional output is rolled back
 before replay; earlier completed work and the composer draft remain intact.
@@ -2110,7 +2110,7 @@ unchanged native identity. Older histories without answer coordinates reuse the
 same native session, with an explicit notice that partial native context may
 remain. Unavailable native history refuses with a named reason rather than
 guessing from transcript text.
-`mevedel-view-render-live-update` retains completed
+`niwa-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
 Before the first unit is retained, a send echo at the history boundary already
 identifies where to append the response. That update preserves reader anchors
@@ -2119,17 +2119,17 @@ the start of a response that has not been drawn yet.
 Standalone reasoning disclosures and grouped tool activity runs are separate
 units; substantive reasoning closes the preceding tool run. Response
 prose advances at the last blank-line boundary outside fenced code. Terminal
-settlement calls `mevedel-view-render-settle` for one exact whole-turn
+settlement calls `niwa-view-render-settle` for one exact whole-turn
 reconciliation. A full rerender, a new turn, or stream cancellation invalidates
-the retained tail. `mevedel-view-stream.el` schedules live updates and owns
+the retained tail. `niwa-view-stream.el` schedules live updates and owns
 request-progress state and the in-flight tool calls the live render draws;
-`mevedel-gptel-stream-bridge.el` confines the private upstream advice. Fragment
+`niwa-gptel-stream-bridge.el` confines the private upstream advice. Fragment
 updates should not bypass the data-buffer transcript.
 
 Running tool calls are no fragment. The live render draws them from
-`mevedel-view--pending-tool-calls` inside the mutable tail it re-renders
+`niwa-view--pending-tool-calls` inside the mutable tail it re-renders
 anyway, so they cost no separate reconciliation. They carry
-`mevedel-view-pending-tool-live` and no transcript source: they are never
+`niwa-view-pending-tool-live` and no transcript source: they are never
 retained as a settled unit, preserved as transcript text, or matched by
 heuristic line text. There is one entry per call, not per distinct tool:
 gptel's tool-call hooks carry no call id, so identical parallel calls are told
@@ -2150,21 +2150,21 @@ Default Bubblewrap/workspace-write/isolated/fresh-proc execution and additional
 read-only mounts remain silent.
 
 The line's class decides how loudly it reads.
-`mevedel-execution-telemetry-sandbox-summary-class` returns `warning` only
+`niwa-execution-telemetry-sandbox-summary-class` returns `warning` only
 when something the model asked for did not run — a refusal, or a child that
 never started — and only that line's `!` marker takes
-`mevedel-view-tool-warning`. The text retains `mevedel-view-tool-metadata`.
+`niwa-view-tool-warning`. The text retains `niwa-view-tool-metadata`.
 Every other disclosure is a `note`: a boundary
 wider than the strictest default is the boundary the session was configured or
 granted, so network access, an additional write path, an escalation, or an
 unavailable sandbox record what ran without claiming a fault. Notes take the
-`◇` marker and `mevedel-view-tool-metadata`.
+`◇` marker and `niwa-view-tool-metadata`.
 
 The line is reconstructed from hidden transcript render-data rather than
 view-only state.
 
-High-level zone markers still define layout order in `mevedel-view.el`.
-`mevedel-view-interaction.el` turns the interaction marker into managed
+High-level zone markers still define layout order in `niwa-view.el`.
+`niwa-view-interaction.el` turns the interaction marker into managed
 fragments; producers do not own managed overlays, preservation wrappers, or
 marker insertion choreography.
 
@@ -2179,14 +2179,14 @@ leaves buffer text, properties, and the composer byte-identical, and the
 resumed render runs through the same preserving wrappers.
 
 Every asynchronous writer outside zone reconciliation goes through one entry,
-`mevedel-view-call-preserving-user-view-state`: live and settled stream
+`niwa-view-call-preserving-user-view-state`: live and settled stream
 updates, full and batched rerenders, latest-turn and tool-row refreshes,
 agent handle refreshes, terminal breadcrumbs and background elapsed ticks.
 It preserves point, mark and every window's logical viewport or visited row
 ([ADR 0126](adr/0126-keep-the-composer-still.md)). Output writes additionally
 keep the end visible in windows that already showed it. Draft text and undo
 stay in their separate buffer. Status and interaction zones reconcile
-through `mevedel-view-zone-reconcile`, which applies their viewport rules
+through `niwa-view-zone-reconcile`, which applies their viewport rules
 without an extra preservation wrapper. The rail only repaints display
 properties in the composer. Table splices use their exact cell mapping for
 positions and share the viewport policy.
@@ -2195,7 +2195,7 @@ The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
 positions: a composer position by its input offset, a managed-fragment
 position by zone namespace, fragment id, and offset, and rendered transcript
-text by its `mevedel-view-source` data start, section role, child discriminator,
+text by its `niwa-view-source` data start, section role, child discriminator,
 and offset into the run. Disclosure keys supply the standalone role of grouped
 rows and the identity of compound children sharing source coordinates. An
 ordinal distinguishes runs within that same section identity; separators and
@@ -2226,7 +2226,7 @@ markers for positions in neighboring zones. Growing or removing status rows
 therefore keeps the reader in the same permission prompt below them.
 
 Region-based note creation uses
-`mevedel-view-call-preserving-window-configuration` around minibuffer input.
+`niwa-view-call-preserving-window-configuration` around minibuffer input.
 It restores the frame layout before reapplying chat anchors on acceptance,
 cancellation, or error, so a saved window configuration cannot overwrite a
 background reader's position after a redraw. Redraws during the prompt still
@@ -2234,7 +2234,7 @@ restore the reader immediately; the source window's original scroll is also
 restored when input ends.
 
 The allocation-heavy chokepoints run with garbage collection batched
-(`mevedel--with-gc-batched`, a direct `gc-cons-threshold` and
+(`niwa--with-gc-batched`, a direct `gc-cons-threshold` and
 `gc-cons-percentage` binding with no external GC-tuning dependency): scheduled
 full and incremental transcript flushes, session save transactions, exclusive
 transport sections, every tool-pipeline step chain, and the whole gptel
@@ -2249,7 +2249,7 @@ depends on the caller's GC settings.
 
 Batching moves a collection to just after its section; it does not make
 collections rarer. While any root or agent request runs,
-`mevedel-gc-cons-threshold-while-busy` (64 MB by default, nil to disable)
+`niwa-gc-cons-threshold-while-busy` (64 MB by default, nil to disable)
 therefore keeps `gc-cons-threshold` at least that high, re-applied every
 second and released 30 seconds after the last request ends: settlement's
 journal publication and collection allocate as much as the turn did, and one
@@ -2268,7 +2268,7 @@ maintenance timer waking. A batch Emacs is unaffected.
 The busy threshold still let a collection land in the middle of typing: a
 settled root refresh allocates about 40 MB, and on a long session's heap one
 collection takes about 200 ms. While any hold exists and input arrived within
-the last second, `mevedel-gc-cons-threshold-while-typing` (256 MB by default,
+the last second, `niwa-gc-cons-threshold-while-typing` (256 MB by default,
 nil to disable) raises the floor further; the first command after a pause
 raises it at once. A collection waits until allocation exceeds both
 `gc-cons-threshold` and `gc-cons-percentage` of the live heap, so each floor is
@@ -2298,7 +2298,7 @@ there warns and falls back to one debounced full rerender, so a terminal render
 bug cannot leave a live spinner timer, a stale in-flight anchor, or an error
 that skips the post-response observers that follow.
 
-`mevedel-view-rerender` is the correctness fallback and is debounced for
+`niwa-view-rerender` is the correctness fallback and is debounced for
 bursty updates. Prefer narrower refresh paths when a stable source exists:
 retained-agent metadata replacements refresh their source-backed handles and
 status rows. Tool-use IDs and enclosing tool blocks recover current source
@@ -2315,7 +2315,7 @@ compaction summaries, and re-anchor the in-flight assistant turn. Without
 a valid in-flight anchor, the next incremental render can erase freshly
 rendered history or duplicate a preserved live tail.
 
-The reanchor also repairs `mevedel-view--data-turn-start`, the data-buffer
+The reanchor also repairs `niwa-view--data-turn-start`, the data-buffer
 marker that bounds what incremental renders re-render. A whole-buffer
 rewrite of the data buffer — compaction application, segment rotation —
 goes through `erase-buffer` and collapses every marker to `point-min`; so the renderer repairs the marker after rebuilding the projection. When the projection found an
@@ -2325,10 +2325,10 @@ it was just rendered as settled history.
 
 Temporary buffers used only to fontify or render view text must suppress
 user major-mode hooks and local variables. Use
-`mevedel-view--with-render-temp-buffer` rather than raw
+`niwa-view--with-render-temp-buffer` rather than raw
 `with-temp-buffer` plus mode activation. The shared mode setup and Markdown
-fontification buffer live in `mevedel-view-fontify.el`; response cache policy
-and invalidation remain in `mevedel-view-render.el`. Generated transcript mode
+fontification buffer live in `niwa-view-fontify.el`; response cache policy
+and invalidation remain in `niwa-view-render.el`. Generated transcript mode
 setup also suppresses persistent Org element-cache loading; ordinary user Org
 buffers keep their configuration.
 
@@ -2340,29 +2340,29 @@ point, undo history, and mention bindings. The data
 buffer remains org-mode for gptel state, tool parsing, and persistence,
 but the user-facing projection does not convert assistant Markdown to org.
 Markdown view text is fontified through `markdown-ts-mode`, which Emacs
-31.1 ships, so mevedel needs no Markdown package. There is no
+31.1 ships, so niwa needs no Markdown package. There is no
 `markdown-mode` path: `markdown-mode` is a third-party package, and
 `markdown-ts-mode` covers CommonMark and most of GFM, adds LaTeX, and
 highlights fenced code blocks with the embedded language's own grammar.
 
 Its two tree-sitter grammars (`markdown` and `markdown-inline`) are not
 shipped with Emacs and must be compiled locally, which needs a C toolchain.
-`mevedel-view--markdown-fontify-mode` returns nil until
+`niwa-view--markdown-fontify-mode` returns nil until
 `treesit-language-available-p` reports both, and then view text stays plain
 unfontified Markdown - never a prompt, because `markdown-ts-mode` calls
 `treesit-ensure-installed`, which offers to clone and compile, and a render
 must never block on that. Loading the mode registers both grammars in
 `treesit-language-source-alist`, so `M-x markdown-ts-mode-install-parsers`
-has a source to build from; mevedel warns once, outside batch, when the
+has a source to build from; niwa warns once, outside batch, when the
 grammars are missing.
 
 To avoid repeated mode setup during streaming redraws,
-`mevedel-view--markdown-fontify-target` sets up one hidden buffer once and
+`niwa-view--markdown-fontify-target` sets up one hidden buffer once and
 only the content is swapped. Nested fontification, including calls from another
 view or during mode setup, uses a separate temporary buffer so it cannot replace
 the outer call's text. Temporary buffers are released on completion or failure.
 Invalidating an active reusable buffer retires it immediately but lets its owner
-finish reading before killing it. `mevedel-view--fontify-as` treats
+finish reading before killing it. `niwa-view--fontify-as` treats
 `markdown-mode` as the tag meaning "this body is Markdown" and routes it
 there; every other `:body-mode` is a real major mode and still gets a
 throwaway temp buffer. Fontification appends a temporary newline so the last
@@ -2375,7 +2375,7 @@ are only made invisible: `markdown-ts-mode` puts an `invisible` property on
 them while fontifying, which rides into the view as an ordinary text
 property, so the text the view holds and every position it maps back to
 the data buffer are unchanged. Set
-`mevedel-view-hide-markdown-markup` to nil to see the raw delimiters.
+`niwa-view-hide-markdown-markup` to nil to see the raw delimiters.
 Because the property is applied at fontification time rather than at
 display time, changing the setting drops the reusable buffer and the
 response and tool rendering caches and re-renders every open view.
@@ -2395,13 +2395,13 @@ Markdown rendering adds small view-only affordances:
   writes or the mutable fixed-path cache. Click a preview or press `RET` on it to
   open the image in an Emacs file buffer, using the same verified committed
   publication for remote session images even when newer staged writes exist.
-  `mevedel-view-inline-image-max-width` takes a fixed pixel width
+  `niwa-view-inline-image-max-width` takes a fixed pixel width
   (default 300) or a float in (0, 1] meaning a fraction of the
   displaying window's pixel width; ratio-sized images retain their path,
   ratio, and measured width and are re-scaled by the realignment job below;
 - canonical pipe tables (two or more consecutive `|...|` rows outside
   fenced blocks and linkify-exempt text) are rendered by
-  `mevedel-view-table.el` as aligned box-drawing rows after the link and
+  `niwa-view-table.el` as aligned box-drawing rows after the link and
   path passes, so buttons and faces inside cells survive. Each cell uses the
   prose Markdown renderer for inline faces and markup visibility. Column
   measurements and wrapping use the displayed text rather than hidden
@@ -2442,15 +2442,15 @@ Markdown rendering adds small view-only affordances:
   opens the whiteboard or document in the session's room, like `o` in the
   artifacts cockpit; `agent://root/PATH` and `history://root/PATH` open that
   agent's transcript; `work://` and `memory://` files open for editing; and
-  `artifact://`, `mevedel://` and `skill://` files open read-only. An address
+  `artifact://`, `niwa://` and `skill://` files open read-only. An address
   with no backing file, such as a listing, reports that there is nothing to
   open. `mcp://` addresses stay text.
 
 Markdown links, local images, paths, and fenced source-panel projection are
-isolated in `mevedel-view-markdown.el`, deferred target path verification in
-`mevedel-view-path.el` (remote paths wait for an idle transport, and the paths
+isolated in `niwa-view-markdown.el`, deferred target path verification in
+`niwa-view-path.el` (remote paths wait for an idle transport, and the paths
 pending on one target share one existence command); the table engine lives in
-`mevedel-view-table.el`, adapted from agent-shell's renderer with
+`niwa-view-table.el`, adapted from agent-shell's renderer with
 attribution.
 
 Normal views first show pipe tables with their canonical source retained as
@@ -2476,7 +2476,7 @@ response keeps streaming. Any later redraw, including terminal reconciliation,
 reapplies the cached layout, so the table does not alternate between its raw
 and rendered forms.
 
-`mevedel-view-mode` schedules that job from decoration, window size/buffer
+`niwa-view-mode` schedules that job from decoration, window size/buffer
 changes, scrolling, and commands. A current image width and no visible stale
 table require no timer. Each buffer owns one cancellable timer;
 killing the buffer or changing its major mode cancels pending work. Pending
@@ -2504,14 +2504,14 @@ the most recently realigned window wins. Font or text-scale changes can trigger
 reflow even if the window pixel width stays the same.
 
 Copying from a view is contract-bound to canonical Markdown:
-`mevedel-view-mode` sets `filter-buffer-substring-function` so any
+`niwa-view-mode` sets `filter-buffer-substring-function` so any
 copied or killed region overlapping a pending or rendered table yields the table's
 complete pipe-table source spliced into the surrounding text, never
 box-drawing glyphs. The fenced code-block copy button still copies the
 raw code body.
-Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
-`mevedel-view-disclosure.el` owns its shared source-backed toggle state, and
-`mevedel-view-render.el` retains the surrounding turn projection. Each
+Audit disclosure formatting and toggling live in `niwa-view-audit.el`;
+`niwa-view-disclosure.el` owns its shared source-backed toggle state, and
+`niwa-view-render.el` retains the surrounding turn projection. Each
 tool-attached hook audit uses its own transcript span, so audits attached to
 one tool retain independent collapse state across rerenders. Each audit is
 drawn in that remembered state, so a streamed update never has to toggle it
@@ -2642,7 +2642,7 @@ copied or decoded, and any other head falls back to the full read. Audit-only
 segment checks run over the data buffer region rather than a copy, and settle
 visible text in the gaps before decoding any block.
 
-`mevedel-view-disclosure.el` keys source-backed disclosure state from
+`niwa-view-disclosure.el` keys source-backed disclosure state from
 data-buffer coordinates and stable source anchors, not view-buffer positions.
 Rerenders should capture
 and reapply collapse state, including temporary in-flight anchors that later
@@ -2668,8 +2668,8 @@ at their current source positions. A background update therefore keeps both
 the compound tool's children and their expanded/collapsed choices. Capturing
 those choices is limited to the replaced row, not an additional transcript-wide
 state scan.
-`mevedel-view-render-settle` computes those keys with their durable
-post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before
+`niwa-view-render-settle` computes those keys with their durable
+post-settle anchors (`niwa-view-disclosure--settling-p`): it runs before
 the stream clears the in-flight turn markers, and keys captured or stamped
 under the temporary `(in-flight)` anchor there would be orphaned the moment
 those markers clear. Empty-string tool ids — restored transcripts stamp
@@ -2677,7 +2677,7 @@ them where the live buffer had nil — never become key anchors, so a
 property restore does not change a section's identity.
 
 A user toggle deletes and re-inserts view text, which can drag the retained
-live-tail view marker away from its data-buffer twin; `mevedel-view-toggle-
+live-tail view marker away from its data-buffer twin; `niwa-view-toggle-
 section` therefore invalidates the retained tail, sending the next update
 down the non-retained path whose capture/restore preserves the toggle. The
 live renderer records the complete final render unit before restoration.
@@ -2717,7 +2717,7 @@ Please inspect the view layout.
 Assistant
 I'll inspect the associated files.
 
-  ● Read: mevedel-view.el
+  ● Read: niwa-view.el
 
 -- 1 pending input --------------------------------------------
 
@@ -2755,7 +2755,7 @@ I'll work on the changes.
 -- 1 permission prompt pending --------------------------------
 
 Allow Bash?
-  npx @emacs-eask/cli test ert test/test-mevedel-view.el
+  npx @emacs-eask/cli test ert test/test-niwa-view.el
 
 Waiting for input · 1m 08s
 
@@ -2804,7 +2804,7 @@ I'll update the docs, run the focused checks, and ask before any risky action.
 
 Permission request from /root/verifier
 Allow Bash?
-  npx @emacs-eask/cli test ert test/test-mevedel-view.el
+  npx @emacs-eask/cli test ert test/test-niwa-view.el
 
 Steering
   1. [+] Keep the request spinner pinned above the composer.
@@ -2820,8 +2820,8 @@ Waiting for input · 2m 14s
 
 ## Input History
 
-`mevedel-view-history.el` provides comint-style input history for the
-composer. `mevedel-view-composer.el` owns the editable input boundary,
+`niwa-view-history.el` provides comint-style input history for the
+composer. `niwa-view-composer.el` owns the editable input boundary,
 completion, prompt submission, and integration with that history ring. The
 related input bindings are:
 
@@ -2853,7 +2853,7 @@ Configure additional top-level composer keys before opening or reinitializing
 a view; registration derives the available entry points from the composer maps.
 
 History persists at the workspace level as
-`<workspace-root>/.mevedel/input-history.el`, so new and resumed
+`<workspace-root>/.niwa/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. When persistence is not
 writable, the active ring remains available in memory. Rewind keeps the current
 workspace ring and composer draft. The Lisp sidecar is printed with circle
@@ -2873,7 +2873,7 @@ draft, never on point, so moving the cursor never reflows the composer; a
 motion command does no hint work at all. They are not buffer text and are
 never sent to the model.
 
-Root prompt producers share `mevedel--insert-user-turn`, which applies the
+Root prompt producers share `niwa--insert-user-turn`, which applies the
 configured gptel separator and clears copied view, tool,
 read-only, and `gptel` properties. Atomic mention bindings and live structural
 provenance survive this cleanup; the transcript grammar restores internal
@@ -2890,7 +2890,7 @@ the braced `@file:{...}` form. Directory drops are ignored.
 
 `C-y` in the composer first tries to save a clipboard image, using the
 first available platform clipboard command, into
-`<workspace-root>/.mevedel/state/media/clipboard-YYYYmmdd-HHMMSS.png`. When an
+`<workspace-root>/.niwa/state/media/clipboard-YYYYmmdd-HHMMSS.png`. When an
 image is saved, the view inserts it as an `@file` mention instead of
 yanking text. If no clipboard image is available, normal `yank` behavior
 is used.
@@ -2915,7 +2915,7 @@ this root steering route.
 Retained-agent buffers refuse native gptel steering: use `SendMessage`
 for their existing retained delivery path. Native gptel
 reject-and-steer confirmation actions likewise direct managed sessions to
-mevedel's permission feedback or composer. This keeps raw native steering out
+niwa's permission feedback or composer. This keeps raw native steering out
 of agent FSMs and assistant-output accumulation. Ordinary gptel buffers retain
 their native commands.
 
@@ -2936,13 +2936,13 @@ native tool batch finishes, its prompt stops and the same turn sends an ordinary
 user prompt carrying the steering text and images. Steering is never delivered
 as hook context. If the native prompt ends first, steering becomes a further
 prompt of that same turn. Neither path interrupts a running tool or starts a new
-Mevedel turn. A native turn cannot wait at a held boundary, so steering still
+Niwa turn. A native turn cannot wait at a held boundary, so steering still
 held by the cockpit or an unresolved interaction when it succeeds becomes the
 first follow-ups ([Sessions](sessions.md#native-context-delivery)).
 
 A plain send refused because the workflow is occupied names the occupying
 cause: a retained accepted-plan implementation hints
-`mevedel-retry-plan-implementation`, a normal unfinished Goal hints
+`niwa-retry-plan-implementation`, a normal unfinished Goal hints
 `/goal resume`, a budget-limited Goal hints `/goal budget`, a preconstruction
 Goal handoff says to wait, and a pending plan proposal points at its approval.
 Resuming a mutable session that holds an implementation retry record also
@@ -3090,9 +3090,9 @@ prepared twice. Accepted input is added to ordinary workspace input history.
 
 ## Agent Transcript Views
 
-`mevedel-view-agent.el` owns transcript lookup and inspection views, live
+`niwa-view-agent.el` owns transcript lookup and inspection views, live
 rows and badges, and status/handle refresh. Transcript turn rendering remains
-in `mevedel-view-render.el`.
+in `niwa-view-render.el`.
 Inspection views put the agent header in the tab line and keep the header line
 for the [pinned prompt](#status-strip-and-cockpit-routing), so a long task stays
 identifiable after it scrolls away. `[← Parent]` in the tab line closes the view.
@@ -3119,10 +3119,10 @@ Resident retained agents show status/activity in the main view and open a
 rendered read-only transcript view over their conversation buffer whether
 running or idle. An open idle view begins live projection when a follow-up
 turn starts. Cold and historical agents open from the saved transcript file
-through `mevedel-view-open-agent-transcript`.
+through `niwa-view-open-agent-transcript`.
 
-`mevedel-transcript-restore.el` restores only the gptel bounds/properties
-needed for rendering and normalizes them through `mevedel-transcript.el`'s
+`niwa-transcript-restore.el` restores only the gptel bounds/properties
+needed for rendering and normalizes them through `niwa-transcript.el`'s
 canonical grammar. Transcript views do not restore backend/tool objects or
 become live agent buffers themselves.
 

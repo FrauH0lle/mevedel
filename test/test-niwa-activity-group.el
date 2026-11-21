@@ -1,0 +1,501 @@
+;;; test-niwa-activity-group.el --- Activity group tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; The Emacs view and the browser projection must fold the same transcript
+;; into the same activity groups with the same summaries.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'gptel)
+(require 'niwa-activity-group)
+(require 'niwa-collaboration-projection)
+(require 'niwa-tool-exec-registration)
+(require 'niwa-tool-render-data)
+(require 'niwa-tools)
+(require 'niwa-view)
+(require 'niwa-view-disclosure)
+(require 'niwa-view-render)
+
+(defun niwa-activity-group-test--tool (name &optional status id)
+  "Return a member tool entry NAME with STATUS and ID."
+  (list :role 'member :kind 'tool :name name :status (or status 'completed) :id id))
+
+(defun niwa-activity-group-test--shape (items)
+  "Return ITEMS as ids, with each group as a vector of its ids."
+  (mapcar (lambda (item)
+            (if (plist-get item :group)
+                (vconcat (plist-get item :ids))
+              (plist-get item :id)))
+          items))
+
+(niwa-deftest niwa-activity-group-partition ()
+  ,test
+  (test)
+  :doc "a run groups only when it holds more tools than the threshold"
+  (let ((run (list (niwa-activity-group-test--tool "Read" nil 1)
+                   (niwa-activity-group-test--tool "Read" nil 2)
+                   (niwa-activity-group-test--tool "Read" nil 3))))
+    (should (equal '([1 2 3]) (niwa-activity-group-test--shape
+                               (niwa-activity-group-partition run 2))))
+    (should (equal '(1 2 3) (niwa-activity-group-test--shape
+                             (niwa-activity-group-partition run 3))))
+    (should (equal '(1 2 3) (niwa-activity-group-test--shape
+                             (niwa-activity-group-partition run 0))))
+    (should (equal '([1 2 3]) (niwa-activity-group-test--shape
+                               (niwa-activity-group-partition run nil)))))
+  :doc "messages and completions join a run without counting toward it"
+  (should (equal '(1 m 2)
+                 (niwa-activity-group-test--shape
+                  (niwa-activity-group-partition
+                   (list (niwa-activity-group-test--tool "Read" nil 1)
+                         '(:role member :kind message :id m)
+                         (niwa-activity-group-test--tool "Read" nil 2))
+                   2))))
+  :doc "boundaries end runs; transparent entries ride inside one but not at its edges"
+  (should (equal '(t0 [1 t1 2] t2 b [3 4])
+                 (niwa-activity-group-test--shape
+                  (niwa-activity-group-partition
+                   (list '(:role transparent :id t0)
+                         (niwa-activity-group-test--tool "Read" nil 1)
+                         '(:role transparent :id t1)
+                         (niwa-activity-group-test--tool "Read" nil 2)
+                         '(:role transparent :id t2)
+                         '(:role boundary :id b)
+                         (niwa-activity-group-test--tool "Read" nil 3)
+                         (niwa-activity-group-test--tool "Read" nil 4))
+                   1))))
+  :doc "leading messages and completions stay single, even when rebuilding a group"
+  (dolist (threshold '(2 nil))
+    (should (equal '(m c [1 2 3])
+                   (niwa-activity-group-test--shape
+                    (niwa-activity-group-partition
+                     (list '(:role member :kind message :id m)
+                           '(:role member :kind completion :id c
+                             :completion ("exec" . "completed"))
+                           (niwa-activity-group-test--tool "Read" nil 1)
+                           (niwa-activity-group-test--tool "Read" nil 2)
+                           (niwa-activity-group-test--tool "Read" nil 3))
+                     threshold)))))
+  :doc "boundaries and scope changes reset the tool-first rule"
+  (dolist (separator '((:role boundary :id b)
+                       (:role member :kind message :id b :scope next)))
+    (should (equal '(1 b m [2 3])
+                   (niwa-activity-group-test--shape
+                    (niwa-activity-group-partition
+                     (list (niwa-activity-group-test--tool "Read" nil 1)
+                           separator
+                           '(:role member :kind message :id m :scope next)
+                           (plist-put (niwa-activity-group-test--tool "Read" nil 2)
+                                      :scope 'next)
+                           (plist-put (niwa-activity-group-test--tool "Read" nil 3)
+                                      :scope 'next))
+                     1)))))
+  :doc "a hidden boundary still splits; transparency is a role, not visibility"
+  (should (equal '(1 b 2)
+                 (niwa-activity-group-test--shape
+                  (niwa-activity-group-partition
+                   (list (niwa-activity-group-test--tool "Read" nil 1)
+                         '(:role boundary :id b :hidden t)
+                         (niwa-activity-group-test--tool "Read" nil 2))
+                   1))))
+  :doc "a scope change ends the run"
+  (should (equal '([1 2] 3)
+                 (niwa-activity-group-test--shape
+                  (niwa-activity-group-partition
+                   (list (niwa-activity-group-test--tool "Read" nil 1)
+                         (niwa-activity-group-test--tool "Read" nil 2)
+                         (plist-put (niwa-activity-group-test--tool "Read" nil 3)
+                                    :scope 'directive))
+                   1))))
+  :doc "summaries count calls, then tools by verb in first-appearance order"
+  (let ((summary (lambda (&rest names)
+                   (plist-get (car (niwa-activity-group-partition
+                                    (mapcar #'niwa-activity-group-test--tool names)
+                                    nil))
+                              :summary))))
+    (should (equal "5 calls: searched 2 patterns, read 1 file, ran 2 commands"
+                   (funcall summary "Grep" "Grep" "Read" "Bash" "Bash")))
+    (should (equal "3 calls: mcp_linear ×2, read 1 file"
+                   (funcall summary "mcp_linear" "mcp_linear" "Read")))
+    (should (equal "3 calls: read 2 files, LspRename"
+                   (funcall summary "Read" "LspRename" "Read")))
+    (should (equal "1 call: read 1 file" (funcall summary "Read"))))
+  :doc "distinct completions count by outcome, then messages"
+  (should (equal "1 call: read 1 file, 1 command completed, 1 failed, received 1 message"
+                 (plist-get
+                  (car (niwa-activity-group-partition
+                        (list (niwa-activity-group-test--tool "Read")
+                              '(:role member :kind completion
+                                :completion (("e1" "/root") . "completed"))
+                              '(:role member :kind completion
+                                :completion (("e1" "/root") . "completed"))
+                              '(:role member :kind completion
+                                :completion (("e2" "/root") . "failed"))
+                              '(:role member :kind message))
+                        nil))
+                  :summary)))
+  :doc "every completion verb the classifier can give reaches the summary"
+  (should (equal "1 call: read 1 file, 1 command completed, 1 failed, 1 stopped, 1 timed out, 1 ended, 1 lost"
+                 (plist-get
+                  (car (niwa-activity-group-partition
+                        (cons (niwa-activity-group-test--tool "Read")
+                              (mapcar (lambda (verb)
+                                        `(:role member :kind completion
+                                          :completion ((,verb "/root") . ,verb)))
+                                      '("lost" "ended" "timed out" "stopped" "failed"
+                                        "completed")))
+                        nil))
+                  :summary)))
+  :doc "pending calls run; a mixed failed and running group keeps its failures"
+  (let ((group (car (niwa-activity-group-partition
+                     (list (niwa-activity-group-test--tool "Read" 'warning)
+                           (niwa-activity-group-test--tool "Grep" 'failed)
+                           (niwa-activity-group-test--tool "Bash" 'running)
+                           (niwa-activity-group-test--tool "Grep" 'failed)
+                           (niwa-activity-group-test--tool "Read" 'running))
+                     2))))
+    (should (eq 'running (plist-get group :status)))
+    (should (= 2 (plist-get group :running)))
+    (should (= 2 (plist-get group :failed)))
+    (should (plist-get group :warning))
+    (should (equal "5 calls: read 2 files, searched 2 patterns (2 failed), ran 1 command"
+                   (plist-get group :summary))))
+  :doc "some failures warn; only a group whose every tool failed has failed"
+  (let ((status
+         (lambda (&rest statuses)
+           (let ((group
+                  (car (niwa-activity-group-partition
+                        (mapcar (lambda (status)
+                                  (niwa-view--activity-group-entry
+                                   (list :kind 'tool :count 1
+                                         :rendering (list :status status :group-tool "Read")
+                                         :group-child (list :tool "Read" :status status))))
+                                statuses)
+                        nil))))
+             (list (plist-get group :status)
+                   (plist-get (niwa-view--tool-group-rendering group (current-buffer))
+                              :status))))))
+    (with-temp-buffer
+      (should (equal '(warning warning) (funcall status 'error 'success)))
+      (should (equal '(failed error) (funcall status 'error 'error)))
+      (should (equal '(completed nil) (funcall status 'success 'success)))))
+  :doc "failures count beside each tool phrase, marked for styling"
+  (let ((summary (plist-get
+                  (car (niwa-activity-group-partition
+                        (list (niwa-activity-group-test--tool "Bash" 'failed)
+                              (niwa-activity-group-test--tool "Bash")
+                              (niwa-activity-group-test--tool "ApplyPatch" 'failed)
+                              (niwa-activity-group-test--tool "ApplyPatch")
+                              (niwa-activity-group-test--tool "Grep" 'failed)
+                              (niwa-activity-group-test--tool "Read"))
+                        nil))
+                  :summary))
+        (part (lambda (summary text)
+                (get-text-property (string-search text summary)
+                                   'niwa-activity-group-part summary))))
+    (should (equal (concat "6 calls: ran 2 commands (1 failed), ApplyPatch ×2 (1 failed), "
+                           "searched 1 pattern (1 failed), read 1 file")
+                   summary))
+    (should-not (string-search "failed:" summary))
+    (should (eq 'count (funcall part summary "6 calls")))
+    (should-not (funcall part summary ": ran"))
+    (should (eq 'failure (funcall part summary "1 failed")))
+    (should (eq 'muted (funcall part summary "(")))
+    (should-not (funcall part summary "ran 2 commands")))
+  :doc "a group is unconfined when any tool ran without confinement"
+  (let ((group (lambda (&rest flags)
+                 (car (niwa-activity-group-partition
+                       (mapcar (lambda (flag)
+                                 (plist-put (niwa-activity-group-test--tool "Bash")
+                                            :unconfined flag))
+                               flags)
+                       nil)))))
+    (should (plist-get (funcall group nil t nil) :unconfined))
+    (should-not (plist-get (funcall group nil nil) :unconfined)))
+  :doc "status falls from failed to warning to completed"
+  (should (equal '(failed warning completed)
+                 (mapcar (lambda (status)
+                           (plist-get (car (niwa-activity-group-partition
+                                            (list (niwa-activity-group-test--tool
+                                                   "Read" status))
+                                            nil))
+                                      :status))
+                         '(failed warning completed)))))
+
+(defun niwa-activity-group-test--part (label kind &optional name status)
+  "Return transcript text for part LABEL of KIND.
+A tool part runs tool NAME and settles with STATUS."
+  (pcase kind
+    ('tool
+     (concat "#+begin_tool\n"
+             (propertize
+              (concat
+               (format "(:name %S :args (:file_path \"/tmp/%s\"))\n%s\n"
+                       (or name "Read") label
+                       (if (eq status 'failed) "Error: failed"
+                         (format "result %s" label)))
+               (when (memq status '(warning running denied))
+                 (niwa-tool-render-data-format (list :status status) label)))
+              'gptel (cons 'tool label))
+             "#+end_tool\n"))
+    ('poll
+     (concat "#+begin_tool\n"
+             (propertize
+              (concat "(:name \"WriteStdin\" :args (:execution_id \"exec\" :chars \"\"))\nstill running\n"
+                      (niwa-tool-render-data-format
+                       '(:kind bash :execution-control poll :control-succeeded-p t :status success)
+                       label))
+              'gptel (cons 'tool label))
+             "#+end_tool\n"))
+    ('mail (format "<agent-message type=\"MAIL\" sender=\"/root/a\">\n%s\n</agent-message>\n"
+                   label))
+    ('notice (format "<agent-result sender=\"/root/a\" outcome=\"completed\">\n%s\n</agent-result>\n"
+                     label))
+    ('own (format (concat "<agent-message type=\"EXECUTION\" sender=\"/root\" "
+                          "execution_id=\"%s\" description=\"own\" "
+                          "outcome=\"success\" exit_code=\"0\">\nout\n</agent-message>\n")
+                  (or name label)))
+    ('crumb (niwa--format-hook-audit-record
+             (list :type 'execution-breadcrumb :owner "/root" :execution-id label
+                   :command "make" :facts '(:kind bash :outcome success))))
+    ('audit (niwa--format-hook-audit-record
+             (list :type (or name 'guest-prompt) :name label)))
+    ('reasoning (propertize (format "#+begin_reasoning\n%s\n#+end_reasoning\n" label)
+                            'gptel 'ignore))
+    ('text (propertize (format "%s.\n\n" label) 'gptel 'response))
+    ('prompt (format "%s?\n\n" label))
+    ('summary (niwa-tool-render-data-format
+               (list :kind 'request-summary :elapsed-seconds 1 :outcome (or name 'success)
+                     :message label)))))
+
+(defun niwa-activity-group-test--view-groups (view-buf positions pending)
+  "Return VIEW-BUF's rendered activity groups as (LABELS . HEADER) pairs.
+POSITIONS maps each settled label to its start in the data buffer;
+PENDING labels in-flight calls, which a group header counts as running."
+  (with-current-buffer view-buf
+    (let ((pos (point-min)) groups seen)
+      (while (< pos (niwa-view-transcript-tail))
+        (let* ((eol (save-excursion (goto-char pos) (line-end-position)))
+               (at (or (text-property-any pos eol 'niwa-view-type 'tool-group)
+                       (text-property-any pos eol 'niwa-view-type 'tool-pending)))
+               (type (and at (get-text-property at 'niwa-view-type)))
+               (line (buffer-substring-no-properties pos eol))
+               (running (and (string-match "· \\([0-9]+\\) running" line)
+                             (string-to-number (match-string 1 line)))))
+          (when (or (eq type 'tool-group) (and (eq type 'tool-pending) running))
+            (let* ((source (get-text-property at 'niwa-view-source))
+                   (start (niwa-view-disclosure-source-start source))
+                   (end (and (consp source) (marker-position (cdr source)))))
+              (unless (and start (member start seen))
+                (push start seen)
+                (push (cons (append
+                             (and start
+                                  (cl-loop for (label . at) in positions
+                                           when (and (<= start at) (< at end))
+                                           collect label))
+                             (and running
+                                  (prog1 (seq-take pending running)
+                                    (setq pending (nthcdr running pending)))))
+                            line)
+                      groups))))
+          (setq pos (min (niwa-view-transcript-tail) (1+ eol)))))
+      (nreverse groups))))
+
+(defun niwa-activity-group-test--projection-groups (records labels)
+  "Return activity groups of projected RECORDS as (LABELS ACTIVITY) pairs."
+  (let (groups)
+    (dolist (record records)
+      (when-let* ((activity (plist-get record :activity))
+                  (label (cl-find-if
+                          (lambda (label)
+                            (or (equal label (plist-get record :toolUseId))
+                                (equal label (plist-get record :tool-use-id))
+                                (equal label (plist-get (plist-get record :execution) :id))
+                                (equal label (plist-get record :text))))
+                          labels)))
+        (let ((cell (assoc (plist-get activity :id) groups)))
+          (if cell (setcdr cell (list (append (cadr cell) (list label)) activity))
+            (push (list (plist-get activity :id) (list label) activity) groups)))))
+    (mapcar #'cdr (nreverse groups))))
+
+(niwa-deftest niwa-activity-group-test--projection-groups ()
+  ,test
+  (test)
+  :doc "mailbox labels match exactly, not a shorter label's prefix"
+  (let ((activity '(:id "group" :summary "3 calls: read 3 files, received 1 message")))
+    (should (equal (list (list '("part10") activity))
+                   (niwa-activity-group-test--projection-groups
+                    (list (list :kind "agent-notice" :text "part10" :activity activity))
+                    '("part1" "part10"))))))
+
+(defun niwa-activity-group-test--surfaces (parts &optional pending)
+  "Render PARTS in both surfaces; return (VIEW-GROUPS PROJECTION-GROUPS).
+Each part is (LABEL KIND [NAME STATUS]).  PENDING labels in-flight Read
+calls that follow PARTS in a turn without a final response."
+  (niwa-view-test--with-buffers
+    (let ((niwa-view-tool-group-collapse-threshold 2)
+          positions)
+      (niwa-tool-exec--register)
+      (niwa-tool-register
+       (niwa-tool--create :name "CoalesceProbe" :category "niwa"
+                             :renderer (lambda (&rest _)
+                                         '(:header "CoalesceProbe: latest" :body "latest"
+                                           :coalesce-key "probe"))))
+      (with-current-buffer data-buf
+        (insert "Start?\n\n")
+        (dolist (part parts)
+          (goto-char (point-max))
+          ;; Audits, prose and polls are never members; an own delivery
+          ;; naming a breadcrumb's execution repeats that breadcrumb.
+          (when (and (memq (cadr part) '(tool mail own crumb))
+                     (not (and (eq (cadr part) 'own) (caddr part))))
+            (push (cons (car part) (point)) positions))
+          (insert (apply #'niwa-activity-group-test--part part)))
+        (unless pending
+          (insert (propertize "Done.\n" 'gptel 'response))))
+      (setq positions (nreverse positions))
+      (with-current-buffer view-buf
+        (let ((niwa-view--render-pending
+               (and pending
+                    (list (mapcar (lambda (label)
+                                    (list label "Read" label (list :tool-use-id label)))
+                                  pending)))))
+          (niwa-view--full-rerender)))
+      (let* ((canonical (niwa-collaboration--canonical-records
+                         data-buf nil nil nil "/root"))
+             (room (list :data-buffer data-buf
+                         :pending-tools
+                         (mapcar (lambda (label)
+                                   (niwa-collaboration--record
+                                    (format "tool-%s" label) "tool"
+                                    :revision 0 :name "Read" :status "running"
+                                    :summary "Read" :result "" :pending t
+                                    :tool-use-id label :presentation nil
+                                    :baseline-tool-count
+                                    (length (niwa-collaboration--tool-records canonical))
+                                    :baseline-record-count (length canonical)))
+                                 pending)))
+             (records (if pending (niwa-collaboration--project-records room)
+                        canonical)))
+        (list (niwa-activity-group-test--view-groups view-buf positions pending)
+              (niwa-activity-group-test--projection-groups
+               records (append (mapcar #'car positions) pending)))))))
+
+(defconst niwa-activity-group-test--agreement-cases
+  '((plain (t1 tool) (t2 tool) (t3 tool))
+    (prefix-mail-label (part1 tool) (t2 tool) (t3 tool) (part10 mail))
+    (leading-breadcrumb (x1 text) (c1 crumb) (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail (x1 text) (m1 mail) (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-breadcrumb (x1 text) (m1 mail) (c1 crumb)
+                             (t1 tool) (t2 tool) (t3 tool))
+    (leading-breadcrumb-mail (x1 text) (c1 crumb) (m1 mail)
+                             (t1 tool) (t2 tool) (t3 tool))
+    (leading-audit-mail (x1 text) (a1 audit) (m1 mail)
+                        (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-audit (x1 text) (m1 mail) (a1 audit)
+                        (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-audit-breadcrumb (x1 text) (m1 mail) (a1 audit) (c1 crumb)
+                                   (t1 tool) (t2 tool) (t3 tool))
+    (leading-breadcrumb-audit-mail (x1 text) (c1 crumb) (a1 audit) (m1 mail)
+                                   (t1 tool) (t2 tool) (t3 tool))
+    (leading-hidden-audit-mail (x1 text) (a1 audit provider-tool-batch) (m1 mail)
+                               (t1 tool) (t2 tool) (t3 tool))
+    (mail-after-boundary (t0 tool) (m0 mail) (a1 audit) (m1 mail) (c1 crumb)
+                         (t1 tool) (t2 tool) (t3 tool))
+    (merged-audit (t1 tool) (t2 tool) (a1 audit) (t3 tool) (t4 tool))
+    (hidden-merged-audit (t1 tool) (t2 tool) (a1 audit provider-tool-batch) (t3 tool))
+    (leading-audit (a1 audit) (t1 tool) (t2 tool) (t3 tool))
+    (audit-after-mail (t1 tool) (t2 tool) (t3 tool) (m1 mail) (a1 audit)
+                      (t4 tool) (t5 tool) (t6 tool))
+    (mail (t1 tool) (m1 mail) (t2 tool) (t3 tool))
+    (notice (t1 tool) (t2 tool) (n1 notice) (t3 tool) (t4 tool) (t5 tool))
+    (own-completion (t1 tool) (o1 own) (t2 tool) (t3 tool))
+    (own-completion-with-breadcrumb (t1 tool) (c1 crumb) (o1 own "c1") (t2 tool) (t3 tool))
+    (breadcrumb (t1 tool) (c1 crumb) (t2 tool) (t3 tool))
+    (poll (t1 tool) (t2 tool) (h1 poll) (t3 tool) (t4 tool))
+    (reasoning (t1 tool) (t2 tool) (t3 tool) (r1 reasoning) (t4 tool) (t5 tool) (t6 tool))
+    (assistant-text (t1 tool) (t2 tool) (x1 text) (t3 tool) (t4 tool) (t5 tool))
+    (prompt (t1 tool) (t2 tool) (t3 tool) (p1 prompt) (t4 tool) (t5 tool) (t6 tool))
+    (mixed-status (t1 tool "Bash" running) (t2 tool "Grep" failed) (t3 tool "Read" warning))
+    (warning (t1 tool) (t2 tool "Grep" warning) (t3 tool))
+    (denied (t1 tool) (t2 tool "Bash" denied) (t3 tool))
+    (request-summary (t1 tool) (t2 tool) (s1 summary) (t3 tool) (t4 tool))
+    (failed-request-summary (t1 tool) (t2 tool) (s1 summary error) (t3 tool) (t4 tool))
+    (summary-audit (t1 tool) (t2 tool) (t3 tool) (s1 summary) (a1 audit))
+    (breadcrumb-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                              (c1 crumb) (s1 summary) (a1 audit))
+    (breadcrumbs-summaries-audit (t1 tool) (t2 tool) (t3 tool)
+                                 (c1 crumb) (c2 crumb)
+                                 (s1 summary) (s2 summary error) (a1 audit))
+    (breadcrumb-summary-hidden-audit (t1 tool) (t2 tool) (t3 tool)
+                                     (c1 crumb) (s1 summary)
+                                     (a1 audit provider-tool-batch))
+    (breadcrumb-own-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                  (c1 crumb) (o1 own "c1") (s1 summary) (a1 audit))
+    (breadcrumb-mail-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                   (c1 crumb) (m1 mail) (s1 summary) (a1 audit))
+    (breadcrumb-prose-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                    (c1 crumb) (x1 text) (s1 summary) (a1 audit))
+    (mail-breadcrumb-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                   (m1 mail) (c1 crumb) (s1 summary) (a1 audit))
+    (multiple-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                            (s1 summary) (s2 summary) (a1 audit))
+    (failed-summary-audit (t1 tool) (t2 tool) (t3 tool) (s1 summary error) (a1 audit))
+    (mixed-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                         (s1 summary) (s2 summary error) (s3 summary) (a1 audit))
+    (summary-audit-next-run (t1 tool) (t2 tool) (t3 tool) (s1 summary) (a1 audit)
+                            (t4 tool) (t5 tool) (t6 tool))
+    (summary-hidden-audit (t1 tool) (t2 tool) (t3 tool)
+                          (s1 summary) (a1 audit provider-tool-batch))
+    (summary-prose-audit (t1 tool) (t2 tool) (t3 tool) (s1 summary)
+                         (x1 text) (a1 audit) (t4 tool) (t5 tool) (t6 tool))
+    (summary-mail-audit (t1 tool) (t2 tool) (t3 tool) (m1 mail)
+                        (s1 summary) (s2 summary) (a1 audit)
+                        (t4 tool) (t5 tool) (t6 tool))
+    (own-completion-audit (t1 tool) (o1 own) (t2 tool) (t3 tool)
+                          (o2 own) (a1 audit) (t4 tool))
+    (multiple-summary-audit-with-breadcrumb
+     (a1 audit) (x1 text) (t1 tool) (c1 crumb) (t2 tool) (t3 tool)
+     (s1 summary) (s2 summary) (a2 audit) (t4 tool))
+    (coalescing (t1 tool) (t2 tool) (w1 tool "CoalesceProbe") (t3 tool))
+    (pending :pending (p1 p2) (t1 tool) (t2 tool))
+    (pending-below :pending (p1 p2) (t1 tool)))
+  "Transcripts whose activity grouping both surfaces must agree on.")
+
+(niwa-deftest niwa-activity-group-agreement ()
+  ,test
+  (test)
+  :doc "the view and the projection fold the same transcript into the same groups"
+  (let (disagreements details)
+    (dolist (case niwa-activity-group-test--agreement-cases)
+      (let* ((pending (and (eq (cadr case) :pending)
+                           (mapcar #'symbol-name (caddr case))))
+             (parts (mapcar (lambda (part)
+                              (cons (symbol-name (car part)) (cdr part)))
+                            (if pending (cdddr case) (cdr case))))
+             (surfaces (niwa-activity-group-test--surfaces parts pending))
+             (view (car surfaces))
+             (projection (cadr surfaces)))
+        (unless (and (equal (mapcar #'car view) (mapcar #'car projection))
+                     ;; Each browser summary, failure counts included,
+                     ;; appears in the matching Emacs group row.
+                     (cl-every (lambda (pair)
+                                 (let ((activity (cadr (cdr pair)))
+                                       (header (cdr (car pair))))
+                                   (string-search (plist-get activity :summary) header)))
+                               (cl-mapcar #'cons view projection)))
+          (push (car case) disagreements)
+          (push (list (car case) :view view
+                      :projection (mapcar (lambda (group)
+                                            (list (car group)
+                                                  (plist-get (cadr group) :summary)))
+                                          projection))
+                details))))
+    (ert-info ((prin1-to-string (nreverse details)))
+      (should-not (nreverse disagreements)))))
+
+(provide 'test-niwa-activity-group)
+;;; test-niwa-activity-group.el ends here

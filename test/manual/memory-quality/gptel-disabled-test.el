@@ -21,5 +21,5 @@
             (should-not (plist-member payload :reasoning_effort))
           (should (equal (plist-get payload :reasoning_effort) (symbol-name effort))))))))
 
-(provide 'mevedel-memory-quality-gptel-disabled-test)
+(provide 'niwa-memory-quality-gptel-disabled-test)
 ;;; gptel-disabled-test.el ends here

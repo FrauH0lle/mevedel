@@ -10,7 +10,7 @@
   const dock = document.querySelector('.dock');
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
-  document.addEventListener('click', window.mevedelTranscriptRenderer.messageAction);
+  document.addEventListener('click', window.niwaTranscriptRenderer.messageAction);
   const queueState = document.getElementById('queue-state');
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
@@ -31,8 +31,8 @@
   const sessionBox = document.getElementById('session-box');
   const sessionSummary = document.getElementById('session-summary');
   const roomButton = document.getElementById('room-button');
-  const transportApi = window.mevedelViewerTransport;
-  const notificationsApi = window.mevedelViewerNotifications;
+  const transportApi = window.niwaViewerTransport;
+  const notificationsApi = window.niwaViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
 
   const PROTO = 5;
@@ -212,9 +212,9 @@
   }
 
   // The page is an open whiteboard, document or artifact, else the room.
-  const presence = window.mevedelPresence.create(
+  const presence = window.niwaPresence.create(
     {send, el, page: () => editing.page() || artifacts.page()});
-  const artifacts = window.mevedelArtifactView.create({
+  const artifacts = window.niwaArtifactView.create({
     send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     openConversation: id => activeStore().conversation(id),
     onPage: () => { agents.cancelArtifactResolution(); presence.report(); },
@@ -248,18 +248,18 @@
       }
     },
   });
-  const history = window.mevedelHistoryView.create({
+  const history = window.niwaHistoryView.create({
     send, el, onArtifacts:refreshFilter,
     onLoaded: () => pinnedPrompt.refresh(),
-    renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
+    renderRecord:record => window.niwaTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, null, openExecutionResult,
       path => agents.open({path}), destinationURL),
   });
-  const agents = window.mevedelAgentView.create({
+  const agents = window.niwaAgentView.create({
     send, el, scopeChip, openArtifact: artifacts.open,
     openExecution: openExecutionResult, flash: flashNotice, href: destinationURL,
   });
-  const background = window.mevedelBackgroundView.create({state, send, el, href: destinationURL,
+  const background = window.niwaBackgroundView.create({state, send, el, href: destinationURL,
     openAgent: row => agents.open(row), openExecution: openExecutionResult,
     showConversation: locateBackground,
   });
@@ -297,20 +297,20 @@
         segment: frame.current ? null : frame.segment});
     } else if (frame.current) {
       selectFilter('all');
-      if (!window.mevedelTranscriptRenderer.revealTool(transcript, frame.toolUseId)) {
+      if (!window.niwaTranscriptRenderer.revealTool(transcript, frame.toolUseId)) {
         flashNotice('The located source has not reached the browser yet. Try again after the next update.');
       }
     } else if (!await history.reveal(frame.segment, frame.toolUseId)) {
       flashNotice('Could not load the located source. Reconnect or retry the archive.');
     }
   }
-  const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
-  const pinnedPrompt = window.mevedelPinnedPrompt.create({pin: document.getElementById('pinned-prompt'),
+  const tasks = window.niwaTaskView.create({el, summarize: summarizeSession});
+  const pinnedPrompt = window.niwaPinnedPrompt.create({pin: document.getElementById('pinned-prompt'),
     transcript, history: document.getElementById('history'), scroll: window,
     edge: [document.querySelector('body > .topbar'), document.getElementById('filter')],
     column: document.getElementById('composer')});
-  const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
-  const editing = window.mevedelEditingView.create({state, send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
+  const goal = window.niwaGoalView.create({el, onChange: renderModeline});
+  const editing = window.niwaEditingView.create({state, send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
     onCatalog: refreshFilter,
     // A docked item is the chat's subject: the chat shows and writes to its
@@ -326,8 +326,8 @@
       document.getElementById('composer-input')?.focus();
     }});
   // The host learns a new name at once; a hello carries the current one.
-  const names = window.mevedelGuestName.create({
-    initials: window.mevedelPresence.initials,
+  const names = window.niwaGuestName.create({
+    initials: window.niwaPresence.initials,
     onChange: name => {
       state.guestName = name;
       send({t: 'set-name', name});
@@ -335,17 +335,17 @@
     },
   });
   names.ready.then(name => { state.guestName = name; });
-  const sessions = window.mevedelSessionView.create(
+  const sessions = window.niwaSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      notice: flashNotice});
-  const uploads = window.mevedelFilesView.uploader({send});
-  const files = window.mevedelFilesView.create(
+  const uploads = window.niwaFilesView.uploader({send});
+  const files = window.niwaFilesView.create(
     {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile,
      downloadFile: artifacts.download, href: destinationURL});
   // The workspace artifact store: the room's Project artifacts sheet and
   // the lobby's Artifacts tab; one is active at a time.
   const storeSheet = document.getElementById('store-sheet');
-  const roomStore = window.mevedelStoreView.create({
+  const roomStore = window.niwaStoreView.create({
     send, el, state, room: true, notice: flashNotice, href: destinationURL,
     navigate: link => nav.navigate(link),
     open: record => {
@@ -362,19 +362,19 @@
     nav.note({view: 'artifacts'});
   }
   storeSheet.addEventListener('close', () => nav.note({view: null}));
-  const lobbyStore = window.mevedelStoreView.create({
+  const lobbyStore = window.niwaStoreView.create({
     send, el, state, open: artifacts.open, notice: flashNotice, href: destinationURL,
     navigate: link => nav.navigate(link),
     creation: document.getElementById('lobby-store-create'),
     list: document.getElementById('lobby-store-list'),
     empty: document.getElementById('lobby-store-empty'),
   });
-  const lobby = window.mevedelLobbyView.create(
+  const lobby = window.niwaLobbyView.create(
     {state, send, el, notice: flashNotice, sessions, files, store: lobbyStore,
      navigate: link => nav.navigate(link),
      onTab: tab => nav.note({tab}),
      initialTab: () => nav.entry().tab});
-  const nav = window.mevedelNav.create({
+  const nav = window.niwaNav.create({
     state, el, parse: parseFragment, sessions, lobby, openStore,
     openRooms: sessions.openRooms,
     panels: [
@@ -415,7 +415,7 @@
         if (record.agent.segment) params.segment = record.agent.segment;
       }
     }
-    return window.mevedelNav.roomURL(state.fragment, params);
+    return window.niwaNav.roomURL(state.fragment, params);
   }
 
   // Import a fresh tab's closed destination vocabulary once. Ordinary panel
@@ -821,7 +821,7 @@
 
   function updateRecordElement(record, previous) {
     const current = state.elements.get(record.id);
-    const turn = window.mevedelTranscriptRenderer.renderRecord(
+    const turn = window.niwaTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, previous || current, openExecutionResult,
       path => agents.open({path}), destinationURL);
     if (current) {
@@ -848,7 +848,7 @@
     });
     refreshFilter();
     editing.refreshConversation();
-    window.mevedelTranscriptRenderer.markContinuations(transcript);
+    window.niwaTranscriptRenderer.markContinuations(transcript);
     scheduleLiveScroll();
     updateLiveAffordance();
   }
@@ -860,7 +860,7 @@
     if (!recordVisible(record)) state.unseen.add(scopeKey(record) || 'main');
     updateRecordElement(record);
     refreshFilter();
-    window.mevedelTranscriptRenderer.markContinuations(transcript);
+    window.niwaTranscriptRenderer.markContinuations(transcript);
     scheduleLiveScroll();
     updateLiveAffordance();
   }
@@ -876,7 +876,7 @@
     });
     refreshFilter();
     if (itemHistoryChanged) editing.refreshConversation();
-    window.mevedelTranscriptRenderer.markContinuations(transcript);
+    window.niwaTranscriptRenderer.markContinuations(transcript);
   }
 
   /* -- Discussion filter --------------------------------------------- */
@@ -884,7 +884,7 @@
   // records carry their scope, the strip lists each one, and the composer
   // replies into the one selected. The menu is derived client-side, so
   // filtering is per-guest and costs no round-trips.
-  const scopeKey = record => window.mevedelTranscriptRenderer.scopeKey(record);
+  const scopeKey = record => window.niwaTranscriptRenderer.scopeKey(record);
   const itemScope = key => typeof key === 'string' && key.startsWith('item:');
 
   function recordVisible(record) {
@@ -1052,7 +1052,7 @@
       const turn = state.elements.get(record.id);
       if (turn) turn.hidden = !recordVisible(record);
     });
-    window.mevedelTranscriptRenderer.groupActivity(transcript);
+    window.niwaTranscriptRenderer.groupActivity(transcript);
     artifacts.render([...history.artifacts(), ...state.records.values()]);
     editing.conversation();
     // The composer follows the filter, so say where a prompt will land.
@@ -1105,14 +1105,14 @@
   // The host presents permission/patch/plan prompts to full-link guests;
   // the first answer (here or in Emacs) settles them everywhere.
 
-  const requestView = window.mevedelRequestView.create({requests, el, send, state});
+  const requestView = window.niwaRequestView.create({requests, el, send, state});
   const renderRequest = requestView.render;
   const removeRequest = requestView.remove;
   const clearRequests = requestView.clear;
 
   /* -- Attachments --------------------------------------------------- */
 
-  const tray = window.mevedelAttachments.create(
+  const tray = window.niwaAttachments.create(
     {list: attachments, notice: flashNotice, shareable: true});
   // Attachments marked for the project go there as their original files,
   // beside the prompt, which carries its own copies.
@@ -1133,12 +1133,12 @@
   // reloads; peer numbers cannot, because the relay reassigns them.
   function guestId() {
     let id = null;
-    try { id = localStorage.getItem('mevedel-guest-id'); }
+    try { id = localStorage.getItem('niwa-guest-id'); }
     catch (_error) { /* storage unavailable */ }
     if (id && /^[A-Za-z0-9_-]{8,64}$/.test(id)) return id;
     const bytes = crypto.getRandomValues(new Uint8Array(12));
     id = base64urlEncode(bytes);
-    try { localStorage.setItem('mevedel-guest-id', id); }
+    try { localStorage.setItem('niwa-guest-id', id); }
     catch (_error) { /* per-page id then */ }
     return id;
   }
@@ -1280,7 +1280,7 @@
     state.connected = false;
     if (!keepShare) {
       notifications.forget();
-      try { sessionStorage.removeItem('mevedel-tab-share'); }
+      try { sessionStorage.removeItem('niwa-tab-share'); }
       catch (_error) { /* storage unavailable */ }
       nav.leave();
     }
@@ -1333,7 +1333,7 @@
     } else if (frame.t === 'welcome' && frame.room === 'artifact') {
       // An artifact link reaches one artifact for an agent, not a room
       // this viewer can show; say where it belongs and leave the room.
-      showTerminal('Artifact link', 'Paste this link into mevedel or an MCP client.');
+      showTerminal('Artifact link', 'Paste this link into niwa or an MCP client.');
     } else if (frame.t === 'welcome') {
       state.readOnly = frame.readOnly !== false;
       state.staging = {records: [], live: []};
@@ -1459,7 +1459,7 @@
         if (!state.editorTitle) {
           // Keep the unseen-activity marker the notifications set.
           const marker = document.title.startsWith('● ') ? '● ' : '';
-          document.title = `${marker}${frame.name} · mevedel`;
+          document.title = `${marker}${frame.name} · niwa`;
         }
         sessions.rememberCurrent(frame.name);
         nav.render();
@@ -1554,23 +1554,23 @@
         } else {
           const interrupted = ['aborted', 'lost'].includes(frame.outcome);
           notifications.maybeNotify(interrupted ? 'Turn interrupted' : 'Turn finished',
-                                    'The mevedel session is idle again.');
+                                    'The niwa session is idle again.');
         }
       } else if (['notify', 'goal', 'failure'].includes(frame.kind)) {
-        notifications.maybeNotify('New mevedel activity', 'Open MevView to see the encrypted session update.');
+        notifications.maybeNotify('New niwa activity', 'Open MevView to see the encrypted session update.');
       } else if (typeof frame.message === 'string') showNotice(frame.message);
     } else if (frame.t === 'error') {
       showTerminal(
         'Rejected',
         typeof frame.message === 'string' ? frame.message + (frame.code ? ''
-          : '. If the protocol differs, update mevedel on the host and reload the viewer.')
+          : '. If the protocol differs, update niwa on the host and reload the viewer.')
           : 'The host rejected this connection.');
     }
     // Unknown frame types from a newer host are tolerated silently.
   }
 
   if (composer) {
-    window.mevedelComposer.bind(composerInput, document.getElementById('send-button'));
+    window.niwaComposer.bind(composerInput, document.getElementById('send-button'));
     composer.addEventListener('submit', async event => {
       event.preventDefault();
       if (submitting) return;
@@ -1601,7 +1601,7 @@
           if (sent) {
             if (composerInput.value === text) {
               composerInput.value = '';
-              window.mevedelComposer.setExpanded(composerInput, false);
+              window.niwaComposer.setExpanded(composerInput, false);
             }
             tray.remove(submittedFiles);
             shareToProject(submittedFiles);
@@ -1625,7 +1625,7 @@
         }
         if (composerInput.value === text) {
           composerInput.value = '';
-          window.mevedelComposer.setExpanded(composerInput, false);
+          window.niwaComposer.setExpanded(composerInput, false);
         }
         tray.remove(submittedFiles);
         shareToProject(submittedFiles);
@@ -1638,13 +1638,13 @@
     // The Send button is type="submit", so the form's submit event already
     // covers it; a click handler here would double-send every prompt.
     stopButton.addEventListener('click', () => send({t: 'abort'}));
-    window.mevedelAttachments.bind(tray, {
+    window.niwaAttachments.bind(tray, {
       target: composer, input: composerInput, button: attachButton, picker: imageInput});
   }
 
-  window.mevedelHeader.create({shared: [document.getElementById('you-menu'),
+  window.niwaHeader.create({shared: [document.getElementById('you-menu'),
                                          document.getElementById('appearance-menu')]});
-  window.mevedelAppearance.bind(value => {
+  window.niwaAppearance.bind(value => {
     artifacts.setTheme(value.theme);
     editing.setAppearance(value);
   });
@@ -1685,7 +1685,7 @@
   window.addEventListener('resize', scheduleLiveScroll);
   window.visualViewport?.addEventListener('resize', scheduleLiveScroll);
   const linkFragment = notificationsApi.resolveShare(parseFragment,
-                                                     window.mevedelNav.historyShare());
+                                                     window.niwaNav.historyShare());
   const rawFragment = linkFragment.split('?')[0];
   const credentials = parseFragment(`#${rawFragment}`);
   if (!credentials) {
@@ -1700,7 +1700,7 @@
     state.owner = Boolean(credentials.ownerToken);
     document.body.toggleAttribute('data-owner-link', state.owner);
     state.writable = Boolean(credentials.writeToken);
-    try { sessionStorage.setItem('mevedel-tab-share', rawFragment); }
+    try { sessionStorage.setItem('niwa-tab-share', rawFragment); }
     catch (_error) { /* storage unavailable */ }
     // Handing on access is derived from the secret this page holds, so
     // the controls need it before the socket is even open.
@@ -1754,7 +1754,7 @@
     if (parseFragment(window.location.hash)) window.location.reload();
   });
 
-  window.mevedelViewer = Object.freeze({
+  window.niwaViewer = Object.freeze({
     parseFragment, atLiveEdge, base64urlDecode, base64urlEncode, addFiles,
   });
 })();

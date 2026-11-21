@@ -473,7 +473,7 @@ func TestHealthzAndViewer(t *testing.T) {
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "mevedel") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "niwa") {
 		t.Fatalf("viewer index: %d, body %q...", resp.StatusCode, body[:min(len(body), 80)])
 	}
 	// The installable-viewer assets ship in the embedded bundle.

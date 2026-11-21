@@ -51,7 +51,7 @@ no per-note Discuss, Implement or Plan action: session permissions and Plan
 mode govern tools. Ask requires approval for mutations; it is not a read-only mode. Plan
 mode restricts project writes through the normal tool boundary, while allowing
 session-owned plan files and new review notes. The base preset defaults to
-`mevedel-implement` and remains user-selectable, as do model, effort and permission
+`niwa-implement` and remains user-selectable, as do model, effort and permission
 mode. A settings transient uses the existing chat model selector; choices persist
 on an unsent note and update its live session after send. A separate durable note
 layer restores isolation, input recording and keys after preset changes and
@@ -165,7 +165,7 @@ clobbering another conversation's later edits.
 ## Decision history
 
 **The original note preset was fixed.** The first implementation used a dedicated
-`mevedel-note` preset inheriting `mevedel-implement`, and refused ordinary preset
+`niwa-note` preset inheriting `niwa-implement`, and refused ordinary preset
 changes to keep note isolation intact. The user required a chosen base preset,
 model, effort and permission mode before sending, with the same controls after
 send. Making note behavior a durable layer instead of a preset identity meets

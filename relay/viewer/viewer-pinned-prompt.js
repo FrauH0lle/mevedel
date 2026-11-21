@@ -14,7 +14,7 @@
  * scroll writes local to the pinned row.
  */
 'use strict';
-window.mevedelPinnedPrompt = Object.freeze({
+window.niwaPinnedPrompt = Object.freeze({
   create({pin, transcript, history, scroll, edge, column}) {
     const LIMIT = 512;
     let target = null, label = '', name = '', role = '', rowHeight = 0, refreshing = false;

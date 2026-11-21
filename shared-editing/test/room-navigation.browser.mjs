@@ -13,7 +13,7 @@ async function room(t, failRead = false) {
   await context.route('**/transport.js',async route => {
     const source=await readFile(new URL('../../relay/viewer/transport.js',import.meta.url),'utf8');
     await route.fulfill({contentType:'text/javascript',body:source+`
-      window.mevedelViewerTransport={...window.mevedelViewerTransport,create(options){
+      window.niwaViewerTransport={...window.niwaViewerTransport,create(options){
         const items=${JSON.stringify(items)};
         let failRead=${failRead};
         return {connect(){

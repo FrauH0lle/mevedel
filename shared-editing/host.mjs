@@ -387,7 +387,7 @@ export async function handle(request) {
       } else {
         const source = JSON.parse(request.data);
         check(
-          source.format === 'mevedel-editable-1' && source.kind === 'document' &&
+          source.format === 'niwa-editable-1' && source.kind === 'document' &&
             Object.keys(source).every((k) => ['format', 'kind', 'title', 'content'].includes(k)),
           'Unsupported native file',
         );
@@ -441,9 +441,9 @@ export async function handle(request) {
       if (format === 'native')
         return {
           result: {
-            text: JSON.stringify({ format: 'mevedel-editable-1', ...before }),
+            text: JSON.stringify({ format: 'niwa-editable-1', ...before }),
             mime: 'application/json',
-            extension: 'mevedel.json',
+            extension: 'niwa.json',
           },
         };
       check(['markdown', 'html'].includes(format), 'Unsupported document export');

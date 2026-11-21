@@ -7,7 +7,7 @@ const document = {getElementById: id => id === 'tasks-list' ? list : null,
   createElement: tag => new Element(tag)};
 const window = {};
 load('relay/viewer/viewer-task.js', {window, document});
-const controller = window.mevedelTaskView.create({
+const controller = window.niwaTaskView.create({
   el: (tag, cls, text) => element(document, tag, cls, text), summarize() {},
 });
 controller.show({t: 'tasks', total: 2, completed: 0, omitted: 0, omittedActive: 0, tasks: [

@@ -48,7 +48,7 @@ function build({writable = true, owner = false, wanted = null} = {}) {
   };
   const storeCalls = [];
   const store = {refresh: () => storeCalls.push('refresh')};
-  const lobby = window.mevedelLobbyView.create({
+  const lobby = window.niwaLobbyView.create({
     files,
     store,
     state: {writable, owner},
@@ -66,12 +66,12 @@ function build({writable = true, owner = false, wanted = null} = {}) {
   });
   return {lobby, nodes, body, document, sent, notices, followed, confirms, tabs,
           confirmAnswer, remembered, newSession, filesCalls, storeCalls,
-          age: window.mevedelLobbyView.age};
+          age: window.niwaLobbyView.age};
 }
 
 const now = Math.floor(Date.now() / 1000);
 const listing = {
-  t: 'lobby', project: 'mevedel', omitted: 0,
+  t: 'lobby', project: 'niwa', omitted: 0,
   sessions: [
     {id: 'a', name: 'design', updated: now - 120, preview: 'Sketch the lobby',
      live: true, shared: true},
@@ -96,9 +96,9 @@ function openButton(nodes, index) {
   assert.equal(nodes.lobby.hidden, false);
   // The header names the project; the heading names only the list.
   assert.equal(textOf(nodes['lobby-title']), 'Sessions');
-  assert.equal(document.title, 'mevedel · mevedel');
+  assert.equal(document.title, 'niwa · niwa');
   // Kept as the lobby, so the rooms of its workspace lead back to it.
-  assert.deepEqual(remembered, ['Lobby · mevedel (lobby)']);
+  assert.deepEqual(remembered, ['Lobby · niwa (lobby)']);
   const rows = nodes['lobby-list'].children.map(row => textOf(row.children[0]));
   assert.equal(rows.length, 3);
   assert.match(rows[0], /design2m ago · sharedSketch the lobby/);
@@ -108,7 +108,7 @@ function openButton(nodes, index) {
   assert.equal(nodes['lobby-omitted'].hidden, true);
   // A refresh is not a second arrival.
   lobby.show(listing);
-  assert.deepEqual(remembered, ['Lobby · mevedel (lobby)']);
+  assert.deepEqual(remembered, ['Lobby · niwa (lobby)']);
 }
 
 // Opening asks the host once and follows the link it returns.

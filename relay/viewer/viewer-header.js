@@ -170,5 +170,5 @@
     return Object.freeze({refit: schedule});
   }
 
-  window.mevedelHeader = Object.freeze({create});
+  window.niwaHeader = Object.freeze({create});
 })();

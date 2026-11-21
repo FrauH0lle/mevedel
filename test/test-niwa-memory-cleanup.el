@@ -1,0 +1,423 @@
+;;; test-niwa-memory-cleanup.el -- Consolidation retention -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Expire real accepted reviews without losing surviving coverage or recovery.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'niwa-memory-pass)
+(require 'niwa-memory-cleanup)
+(require 'niwa-memory-decision)
+(require 'niwa-memory-list)
+(require 'niwa-memory-store)
+(require 'niwa-journal-cleanup)
+(require 'niwa-journal-gc)
+(require 'niwa-journal-jobs)
+(require 'niwa-journal-store)
+(require 'niwa-session-control-fs)
+(require 'niwa-system)
+(require 'niwa-workspace-identity)
+
+(niwa-deftest niwa-memory-cleanup-entry
+    (:vars* ((root (make-temp-file "niwa-memory-retention-" t))
+             (workspace (niwa-workspace--create :root root))
+             (identity (niwa-workspace-identity-ensure root))
+             (niwa-memory-dirs nil)
+             (niwa-journal-max-age-days 365)
+             (none "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes.")
+             claim prepared review)
+     :after-each ((when claim (niwa-journal-claim-settle claim 'cancelled "")) (delete-directory root t)))
+  (cl-labels ((publish (&optional digest reply focus created)
+                (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) (or created "2000-01-01T00:00:00Z"))))
+                  (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180)
+                        prepared (niwa-memory-store-prepare workspace claim (niwa-memory-scope-capture workspace)
+                                                               (and digest (list digest)) (or focus "")))
+                  (niwa-memory-store-accept workspace prepared (or reply none) (and digest (list digest)) "test:model" nil)
+                  (setq review (niwa-memory-store-publish workspace (plist-get prepared :id)))))
+              (topic ()
+                (let ((memory (file-name-concat root "memory")))
+                  (make-directory memory)
+                  (setq niwa-memory-dirs (list memory))
+                  (publish nil
+                           (format (concat "## Promote\n```proposal\nroot: %S\nfile: \"topic.md\"\ntype: \"project\"\n"
+                                           "title: \"Topic\"\nhook: \"Current\"\nreason: \"Evidence\"\nevidence: []\n---\nNew topic.\n```\n"
+                                           "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                                   (caar (plist-get (niwa-memory-scope-capture workspace) :roots))))
+                  (car (plist-get (niwa-memory-store-accepted workspace (plist-get prepared :id)) :proposals)))))
+    ,test)
+  (test)
+  :doc "recent reviews skip private history reads but become eligible when retention ends"
+  (progn
+    (publish nil nil nil (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+    (let ((read-pass (symbol-function 'niwa-memory-store-accepted))
+          (reads 0))
+      (cl-letf (((symbol-function 'niwa-memory-store-accepted)
+                 (lambda (&rest args) (cl-incf reads) (apply read-pass args))))
+        (should-not (niwa-memory-cleanup-entry workspace review (list review)))
+        (should (= 0 reads))
+        (let ((niwa-memory-history-max-age-days 0))
+          (should (niwa-memory-cleanup-entry workspace review (list review))))
+        (should (= 1 reads)))))
+  :doc "expires a rejected proposal's complete history without republishing its decision"
+  (let ((proposal (topic)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (plist-get (niwa-memory-decision-reject workspace (plist-get prepared :id) (plist-get proposal :id)) :decision))
+    (should (= 2 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should-not (niwa-journal-store-entries root))
+    (should-not (niwa-session-control-fs-list-directory (niwa-memory-decision--directory workspace) "\\.el\\'"))
+    (niwa-memory-decision-recover workspace)
+    (niwa-memory-store-recover workspace)
+    (should-not (niwa-memory-list--collect (list :workspace workspace))))
+  :doc "expires applied and reversed evidence together while preserving current memory files"
+  (let ((proposal (topic)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (plist-get (niwa-memory-decision-apply workspace (plist-get prepared :id) (plist-get proposal :id)) :decision)
+      (plist-get (niwa-memory-decision-reverse workspace (plist-get prepared :id) (plist-get proposal :id)) :decision))
+    (let ((rows (niwa-memory-list--collect (niwa-cockpit-workspace-context workspace))))
+      (should (= 1 (length rows)))
+      (should (eq 'reversed (plist-get (car rows) :status)))
+      (should-not (plist-get (car rows) :error)))
+    (should (= 3 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should-not (niwa-journal-store-entries root))
+    (should-not (niwa-journal-store-entries root))
+    (should-not (niwa-memory-list--collect (niwa-cockpit-workspace-context workspace)))
+    (should-not (niwa-session-control-fs-list-directory (niwa-memory-decision--directory workspace) "\\.el\\'"))
+    (should-not (file-exists-p (file-name-concat root "memory" "topic.md")))
+    (niwa-memory-decision-recover workspace))
+  :doc "a recent terminal decision retains an older review and its evidence"
+  (let ((proposal (topic)))
+    (plist-get (niwa-memory-decision-reject workspace (plist-get prepared :id) (plist-get proposal :id)) :decision)
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (= 2 (length (niwa-journal-store-entries root))))
+    (should (niwa-memory-store-accepted workspace (plist-get prepared :id))))
+  :doc "an accepted expiry refuses reversal before the retirement marker is written"
+  (let* ((proposal (topic)) (pass (plist-get prepared :id)) (id (plist-get proposal :id))
+         (path (file-name-concat root "memory" "topic.md")) interrupted)
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (should (eq (plist-get (niwa-memory-decision-apply workspace pass id) :status) 'applied)))
+    (niwa-test--with-captured-messages nil
+      (cl-letf (((symbol-function 'niwa-journal-cleanup--apply)
+                 (lambda (_journal manifest)
+                   (let ((outcome (niwa-journal-claim-outcome (plist-get manifest :token))))
+                     (setq interrupted (equal (plist-get outcome :payload) (plist-get manifest :hash))))
+                   (error "Injected stop before retirement marker"))))
+        (niwa-journal-cleanup-expired workspace t)))
+    (should interrupted)
+    (should-not (niwa-journal-cleanup-pass-retired-p root pass))
+    (let ((bytes (niwa-session-control-fs-read-file path)))
+      (should-error (niwa-memory-decision-reverse workspace pass id))
+      (should (equal bytes (niwa-session-control-fs-read-file path))))
+    (niwa-journal-cleanup-expired workspace t)
+    (should (niwa-journal-cleanup-pass-retired-p root pass)))
+  :doc "an application on another client's memory root retains recovery evidence"
+  (let ((proposal (topic)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (plist-get (niwa-memory-decision-apply workspace (plist-get prepared :id) (plist-get proposal :id)) :decision))
+    (cl-letf (((symbol-function 'niwa-workspace-identity-client) (lambda () (make-string 64 ?f))))
+      (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+      (should (= 2 (length (niwa-journal-store-entries root))))
+      (should-not (niwa-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
+    (should (= 2 (plist-get (niwa-journal-cleanup-expired workspace t) :count))))
+  :doc "expiry must not discard an interrupted reversal's only retry evidence"
+  (let* ((proposal (topic)) (pass (plist-get prepared :id)) (id (plist-get proposal :id))
+         (path (file-name-concat root "memory" "topic.md")) stopped)
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (should (eq 'applied (plist-get (niwa-memory-decision-apply workspace pass id) :status)))
+      (should (file-exists-p path))
+      (cl-letf (((symbol-function 'niwa-memory-decision--elect)
+                 (lambda (&rest _) (setq stopped t) (error "Stop before reversal election"))))
+        (should-error (niwa-memory-decision-reverse workspace pass id))))
+    (should stopped)
+    (should-not (file-exists-p path))
+    (should (eq 'applied (plist-get (niwa-memory-decision-status workspace id) :status)))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (= 2 (length (niwa-journal-store-entries root))))
+    (should (eq 'reversed (plist-get (niwa-memory-decision-reverse workspace pass id) :status))))
+  :doc "manual undo retains reversal evidence but a later index edit permits normal expiry"
+  (let* ((proposal (topic)) (pass (plist-get prepared :id)) (id (plist-get proposal :id))
+         (path (file-name-concat root "memory" "topic.md"))
+         (index (file-name-concat root "memory" "MEMORY.md")))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (should (eq 'applied (plist-get (niwa-memory-decision-apply workspace pass id) :status))))
+    (delete-file path)
+    (should (string-search "A reversal may be incomplete. Choose Reverse"
+                           (niwa-memory-list--retention workspace (niwa-memory-store-accepted workspace pass))))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (eq 'applied (plist-get (niwa-memory-decision-apply workspace pass id) :status)))
+    (should-not (file-exists-p path))
+    (write-region "Later promotion.\n" nil index nil 'silent)
+    (should-error (niwa-memory-decision-reverse workspace pass id))
+    (should (= 2 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+    (should (equal "Later promotion.\n" (niwa-session-control-fs-read-file index))))
+  :doc "interrupted history deletion can resume after its pass and decision bodies are gone"
+  (let* ((proposal (topic)) (id (plist-get proposal :id)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (should (eq 'applied (plist-get (niwa-memory-decision-apply workspace (plist-get prepared :id) id) :status))))
+    (let* ((path (car (niwa-memory-decision--slots workspace id)))
+           (topic-file (file-name-concat root "memory" "topic.md"))
+           (current (niwa-session-control-fs-read-file topic-file))
+           (original (symbol-function 'niwa-session-control-fs-delete-file)))
+      (niwa-test--with-captured-messages nil
+        (cl-letf (((symbol-function 'niwa-session-control-fs-delete-file)
+                   (lambda (file) (if (equal file path) (error "Interrupted history deletion") (funcall original file)))))
+          (should-not (niwa-journal-cleanup-expired workspace))))
+      (should (file-exists-p path))
+      (should-not (niwa-journal-store-entries root))
+      (niwa-memory-decision-recover workspace)
+      (should-not (niwa-memory-list--collect (list :workspace workspace)))
+      (niwa-journal-cleanup-expired workspace t)
+      (should-not (file-exists-p path))
+      (should (equal current (niwa-session-control-fs-read-file topic-file)))))
+  :doc "a history larger than the content-group limit expires as one dependency group"
+  (let* ((proposal (topic))
+         (id (plist-get proposal :id)) (pass (plist-get prepared :id))
+         (path (file-name-concat root "memory" "topic.md"))
+         (niwa-journal-gc--content-group-limit 2))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (write-region "Unrelated file." nil path nil 'silent)
+      (dotimes (_ 3) (should (eq 'stale (plist-get (niwa-memory-decision-apply workspace pass id) :status))))
+      (delete-file path)
+      (should (eq 'rejected (plist-get (niwa-memory-decision-reject workspace pass id) :status))))
+    (should (= 5 (length (niwa-journal-store-entries root))))
+    (let ((original (symbol-function 'niwa-memory-decision--publish))
+          (read-pass (symbol-function 'niwa-memory-store-accepted))
+          (replays 0) (pass-reads 0))
+      (cl-letf (((symbol-function 'niwa-memory-decision--publish)
+                 (lambda (&rest args) (cl-incf replays) (apply original args)))
+                ((symbol-function 'niwa-memory-store-accepted)
+                 (lambda (&rest args) (cl-incf pass-reads) (apply read-pass args))))
+        (niwa-memory-decision-recover workspace))
+      (should (= 0 replays))
+      (should (= 1 pass-reads)))
+    (let ((read-pass (symbol-function 'niwa-memory-store-accepted))
+          (read-decision (symbol-function 'niwa-memory-decision--record))
+          (pass-reads 0) (decision-reads 0))
+      (cl-letf (((symbol-function 'niwa-memory-store-accepted)
+                 (lambda (&rest args) (cl-incf pass-reads) (apply read-pass args)))
+                ((symbol-function 'niwa-memory-decision--record)
+                 (lambda (&rest args) (cl-incf decision-reads) (apply read-decision args))))
+        ;; Public decision files are one dependency group, not five groups.
+        (should (equal '(:count 5 :more nil) (niwa-journal-cleanup-expired workspace))))
+      (should (= 1 pass-reads))
+      (should (= 4 decision-reads)))
+    (should-not (niwa-journal-store-entries root))
+    (should-not (niwa-session-control-fs-list-directory (niwa-memory-decision--directory workspace) "\\.el\\'")))
+  :doc "expires an old no-action review and its private body without later republication"
+  (progn
+    (publish)
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should-not (niwa-journal-store-entries root))
+    (dolist (file '("prepared.el" "accepted.el"))
+      (should-not (file-exists-p (file-name-concat
+                                (niwa-memory-store--directory workspace (plist-get prepared :id)) file))))
+    (niwa-memory-store-recover workspace)
+    (should-not (niwa-journal-store-entries root))
+    (should-error (niwa-memory-store-read workspace (plist-get prepared :id)))
+    (let ((record (json-parse-string
+                   (niwa-session-control-fs-read-file
+                    (file-name-concat (niwa-journal-store-state-directory (niwa-journal-store-directory root)) "retired-passes" (plist-get prepared :id))))))
+      (should (equal "general" (gethash "scope" record)))
+      (should (equal (plist-get review :created) (gethash "created" record))))
+    (should-not (niwa-memory-list--collect (list :workspace workspace))))
+  :doc "retired focused reviews retain scheduling scope without retaining the private focus"
+  (progn
+    (publish nil nil "SECRET focus")
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (let* ((text (niwa-session-control-fs-read-file
+                  (file-name-concat (niwa-journal-store-state-directory (niwa-journal-store-directory root)) "retired-passes" (plist-get prepared :id))))
+           (record (json-parse-string text)))
+      (should (equal "focused" (gethash "scope" record)))
+      (should (equal (plist-get review :created) (gethash "created" record)))
+      (should-not (string-search "SECRET" text))))
+  :doc "expires focused history while preserving its unprocessed public source"
+  (let ((digest (niwa-journal-store-publish-digest
+                 root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                            :workspace identity :trigger 'session-end :segment 1 :source-revision (make-string 64 ?b)
+                            :turns '(1) :turn-ids (list (make-string 64 ?c))
+                            :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
+                 "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
+    (publish digest nil "Focused question")
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (equal (list (plist-get digest :id))
+                   (mapcar (lambda (entry) (plist-get entry :id))
+                           (niwa-journal-index-unreviewed (niwa-journal-store-entries root)))))
+    (should (niwa-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
+  :doc "retains an old review while its covered digest or unreleased evidence pin survives"
+  (let ((digest (niwa-journal-store-publish-digest
+                 root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                            :workspace identity :trigger 'session-end :segment 1 :source-revision (make-string 64 ?b)
+                            :turns '(1) :turn-ids (list (make-string 64 ?c))
+                            :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
+                 "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
+    (publish digest)
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (= 1 (length (niwa-journal-store-entries root))))
+    (should-not (niwa-journal-index-unreviewed (niwa-journal-store-entries root)))
+    (let ((niwa-journal-max-age-days 0))
+      (cl-letf (((symbol-function 'niwa-session-control-fs-target-time) (lambda (_) (+ 2 (floor (float-time))))))
+        (should (niwa-memory-store-accepted workspace (plist-get prepared :id)))
+        (let ((pin (niwa-memory-store--pin workspace (plist-get prepared :id) (plist-get digest :id))))
+          (make-directory (file-name-directory pin) t)
+          (write-region (plist-get prepared :hash) nil pin nil 'silent)
+          (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+          (should (niwa-memory-store-accepted workspace (plist-get prepared :id)))
+          (delete-file pin))
+        (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+        (should-not (niwa-journal-store-entries root)))))
+  :doc "fully reviewed recent notes retire even when recall expiry is disabled"
+  (let* ((niwa-journal-max-age-days nil)
+         (entry (niwa-journal-store-publish-digest
+                 root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                            :workspace identity :trigger 'session-end :segment 1
+                            :source-revision (make-string 64 ?b) :turns '(1)
+                            :turn-ids (list (make-string 64 ?c))
+                            :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
+                 "## Done\n- Observed: Completed work.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+    (publish entry)
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+    (should-error (niwa-journal-store-read root (plist-get entry :file)))
+    (should (equal (plist-get entry :body)
+                   (plist-get (car (plist-get (plist-get (niwa-memory-store-accepted
+                                                        workspace (plist-get prepared :id)) :prepared) :entries)) :body))))
+  :doc "a live consolidation owner postpones expiry without losing its claim"
+  (progn
+    (publish)
+    (setq claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180))
+    (should-not (niwa-journal-cleanup-expired workspace))
+    (should (equal claim (niwa-journal-claim-current (plist-get claim :directory))))
+    (should-not (niwa-journal-claim-outcome claim))
+    (should (niwa-memory-store-accepted workspace (plist-get prepared :id))))
+  :doc "accepted expiry resumes after private deletion is interrupted without exposing a pending proposal"
+  (progn
+    (publish)
+    (let* ((path (file-name-concat (niwa-memory-store--directory workspace (plist-get prepared :id)) "accepted.el"))
+           (original (symbol-function 'niwa-session-control-fs-delete-file)))
+      (niwa-test--with-captured-messages nil
+        (cl-letf (((symbol-function 'niwa-session-control-fs-delete-file)
+                   (lambda (file) (if (equal file path) (error "Interrupted private retirement") (funcall original file)))))
+          (should-not (niwa-journal-cleanup-expired workspace))))
+      (should (file-exists-p path))
+      (niwa-memory-store-recover workspace)
+      (should-not (niwa-memory-list--collect (list :workspace workspace)))
+      (niwa-journal-cleanup-expired workspace t)
+      (should-not (file-exists-p path))
+      (should-not (niwa-journal-store-entries root))))
+  :doc "changed private bytes remain after accepted retirement and cannot be silently deleted"
+  (progn
+    (publish)
+    (let* ((path (file-name-concat (niwa-memory-store--directory workspace (plist-get prepared :id)) "accepted.el"))
+           (original (symbol-function 'niwa-session-control-fs-delete-file)))
+      (niwa-test--with-captured-messages nil
+        (cl-letf (((symbol-function 'niwa-session-control-fs-delete-file)
+                   (lambda (file) (if (equal file path) (error "Interrupted private retirement") (funcall original file)))))
+          (niwa-journal-cleanup-expired workspace)))
+      (write-region "Foreign private edit" nil path nil 'silent)
+      (let (messages)
+        (niwa-test--with-captured-messages messages
+          (should-not (niwa-journal-cleanup-expired workspace t)))
+        (should (string-search "changed; retained for inspection" messages)))
+      (should (equal "Foreign private edit" (niwa-session-control-fs-read-file path)))))
+  :doc "pending proposals retain their review and private before-state after the age threshold"
+  (let* ((memory (file-name-concat root "memory"))
+         (niwa-memory-dirs (list memory)))
+    (make-directory memory)
+    (publish nil
+             (format (concat "## Promote\n```proposal\nroot: %S\nfile: \"topic.md\"\ntype: \"project\"\n"
+                             "title: \"Topic\"\nhook: \"Current\"\nreason: \"Evidence\"\nevidence: []\n---\nNew topic.\n```\n"
+                             "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                     (caar (plist-get (niwa-memory-scope-capture workspace) :roots))))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should-not (niwa-journal-index-entries workspace))
+    (let ((row (car (niwa-journal-jobs--retained workspace))))
+      (should (member "Awaiting proposal decisions" (plist-get row :reasons)))
+      (should (> (plist-get row :age) 365)))
+    (should (plist-get (niwa-memory-store-accepted workspace (plist-get prepared :id)) :proposals)))
+  :doc "manifest private paths cannot escape the exact retired pass"
+  (progn
+    (publish)
+    (niwa-journal-cleanup-expired workspace)
+    (let* ((journal (niwa-journal-store-directory root))
+           (path (car (niwa-session-control-fs-list-directory (file-name-concat (niwa-journal-store-state-directory journal) "expiry") "\\.json\\'")))
+           (manifest (json-parse-string (niwa-session-control-fs-read-file path)))
+           (private (gethash "private" (aref (gethash "entries" manifest) 0))))
+      (puthash "file" "../outside.el" (aref private 0))
+      (write-region (json-serialize manifest) nil path nil 'silent)
+      (should-error (niwa-journal-cleanup--read journal path))))
+  :doc "history observations never hide accepted-pass edits from a later recovery"
+  (let* ((proposal (topic))
+         (pass (plist-get prepared :id))
+         (path (file-name-concat (niwa-memory-store--directory workspace pass) "accepted.el")))
+    (plist-get (niwa-memory-decision-reject workspace pass (plist-get proposal :id)) :decision)
+    (niwa-memory-decision-recover workspace)
+    (let ((text (niwa-session-control-fs-read-file path)))
+      (write-region (concat text "\n") nil path nil 'silent))
+    (should-error (niwa-memory-decision-recover workspace))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (= 2 (length (niwa-journal-store-entries root))))
+    (should-not (niwa-journal-cleanup-pass-retired-p root pass)))
+  :doc "a decision changed after history selection survives checked deletion"
+  (let* ((proposal (topic)) decision
+         (original (symbol-function 'niwa-memory-cleanup--history)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (setq decision (plist-get (niwa-memory-decision-reject workspace (plist-get prepared :id) (plist-get proposal :id)) :decision)))
+    (let ((path (file-name-concat (niwa-memory-decision--directory workspace)
+                                 (concat (plist-get decision :decision-id) ".el")))
+          messages)
+      (niwa-test--with-captured-messages messages
+        (cl-letf (((symbol-function 'niwa-memory-cleanup--history)
+                   (lambda (&rest args)
+                     (prog1 (apply original args)
+                       (write-region "Changed decision bytes" nil path nil 'silent)))))
+          (should-not (niwa-journal-cleanup-expired workspace))))
+      (should (string-search "changed; retained for inspection" messages))
+      (should (equal "Changed decision bytes" (niwa-session-control-fs-read-file path)))))
+  :doc "an additional accepted but unpublished decision retains the public history"
+  (let* ((proposal (topic)) (pass (plist-get prepared :id)) (id (plist-get proposal :id)))
+    (cl-letf (((symbol-function 'niwa-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
+      (should (eq 'applied (plist-get (niwa-memory-decision-apply workspace pass id) :status)))
+      (cl-letf (((symbol-function 'niwa-memory-decision--publish) (lambda (&rest _) (error "Injected stop"))))
+        (should-error (niwa-memory-decision-reverse workspace pass id))))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (= 2 (length (niwa-journal-store-entries root))))
+    (should (= 2 (length (niwa-session-control-fs-list-directory
+                         (niwa-memory-decision--directory workspace) "\\.el\\'"))))
+    (should-not (niwa-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
+  :doc "unreviewed overdue evidence survives until a successful no-action review"
+  (let ((entry (niwa-journal-store-publish-digest
+                root (list :capture-id (make-string 64 ?a) :session "closed"
+                           :session-name "Closed" :workspace identity
+                           :trigger 'session-end :segment 1
+                           :source-revision (make-string 64 ?b) :turns '(1)
+                           :turn-ids (list (make-string 64 ?c))
+                           :created "2000-01-01T00:00:00Z" :model "test:model")
+                "## Done\n- Observed: Completed work.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none")))
+    (should (= 0 (plist-get (niwa-journal-cleanup-expired workspace) :count)))
+    (should (equal entry (niwa-journal-store-read root (plist-get entry :file))))
+    (should-not (niwa-journal-index-entries workspace))
+    (publish entry)
+    (should-not (niwa-journal-index-unreviewed (niwa-journal-store-entries root)))
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+    (should-error (niwa-journal-store-read root (plist-get entry :file)))
+    (should (= 1 (plist-get (niwa-journal-cleanup-expired workspace t) :count)))
+    (should-not (niwa-journal-store-entries root))))
+
+
+(niwa-deftest niwa-journal-cleanup-pass-retired-p ()
+  ,test
+  (test)
+  :doc "retirement discovery refuses non-identities and creates no state"
+  (let ((root (make-temp-file "niwa-retired-pass-" t)))
+    (unwind-protect
+        (progn
+          (should-not (niwa-journal-cleanup-pass-retired-p root (make-string 64 ?a)))
+          (should-error (niwa-journal-cleanup-pass-retired-p root "../outside"))
+          (should-not (file-exists-p (file-name-concat root ".niwa"))))
+      (delete-directory root t))))
+
+(provide 'test-niwa-memory-cleanup)
+;;; test-niwa-memory-cleanup.el ends here

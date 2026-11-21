@@ -113,7 +113,7 @@ change that environment, so a PARTIAL claim was rejected again and again until
 the model chose to block or an optional budget ran out. That rule was prompt
 guidance, not a mechanism, and a Goal with no budget could loop indefinitely.
 This mattered once an active Goal began holding a host's nightly restart
-(`mevedel-restart-unsafe-p`): a looping Goal would postpone updates forever.
+(`niwa-restart-unsafe-p`): a looping Goal would postpone updates forever.
 PARTIAL now completes with a recorded note, and a configurable number of
 consecutive FAIL or invalid outcomes blocks the Goal for the user. The
 independent verifier still decides; only the consequence of its verdict changed.

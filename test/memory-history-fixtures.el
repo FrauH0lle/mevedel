@@ -5,7 +5,7 @@
 ;;
 ;; Building authentic history costs about a hundred control programs per
 ;; applied decision.  Multi-case suites build it once per worker with
-;; `mevedel-test-memory-history-root' and `mevedel-test-memory-history-build',
+;; `niwa-test-memory-history-root' and `niwa-test-memory-history-build',
 ;; then give each case a private copy of the immutable result.
 
 ;;; Code:
@@ -13,73 +13,73 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
-(require 'mevedel-journal-claim)
-(require 'mevedel-memory-decision)
-(require 'mevedel-memory-notes)
-(require 'mevedel-memory-scope)
-(require 'mevedel-memory-store)
+(require 'niwa-journal-claim)
+(require 'niwa-memory-decision)
+(require 'niwa-memory-notes)
+(require 'niwa-memory-scope)
+(require 'niwa-memory-store)
 
-(defmacro mevedel-test-memory-history-owned (workspace &rest body)
+(defmacro niwa-test-memory-history-owned (workspace &rest body)
   "Run BODY under a fresh successor consolidation claim for WORKSPACE."
   (declare (indent 1))
   (let ((claim (make-symbol "claim")))
-    `(let ((,claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory ,workspace) 180)))
+    `(let ((,claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory ,workspace) 180)))
        (should ,claim)
        (unwind-protect (progn ,@body)
-         (mevedel-journal-claim-settle ,claim 'cancelled "")))))
+         (niwa-journal-claim-settle ,claim 'cancelled "")))))
 
-(defun mevedel-test-memory-history-create (workspace batches items bytes &optional pending)
+(defun niwa-test-memory-history-create (workspace batches items bytes &optional pending)
   "Create BATCHES accepted passes in WORKSPACE with ITEMS decisions each.
 Each shared note contains BYTES bytes.  Return the accepted bundles.
 PENDING leaves their proposals undecided; otherwise apply each normally."
-  (let* ((root (mevedel-workspace-root workspace))
-         (shared (file-name-concat root ".mevedel" "shared")) bundles)
+  (let* ((root (niwa-workspace-root workspace))
+         (shared (file-name-concat root ".niwa" "shared")) bundles)
     (make-directory shared t)
     (dotimes (batch batches (nreverse bundles))
       (dotimes (item items)
         (let ((path (file-name-concat shared (format "note-%d-%d.md" batch item))))
           (write-region (make-string bytes ?x) nil path nil 'silent)
           (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))))
-      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto))
-             (scope (mevedel-memory-scope-capture workspace))
-             (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
+      (let* ((capture (niwa-memory-notes-capture workspace nil :mode 'auto))
+             (scope (niwa-memory-scope-capture workspace))
+             (claim (niwa-journal-claim-acquire (niwa-memory-store--claim-directory workspace) 180)))
         (unwind-protect
             (let* ((scope (plist-put scope :roots (append (plist-get scope :roots) (list (plist-get capture :root)))))
-                   (prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
+                   (prepared (niwa-memory-store-prepare workspace claim scope nil ""))
                    (notes (mapcar (lambda (document) (plist-get document :id))
-                                  (mevedel-memory-notes-documents scope)))
+                                  (niwa-memory-notes-documents scope)))
                    (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
                                   "## Remove\n- none\n## Instructions\n- none\n## No action\n- none"))
-                   (accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes)))
-              (mevedel-memory-store-publish workspace (plist-get prepared :id))
+                   (accepted (niwa-memory-store-accept workspace prepared reply nil "test:model" nil notes)))
+              (niwa-memory-store-publish workspace (plist-get prepared :id))
               (unless pending
                 (dolist (proposal (plist-get accepted :proposals))
-                  (should (eq 'applied (plist-get (mevedel-memory-decision-apply
+                  (should (eq 'applied (plist-get (niwa-memory-decision-apply
                                                    workspace (plist-get prepared :id) (plist-get proposal :id)) :status)))))
               (push accepted bundles))
-          (mevedel-journal-claim-settle claim 'cancelled ""))))))
+          (niwa-journal-claim-settle claim 'cancelled ""))))))
 
-(defvar mevedel-test-memory-history--snapshots (make-hash-table :test #'equal)
+(defvar niwa-test-memory-history--snapshots (make-hash-table :test #'equal)
   "Built histories by key: (DIRECTORY . VALUE), private to this worker.")
 
-(defun mevedel-test-memory-history--directory (key)
+(defun niwa-test-memory-history--directory (key)
   "Return KEY's worker-private fixture directory."
-  (file-name-concat mevedel-test--worker-home "memory-history" (md5 (prin1-to-string key))))
+  (file-name-concat niwa-test--worker-home "memory-history" (md5 (prin1-to-string key))))
 
-(defun mevedel-test-memory-history--copy (value)
+(defun niwa-test-memory-history--copy (value)
   "Return a copy of plain-data VALUE sharing no strings or conses with it."
   (let (print-length print-level)
     (car (read-from-string (prin1-to-string value)))))
 
-(defun mevedel-test-memory-history--forget (root)
-  "Drop process-wide `mevedel-' hash entries whose key names ROOT.
+(defun niwa-test-memory-history--forget (root)
+  "Drop process-wide `niwa-' hash entries whose key names ROOT.
 Each case at a reused fixed path then starts from the caches a never-seen
 root would have, so no topic rows, identities or proofs carry over."
   (let ((names (delete-dups (list (directory-file-name (expand-file-name root))
                                   (directory-file-name (file-truename root))))))
     (mapatoms
      (lambda (symbol)
-       (when (and (boundp symbol) (string-prefix-p "mevedel-" (symbol-name symbol))
+       (when (and (boundp symbol) (string-prefix-p "niwa-" (symbol-name symbol))
                   (hash-table-p (symbol-value symbol)))
          (let ((table (symbol-value symbol)) stale)
            (maphash (lambda (key _)
@@ -88,42 +88,42 @@ root would have, so no topic rows, identities or proofs carry over."
                           (push key stale))))
                     table)
            ;; Live ownership is a teardown leak, not a disposable read cache.
-           (when (memq symbol '(mevedel-memory-decision--operations
-                                mevedel-memory-pass--running
-                                mevedel-memory-pass--deferred))
+           (when (memq symbol '(niwa-memory-decision--operations
+                                niwa-memory-pass--running
+                                niwa-memory-pass--deferred))
              (should-not stale))
            (dolist (key stale) (remhash key table))))))))
 
-(defun mevedel-test-memory-history-root (key)
+(defun niwa-test-memory-history-root (key)
   "Return a fresh workspace root for KEY, holding its built history if any.
 Retained history embeds and authenticates its absolute root, so a copy is
 valid only where it was built: every case of KEY uses one fixed path in the
 worker's home, emptied and refilled from the immutable snapshot each time.
 Process caches naming that path are dropped first."
-  (let ((root (file-name-concat (mevedel-test-memory-history--directory key) "root"))
-        (snapshot (car (gethash key mevedel-test-memory-history--snapshots))))
+  (let ((root (file-name-concat (niwa-test-memory-history--directory key) "root"))
+        (snapshot (car (gethash key niwa-test-memory-history--snapshots))))
     (when (file-exists-p root) (delete-directory root t))
-    (mevedel-test-memory-history--forget root)
+    (niwa-test-memory-history--forget root)
     (make-directory (file-name-directory root) t)
     (if snapshot (copy-directory snapshot root t) (make-directory root))
     root))
 
-(defun mevedel-test-memory-history-build (key root build)
+(defun niwa-test-memory-history-build (key root build)
   "Return KEY's history value, calling BUILD in ROOT only on first use.
-ROOT comes from `mevedel-test-memory-history-root'.  The first call snapshots
+ROOT comes from `niwa-test-memory-history-root'.  The first call snapshots
 ROOT after BUILD; later calls return a copy of BUILD's value, matching the
 files the root call restored."
-  (if-let* ((snapshot (gethash key mevedel-test-memory-history--snapshots)))
-      (mevedel-test-memory-history--copy (cdr snapshot))
-    (unless (equal root (file-name-concat (mevedel-test-memory-history--directory key) "root"))
+  (if-let* ((snapshot (gethash key niwa-test-memory-history--snapshots)))
+      (niwa-test-memory-history--copy (cdr snapshot))
+    (unless (equal root (file-name-concat (niwa-test-memory-history--directory key) "root"))
       (error "History fixture %S built outside its fixed root" key))
     (let ((value (funcall build))
-          (snapshot (file-name-concat (mevedel-test-memory-history--directory key) "snapshot")))
+          (snapshot (file-name-concat (niwa-test-memory-history--directory key) "snapshot")))
       (when (file-exists-p snapshot) (delete-directory snapshot t))
       (copy-directory root snapshot t)
-      (let ((copy (mevedel-test-memory-history--copy value)))
+      (let ((copy (niwa-test-memory-history--copy value)))
         (unless (equal copy value) (error "History fixture %S value is not plain data" key))
-        (puthash key (cons snapshot copy) mevedel-test-memory-history--snapshots))
+        (puthash key (cons snapshot copy) niwa-test-memory-history--snapshots))
       value)))
 
 (provide 'memory-history-fixtures)

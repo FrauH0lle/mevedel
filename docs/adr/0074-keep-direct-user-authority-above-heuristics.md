@@ -6,7 +6,7 @@ A direct user-authored allow settles the named tool operation without heuristic
 prompts or automatic review, including Bash command authorization and
 inherently unconfined live Eval. Resource authorization, explicit denies, and
 confinement authority remain independent, but once the user has supplied every
-required authority, mevedel executes even an operation with catastrophic
+required authority, niwa executes even an operation with catastrophic
 potential. Heuristics and the approval reviewer handle missing authority; they do not silently
 invalidate deliberate user policy. Direct user denies remain final, and direct
 user asks require approval in Ask/Edits. Full Access ignores ordinary asks. Permission prompts may create reusable

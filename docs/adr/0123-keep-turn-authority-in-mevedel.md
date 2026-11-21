@@ -1,11 +1,11 @@
-# Keep turn authority in mevedel across model engines
+# Keep turn authority in niwa across model engines
 
 Status: accepted
 
 ## Current decision
 
 Claude subscription access runs the installed Claude agent through ACP, with
-mevedel's tools exposed through a private asynchronous MCP bridge. Mevedel owns
+niwa's tools exposed through a private asynchronous MCP bridge. Niwa owns
 request admission, execution authority, effects, canonical transcript and
 settlement; the external agent owns sampling, native model history and
 compaction. The gptel engine retains its real state machine, while external
@@ -20,7 +20,7 @@ ownership is cleared; stale startup continuations and rollback cannot mutate a
 replacement. This closes the observed save-prompt admission race without adding
 a second admission state machine or changing provider settlement.
 
-The bridge resolves every call against current mevedel authority. Discovery is
+The bridge resolves every call against current niwa authority. Discovery is
 not permission, and a request's cancellation revokes pending interactions and
 effects. The native conversation identity is persisted before its prompt is
 sent, so process failure leaves an uncertain turn; the next prompt must
@@ -145,7 +145,7 @@ workloads use the same handling and bounded acknowledgement; a retained
 invocation's runtime canceller defers terminal settlement until the
 connection completes it.
 
-Provider identity lives in `mevedel-claude-code-backend.el`: the backend type,
+Provider identity lives in `niwa-claude-code-backend.el`: the backend type,
 model metadata, registration, and generic methods are available without ACP,
 MCP, or Claude usage execution. The methods call autoloaded runtime entry
 points. Setup and actual Claude requests load those implementations; native
@@ -178,8 +178,8 @@ explicit continuation. Native history recovery still requires an idle conversati
 preserves the transcript and effects.
 
 Bounded sample recovery stays below the admitted turn boundary for all
-mevedel-admitted native gptel backends, not just Codex OAuth. The
-`mevedel-gptel-retry` controller retries a prepared model sample up to 10 times
+niwa-admitted native gptel backends, not just Codex OAuth. The
+`niwa-gptel-retry` controller retries a prepared model sample up to 10 times
 after its initial attempt. Success resets that sample allowance; session requests
 (including notes), shared-item and retained-agent requests own independent budgets.
 Replay bypasses WAIT preparation, retaining tools/results,
@@ -208,7 +208,7 @@ attempt diagnostics with the original provider error, and pauses an affected
 Goal rather than invoking its settled-turn retry policy. An owned permanent
 refusal also pauses the affected Goal instead of gaining new-turn retries.
 Reported usage has a distinct physical-call identity and is charged once; absent usage stays
-unknown. Zero `mevedel-gptel-retry-max-retries` disables automatic resends;
+unknown. Zero `niwa-gptel-retry-max-retries` disables automatic resends;
 root requests still discard failed provisional output and retain the prepared
 sample for explicit failed-turn Retry. Retained agents opt out at zero.
 Unadmitted background gptel policies are unchanged. Claude Code/ACP stays
@@ -232,7 +232,7 @@ without cancelling a successor started by its completion callback. After the
 replay is sent, cancellation again waits for the prompt's acknowledgement.
 Any other failure, a second refusal, or a refusal after a tool call still ends
 the turn. Errors in the retry policy also settle the turn: acp.el contains
-callback exceptions but cannot release mevedel's active-turn state.
+callback exceptions but cannot release niwa's active-turn state.
 
 Queued input records one durable delivery intent, a sidecar-only `dispatching`
 mark, before dispatch; delivery writes nothing further, so a committed prompt
@@ -319,7 +319,7 @@ through later compaction.
 - **Native retry scope:** the first bounded controller admitted only Codex
   OAuth requests, interpreting Responses-specific error handling as a provider
   boundary. The user clarified that the intended policy was generic: every
-  mevedel-admitted native gptel backend should recover the prepared sample,
+  niwa-admitted native gptel backend should recover the prepared sample,
   while Claude Code/ACP and unadmitted background policies remain separate.
   Cross-backend review also confirmed a global Gemini streaming regression:
   installed parser advice accepted three arguments, but Gemini passes the
@@ -342,7 +342,7 @@ through later compaction.
   by their recovery checks, and failure evidence remains in retained results.
 
 - **Steering:** busy Claude input first became queued follow-ups, because the
-  native loop offered no same-turn user input mevedel could observe. The
+  native loop offered no same-turn user input niwa could observe. The
   receipt-backed tool-batch hook already delivered mail and turn events inside
   the running turn, so steering initially rode it under an authority-restoration
   header. In the 2026-11-01 Background Job Load Test, Haiku received two real
@@ -390,7 +390,7 @@ through later compaction.
   call. The call now waits for that announcement. A fixture writing the call
   before its preceding text and announcement reproduces the split without the
   wait and keeps the text ahead of the row with it.
-- **Lost MCP client:** a native turn ended with "Process mevedel-mcp <N> no
+- **Lost MCP client:** a native turn ended with "Process niwa-mcp <N> no
   longer connected to pipe; closed it". A reply was written to a client whose
   peer had closed while Emacs had not yet read its end; Emacs then signals that
   error and closes the client, and every owner turned it into a turn failure,

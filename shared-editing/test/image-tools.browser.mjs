@@ -72,7 +72,7 @@ test('shared image transformations', async t => {
     await edge.focus();await page.keyboard.press('ArrowRight');
     assert.equal(await dialog.getByLabel('Crop width (%)',{exact:true}).inputValue(),'51.25');
     await page.keyboard.press('ArrowLeft');
-    if(process.env.MEVEDEL_IMAGE_SCREENSHOTS) {
+    if(process.env.NIWA_IMAGE_SCREENSHOTS) {
       await mkdir('.scratch/image-tools',{recursive:true});
       await page.screenshot({path:`.scratch/image-tools/${kind}-crop.png`});
     }
@@ -116,7 +116,7 @@ test('shared image transformations', async t => {
     assert.equal(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth),true,'crop dialog fits a phone');
     await dialog.getByRole('button',{name:'Reset crop',exact:true}).click();
     assert.equal(await dialog.getByLabel('Crop width (%)',{exact:true}).inputValue(),'100');
-    if(process.env.MEVEDEL_IMAGE_SCREENSHOTS)
+    if(process.env.NIWA_IMAGE_SCREENSHOTS)
       await page.screenshot({path:`.scratch/image-tools/${kind}-crop-phone.png`});
     await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
     await page.close();

@@ -16,7 +16,7 @@ checks, or ApplyPatch review. A view link sees no project files at all.
 Uploads land in any listed folder of the project, not in a confined drop
 folder such as `work://shared/`. An upload creates a new file and never
 replaces one. Removal moves a file to the trash. The project's own listing,
-minus `.mevedel/` components at every depth, is the only authority for which paths a browser may name;
+minus `.niwa/` components at every depth, is the only authority for which paths a browser may name;
 the browser never supplies a path the listing does not show. In a Git
 project that listing includes each untracked, unignored Git repository
 cloned inside it, by that repository's own listing.
@@ -26,7 +26,7 @@ cloned inside it, by that repository's own listing.
 A project can be pure whiteboard and chat, with no code to protect, and still
 need reference data that every session reads. Those files belong where the
 sessions look for project material: the project tree. A drop folder under
-`.mevedel/` would be hidden from the tree, committed as versioned working
+`.niwa/` would be hidden from the tree, committed as versioned working
 material, and a second place for workspace files beside the project itself.
 
 Routing every browser upload or removal through the model was the
@@ -53,7 +53,7 @@ ordinary nested project files.
 A full lobby link, which ADR 0114 already makes a long-lived bearer, now also
 carries write access to the project tree. Anyone it is handed on to can add
 files and remove them without a permission prompt. The bounds are: no
-overwrite, no folder removal, no hidden upload names or ignored paths, no `.mevedel/`
+overwrite, no folder removal, no hidden upload names or ignored paths, no `.niwa/`
 state, at most 16 MiB per upload, and removal to the trash, which keeps the
 bytes. Existing listed dotfiles, such as `.gitignore`, remain readable and
 removable; the leading-dot restriction applies to new upload names, not the

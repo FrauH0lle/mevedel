@@ -12,7 +12,7 @@ const document = {createElement(tag) {
 }};
 load('relay/viewer/renderer.js', {window, document});
 const href = navigation({window, document});
-const renderer = window.mevedelTranscriptRenderer;
+const renderer = window.niwaTranscriptRenderer;
 const record = {id: 'tool-envelope', kind: 'tool', name: 'ToolCall', status: 'completed',
   result: '<system-reminder>Raw dependency</system-reminder>',
   presentation: {id: 'root', name: 'Skill', detail: 'artifact-dashboard',

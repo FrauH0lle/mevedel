@@ -11,7 +11,7 @@
     const closeButton = document.getElementById('agent-close');
     const latestButton = document.getElementById('agent-latest');
     const transcript = document.getElementById('agent-transcript');
-    const pinnedPrompt = window.mevedelPinnedPrompt.create({
+    const pinnedPrompt = window.niwaPinnedPrompt.create({
       pin: document.getElementById('agent-pinned-prompt'), transcript, scroll: transcript,
       edge: panel.querySelector('.topbar'), column: transcript});
     const view = {path: null, row: null, reqId: 0, digest: null, staging: null,
@@ -51,7 +51,7 @@
     function renderRecords(records) {
       if (!transcript) return;
       const follow = atLiveEdge();
-      const renderer = window.mevedelTranscriptRenderer;
+      const renderer = window.niwaTranscriptRenderer;
       const previous = new Map([...transcript.children].flatMap(turn => turn.groupDetails
         ? [...turn.groupDetails.children].filter(child => child.dataset.recordId) : [turn]).map(turn =>
         [turn.dataset.recordId, turn]));
@@ -214,5 +214,5 @@
     return Object.freeze({show, handle, close, open, describe, resolveArtifact, cancelArtifactResolution});
   }
 
-  window.mevedelAgentView = Object.freeze({create});
+  window.niwaAgentView = Object.freeze({create});
 })();

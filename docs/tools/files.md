@@ -26,7 +26,7 @@ are not filesystem paths.
 | `memory://journal/` | Yes | Yes | Yes | Validated published workspace journal records |
 | `notes://[UUID.md]` | Yes | Yes | Yes | Read-only marked-code notes in the session's workspace |
 | `shared://` | Yes | No | Text views | Shared whiteboards and documents; a remote HTML artifact's files |
-| `mevedel://` | Yes | Yes | Yes | Installed Markdown documentation |
+| `niwa://` | Yes | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | No | Connected servers' advertised resources |
 
 Bare `skill://` supports Read only; Glob and Grep require a selected package.
@@ -75,7 +75,7 @@ Read of `work://shared/` or a shared descendant directory generates bounded
 note rows; bare `work://` includes the same shared rows alongside session files.
 Rows show canonical address, modification age, age-readiness and a bounded first
 Markdown heading. Notes and attachments become age-ready after 14 days untouched
-by default (`mevedel-working-note-max-age-days`); future mtimes wait. No note
+by default (`niwa-working-note-max-age-days`); future mtimes wait. No note
 header or lifecycle labels are parsed. Age-readiness is not mutation
 authority: capture/application safety checks remain pending. Incomplete inventory
 or reads stay visible. Listing does not create storage or mark every file in use;
@@ -86,9 +86,9 @@ where SOURCE-KEY is the full lowercase SHA-256 source identity from discovery.
 Readable aliases select the current discovered origin:
 
 ```text
-skill://local-mevedel/SKILL
+skill://local-niwa/SKILL
 skill://local-agents/SKILL
-skill://global-mevedel/SKILL
+skill://global-niwa/SKILL
 skill://global-agents/SKILL
 skill://bundled/SKILL
 skill://managed/SKILL
@@ -105,7 +105,7 @@ slashes, colons, fragments, percent signs, spaces, and Unicode. Reading
 directory or a network access grant.
 
 For lifecycle, containment, and full address semantics, consult
-`mevedel://address-to-resource.md`.
+`niwa://address-to-resource.md`.
 
 ## Selecting JSON from an agent result
 

@@ -1,0 +1,157 @@
+;;; niwa-memory-apply.el -- Prepare checked memory transactions -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Derive complete topic/index or instruction changes from accepted before-state.
+;; Preparation is read-only. The decision owner must retain a durable write
+;; intent and hold workspace/target authority before calling the shared patch
+;; transaction with these changes.
+
+;;; Code:
+
+(eval-when-compile (require 'cl-lib) (require 'rx))
+(require 'niwa-memory-scope)
+(require 'url-util)
+
+;; `niwa-memory-notes'
+(declare-function niwa-memory-notes-changes "niwa-memory-notes" (proposal))
+(autoload 'niwa-memory-notes-changes "niwa-memory-notes")
+
+(defun niwa-memory-apply--index-lines (text)
+  "Parse index TEXT into (DESTINATION . LINE) rows, retaining all lines.
+Non-entry lines have a nil destination. Reject ambiguous or unsafe indexes."
+  (let (seen rows)
+    (dolist (line (split-string text "\n") (nreverse rows))
+      (let (target)
+        (if (string-match
+             (rx string-start "- [" (* (or (seq "\\" nonl) (not (any "]" "\\" "\n"))))
+                 "](" (group (+ (not (any ")" "\n")))) ")" (or " - " ": ") (+ nonl) string-end)
+             line)
+            (progn
+              (setq target (decode-coding-string (url-unhex-string (match-string 1 line)) 'utf-8-unix))
+              (unless (and (niwa-memory-proposal--file-p target)
+                           (not (equal (file-name-nondirectory target) "MEMORY.md"))
+                           (not (member target seen)))
+                (error "Memory index has a duplicate or invalid destination"))
+              (push target seen))
+          (when (string-match-p "\\[.*\\](" line)
+            (error "Memory index has unsupported link syntax")))
+        (push (cons target line) rows)))))
+
+(defun niwa-memory-apply--index-conflicts (before current proposal)
+  "Return PROPOSAL destinations whose entries differ in BEFORE and CURRENT.
+Both arguments are index snapshots. Absence means an empty index. Unrelated
+entries, prose, and entry positions do not participate in the comparison."
+  (let ((old (niwa-memory-apply--index-lines
+              (decode-coding-string (or (plist-get before :bytes) "") 'utf-8-unix)))
+        (new (niwa-memory-apply--index-lines
+              (decode-coding-string (or (plist-get current :bytes) "") 'utf-8-unix))))
+    (seq-filter (lambda (file) (not (equal (cdr (assoc file old)) (cdr (assoc file new)))))
+                (delete-dups (cons (plist-get proposal :file) (copy-sequence (plist-get proposal :merged-files)))))))
+
+(defun niwa-memory-apply--index (text proposal)
+  "Return index TEXT with PROPOSAL's entries replaced, merged, or removed.
+Preserve unrelated lines. Reject duplicate destinations, out-of-root links,
+and unsupported link syntax instead of silently creating conflicting entries."
+  (let* ((file (plist-get proposal :file))
+         (affected (cons file (plist-get proposal :merged-files)))
+         (label (mapconcat (lambda (char) (concat (when (memq char '(?\[ ?\] ?\\)) "\\") (char-to-string char)))
+                           (plist-get proposal :title) ""))
+         (replacement (unless (eq (plist-get proposal :action) 'remove)
+                        (format "- [%s](%s) - %s" label
+                                (mapconcat #'url-hexify-string (split-string file "/") "/")
+                                (plist-get proposal :hook))))
+         lines inserted)
+    (dolist (row (niwa-memory-apply--index-lines text))
+      (if (member (car row) affected)
+          (when (and replacement (not inserted)) (push replacement lines) (setq inserted t))
+        (push (cdr row) lines)))
+    (let ((result (string-join (nreverse lines) "\n")))
+      (if (or (not replacement) inserted) result
+        (concat result (unless (or (string-empty-p result) (string-suffix-p "\n" result)) "\n") replacement "\n")))))
+
+(define-error 'niwa-memory-apply-mode-refused "New-file permissions refused")
+
+(defun niwa-memory-apply-check-new-mode (before after)
+  "Refuse creating AFTER from absent BEFORE beyond this editor's permissions.
+An existing AFTER is not a creation and needs no mode change."
+  (when (and (not (plist-get before :exists)) (plist-get after :exists))
+    (let ((mode (plist-get after :mode)) (allowed (logand #o666 (default-file-modes))))
+      (unless (and (natnump mode) (= (logand mode allowed) mode))
+        (signal 'niwa-memory-apply-mode-refused
+                (list (format "Captured mode %04o exceeds permitted new-file mode %04o" mode allowed)))))))
+
+(cl-defun niwa-memory-apply-changes (scope proposal)
+  "Prepare complete patch changes for accepted PROPOSAL in original SCOPE.
+Each change includes :before and exact proposed bytes; writes also carry
+decoded :content for visited-buffer synchronization. No target is written.
+Shared-note actions return the note module's checked changes instead.
+The caller must persist these states and check every captured dependency,
+including unchanged indexes, before applying with workspace and target
+ownership. The patch transaction rechecks each change's expected snapshot."
+  (let* ((id (plist-get proposal :root)) (root (niwa-memory-scope--root scope id)))
+    (dolist (row (plist-get proposal :before))
+      (unless (equal (cdr row) (niwa-memory-scope-before scope id (car row)))
+        (error "Proposal before-state differs from its captured scope")))
+    (niwa-memory-apply--changes root proposal (plist-get scope :new-file-mode))))
+
+(cl-defun niwa-memory-apply--changes (root proposal new-mode &optional date)
+  "Derive exact changes for frozen ROOT and PROPOSAL with NEW-MODE, without IO.
+DATE, a YYYY-MM-DD string, stamps a changed topic; it defaults to today."
+  (let* (
+         (action (plist-get proposal :action))
+         (file (plist-get proposal :file))
+         (body (plist-get proposal :body))
+         (before (plist-get proposal :before))
+         changes)
+    (when (niwa-memory-proposal-note-action-p action)
+      (unless (eq (plist-get root :kind) 'notes)
+        (error "Shared-note proposal differs from its captured scope"))
+      (cl-return-from niwa-memory-apply--changes (niwa-memory-notes-changes proposal)))
+    (unless (and (memq action '(promote update merge remove instructions))
+                 (eq (eq action 'instructions) (eq (plist-get root :kind) 'instructions))
+                 (stringp body) (not (string-search "\0" body))
+                 (not (cl-some #'niwa--invalid-message-char-p body)))
+      (error "Invalid accepted memory action"))
+    (cl-labels
+        ((snapshot (name) (or (cdr (assoc name before)) (error "Missing proposal before-state")))
+         (emit (name text exists)
+           (let* ((original (snapshot name))
+                  (bytes (and exists (encode-coding-string text 'utf-8-unix))))
+             (when (and bytes (> (length bytes) niwa-memory-scope--max-file-bytes))
+               (error "Proposed memory file exceeds its readable byte limit"))
+             (unless (and (eq exists (plist-get original :exists)) (equal bytes (plist-get original :bytes)))
+               (push (append (list :path (plist-get original :path) :before original :action (if exists 'write 'delete))
+                             (when exists (list :content text :bytes bytes
+                                                :mode (or (plist-get original :mode)
+                                                          new-mode
+                                                          (logand #o666 (default-file-modes))))))
+                     changes)))))
+      (if (eq action 'instructions)
+          (emit file body t)
+        (let* ((index-before (snapshot "MEMORY.md"))
+               (index (niwa-memory-apply--index
+                       (decode-coding-string (or (plist-get index-before :bytes) "") 'utf-8-unix) proposal)))
+          (if (eq action 'remove) (emit file nil nil)
+            (unless (member (plist-get proposal :type) '("user" "feedback" "project" "reference"))
+              (error "Invalid accepted memory type"))
+            (let* ((head (format "---\nname: %s\ndescription: %s\ntype: %s\n"
+                                 (decode-coding-string (json-serialize (plist-get proposal :title)) 'utf-8-unix)
+                                 (decode-coding-string (json-serialize (plist-get proposal :hook)) 'utf-8-unix)
+                                 (plist-get proposal :type)))
+                   (tail (format "---\n\n%s\n" (string-trim-right body "\n")))
+                   (old (decode-coding-string (or (plist-get (snapshot file) :bytes) "") 'utf-8-unix))
+                   ;; An otherwise unchanged topic keeps its date, so re-accepting it stays a no-op.
+                   (date (if (string-match (concat "\\`" (regexp-quote head) "modified: \\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)\n"
+                                                   (regexp-quote tail) "\\'")
+                                           old)
+                             (match-string 1 old)
+                           (or date (format-time-string "%Y-%m-%d")))))
+              (emit file (concat head "modified: " date "\n" tail) t)))
+          (dolist (source (plist-get proposal :merged-files))
+            (unless (equal file source) (emit source nil nil)))
+          (emit "MEMORY.md" index (or (plist-get index-before :exists) (not (string-empty-p index))))))
+      (nreverse changes))))
+
+(provide 'niwa-memory-apply)
+;;; niwa-memory-apply.el ends here

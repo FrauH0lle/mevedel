@@ -15,7 +15,7 @@ point. The note child frame contains a docked transcript and composer.
 Terminals and unavailable child frames use a right-hand split; a native side
 window cannot contain the pair as an independent window combination.
 
-`mevedel-note-frame.el` owns this presentation; `mevedel-note-source.el`
+`niwa-note-frame.el` owns this presentation; `niwa-note-source.el`
 coordinates source anchors and durable note records. Frame options and symbols
 use note names, with no aliases for the retired directive names.
 
@@ -26,7 +26,7 @@ shows note identity and state without taking the pinned prompt's header line.
 ## Rationale and consequences
 
 An overlay `after-string` was the obvious cheaper surface and cannot work.
-Interactions are point-addressed: `mevedel--prompt--overlay-at-point` resolves
+Interactions are point-addressed: `niwa--prompt--overlay-at-point` resolves
 its target through `(point)`, and the approve/deny/feedback keymap is an
 overlay keymap that is live only while point is inside the overlay. Point
 cannot enter a display string, so an overlay surface fails three ways at once —

@@ -56,7 +56,7 @@
       const preview = el('pre', 'background-preview');
       const controls = el('div', 'background-controls');
       const open = row.kind === 'agent'
-        ? window.mevedelNav.link(el('a', 'btn quiet'), href({agent: row}), () => {
+        ? window.niwaNav.link(el('a', 'btn quiet'), href({agent: row}), () => {
           if (state.connected && !settled(entry)) openAgent(entry.row);
         })
         : action('', () => openExecution({owner: entry.row.owner, id: entry.row.id}));
@@ -229,5 +229,5 @@
     }
     return Object.freeze({show, refresh: render, reset});
   }
-  window.mevedelBackgroundView = Object.freeze({create});
+  window.niwaBackgroundView = Object.freeze({create});
 })();

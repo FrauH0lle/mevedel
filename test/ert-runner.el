@@ -15,23 +15,23 @@
 (require 'json)
 (require 'seq)
 
-(defconst mevedel-test-runner--helpers-file
+(defconst niwa-test-runner--helpers-file
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                     "helpers")
   "Shared case guards, loaded after the selected test files for cold runs.")
 
-(defun mevedel-test-runner-dispatch (original &rest _args)
+(defun niwa-test-runner-dispatch (original &rest _args)
   "Discover tests or run a measured partition through ORIGINAL.
-Read paths from MEVEDEL_TEST_PARTITION and MEVEDEL_TEST_RESULTS.  Without a
+Read paths from NIWA_TEST_PARTITION and NIWA_TEST_RESULTS.  Without a
 partition, write the complete inventory and run no tests, unless
-MEVEDEL_TEST_FRESH_FILE requests running that file's inventory immediately."
-  (let* ((input (getenv "MEVEDEL_TEST_PARTITION"))
-         (output (or (getenv "MEVEDEL_TEST_RESULTS")
+NIWA_TEST_FRESH_FILE requests running that file's inventory immediately."
+  (let* ((input (getenv "NIWA_TEST_PARTITION"))
+         (output (or (getenv "NIWA_TEST_RESULTS")
                      (error "Missing test results path")))
          (tests (ert-select-tests t t))
          (inventory
           (mapcar (lambda (test) (symbol-name (ert-test-name test))) tests)))
-    (if (and (not input) (not (getenv "MEVEDEL_TEST_FRESH_FILE")))
+    (if (and (not input) (not (getenv "NIWA_TEST_FRESH_FILE")))
         (progn
           (with-temp-file output
             (insert (json-serialize
@@ -45,7 +45,7 @@ MEVEDEL_TEST_FRESH_FILE requests running that file's inventory immediately."
           (funcall original '(member)))
       ;; Pure ERT files need the same leak assertions as macro-based files.
       ;; Load after the roster so its loading phase remains genuinely cold.
-      (require 'helpers mevedel-test-runner--helpers-file)
+      (require 'helpers niwa-test-runner--helpers-file)
       (let* ((request (if input
                           (with-temp-buffer
                             (insert-file-contents input)
@@ -76,8 +76,8 @@ MEVEDEL_TEST_FRESH_FILE requests running that file's inventory immediately."
                            :tests (vconcat (nreverse rows))))))
           stats)))))
 
-(when (getenv "MEVEDEL_TEST_RESULTS")
-  (advice-add 'ert-run-tests-batch :around #'mevedel-test-runner-dispatch))
+(when (getenv "NIWA_TEST_RESULTS")
+  (advice-add 'ert-run-tests-batch :around #'niwa-test-runner-dispatch))
 
 (provide 'ert-runner)
 ;;; ert-runner.el ends here

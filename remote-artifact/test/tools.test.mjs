@@ -44,10 +44,10 @@ test('list_artifacts shows name, title, kind, origin, tier and whether the origi
   const result = await callTool('list_artifacts', {}, { env });
   assert.ok(!result.isError);
   assert.deepEqual(result.content[0].text.split('\n'), [
-    'snt-pipeline: "SNT analysis pipeline" whiteboard from snt-app on mevedel-host, edit link, origin reachable',
+    'snt-pipeline: "SNT analysis pipeline" whiteboard from snt-app on niwa-host, edit link, origin reachable',
     'notes: "Meeting notes" whiteboard from minutes on laptop, view link, origin reachable',
     // An unreachable origin is named as attach stored it.
-    'old-board: "Old board" whiteboard from snt-app on mevedel-host, edit link, '
+    'old-board: "Old board" whiteboard from snt-app on niwa-host, edit link, '
       + 'origin unavailable (revoked, deleted, or offline)',
     'older: "Older" whiteboard from 127.0.0.1, view link, origin reachable',
   ]);
@@ -128,10 +128,10 @@ test('an origin that never binds the connection may run an older protocol', asyn
   const connect = (entry) => openRoom(old.link(), { name: 'tester', guestId: entry.guestId, timeoutMs: 200 });
   const result = await callTool('read_artifact', { name: 'snt-pipeline' }, { env, connect });
   assert.ok(result.isError);
-  assert.equal(result.content[0].text, 'Origin may run an older protocol; update mevedel on the host');
+  assert.equal(result.content[0].text, 'Origin may run an older protocol; update niwa on the host');
   const listed = await callTool('list_artifacts', {}, { env, connect });
   assert.match(listed.content[0].text,
-    /edit link, origin may run an older protocol; update mevedel on the host$/);
+    /edit link, origin may run an older protocol; update niwa on the host$/);
 });
 
 for (const [reason, message] of [
@@ -191,7 +191,7 @@ test('the MCP server answers initialize, tools/list and tools/call over stdio', 
   const init = await reply(1);
   assert.equal(init.result.protocolVersion, '2025-06-18');
   assert.ok(init.result.capabilities.tools);
-  assert.equal(init.result.serverInfo.name, 'mevedel-remote-artifact');
+  assert.equal(init.result.serverInfo.name, 'niwa-remote-artifact');
   send({ method: 'notifications/initialized' });
   send({ id: 2, method: 'tools/list' });
   assert.deepEqual((await reply(2)).result.tools.map((tool) => tool.name).slice(0, 2),

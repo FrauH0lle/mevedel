@@ -8,7 +8,7 @@
 # an older header's module loads into Emacs 31 and later; the module uses only
 # functions Emacs 25 already had.  A newer header's would be refused by older
 # Emacsen.
-# Writes mevedel-native-ARCH.so and its .sha256 file.
+# Writes niwa-native-ARCH.so and its .sha256 file.
 set -euo pipefail
 arch=$1
 out=$2
@@ -21,10 +21,10 @@ fi
 mkdir -p "$out"
 cc -shared -fPIC -O2 -Wall -Wextra -Werror \
    -I"$(dirname "$header")" \
-   "$here"/*.c -o "$out/mevedel-native-$arch.so" \
+   "$here"/*.c -o "$out/niwa-native-$arch.so" \
    $(pkg-config --cflags --libs gtk+-3.0 wayland-client) -lm
-strip --strip-unneeded "$out/mevedel-native-$arch.so"
-(cd "$out" && sha256sum "mevedel-native-$arch.so" > "mevedel-native-$arch.so.sha256")
-# The hash `mevedel-native--source-hash' computes: all sources in byte order.
+strip --strip-unneeded "$out/niwa-native-$arch.so"
+(cd "$out" && sha256sum "niwa-native-$arch.so" > "niwa-native-$arch.so.sha256")
+# The hash `niwa-native--source-hash' computes: all sources in byte order.
 echo "source $(cd "$here" && LC_ALL=C ls ./*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16)"
-cat "$out/mevedel-native-$arch.so.sha256"
+cat "$out/niwa-native-$arch.so.sha256"

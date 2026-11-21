@@ -1,0 +1,198 @@
+;;; test-niwa-schedule-timing.el --- Pure schedule timing -*- lexical-binding: t -*-
+
+;;; Commentary:
+;; Timing parsing and next-run calculation under real time zones set through
+;; the process environment.  Expected epoch seconds come from worked examples
+;; checked with GNU date, not from the code's own method.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-schedule)
+
+(defmacro niwa-schedule-timing-test--in-zone (zone &rest body)
+  "Run BODY with the process environment's TZ set to ZONE."
+  (declare (indent 1) (debug t))
+  `(let ((previous (getenv "TZ")))
+     (unwind-protect
+         (progn (setenv "TZ" ,zone) ,@body)
+       (setenv "TZ" previous))))
+
+(defun niwa-schedule-timing-test--runs (text after count)
+  "Return COUNT successive fire times of timing TEXT later than AFTER."
+  (let ((timing (niwa-schedule-parse-timing text after))
+        runs)
+    (dotimes (_ count)
+      (push (setq after (niwa-schedule-next-run timing after)) runs))
+    (nreverse runs)))
+
+(niwa-deftest niwa-schedule-next-run ()
+  ,test
+  (test)
+  :doc "cron weekdays skip the weekend"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    ;; Fri 2026-11-20 13:00 -> Mon 09:00, Tue 09:00.
+    (should (equal '(1795420800 1795507200)
+                   (niwa-schedule-timing-test--runs "0 9 * * 1-5" 1795176000 2))))
+
+  :doc "cron lists, ranges and steps combine"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    ;; 2026-11-21 08:05, 08:35, 10:05.
+    (should (equal '(1795244700 1795246500 1795251900)
+                   (niwa-schedule-timing-test--runs "5,35 8-10/2 * * *" 1795176000 3))))
+
+  :doc "restricted day-of-month and day-of-week match either"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    ;; The 13th or a Friday: Fri 2026-11-27 09:00 comes before Dec 13.
+    (should (equal '(1795766400)
+                   (niwa-schedule-timing-test--runs "0 9 13 * 5" 1795176000 1)))
+    ;; Day of week 7 is Sunday: Sun 2026-11-22 00:00.
+    (should (equal '(1795302000)
+                   (niwa-schedule-timing-test--runs "0 0 * * 7" 1795176000 1))))
+
+  :doc "a day field starting with * counts as unrestricted, as in cronie"
+  (niwa-schedule-timing-test--in-zone "UTC"
+    ;; cronie 1.7.2 cronnext from 2026-01-01 12:00 UTC: odd days that are
+    ;; Mondays -> Jan 5; the 1st on an even weekday -> Sun Feb 1.
+    (should (equal '(1767603600)
+                   (niwa-schedule-timing-test--runs "0 9 */2 * 1" 1767268800 1)))
+    (should (equal '(1769936400)
+                   (niwa-schedule-timing-test--runs "0 9 1 * */2" 1767268800 1))))
+
+  :doc "a rare date-and-weekday cron is found years ahead, even across a skipped leap day"
+  (niwa-schedule-timing-test--in-zone "UTC"
+    ;; From 2027-02-02, February 1st on a Monday is next in 2038.
+    (should (equal '(2148595200)
+                   (niwa-schedule-timing-test--runs "0 0 */31 2 1" 1801526400 1)))
+    ;; From 2088-03-01, February 29th on a Sunday is next in 2128: 2100 is
+    ;; no leap year.
+    (should (equal '(4991068800)
+                   (niwa-schedule-timing-test--runs "0 0 29 2 */7" 3728937600 1))))
+
+  :doc "a cron time in the skipped hour fires once at the first minute after the gap"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    ;; 2027-03-28: 02:00 CET jumps to 03:00 CEST.  02:30 -> 03:00 CEST, then
+    ;; 2027-03-29 02:30 CEST.
+    (should (equal '(1806195600 1806280200)
+                   (niwa-schedule-timing-test--runs "30 2 * * *" 1806145200 2)))
+    ;; Every quarter hour from 01:50 CET: 02:00-02:45 collapse into one 03:00.
+    (should (equal '(1806195600 1806196500)
+                   (niwa-schedule-timing-test--runs "*/15 * * * *" 1806195000 2))))
+  (niwa-schedule-timing-test--in-zone "America/New_York"
+    ;; 2027-03-14: 02:00 EST jumps to 03:00 EDT.
+    (should (equal '(1805007600)
+                   (niwa-schedule-timing-test--runs "30 2 * * *" 1804957200 1))))
+
+  :doc "a cron time in the repeated hour fires once, at its first occurrence"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    ;; 2027-10-31: 03:00 CEST falls back to 02:00 CET.  02:30 CEST, then not
+    ;; 02:30 CET (1824946200) but 2027-11-01 02:30 CET.
+    (should (equal '(1824942600 1825032600)
+                   (niwa-schedule-timing-test--runs "30 2 * * *" 1824890400 2))))
+  (niwa-schedule-timing-test--in-zone "America/New_York"
+    ;; 2027-11-07: 02:00 EDT falls back to 01:00 EST.  01:30 EDT, then
+    ;; 2027-11-08 01:30 EST.
+    (should (equal '(1825565400 1825655400)
+                   (niwa-schedule-timing-test--runs "30 1 * * *" 1825516800 2))))
+
+  :doc "an interval is timed in absolute seconds from the previous run, across a gap"
+  (niwa-schedule-timing-test--in-zone "America/New_York"
+    ;; 2027-03-14 01:50 EST -> 03:10 EDT, twenty real minutes later.
+    (should (equal '(1805008200 1805009400)
+                   (niwa-schedule-timing-test--runs "every 20m" 1805007000 2)))))
+
+(niwa-deftest niwa-schedule-parse-timing ()
+  ,test
+  (test)
+  :doc "recognizes one-shot, interval and cron timing"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    (should (equal '(:kind once :at 1795179600)
+                   (niwa-schedule-parse-timing "1h" 1795176000)))
+    (should (equal '(:kind interval :seconds 1200)
+                   (niwa-schedule-parse-timing "every 20m" 1795176000)))
+    (should (equal '(:kind interval :seconds 60)
+                   (niwa-schedule-parse-timing "every 1m" 1795176000)))
+    (should (equal '(:kind cron :expression "0 9 * * 1-5")
+                   (niwa-schedule-parse-timing " 0 9 * * 1-5 " 1795176000))))
+
+  :doc "a local time in the skipped hour moves to the gap's end; a repeated one takes its first occurrence"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    (should (equal '(:kind once :at 1806195600)
+                   (niwa-schedule-parse-timing "2027-03-28 02:30" 1795176000)))
+    (should (equal '(:kind once :at 1824942600)
+                   (niwa-schedule-parse-timing "2027-10-31 02:30" 1795176000))))
+  (niwa-schedule-timing-test--in-zone "America/New_York"
+    (should (equal '(:kind once :at 1805007600)
+                   (niwa-schedule-parse-timing "2027-03-14 02:30" 1795176000)))
+    (should (equal '(:kind once :at 1825565400)
+                   (niwa-schedule-parse-timing "2027-11-07 01:30" 1795176000))))
+
+  :doc "unsupported cron syntax, short intervals and impossible dates are clear errors"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    (dolist (case '(("0 9 * * MON-FRI" . "names")
+                    ("0 9 * JAN *" . "names")
+                    ("0 9 L * *" . "L, W and \\?")
+                    ("0 9 15W * *" . "L, W and \\?")
+                    ("0 9 ? * 1" . "L, W and \\?")
+                    ("60 * * * *" . "minute field")
+                    ("0 9 * * 1-8" . "day-of-week field")
+                    ("*/0 * * * *" . "zero step")
+                    ("0 9 5-1 * *" . "day-of-month field")
+                    ("0 0 31 2 *" . "never fires")
+                    ("every 30s" . "at least one minute")
+                    ("every soon" . "at least one minute")
+                    ("2030-02-31 13:00" . "Unrecognized")
+                    ("2030-13-01 14:00" . "Unrecognized")
+                    ("2030-11-20 25:90" . "Unrecognized")))
+      (ert-info ((car case))
+        (let ((err (should-error (niwa-schedule-parse-timing (car case) 1795176000)
+                                 :type 'user-error)))
+          (should (string-match-p (cdr case) (cadr err))))))))
+
+(niwa-deftest niwa-schedule-parse-expiry ()
+  ,test
+  (test)
+  :doc "an expiry is a duration or local time, or never for none"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    (should (= 1795183200 (niwa-schedule-parse-expiry "2h" 1795176000)))
+    (should (= 1795251600 (niwa-schedule-parse-expiry "2026-11-21 10:00" 1795176000)))
+    (should-not (niwa-schedule-parse-expiry " never " 1795176000))
+    (dolist (text '("every 1h" "0 9 * * 1-5"))
+      (ert-info (text)
+        (should-error (niwa-schedule-parse-expiry text 1795176000) :type 'user-error)))))
+
+(niwa-deftest niwa-schedule-entry-p ()
+  ,test
+  (test)
+  :doc "a persisted entry passes only with timing creation would accept"
+  (niwa-schedule-timing-test--in-zone "Europe/Zurich"
+    (cl-flet ((entry (timing)
+                (list :id "w-1" :note "x" :timing timing :created-at 1795176000
+                      :due 1795177200 :expires-at nil :status 'pending)))
+      (should (niwa-schedule-entry-p (entry '(:kind once :at 1795177200))))
+      (should (niwa-schedule-entry-p (entry '(:kind interval :seconds 60))))
+      (should (niwa-schedule-entry-p (entry '(:kind cron :expression "0 9 * * 1-5"))))
+      (dolist (timing '((:kind interval :seconds 0)
+                        (:kind interval :seconds 59)
+                        (:kind interval :seconds "60")
+                        (:kind cron :expression "BAD")
+                        (:kind cron :expression "0 9 * * MON")
+                        (:kind cron :expression "0 0 31 2 *")
+                        (:kind weekly)))
+        (ert-info ((format "%S" timing))
+          (should-not (niwa-schedule-entry-p (entry timing)))))))
+
+  :doc "a malformed creation time makes a cron entry invalid without signalling"
+  (dolist (created-at (list "1795176000" 1795176000.0 most-positive-fixnum (expt 10 30)))
+    (ert-info ((format "%S" created-at))
+      (should-not (niwa-schedule-entry-p
+                   (list :id "w-1" :note "x" :timing '(:kind cron :expression "0 9 * * 1-5")
+                         :created-at created-at :due 1795177200 :expires-at nil
+                         :status 'pending))))))
+
+(provide 'test-niwa-schedule-timing)
+;;; test-niwa-schedule-timing.el ends here

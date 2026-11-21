@@ -42,7 +42,7 @@ async function openFile(page, source = markdown, file = fixturePath) {
   await page.goto('http://localhost:8765/');
   return page.evaluate(({path, data, size}) => {
     const sent = [];
-    const controller = window.mevedelArtifactView.create({
+    const controller = window.niwaArtifactView.create({
       send: frame => { sent.push(frame); return Promise.resolve(true); },
       el: (tag, className, text) => {
         const node = document.createElement(tag);

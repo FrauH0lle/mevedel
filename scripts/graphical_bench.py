@@ -36,7 +36,7 @@ def compile_build(root, temporary, bench):
     """Byte-compile everything into TEMPORARY/compiled; return the load path."""
     compiled = temporary / "compiled"
     compiled.mkdir()
-    files = sorted(str(p) for p in root.glob("mevedel*.el"))
+    files = sorted(str(p) for p in root.glob("niwa*.el"))
     files.append(str(bench.resolve()))
     load_path = temporary / "load-path.eld"
     expression = f"""
@@ -162,7 +162,7 @@ def run_benchmark(root, bench, run_form, probe_form):
     PROBE_FORM drives redisplay in a separate Emacs before and after the run.
     """
     kwin = load_kwin_runner()
-    with tempfile.TemporaryDirectory(prefix="mevedel-graphical-bench-") as directory:
+    with tempfile.TemporaryDirectory(prefix="niwa-graphical-bench-") as directory:
         temporary = Path(directory)
         load_path = compile_build(root, temporary, bench)
         output = temporary / "raw.json"

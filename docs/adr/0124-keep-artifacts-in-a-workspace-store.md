@@ -11,9 +11,9 @@ the project's view).
 ## Current decision
 
 **The workspace artifact store is the original.** Every artifact, whiteboard
-and document has a stable id under `<workspace>/.mevedel/artifacts/ID/`.
+and document has a stable id under `<workspace>/.niwa/artifacts/ID/`.
 Authored files live there; metadata, versions, discussions and live editor state
-live under the protected sibling `.mevedel/artifacts/.state/ID/`.
+live under the protected sibling `.niwa/artifacts/.state/ID/`.
 Sessions do not own artifacts; they attach to them.
 One artifact can be attached to several sessions, and one session can attach
 several artifacts. A session persists only its attached ids; Fork and Save As
@@ -46,7 +46,7 @@ queue per workspace in each Emacs serves every room and session there.
 Across Emacs instances an item lease, with the session lease's generation
 records, target clock, heartbeat and expiry, decides who commits. Lease
 transitions and state/metadata writes share a target-side `flock` on the
-stable `.mevedel/leases/artifacts/` directory; each write proves ownership,
+stable `.niwa/leases/artifacts/` directory; each write proves ownership,
 latest generation and expiry while holding that lock. Another Emacs sees the item read-only
 and asks the holder to hand it over, which happens once the holder's queue for
 it is idle and the item has had no edit there for 10 seconds; a lease whose
@@ -65,8 +65,8 @@ previous index under the target mutation lock and retries concurrent changes.
 ApplyPatch versions use the committed bytes from that write.
 
 **Store contents are durable work, not machine state.** Whether the store is
-committed to Git is the project's choice; mevedel adds no ignore rule. Item
-leases therefore live outside it, under `.mevedel/leases/`. The store's
+committed to Git is the project's choice; niwa adds no ignore rule. Item
+leases therefore live outside it, under `.niwa/leases/`. The store's
 bookkeeping -- metadata, item state, discussions, versions -- lives in the
 separate `.state/` subtree. That subtree and the leases are read-only to model
 tools by default, so edits cannot bypass leases, versions and validation.
@@ -135,10 +135,10 @@ every room one queue per item, and nothing so far shows unrelated boards
 waiting on each other.
 
 Protected globs for the store's bookkeeping would each have cost a full
-workspace walk before every Bash launch. Patterns below `**/.mevedel/`, which
+workspace walk before every Bash launch. Patterns below `**/.niwa/`, which
 exists only at a workspace root, therefore protect in the Bash sandbox the
-whole directory their literal part names (`.mevedel/artifacts`,
-`.mevedel/leases`) at each discovery root, without a walk; a `.mevedel` nested
+whole directory their literal part names (`.niwa/artifacts`,
+`.niwa/leases`) at each discovery root, without a walk; a `.niwa` nested
 deeper is covered by native tool checks but not by the Bash sandbox.
 
 Versions are recorded once per turn, for files as for whiteboards and
@@ -256,7 +256,7 @@ push out every earlier version, including the state before the turn.
   dedicated session, and finding the dedicated sessions meant reading every
   artifact's metadata -- on each default-chat lookup, lobby listing and
   session chooser, 0.4 s at 50 artifacts over TRAMP. A `meta.el` copied
-  outside mevedel also made deleting the copy delete the original's
+  outside niwa also made deleting the copy delete the original's
   conversation. The session now records its artifact too, and only a pair
   that agrees counts.
 - **Replies from another room.** A reply first followed the session that

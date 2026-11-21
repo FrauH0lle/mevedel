@@ -15,14 +15,14 @@ The user selected the partner's model and reasoning effort:
 
 ```!el
 (progn
-  (require 'mevedel-models)
+  (require 'niwa-models)
   (condition-case nil
-      (let* ((candidates (or (mevedel-model-candidates)
+      (let* ((candidates (or (niwa-model-candidates)
                              (user-error "No registered gptel models")))
              (label (completing-read "Partner model: " candidates nil t))
              (model (plist-get (cdr (assoc label candidates)) :model))
              (efforts (mapcar #'symbol-name
-                              (mevedel-model-supported-efforts model)))
+                              (niwa-model-supported-efforts model)))
              (effort (and efforts
                           (completing-read "Partner effort: "
                                            (cons "default" efforts)

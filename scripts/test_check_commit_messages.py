@@ -47,8 +47,8 @@ class CommitMessageTests(unittest.TestCase):
     def test_wrapped_and_grouped_gnu_entries(self):
         # The wrapped entry is copied from reviewed commit 056476b69b55.
         for entry in (
-            '* test/test-mevedel-session-durability-heartbeat.el\n'
-            '(mevedel-session-durability-heartbeat): Add the case "a named\n'
+            '* test/test-niwa-session-durability-heartbeat.el\n'
+            '(niwa-session-durability-heartbeat): Add the case "a named\n'
             'lease-update decline is a lost lease: it reclaims and is no failure".',
             '* source.el (first):\nDescribe the change on the next line.',
             '* a.el, b.el: Share the behavior.',

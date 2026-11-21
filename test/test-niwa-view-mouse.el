@@ -1,0 +1,581 @@
+;;; test-niwa-view-mouse.el --- Live view mouse interleavings -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Deliver mouse events through the graphical command loop, not direct command
+;; calls.  A post-command hook imposes a live update between down and release.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-execution)
+(require 'niwa-background-list)
+(require 'niwa-view)
+(require 'niwa-view-agent)
+(require 'niwa-view-composer)
+(require 'niwa-view-execution)
+(require 'niwa-view-render)
+(require 'niwa-view-stream)
+
+(defun niwa-view-mouse-test--target-window (needle)
+  "Return the selected view window or its dock for composer NEEDLE."
+  (if (string-suffix-p "composer target" needle)
+      (let ((window (niwa-view-composer-display (selected-window))))
+        (should (window-live-p window))
+        window)
+    (selected-window)))
+
+(defun niwa-view-mouse-test--target (needle)
+  "Return the position of the intended click within NEEDLE."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward needle)
+    (- (point) 3)))
+
+(defun niwa-view-mouse-test--click (position update redraw queued)
+  "Click POSITION with UPDATE between down and release.
+With REDRAW, redisplay after UPDATE.  With QUEUED, resolve the release before
+UPDATE, like input already queued by the display backend."
+  (let* ((window (selected-window))
+         (start (posn-at-point position window))
+         (xy (cons (car (posn-x-y start))
+                   (+ (cdr (posn-x-y start))
+                      (window-header-line-height window)
+                      (window-tab-line-height window))))
+         (release (list 'mouse-1 (copy-tree start)))
+         (phase 'waiting)
+         failure commands timer exit-timer)
+    (should start)
+    (ert-info ((format "Start %S; lookup %S; header %S; edges %S"
+                       start (posn-at-x-y (car xy) (cdr xy) window)
+                       header-line-format (window-inside-pixel-edges window)))
+	      (should (= position (posn-point (posn-at-x-y (car xy) (cdr xy) window)))))
+    (let ((before
+           (lambda ()
+             (pcase (car-safe last-command-event)
+               ('down-mouse-1 (setq phase 'down))
+               ('mouse-1 (setq phase 'up)))))
+          (hook
+           (lambda ()
+             (when (memq phase '(down up)) (push this-command commands))
+             (condition-case err
+                 (pcase phase
+                   ('down
+                    (setq phase 'waiting)
+                    (should (= position (point)))
+                    (funcall update)
+                    (when redraw (redisplay t))
+                    (setq unread-command-events
+                          (list (if queued release
+                                  (list 'mouse-1
+                                        (posn-at-x-y (car xy) (cdr xy) window))))))
+                   ('up
+                    (setq phase 'done)
+                    ;; Let the remaining production post-command hooks drain
+                    ;; deferred projection writes before leaving the loop.
+                    (setq exit-timer (run-at-time 0 nil #'exit-recursive-edit))))
+               (error (setq failure err) (exit-recursive-edit))))))
+      (unwind-protect
+          (progn
+            (add-hook 'pre-command-hook before nil t)
+            (add-hook 'post-command-hook hook nil t)
+            (setq timer (run-at-time 3 nil
+                                     (lambda ()
+                                       (setq failure '(error "Mouse loop timed out"))
+                                       (exit-recursive-edit))))
+            (setq unread-command-events (list (list 'down-mouse-1 start)))
+            (recursive-edit))
+        (remove-hook 'pre-command-hook before t)
+        (remove-hook 'post-command-hook hook t)
+        (when timer (cancel-timer timer))
+        (when exit-timer (cancel-timer exit-timer))
+        (setq unread-command-events nil)))
+    (when failure (signal (car failure) (cdr failure)))
+    (should (= 2 (length commands)))
+    (should (cl-some (lambda (command)
+                       (memq command '(mouse-drag-region
+                                       niwa-view-execution--mouse-press)))
+                     commands))))
+
+(niwa-deftest niwa-view-mouse-live-update ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (save-window-excursion
+      (delete-other-windows)
+      (niwa-view-test--with-buffers
+	(niwa-view-test--insert-data data-buf "Mouse prompt\n\n" nil)
+	(niwa-view-test--insert-data
+	 data-buf "An assistant response.\n\n" 'response)
+	(niwa-view-test--insert-data
+	 data-buf
+	 "#+begin_tool\n(:name \"Read\" :args (:file_path \"mouse-tool-target.el\"))\n\ncontent\n#+end_tool\n"
+	 '(tool . "mouse-tool"))
+	(switch-to-buffer view-buf)
+	(let* ((session (niwa-session--create :name "mouse"))
+               (clock 1000.0)
+               (original-float-time (symbol-function 'float-time))
+               (executions
+		(list (list :execution-id "mouse-exec" :owner "/root" :yielded t
+                            :state 'running :description "Click background target"
+                            :started-at 941.0)))
+               (draft "> click composer target\nsecond line")
+               (needle ,needle)
+               (redraw ,redraw)
+               (queued ,queued)
+               (operation ,operation))
+          (setq-local niwa--session session)
+          (with-current-buffer data-buf (setq-local niwa--session session))
+          (niwa-view-test--insert-composer-draft draft)
+          (cl-letf (((symbol-function 'float-time)
+                     (lambda (&optional time)
+                       (if time (funcall original-float-time time) clock)))
+                    ((symbol-function 'frame-focus-state) (lambda (&optional _) t))
+                    ((symbol-function 'niwa-execution-count-user) (lambda (_) 1))
+                    ((symbol-function 'niwa-execution-list-user) (lambda (_) executions))
+                    ((symbol-function 'niwa-view--agent-status-collect) (lambda () nil)))
+            (niwa-view--full-rerender)
+            (niwa-view-stream-begin-turn
+             (niwa-view--history-insertion-marker)
+             (with-current-buffer data-buf (point-max)))
+            (niwa-view-test--insert-data data-buf "Initial stream text." 'response)
+            (niwa-view--render-stream-update data-buf)
+            (let ((target-window (niwa-view-mouse-test--target-window needle)))
+              (goto-char (point-min))
+              (set-window-start nil (point-min))
+              (should niwa-view-execution--elapsed-targets)
+              (with-selected-window target-window
+                (redisplay t)
+                (sit-for 0.02)
+                (redisplay t)
+                (niwa-view-mouse-test--click
+                 (niwa-view-mouse-test--target needle)
+                 (lambda ()
+                   (with-current-buffer view-buf
+                     (if (eq operation 'tick)
+                         (progn
+                           (setq clock 1001.0)
+                           (niwa-view--spinner-tick))
+                       (niwa-view-test--insert-data data-buf " Additional chunk." 'response)
+                       (niwa-view--render-stream-update data-buf))))
+                 redraw queued)
+                (should (eq target-window (selected-window)))
+                (should (= (niwa-view-mouse-test--target needle) (point))))
+              (if (eq operation 'tick)
+                  (should (string-search "1m 00s" (buffer-string)))
+		(should (string-search "Additional chunk." (buffer-string))))
+              (should (equal draft (niwa-view--input-text)))))))))
+  (needle redraw queued operation)
+  :doc "composer click, stale geometry, release resolved after update"
+  "click composer target" nil nil 'tick
+  :doc "composer click, fresh geometry, release resolved after update"
+  "click composer target" t nil 'tick
+  :doc "composer click, stale geometry, release already queued"
+  "click composer target" nil t 'tick
+  :doc "composer click, fresh geometry, release already queued"
+  "click composer target" t t 'tick
+  :doc "background click, stale geometry, release resolved after update"
+  "Click background target" nil nil 'tick
+  :doc "background click, fresh geometry, release resolved after update"
+  "Click background target" t nil 'tick
+  :doc "background click, stale geometry, release already queued"
+  "Click background target" nil t 'tick
+  :doc "background click, fresh geometry, release already queued"
+  "Click background target" t t 'tick
+  :doc "tool click, stale geometry, queued release across elapsed tick"
+  "mouse-tool-target.el" nil t 'tick
+  :doc "tool click, fresh geometry, queued release across elapsed tick"
+  "mouse-tool-target.el" t t 'tick
+  :doc "composer click, stale geometry, release resolved after stream chunk"
+  "click composer target" nil nil 'stream
+  :doc "composer click, fresh geometry, release resolved after stream chunk"
+  "click composer target" t nil 'stream
+  :doc "composer click, stale geometry, queued release across stream chunk"
+  "click composer target" nil t 'stream
+  :doc "composer click, fresh geometry, queued release across stream chunk"
+  "click composer target" t t 'stream
+  :doc "background click, stale geometry, queued release across stream chunk"
+  "Click background target" nil t 'stream
+  :doc "background click, fresh geometry, queued release across stream chunk"
+  "Click background target" t t 'stream
+  :doc "tool click, stale geometry, queued release across stream chunk"
+  "mouse-tool-target.el" nil t 'stream
+  :doc "tool click, fresh geometry, queued release across stream chunk"
+  "mouse-tool-target.el" t t 'stream)
+
+(defun niwa-view-mouse-test--wait (predicate)
+  "Run real timers until PREDICATE succeeds, with a progress watchdog."
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and (not (funcall predicate)) (< (float-time) deadline))
+      (accept-process-output nil 0.01))
+    (should (funcall predicate))))
+
+(defvar niwa-view-mouse-test--macro-resume nil)
+(defvar niwa-view-mouse-test--macro-observations nil)
+(defvar niwa-view-mouse-test--macro-requeue nil)
+(defvar niwa-view-mouse-test--macro-motion nil)
+
+(defun niwa-view-mouse-test--macro-press (event)
+  "Track EVENT's release inside one command, like macro-based mouse clients."
+  (interactive "e")
+  (mouse-set-point event)
+  (let (release)
+    (track-mouse
+      (funcall niwa-view-mouse-test--macro-resume 'schedule)
+      (push (list 'before track-mouse (car-safe last-command-event)
+                  (eq last-command-event event)
+                  (not (null (terminal-parameter nil 'mouse-drag-start)))
+                  (buffer-modified-tick)
+                  (string-search "Deferred response 5" (buffer-string)))
+            niwa-view-mouse-test--macro-observations)
+      (when niwa-view-mouse-test--macro-motion
+        (push (list 'mouse-movement (copy-tree (event-start event)))
+              unread-command-events))
+      ;; Tracking reports pointer motion as well as release.  Treating motion
+      ;; as release could leave before the scheduled catch-up even started.
+      (while (eq (car-safe (setq release (read-key))) 'mouse-movement))
+      (should (eq (car-safe release) 'mouse-1))
+      (push (list 'after track-mouse (car-safe last-command-event)
+                  (eq last-command-event event)
+                  (not (null (terminal-parameter nil 'mouse-drag-start)))
+                  (buffer-modified-tick)
+                  (string-search "Deferred response 5" (buffer-string)))
+            niwa-view-mouse-test--macro-observations))
+    (if niwa-view-mouse-test--macro-requeue
+        (push release unread-command-events)
+      (mouse-set-point release))))
+
+(defun niwa-view-mouse-test--macro-click (position resume &optional requeue motion)
+  "Click POSITION while RESUME runs timers inside macro-based tracking.
+With REQUEUE, hand the release back to the ordinary command loop.
+With MOTION, deliver a movement event before the release."
+  (let* ((start (posn-at-point position))
+         (release (list 'mouse-1 (copy-tree start)))
+         (niwa-view-mouse-test--macro-resume resume)
+         (niwa-view-mouse-test--macro-requeue requeue)
+         (niwa-view-mouse-test--macro-motion motion)
+         (map (copy-keymap (current-local-map)))
+         timer exit-timer deadline)
+    ;; Preserve the real release binding from the clicked fragment.  The
+    ;; override is only needed to replace its press handler with this fixture.
+    (define-key map [mouse-1] (key-binding [mouse-1]))
+    (define-key map [down-mouse-1] #'niwa-view-mouse-test--macro-press)
+    (let ((overriding-local-map map)
+          (old-map (current-local-map))
+          (after (lambda ()
+                   (when (and (= 2 (length niwa-view-mouse-test--macro-observations))
+                              (not (cl-some #'mouse-event-p unread-command-events)))
+                     (setq exit-timer (run-at-time 0 nil #'exit-recursive-edit))))))
+      (unwind-protect
+          (progn
+            (use-local-map map)
+            (add-hook 'post-command-hook after nil t)
+            ;; The release arrives while `read-key' runs real production timers.
+            (setq timer (run-at-time 0.65 nil
+                                     (lambda ()
+                                       (setq unread-command-events (list release)))))
+            (setq deadline (run-at-time 1.5 nil #'exit-recursive-edit))
+            (setq unread-command-events (list (list 'down-mouse-1 start)))
+            (recursive-edit)
+            (should (= 2 (length niwa-view-mouse-test--macro-observations))))
+        (use-local-map old-map)
+        (remove-hook 'post-command-hook after t)
+        (when timer (cancel-timer timer))
+        (when deadline (cancel-timer deadline))
+        (when exit-timer (cancel-timer exit-timer))
+        (setq unread-command-events nil)))))
+
+(defun niwa-view-mouse-test--focus-click (position ordering resume)
+  "Click POSITION across focus RESUME with the specified ORDERING."
+  (let* ((start (posn-at-point position))
+         (release (list 'mouse-1 (copy-tree start)))
+         (phase nil)
+         (commands 0)
+         timer exit-timer failure)
+    (should start)
+    (when (eq ordering 'before-fresh)
+      (funcall resume t)
+      (setq start (posn-at-point (point))
+            release (list 'mouse-1 (copy-tree start))))
+    (let ((before
+           (lambda ()
+             (pcase (car-safe last-command-event)
+               ('down-mouse-1
+                (setq phase 'down))
+               ('mouse-1 (setq phase 'up)))))
+          (after
+           (lambda ()
+             (condition-case err
+                 (pcase phase
+                   ('down
+                    (cl-incf commands)
+                    (setq phase nil)
+                    (when (eq ordering 'between) (funcall resume nil))
+                    (setq unread-command-events (list release)))
+                   ('up
+                    (cl-incf commands)
+                    (setq phase nil)
+                    ;; Leave the loop only after production release hooks run.
+                    (setq exit-timer (run-at-time 0 nil #'exit-recursive-edit))))
+               (error (setq failure err) (exit-recursive-edit))))))
+      (unwind-protect
+          (progn
+            (add-hook 'pre-command-hook before nil t)
+            (add-hook 'post-command-hook after nil t)
+            (setq timer (run-at-time 3 nil
+                                     (lambda ()
+                                       (setq failure '(error "Focus click timed out"))
+                                       (exit-recursive-edit))))
+            (setq unread-command-events (list (list 'down-mouse-1 start)))
+            (recursive-edit))
+        (remove-hook 'pre-command-hook before t)
+        (remove-hook 'post-command-hook after t)
+        (when timer (cancel-timer timer))
+        (when exit-timer (cancel-timer exit-timer))
+        (setq unread-command-events nil)))
+    (when failure (signal (car failure) (cdr failure)))
+    (should (= 2 commands))))
+
+(niwa-deftest niwa-view-mouse-focus-resume ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (save-window-excursion
+      (delete-other-windows)
+      (niwa-view-test--with-buffers
+        (niwa-view-test--insert-data data-buf "Mouse prompt\n\n" nil)
+        (niwa-view-test--insert-data data-buf "Initial response.\n\n" 'response)
+        (switch-to-buffer view-buf)
+        (let* ((session (niwa-session--create :name "focus-mouse"))
+               (focused t)
+               (kind ,kind)
+               (ordering ,ordering)
+               (niwa-view-mouse-test--macro-observations nil)
+               managed
+               (draft "> focus composer target\nsecond line")
+               (needle ,needle)
+               (executions
+                (list (list :execution-id "focus-exec" :owner "/root" :yielded t
+                            :state 'running :description "Focus background target"
+                            :started-at (float-time))))
+               (niwa-view-rerender-debounce 0.015))
+          (setq-local niwa--session session)
+          (with-current-buffer data-buf (setq-local niwa--session session))
+          (niwa-view-test--insert-composer-draft draft)
+          ;; Only the focus scalar is simulated.  The real unattended predicate,
+          ;; scheduling/resume hooks, debounce timer and projection writers run.
+          (cl-letf (((symbol-function 'frame-focus-state) (lambda (&optional _) focused))
+                    ((symbol-function 'niwa-execution-count-user) (lambda (_) 1))
+                    ((symbol-function 'niwa-execution-list-user) (lambda (_) executions))
+                    ((symbol-function 'niwa-background-list-open) (lambda () (setq managed t)))
+                    ((symbol-function 'niwa-view--agent-status-collect) (lambda () nil)))
+            (niwa-view--full-rerender)
+            (unless (eq kind 'batch)
+              (niwa-view-stream-begin-turn
+               (niwa-view--history-insertion-marker)
+               (with-current-buffer data-buf (point-max)))
+              (niwa-view-test--insert-data data-buf "Live initial." 'response)
+              (niwa-view--render-stream-update data-buf))
+            (let* ((target-window (niwa-view-mouse-test--target-window needle))
+                   (clicked (with-selected-window target-window
+                              (goto-char (niwa-view-mouse-test--target needle))))
+                   (old-text (buffer-string)))
+              (set-window-start nil (point-min))
+              (redisplay t)
+              (setq focused nil)
+              (should (niwa-view--unattended-p))
+              (dotimes (index 6)
+                (when (eq kind 'batch)
+                  (niwa-view-test--insert-data data-buf (format "Deferred prompt %d\n\n" index) nil))
+                (niwa-view-test--insert-data
+                 data-buf (format "Deferred response %d: new transcript content.\n\n" index) 'response)
+                (niwa-view--schedule-render
+                 (if (eq kind 'incremental) 'incremental 'full)
+                 data-buf niwa-view-rerender-debounce))
+              (should (equal old-text (buffer-string)))
+              (should-not niwa-view--render-timer)
+              (should niwa-view--pending-render-kind)
+              (with-selected-window target-window
+                (funcall
+                 (if (memq ordering '(macro-between macro-requeue macro-requeue-motion))
+                     (lambda (pos _order callback)
+                       (niwa-view-mouse-test--macro-click
+                        pos callback (memq ordering '(macro-requeue macro-requeue-motion))
+                        (eq ordering 'macro-requeue-motion)))
+                   #'niwa-view-mouse-test--focus-click)
+                 clicked ordering
+                 (lambda (complete)
+                   (with-current-buffer view-buf
+                     (setq focused t)
+                     (niwa-view--resume-attended-views)
+                     (should niwa-view--render-timer)
+                     ;; The actual scheduled timer must fire, not a direct flush.
+                     (unless (eq complete 'schedule)
+                       (niwa-view-mouse-test--wait
+                        (lambda () (null niwa-view--render-timer))))
+                     (when (eq complete t)
+                       (niwa-view-mouse-test--wait
+                        (lambda () (null niwa-view-render--batch)))))))
+                (should (eq target-window (selected-window))))
+              (niwa-view-mouse-test--wait
+               (lambda () (null niwa-view-render--batch)))
+              (should (string-search "Deferred response 5" (buffer-string)))
+              (should (equal draft (niwa-view--input-text)))
+              (when (equal needle "[Manage]") (should managed))
+              (let ((actual (window-point target-window))
+                    (expected (with-current-buffer (window-buffer target-window)
+                                (niwa-view-mouse-test--target needle))))
+                (ert-info ((format "Kind %S ordering %S target %S: old=%d actual=%d expected=%d; macro=%S"
+                                   kind ordering needle clicked actual expected
+                                   niwa-view-mouse-test--macro-observations))
+                  (should (= expected actual))))))))))
+  (kind ordering needle)
+  :doc "full catch-up between press and release"
+  'full 'between "focus composer target"
+  :doc "incremental catch-up between press and release"
+  'incremental 'between "focus composer target"
+  :doc "batched catch-up between press and release"
+  'batch 'between "focus composer target"
+  :doc "full catch-up before freshly resolved press"
+  'full 'before-fresh "focus composer target"
+  :doc "incremental catch-up before freshly resolved press"
+  'incremental 'before-fresh "focus composer target"
+  :doc "batched catch-up before freshly resolved press"
+  'batch 'before-fresh "focus composer target"
+  :doc "full background catch-up between press and release"
+  'full 'between "Focus background target"
+  :doc "incremental background catch-up between press and release"
+  'incremental 'between "Focus background target"
+  :doc "batched background catch-up between press and release"
+  'batch 'between "Focus background target"
+  :doc "full background catch-up before freshly resolved press"
+  'full 'before-fresh "Focus background target"
+  :doc "incremental background catch-up before freshly resolved press"
+  'incremental 'before-fresh "Focus background target"
+  :doc "batched background catch-up before freshly resolved press"
+  'batch 'before-fresh "Focus background target"
+  :doc "full catch-up during macro-based tracking"
+  'full 'macro-between "focus composer target"
+  :doc "incremental catch-up during macro-based tracking"
+  'incremental 'macro-between "focus composer target"
+  :doc "batched catch-up during macro-based tracking"
+  'batch 'macro-between "focus composer target"
+  :doc "full background catch-up during macro-based tracking"
+  'full 'macro-between "Focus background target"
+  :doc "incremental background catch-up during macro-based tracking"
+  'incremental 'macro-between "Focus background target"
+  :doc "batched background catch-up during macro-based tracking"
+  'batch 'macro-between "Focus background target"
+  :doc "full catch-up with macro-requeued release"
+  'full 'macro-requeue "focus composer target"
+  :doc "incremental catch-up with macro-requeued release"
+  'incremental 'macro-requeue "focus composer target"
+  :doc "batched catch-up with macro-requeued release"
+  'batch 'macro-requeue "focus composer target"
+  :doc "full background catch-up with macro-requeued release"
+  'full 'macro-requeue "Focus background target"
+  :doc "incremental background catch-up with macro-requeued release"
+  'incremental 'macro-requeue "Focus background target"
+  :doc "batched background catch-up with macro-requeued release"
+  'batch 'macro-requeue "Focus background target"
+  :doc "full plain transcript click with macro-requeued release"
+  'full 'macro-requeue "Initial response"
+  :doc "incremental plain transcript click with macro-requeued release"
+  'incremental 'macro-requeue "Initial response"
+  :doc "batched plain transcript click with macro-requeued release"
+  'batch 'macro-requeue "Initial response"
+  :doc "full Manage button click with macro-requeued release"
+  'full 'macro-requeue "[Manage]"
+  :doc "incremental Manage button click with macro-requeued release"
+  'incremental 'macro-requeue "[Manage]"
+  :doc "batched Manage button click with macro-requeued release"
+  'batch 'macro-requeue "[Manage]"
+  :doc "batched background catch-up with motion before macro-requeued release"
+  'batch 'macro-requeue-motion "Focus background target")
+
+(niwa-deftest niwa-view-mouse-history-focus ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (save-window-excursion
+      (delete-other-windows)
+      (niwa-view-test--with-buffers
+        (niwa-view-test--insert-data data-buf "History focus prompt\n\n" nil)
+        (niwa-view-test--insert-data
+         data-buf
+         (mapconcat (lambda (n) (format "History line %d.\n" n))
+                    (number-sequence 0 99) "")
+         'response)
+        (switch-to-buffer view-buf)
+        (let ((focused t)
+              (kind ,kind)
+              (niwa-view-rerender-debounce 0.015)
+              (draft "> active draft\nsecond line"))
+          (niwa-view-test--insert-composer-draft draft)
+          (cl-letf (((symbol-function 'frame-focus-state)
+                     (lambda (&optional _) focused)))
+            (niwa-view--full-rerender)
+            (when (eq kind 'incremental)
+              ;; A new live turn starts after its user prompt, not inside the
+              ;; preceding response's contiguous gptel property run.
+              (niwa-view-test--insert-data
+               data-buf "Continue with a live response.\n\n" nil)
+              (niwa-view--full-rerender)
+              (niwa-view-stream-begin-turn
+               (niwa-view--history-insertion-marker)
+               (with-current-buffer data-buf (point-max)))
+              (niwa-view-test--insert-data data-buf "Live initial.\n\n" 'response)
+              (niwa-view--render-stream-update data-buf))
+            (let* ((window (selected-window))
+                   (dock (niwa-view-composer-display window))
+                   (clicked (niwa-view-mouse-test--target "History line 65.")))
+              (redisplay t)
+              (sit-for 0.02)
+              (goto-char clicked)
+              (set-window-start window (save-excursion (forward-line -8) (point)))
+              (set-window-vscroll window 7 t t)
+              (redisplay t)
+              (let* ((dock-point (window-point dock))
+                     (dock-start (window-start dock))
+                     (start (window-start window))
+                     (reading-y (niwa-view--position-screen-y clicked window)))
+                (ert-info ((format "Kind %S start=%d clicked=%d end=%d"
+                                   kind start clicked (point-max)))
+                  (should reading-y))
+                (should (posn-at-point dock-point dock))
+                (should (= 7 (window-vscroll window t)))
+                (should-not (pos-visible-in-window-p (point-max) window))
+                (setq focused nil)
+                (niwa-view-test--insert-data
+                 data-buf
+                 (mapconcat (lambda (n) (format "Catch-up line %d.\n" n))
+                            (number-sequence 0 7) "")
+                 'response)
+                (niwa-view--schedule-render kind data-buf 0.015)
+                (should-not niwa-view--render-timer)
+                (niwa-view-mouse-test--focus-click
+                 clicked 'between
+                 (lambda (_)
+                   (setq focused t)
+                   (niwa-view--resume-attended-views)
+                   (niwa-view-mouse-test--wait
+                    (lambda () (null niwa-view--render-timer)))))
+                (niwa-view-mouse-test--wait
+                 (lambda () (null niwa-view-render--batch)))
+                (redisplay t)
+                (should (string-search "Catch-up line 7." (buffer-string)))
+                (should (= clicked (point)))
+                (should (= start (window-start window)))
+                (should (= 7 (window-vscroll window t)))
+                (should (= reading-y (niwa-view--position-screen-y (point) window)))
+                (should (eq window (selected-window)))
+                (should (= dock-point (window-point dock)))
+                (should (= dock-start (window-start dock)))
+                (should (equal draft (niwa-view--input-text))))))))))
+  (kind)
+  :doc "A history focus click retains its pixel viewport across full catch-up" 'full
+  :doc "A history focus click retains its pixel viewport across incremental catch-up" 'incremental)
+
+(provide 'test-niwa-view-mouse)
+;;; test-niwa-view-mouse.el ends here

@@ -36,7 +36,7 @@ test('unified work panel retains expanded completions and checks writable contro
         ];
         const el = (tag, cls, text) => { const node = document.createElement(tag);
           node.className = cls || ''; node.textContent = text || ''; return node; };
-        window.bg = window.mevedelBackgroundView.create({state: window.bgState, el,
+        window.bg = window.niwaBackgroundView.create({state: window.bgState, el,
           href: destination => '#room.secret?agent=' + encodeURIComponent(destination.agent.path),
           send: frame => window.bgSent.push(frame), now: () => window.bgTime,
           setTimer: fn => { window.bgTick = fn; return 1; }, clearTimer() {},
@@ -152,7 +152,7 @@ test('reading-mode work taps keep the panel still through focus and click', asyn
         document.getElementById('transcript').style.height = '1500px';
         const el = (tag, cls, text) => { const node = document.createElement(tag);
           node.className = cls || ''; node.textContent = text || ''; return node; };
-        const bg = window.mevedelBackgroundView.create({state: {connected: true, writable}, el,
+        const bg = window.niwaBackgroundView.create({state: {connected: true, writable}, el,
           send() {}, openAgent() {}, openExecution() {}, showConversation() {}});
         bg.show({rows: Array.from({length: 4}, (_, n) => ({key: `work-${n}`, kind: 'bash',
           owner: '/root', id: `exec-${n}`, description: `Command ${n}`, status: 'running', statusLabel: 'Running'}))});

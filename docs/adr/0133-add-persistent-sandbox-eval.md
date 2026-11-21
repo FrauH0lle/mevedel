@@ -14,11 +14,11 @@ evaluating in the user's Emacs and without rebuilding every fixture per call.
   running a small request loop. Requests and replies travel as framed,
   `read`-safe forms with request IDs over the child's stdin and stdout.
   Features are loaded on demand by the evaluated forms; the user's init is
-  never loaded, because it loads mevedel itself and can start collaboration
+  never loaded, because it loads niwa itself and can start collaboration
   rooms, sleep inhibitors, servers or timers.
 - **Service child.** Managed executions own one child and close its pipe stdin
   at launch, so the sandbox is not an ordinary execution. It is a
-  session-owned service child started through a new `mevedel-execution` entry:
+  session-owned service child started through a new `niwa-execution` entry:
   writable pipe stdin, no PTY, no spool of its own, and not listed as a
   model-visible execution. The facade owns the binding between the service
   and its calls; callers do not inspect process records.
@@ -47,7 +47,7 @@ evaluating in the user's Emacs and without rebuilding every fixture per call.
   sandbox process, because a running form cannot be interrupted safely in
   place.
 - **Lifetime.** Idle means no call in flight.
-  `mevedel-eval-sandbox-idle-timeout` (seconds; nil disables) is armed when a
+  `niwa-eval-sandbox-idle-timeout` (seconds; nil disables) is armed when a
   call settles and cancelled when the next call is admitted, so it cannot stop
   a running call. Session close and Emacs exit kill the sandbox, as does a
   change of the owner's working directory, detected on the next call, which

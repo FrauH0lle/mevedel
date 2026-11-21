@@ -4,9 +4,9 @@ Status: accepted
 
 ## Current decision
 
-Mevedel exposes one closed resolver for `work://`, `artifact://`, `skill://`,
+Niwa exposes one closed resolver for `work://`, `artifact://`, `skill://`,
 `agent://`, `history://`, `memory://`, `mcp://`, `shared://`, `notes://`, and
-`mevedel://`. An address
+`niwa://`. An address
 serializes a canonical locator; it grants no authority. Preparation validates
 an opaque attempt and logical authority facts before permission. Authorized
 execution consumes that attempt without reparsing or exposing private backing
@@ -44,7 +44,7 @@ borrow that exception. Note conversations use this same session Plan boundary.
 
 Explicit skill-origin aliases resolve to the current exact full-hash locator
 while preserving the authored alias in model-visible output. There is no
-unqualified name alias. `mevedel://` is always advertised and exposes installed
+unqualified name alias. `niwa://` is always advertised and exposes installed
 Markdown documentation through Read, Glob and Grep. It does not expose source
 code or a mutation interface. Its owner directory is resolved from an existing
 source sibling of the loaded bytecode, or from the loaded library itself when
@@ -225,7 +225,7 @@ All revisions below refine ADR 0104's closed resolver decision.
 - **Lenient address spelling.** The resolver accepted only the canonical
   spelling. Across 17 sessions from 2026-09-14 to 2026-10-06, models were
   rejected 27 times for a directory's trailing slash, almost always
-  `work://shared/`, the spelling mevedel's own prompts used, and twice for a
+  `work://shared/`, the spelling niwa's own prompts used, and twice for a
   library name written as the listing printed it, with spaces. Each rejection cost a
   round trip and taught nothing, because both spellings have exactly one
   meaning. The resolver now normalizes literal characters, either hex case, and

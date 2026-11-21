@@ -16,7 +16,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 Consider a task transition event when notifications or tracker synchronization
 need to observe every completion. A hook matching `TaskWrite` misses automatic
-completion by `mevedel-tool-task-finalize-owner` in `mevedel-tool-task.el`.
+completion by `niwa-tool-task-finalize-owner` in `niwa-tool-task.el`.
 Observe actual state transitions across both paths rather than tool calls alone.
 Defer until a concrete integration needs that coverage.
 

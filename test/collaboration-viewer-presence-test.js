@@ -21,7 +21,7 @@ function build() {
   load('relay/viewer/viewer-presence.js', {window, document});
   const sent = [];
   const current = {page: null};
-  const presence = window.mevedelPresence.create({
+  const presence = window.niwaPresence.create({
     send: frame => sent.push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
     page: () => current.page,

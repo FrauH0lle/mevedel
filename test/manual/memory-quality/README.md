@@ -10,7 +10,7 @@ the model input.
 `run.el` uses a configured DeepSeek or Codex backend. It accepts a temporary private
 provider configuration, creates a temporary workspace through Eask's isolated
 test environment, and writes evidence under `.scratch/memory-quality/` by default.
-`MEVEDEL_QUALITY_OUTPUT` chooses another output directory. Model credentials
+`NIWA_QUALITY_OUTPUT` chooses another output directory. Model credentials
 remain in a mode-0600 temporary file and are deleted when the test settles.
 If loading fails before the test starts, remove that temporary file explicitly.
 
@@ -28,20 +28,20 @@ workload selection without loading branch code into that Emacs. Then run:
 
 ```sh
 npx @emacs-eask/cli clean elc
-MEVEDEL_QUALITY_PROVIDER=/tmp/RETURNED-PROVIDER-FILE.el \
+NIWA_QUALITY_PROVIDER=/tmp/RETURNED-PROVIDER-FILE.el \
   npx @emacs-eask/cli test ert test/manual/memory-quality/run.el
 ```
 
 Optional environment variables:
 
-- `MEVEDEL_QUALITY_GPTEL`: source directory for the dependency being evaluated;
+- `NIWA_QUALITY_GPTEL`: source directory for the dependency being evaluated;
   newer source is preferred over stale bytecode.
-- `MEVEDEL_QUALITY_MODEL`: a model already declared by the exported backend,
+- `NIWA_QUALITY_MODEL`: a model already declared by the exported backend,
   such as `deepseek-v4-pro`, for an explicit comparison. This does not change
   the user's workload configuration.
-- `MEVEDEL_QUALITY_RESULTS`: output subdirectory, default `results`, so a
+- `NIWA_QUALITY_RESULTS`: output subdirectory, default `results`, so a
   comparison does not replace earlier evidence.
-- `MEVEDEL_QUALITY_DIGEST_EFFORT`: explicit comparison effort for digests;
+- `NIWA_QUALITY_DIGEST_EFFORT`: explicit comparison effort for digests;
   continuation keeps the exported policy. For the GPT comparison, `none`
   corresponds to the DeepSeek comparison's disabled digest reasoning.
 
@@ -59,7 +59,7 @@ To export Codex access, dynamically bind `process-environment` around the export
 
 ```elisp
 (let ((process-environment
-       (cons "MEVEDEL_QUALITY_BACKEND=Codex" process-environment)))
+       (cons "NIWA_QUALITY_BACKEND=Codex" process-environment)))
   (with-temp-buffer
     (insert-file-contents "/ABS/REPO/test/manual/memory-quality/export-provider.el")
     (eval (read (current-buffer)) t)))
@@ -67,11 +67,11 @@ To export Codex access, dynamically bind `process-environment` around the export
 
 This exports temporary authentication headers, without exporting refresh tokens
 or changing the live workload. Use a separate export per run; the harness deletes
-each file. Select each exact registered model with `MEVEDEL_QUALITY_MODEL`.
+each file. Select each exact registered model with `NIWA_QUALITY_MODEL`.
 The request harness has a network-free timeout/cancellation check:
 
 ```sh
-MEVEDEL_QUALITY_GPTEL=/PATH/TO/GPTEL \
+NIWA_QUALITY_GPTEL=/PATH/TO/GPTEL \
   npx @emacs-eask/cli test ert test/manual/memory-quality/request-test.el
 ```
 
@@ -100,14 +100,14 @@ abandoned-decision, and repeated-summary cases. Review questions and expected
 answers stay outside model input.
 
 Export the configured memory workload by binding
-`MEVEDEL_QUALITY_WORKLOAD=memory` in `process-environment` around the export form.
+`NIWA_QUALITY_WORKLOAD=memory` in `process-environment` around the export form.
 Then run:
 
 ```sh
-MEVEDEL_QUALITY_PROVIDER=/tmp/RETURNED-PROVIDER-FILE.el \
-MEVEDEL_QUALITY_OUTPUT=/ABS/QUALITY-OUTPUT \
-MEVEDEL_QUALITY_DIGESTS=/ABS/ACCEPTED-STAGE-ONE-RESULTS \
-MEVEDEL_QUALITY_RESULTS=consolidation-memory \
+NIWA_QUALITY_PROVIDER=/tmp/RETURNED-PROVIDER-FILE.el \
+NIWA_QUALITY_OUTPUT=/ABS/QUALITY-OUTPUT \
+NIWA_QUALITY_DIGESTS=/ABS/ACCEPTED-STAGE-ONE-RESULTS \
+NIWA_QUALITY_RESULTS=consolidation-memory \
   npx @emacs-eask/cli test ert test/manual/memory-quality/consolidation.el
 ```
 

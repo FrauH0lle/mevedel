@@ -133,7 +133,7 @@ turning the model into a delivery-protocol participant.
   mail durable without adding model-side delivery bookkeeping.
 - **ADR 0050 fixed automatic result ownership at the spawn parent**, including
   peer-initiated follow-ups, avoiding shifting ownership and broadcast duplicates.
-  It explicitly included interruption because interruption settles a mevedel turn.
+  It explicitly included interruption because interruption settles a niwa turn.
 - **ADR 0051 chose one RESULT envelope** for completed, errored, and interrupted
   turns. ADR 0052 bounded inline results while reusing persisted transcripts for
   full content. Its original “32 KiB” wording described a character-count limit;

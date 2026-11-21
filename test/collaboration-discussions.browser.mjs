@@ -71,7 +71,7 @@ async function setup(page) {
     window.openedConversations = [];
     window.located = [];
     addEventListener('message', event => {
-      if (event.data && event.data.mevedelDiscussion === 'located') window.located.push(event.data);
+      if (event.data && event.data.niwaDiscussion === 'located') window.located.push(event.data);
     });
     const el = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -112,7 +112,7 @@ async function setup(page) {
       window.controller.handle(reply);
     };
     const $ = id => document.getElementById(id);
-    window.controller = window.mevedelArtifactDiscussions.create({
+    window.controller = window.niwaArtifactDiscussions.create({
       send: frame => {
         window.sent.push(frame);
         setTimeout(() => answer(frame), 0);
@@ -133,7 +133,7 @@ async function setup(page) {
       frame.className = 'artifact-frame';
       frame.srcdoc = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
         + 'style-src \'unsafe-inline\'; script-src \'unsafe-inline\'">'
-        + window.mevedelArtifactDiscussions.script() + html;
+        + window.niwaArtifactDiscussions.script() + html;
       body.append(frame);
       window.controller.attach(frame, id, 'schema.html');
     };
@@ -283,7 +283,7 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
 
     // The artifact cannot start a discussion on its own, and messages from
     // any other window are not heard at all.
-    const forged = {mevedelDiscussion: 'pick', anchor: {selector: '#lead', label: 'Forged'},
+    const forged = {niwaDiscussion: 'pick', anchor: {selector: '#lead', label: 'Forged'},
                     rect: {left: 0, top: 0, width: 10, height: 10}, context: {}};
     await frame.evaluate(message => parent.postMessage(message, '*'), forged);
     await page.waitForTimeout(50);
@@ -593,7 +593,7 @@ test('an answer to a discussion not on screen marks it, never takes the reader a
     assert.equal(await page.evaluate(() =>
       document.getElementById('artifact-discussions').classList.contains('unread')), true);
     await frame.waitForFunction(() => {
-      const layer = document.querySelector('mevedel-discussion-layer');
+      const layer = document.querySelector('niwa-discussion-layer');
       return !!layer;
     });
     await page.click(`${fresh} .ds-back`);

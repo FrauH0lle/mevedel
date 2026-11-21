@@ -23,7 +23,7 @@ prose, so an explainer that is mostly text is underusing it.
 1. Read the template:
 
    ```
-   ${MEVEDEL_SKILL_DIR}template.html
+   ${NIWA_SKILL_DIR}template.html
    ```
 
 2. Pick a flavor (below) and **delete the other one entirely** - the template

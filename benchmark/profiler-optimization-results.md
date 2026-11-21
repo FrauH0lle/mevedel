@@ -5,7 +5,7 @@ the load path:
 
 ```bash
 npx @emacs-eask/cli emacs --batch -L . -L test \
-  -l benchmark/mevedel-profiler-optimization.el -- SCENARIO OUTPUT_DIRECTORY
+  -l benchmark/niwa-profiler-optimization.el -- SCENARIO OUTPUT_DIRECTORY
 ```
 
 Raw profiles live under
@@ -247,17 +247,17 @@ Compile the package and harness before running:
 ```sh
 npx @emacs-eask/cli compile
 npx @emacs-eask/cli emacs --batch -L . \
-  --eval '(setq mevedel-benchmark--no-main t)' \
-  -f batch-byte-compile benchmark/mevedel-profiler-optimization.el
+  --eval '(setq niwa-benchmark--no-main t)' \
+  -f batch-byte-compile benchmark/niwa-profiler-optimization.el
 npx @emacs-eask/cli emacs --batch -L . \
-  -l benchmark/mevedel-profiler-optimization.elc -- \
+  -l benchmark/niwa-profiler-optimization.elc -- \
   full-projection OUTPUT-DIRECTORY [SESSION-DIRECTORY]
 ```
 
 Set `treesit-extra-load-path` before loading the harness if Markdown grammars
 are installed outside Emacs's default search path. Metrics record the resolved
 mode; a nil mode measures the unfontified fallback, not Markdown fontification.
-Bind `mevedel-benchmark--projection-gc-threshold` before loading to compare a
+Bind `niwa-benchmark--projection-gc-threshold` before loading to compare a
 tuned heap; the default is 800,000 bytes with `gc-cons-percentage` 0.1.
 
 Both synchronous projection and scheduled projection driven deterministically
@@ -480,7 +480,7 @@ independent fixes on `9b710fc9`), not against the earlier buggy revision. A
 separate lighter comparison below measures those fixes against `9b710fc9`.
 Both sides used private compiled snapshots and matching harness, dependencies,
 assets and installed Markdown grammars in fresh isolated Emacs 31.1 processes.
-Restored input was `/tmp/mevedel-projection-fixture-xk2PCJ/session`; the other
+Restored input was `/tmp/niwa-projection-fixture-xk2PCJ/session`; the other
 fixture was synthetic. Frame 80×25, GC percentage 0.1, thresholds 800000 and
 67108864. The shared benchmark flock serialized all heavy runs with other view
 work. No worktree code was loaded into the user's running Emacs.
@@ -662,7 +662,7 @@ Fresh post-discard validation of the retained `04ab1a4b` implementation:
   zone **1732/1832** net conses, zero GCs. All ran under the shared benchmark lock;
   command logs are `.scratch/turn-plans-retained-validation/`.
 - Independent read-only review found no actionable documentation inaccuracies;
-  `git diff --check` passes. `mevedel-view-zone.el` is unchanged from `9b710fc9`;
+  `git diff --check` passes. `niwa-view-zone.el` is unchanged from `9b710fc9`;
   `.eask` remains an untracked dependency symlink. Candidate modules are absent.
 
 Conditional transport/environment skips remain unverified. No cache-specific
@@ -679,7 +679,7 @@ No new persistent turn cache is involved.
 ### Ordinary full-projection drain
 
 Reuse the unchanged `full-projection` scenario above, its synthetic forty-exchange
-history and restored `/tmp/mevedel-projection-fixture-xk2PCJ/session` copy. Seven
+history and restored `/tmp/niwa-projection-fixture-xk2PCJ/session` copy. Seven
 alternating baseline/change pairs per fixture, 28 fresh batch Emacs processes,
 compiled package/harness with identical installed dependency manifests,
 installed `markdown-ts-mode` and both frozen grammars, Emacs 31.1, private

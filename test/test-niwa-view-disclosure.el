@@ -1,0 +1,1489 @@
+;;; test-niwa-view-disclosure.el -- Transcript disclosure tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Source-backed disclosure identity, state, and action coverage.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+(require 'niwa-structs)
+(require 'niwa-tool-registry)
+(require 'niwa-tool-ptc)
+(require 'niwa-view)
+(require 'niwa-view-composer)
+(require 'niwa-view-disclosure)
+(require 'niwa-view-render)
+(require 'niwa-view-stream)
+
+;; `niwa-session-persistence'
+(defvar niwa-session--read-only-mode)
+
+
+;;
+;;; Disclosure
+
+(defun niwa-view-disclosure-test--caret-offset ()
+  "Return the composer caret offset from its draft start.
+The current buffer is the owning view."
+  (let ((view (current-buffer)))
+    (with-current-buffer (niwa-view-composer-buffer view)
+      (- (point) (niwa-view-composer-draft-start view)))))
+
+(niwa-deftest niwa-view-disclosure-indent-text ()
+  ,test
+  (test)
+  :doc "display insets preserve authored whitespace on every payload line"
+  (dolist (width '(0 4 6 9))
+    (let* ((text "  authored indent\nnext line")
+           (indented (niwa-view-disclosure-indent-text text width))
+           (prefix (make-string width ?\s)))
+      (should (equal text (substring-no-properties indented)))
+      (dotimes (pos (length text))
+        (should (equal prefix (get-text-property pos 'line-prefix indented)))
+        (should (equal prefix (get-text-property pos 'wrap-prefix indented)))))))
+
+(niwa-deftest niwa-view-disclosure-state-key ()
+  ,test
+  (test)
+  :doc "rebases source coordinates while preserving a record discriminator"
+  (let ((key (niwa-view-disclosure-state-key
+              '(10 . 20) 'hook-audit
+              '(source hook-audit 1 old-anchor record-id))))
+    (should (equal 'source (nth 0 key)))
+    (should (equal 'hook-audit (nth 1 key)))
+    (should (= 10 (nth 2 key)))
+    (should (equal '(record-id) (nthcdr 4 key)))))
+
+(niwa-deftest niwa-view-disclosure-rebase-compaction-tool-states ()
+  ,test
+  (test)
+  :doc "moves surviving tool and hidden child states without reviving archived rows"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf "(:name \"Read\" :args nil)\n\nArchived result\n"
+     '(tool . "archived-call"))
+    (let ((old-end (with-current-buffer data-buf (point-max))))
+      (niwa-view-test--insert-data
+       data-buf "(:name \"Read\" :args nil)\n\nSurviving result\n"
+       '(tool . "surviving-call"))
+      (with-current-buffer view-buf
+        (let* ((old-key (list 'source 'tool-summary 1
+                              '(tool "archived-call")))
+               (new-key (list 'source 'tool-summary old-end
+                              '(tool "surviving-call")))
+               (child-key (list 'source 'tool-child old-end
+                                '(tool "surviving-call") 1)))
+          (niwa-view-disclosure-record-state-for-key old-key nil)
+          (niwa-view-disclosure-record-state-for-key new-key nil)
+          (niwa-view-disclosure-record-state-for-key child-key nil)
+          (let ((states (niwa-view-disclosure-compaction-tool-states)))
+            (should (= 3 (length states)))
+            (with-current-buffer data-buf
+              (delete-region (point-min) old-end)
+              (goto-char (point-min))
+              (insert "Leading compacted summary\n"))
+            (niwa-view-disclosure-rebase-compaction-tool-states
+             states data-buf)
+            (let ((new-start (length "Leading compacted summary\n")))
+              (cl-flet ((rebased (key)
+                          (let ((copy (copy-tree key)))
+                            (setcar (nthcdr 2 copy) (1+ new-start))
+                            copy)))
+                (should-not (niwa-view-disclosure-state-for-key old-key))
+                (should-not (niwa-view-disclosure-state-for-key new-key))
+                (should (equal (cons (rebased new-key) nil)
+                               (niwa-view-disclosure-state-for-key
+                                (rebased new-key))))
+                (should (equal (cons (rebased child-key) nil)
+                               (niwa-view-disclosure-state-for-key
+                                (rebased child-key))))))))))))
+
+(niwa-deftest niwa-view-toggle-section ()
+  ,test
+  (test)
+  :doc "expands collapsed tool one-liners"
+  (niwa-view-test--with-buffers
+   (niwa-view-test--insert-data
+    data-buf
+    "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\nfull content here\nline 2\n"
+    '(tool . "call_1"))
+   (niwa-view-test--insert-data data-buf "Done.\n" 'response)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     ;; Find the collapsed tool line
+     (goto-char (point-min))
+     (let ((found nil))
+       (while (and (not found) (< (point) (niwa-view-transcript-tail)))
+         (if (eq (get-text-property (point) 'niwa-view-collapsed) t)
+             (setq found t)
+           (goto-char (or (next-single-property-change
+                           (point) 'niwa-view-collapsed)
+                          (niwa-view-transcript-tail)))))
+       (should found)
+       ;; Content should be collapsed
+       (let ((text (buffer-substring-no-properties (point-min) (niwa-view-transcript-tail))))
+         (should-not (string-match-p "full content here" text)))
+       ;; Expand
+       (niwa-view-toggle-section)
+       (let ((text (buffer-substring-no-properties (point-min) (niwa-view-transcript-tail))))
+         (should (string-match-p "Read: .*f\\.el" text))
+         (should (string-match-p "full content here" text)))
+       (search-forward "full content here")
+       (let ((body-start (match-beginning 0)))
+         (should (equal "    " (get-text-property body-start 'line-prefix)))
+         (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+         (goto-char body-start)
+         (should (looking-at-p "full content here"))))))
+
+  :doc "ordinary tool toggles and refreshes preserve following independent deliveries"
+  (dolist (name '("Read" "Bash"))
+    (let ((niwa-view-tool-group-collapse-threshold 0))
+      (niwa-view-test--with-buffers
+        (niwa-view-test--insert-data
+         data-buf
+         (format "#+begin_tool\n(:name %S :args nil)\n\ntool output\n#+end_tool\n" name)
+         '(tool . "preceding-call"))
+        (niwa-view-test--insert-data
+         data-buf
+         (concat "<agent-result sender=\"/root/failed\" recipient=\"/root\" outcome=\"errored\">\n"
+                 "Provider unavailable\n</agent-result>\n"
+                 "<agent-result sender=\"/root/done\" recipient=\"/root\" outcome=\"completed\">\n"
+                 "Finished work\n</agent-result>\n")
+         nil)
+        (niwa-view-test--insert-data data-buf "Following prose.\n" 'response)
+        (with-current-buffer view-buf
+          (niwa-view--full-rerender)
+          (niwa-view-test--insert-composer-draft "> keep\nsecond line" 3)
+          (dolist (header '("Agent /root/failed failed" "Agent /root/done finished"))
+            (goto-char (point-min))
+            (should (search-forward header (niwa-view-transcript-tail) t)))
+          (dotimes (_ 3)
+            (niwa-view--full-rerender)
+            (dolist (action '(refresh toggle toggle))
+              (goto-char (text-property-any (point-min) (niwa-view-transcript-tail)
+                                            'niwa-view-type 'tool-summary))
+              (if (eq action 'refresh)
+                  (should (niwa-view--refresh-tool-row data-buf "preceding-call"))
+                (niwa-view-toggle-section))
+              (dolist (header '("Agent /root/failed failed" "Agent /root/done finished"))
+                (goto-char (point-min))
+                (should (search-forward header (niwa-view-transcript-tail) t))
+                (should-not (invisible-p (match-beginning 0)))
+                (should (get-text-property (point) 'niwa-view-collapsed))
+                (should (= 1 (niwa-view-test--count-substring header (buffer-string)))))
+              (should (string-search "Following prose." (buffer-string)))
+              (should (equal "> keep\nsecond line" (niwa-view-composer-draft-text view-buf t)))))
+          (niwa-view--full-rerender)
+          (should (= 1 (niwa-view-test--count-substring
+                        "Agent /root/failed failed" (buffer-string))))))))
+
+  :doc "generic tool identity survives toggles and targeted result refresh"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf
+     "#+begin_tool\n(:name \"GenericIdentityTool\" :args (:value \"x\"))\n\ninitial result\n#+end_tool\n"
+     '(tool . "identity-call"))
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (niwa-view-test--insert-composer-draft "> keep\nsecond line" 3)
+      (let ((tick (with-current-buffer data-buf (buffer-modified-tick))))
+        (dotimes (_ 2)
+          (let ((region (niwa-view--tool-row-region data-buf "identity-call")))
+            (should region)
+            (goto-char (car region))
+            (should (get-text-property (point) 'niwa-view-collapsed))
+            (niwa-view-toggle-section)
+            (should-not (get-text-property (point) 'niwa-view-collapsed))
+            (niwa-view-toggle-section)
+            (should (get-text-property (point) 'niwa-view-collapsed))
+            (should (equal "identity-call"
+                           (get-text-property (point) 'niwa-view-tool-use-id)))
+            (should (niwa-view--refresh-tool-row data-buf "identity-call"))))
+        (should (= tick (with-current-buffer data-buf (buffer-modified-tick)))))
+      (with-current-buffer data-buf
+        (goto-char (point-min))
+        (search-forward "initial result")
+        (let ((start (match-beginning 0)))
+          (replace-match "updated result" t t)
+          (put-text-property start (point) 'gptel '(tool . "identity-call"))))
+      (should (niwa-view--refresh-tool-row data-buf "identity-call"))
+      (goto-char (car (niwa-view--tool-row-region data-buf "identity-call")))
+      (should (get-text-property (point) 'niwa-view-collapsed))
+      (should-not (search-forward "updated result" (niwa-view-transcript-tail) t))
+      (goto-char (car (niwa-view--tool-row-region data-buf "identity-call")))
+      (niwa-view-toggle-section)
+      (should (search-forward "updated result" (niwa-view-transcript-tail) t))
+      (should (equal "> keep\nsecond line" (niwa-view-composer-draft-text view-buf t)))))
+
+  :doc "fallback prompt disclosure keeps its header when expanded"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert ":PROMPT:\nExpanded prompt body.\n:END:\n"))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t)
+           (source (cons 1 (with-current-buffer data-buf (point-max)))))
+       (goto-char (niwa-view-transcript-tail))
+       (niwa-view--insert-rendered-tool
+        '(:header "Prompt"
+                  :body "Expanded prompt body."
+                  :body-mode markdown-mode
+                  :vtype prompt-summary
+                  :initially-collapsed-p t)
+        source))
+     (goto-char (point-min))
+     (search-forward "Prompt")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^  ◆ Prompt$" text))
+       (should (= 1 (niwa-view-test--count-substring "Prompt" text)))
+       (should (string-match-p "Expanded prompt body" text)))
+     (goto-char (point-min))
+     (search-forward "Expanded prompt body")
+     (let ((body-start (match-beginning 0)))
+       (should (equal "    " (get-text-property body-start 'line-prefix)))
+       (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+       (goto-char body-start)
+       (niwa-view-toggle-section))
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (= 1 (niwa-view-test--count-substring "Prompt" text)))
+       (should-not (string-match-p "Expanded prompt body" text)))))
+
+  :doc "embedded tool syntax cannot hijack a prompt disclosure"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert (concat ":PROMPT:\nExpanded follow-up prompt.\n"
+                     ",#+begin_tool (Read :file_path \"/tmp/example.el\")\n"
+                     "(:name \"Read\" :args "
+                     "(:file_path \"/tmp/example.el\"))\n\n"
+                     "Embedded tool output.\n,#+end_tool\n:END:\n")))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t)
+           (source (cons 1 (with-current-buffer data-buf (point-max)))))
+       (goto-char (niwa-view-transcript-tail))
+       (niwa-view--insert-rendered-tool
+        '(:header "Prompt"
+                  :body "Expanded follow-up prompt."
+                  :body-mode markdown-mode
+                  :vtype prompt-summary
+                  :initially-collapsed-p t)
+        source))
+     (goto-char (point-min))
+     (search-forward "Prompt")
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-search "Expanded follow-up prompt." text)))
+     (goto-char (point-min))
+     (search-forward "Expanded follow-up prompt.")
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-search "◆ Prompt" text))
+       (should-not (string-search "Read: /tmp/example.el" text)))))
+
+  :doc "collapsed tools retain material sandbox disclosure"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert "sandboxed tool source\n"))
+   (with-current-buffer view-buf
+     (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+            (rendering
+             '(:header "Bash: test"
+                       :body "test output\n"
+                       :body-mode text-mode
+                       :sandbox-summary
+                       (:attempt-count 1 :started-count 1 :refused-count 0
+                                       :sandbox bubblewrap :filesystem workspace-write
+                                       :network unrestricted :proc fresh
+                                       :additional-read-count 0 :additional-write-count 1))))
+       (let ((inhibit-read-only t))
+         (goto-char (niwa-view-transcript-tail))
+         (niwa-view--render-expanded-body rendering source))
+       (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                  (lambda (_buf _start _end &optional _collapsed-only)
+                    rendering)))
+         (goto-char (point-min))
+         (search-forward "test output")
+         (niwa-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "Bash: test" text))
+           (should (string-match-p
+                    "Sandbox:.*network access allowed.*additional filesystem write access"
+                    text))
+           (should-not (string-match-p "test output" text)))))))
+
+  :doc "collapsing a compound tool takes its nested call rows with it"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert "ptc source data\n"))
+   (with-current-buffer view-buf
+     (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+            (rendering
+             '(:header "ToolCall: 1 call (completed)"
+               :body "Returned:\nfinal value\n"
+               :initially-collapsed-p nil
+               :child-calls ((:id "ptc/1" :tool "Read" :status success
+                              :args (:file_path "a.el")
+                              :result "child output")))))
+       (let ((inhibit-read-only t))
+         (goto-char (niwa-view-transcript-tail))
+         (niwa-view--insert-rendered-tool rendering source))
+       (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                  (lambda (_buf _start _end &optional _collapsed-only)
+                    rendering)))
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "final value" text))
+           (should (string-match-p "Read: a\\.el" text)))
+         ;; Collapsing the envelope must remove the rows it owns, not
+         ;; orphan them under the collapsed header.
+         (goto-char (point-min))
+         (search-forward "final value")
+         (niwa-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "ToolCall: 1 call" text))
+           (should-not (string-match-p "final value" text))
+           (should-not (string-match-p "Read: a\\.el" text)))
+         ;; Expanding again brings them back, and the envelope keeps its
+         ;; own identity instead of inheriting a row's.
+         (goto-char (point-min))
+         (search-forward "ToolCall: 1 call")
+         (niwa-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "final value" text))
+           (should (string-match-p "Read: a\\.el" text)))
+         (goto-char (point-min))
+         (search-forward "final value")
+         (should (eq 'tool-summary
+                     (get-text-property (match-beginning 0)
+                                        'niwa-view-type)))
+         (goto-char (point-min))
+         (search-forward "Read: a.el")
+         (should (eq 'tool-child
+                     (get-text-property (match-beginning 0)
+                                        'niwa-view-type)))))))
+
+  :doc "repeated nested compound toggles retain descendants and siblings exactly once"
+  (niwa-view-test--with-buffers
+   (niwa-tool-ptc--register)
+   (with-current-buffer data-buf (insert "source\n"))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t))
+       (goto-char (niwa-view-transcript-tail))
+       (niwa-view--render-expanded-body
+        '(:header "Activity" :vtype tool-group
+          :child-calls
+          ((:id "group/1" :tool "ToolCall" :status success :result "ok"
+            :render-data
+            (:kind ptc :outcome completed
+             :calls ((:id "ptc/1" :tool "Read" :status success
+                      :args (:file_path "a.el") :result "first output")
+                     (:id "ptc/2" :tool "Read" :status success
+                      :args (:file_path "b.el") :result "second output"))))
+           (:id "group/2" :tool "Read" :status success
+            :args (:file_path "sibling.el") :result "sibling output")))
+        (cons 1 8)))
+     (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
+     (let ((draft-point (copy-marker (point))))
+       (unwind-protect
+           (dotimes (i 6)
+             (save-excursion
+               (goto-char (point-min))
+               (search-forward "ToolCall: 2 calls")
+               (niwa-view-toggle-section)
+               (let ((text (buffer-substring-no-properties
+                            (point-min) (niwa-view-transcript-tail))))
+                 (should (= (if (zerop (% i 2)) 1 0)
+                            (niwa-view-test--count-substring "Read: a.el" text)))
+                 (should (= (if (zerop (% i 2)) 1 0)
+                            (niwa-view-test--count-substring "Read: b.el" text)))
+                 (should (= 1 (niwa-view-test--count-substring
+                               "Read: sibling.el" text))))
+               (when (zerop (% i 2))
+                 ;; A descendant toggles its own output, not its parent's calls.
+                 (goto-char (point-min))
+                 (search-forward "Read: a.el")
+                 (should (equal "    " (get-text-property (point) 'line-prefix)))
+                 (niwa-view-toggle-section)
+                 (should (string-search "first output" (buffer-string)))
+                 (should-not (string-search "second output" (buffer-string)))
+                 (goto-char (point-min))
+                 (search-forward "first output")
+                 (should (equal "        " (get-text-property (point) 'line-prefix)))
+                 (should (equal "        " (get-text-property (point) 'wrap-prefix)))
+                 (goto-char (point-min))
+                 (search-forward "Read: a.el")
+                 (should (equal "    " (get-text-property (point) 'line-prefix)))
+                 (niwa-view-toggle-section)))
+             (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text view-buf t)))
+             (should (= (point) draft-point))
+             (should (= 4 (niwa-view-disclosure-test--caret-offset))))
+         (set-marker draft-point nil)))))
+
+  :doc "non-expandable tool events remain non-toggleable and untracked"
+  (niwa-view-test--with-buffers
+   (niwa-tool-register
+    (niwa-tool--create
+     :name "EventStateTool"
+     :category "niwa"
+     :renderer (lambda (_name _args _result _data)
+                 (list :header "EventStateTool: complete"
+                       :expandable-p nil))))
+   (niwa-view-test--insert-data
+    data-buf
+    "(:name \"EventStateTool\" :args (:id 1))\n\nevent body hidden\n"
+    '(tool . "call_event_state"))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t))
+       (goto-char (niwa-view-transcript-tail))
+       (niwa-view--render-tool-activity
+        (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
+        data-buf))
+     (goto-char (point-min))
+     (search-forward "EventStateTool: complete")
+     (goto-char (match-beginning 0))
+     (should (eq (get-text-property (point) 'niwa-view-type)
+                 'tool-event))
+     (should-not (get-text-property (point) 'niwa-view-source))
+     (should-error (niwa-view-toggle-section) :type 'user-error)
+     (should (= 0 (hash-table-count niwa-view-disclosure--source-states)))
+     (should-not (search-forward "event body hidden"
+                                 (niwa-view-transcript-tail) t))))
+
+  :doc "TAB toggles running and completed Agent rows; RET opens transcripts"
+  (dolist (status '(running completed))
+    (niwa-view-test--with-buffers
+     (with-current-buffer data-buf
+       (insert "agent source data\n"))
+     (let* ((agent-path (format "/root/%s" status))
+            (source (cons 1 (with-current-buffer data-buf (point-max))))
+            (rendering
+             `(:header ,(format "Started %s" agent-path)
+                       :body "Agent details\n"
+                       :body-mode text-mode
+                       :vtype agent-handle
+                       :agent-path ,agent-path
+                       :agent-status ,status
+                       :initially-collapsed-p t))
+            opened)
+       (with-current-buffer view-buf
+         (let ((inhibit-read-only t))
+           (goto-char (niwa-view-transcript-tail))
+           (niwa-view--insert-rendered-tool rendering source))
+         (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                    (lambda (_buf _start _end &optional _collapsed-only)
+                      rendering))
+                   ((symbol-function
+                     'niwa-view-open-agent-transcript-at-point)
+                    (lambda (&optional _event)
+                      (setq opened t))))
+           (goto-char (point-min))
+           (search-forward "Started")
+           (niwa-view-toggle-section)
+           (should (search-forward "Agent details"
+                                   (niwa-view-transcript-tail) t))
+           (should-not opened)
+           (goto-char (point-min))
+           (search-forward agent-path)
+           (goto-char (match-beginning 0))
+           (should (eq #'niwa-view-toggle-section
+                       (lookup-key (get-text-property (point) 'keymap)
+                                   (kbd "TAB"))))
+           (niwa-view-toggle-section)
+           (should-not (search-forward "Agent details"
+                                       (niwa-view-transcript-tail) t))
+           (goto-char (point-min))
+           (search-forward agent-path)
+           (goto-char (match-beginning 0))
+           (should (eq #'niwa-view-activate-at-point
+                       (lookup-key (get-text-property (point) 'keymap)
+                                   (kbd "RET"))))
+           (niwa-view-activate-at-point)
+           (should opened))))))
+
+  :doc "prompt summaries expand and collapse through their renderer"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
+   (with-current-buffer view-buf
+     (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+            (rendering '(:header "Agent: explorer -- Find calls"
+                                 :body "rendered agent body\n"
+                                 :body-mode text-mode
+                                 :vtype prompt-summary)))
+       (let ((inhibit-read-only t))
+         (goto-char (niwa-view-transcript-tail))
+         (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+         (unwind-protect
+             (let ((start (point)))
+               (insert "› Agent: explorer -- Find calls\nrendered agent body\n")
+               (add-text-properties
+                start (point)
+                `(font-lock-face niwa-view-tool-summary
+                                 niwa-view-type prompt-summary
+                                 niwa-view-collapsed nil
+                                 niwa-view-source ,source
+                                 read-only t
+                                 keymap ,niwa-view--display-map
+                                 front-sticky (read-only keymap)
+                                 rear-nonsticky (read-only keymap))))
+           (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))
+       (cl-letf (((symbol-function 'niwa-view--segment-rendering)
+                  (lambda (buf start end &optional _collapsed-only)
+                    (should (eq buf data-buf))
+                    (should (= start (car source)))
+                    (should (= end (cdr source)))
+                    rendering)))
+         (goto-char (point-min))
+         (search-forward "rendered agent body")
+         (niwa-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "Agent: explorer -- Find calls" text))
+           (should-not (string-match-p "rendered agent body" text))
+           (should-not (string-match-p "raw launch payload" text))
+           (goto-char (point-min))
+           (search-forward "Agent: explorer")
+           (goto-char (match-beginning 0))
+           (should (eq (get-text-property (point) 'niwa-view-type)
+                       'prompt-summary))
+           (should (eq (get-text-property (point)
+                                          'niwa-view-collapsed)
+                       t)))
+         (goto-char (point-min))
+         (search-forward "Agent: explorer")
+         (niwa-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+           (should (string-match-p "rendered agent body" text))
+           (should-not (string-match-p "raw launch payload" text))
+           (goto-char (point-min))
+           (search-forward "Agent: explorer")
+           (goto-char (match-beginning 0))
+           (should (eq (get-text-property (point)
+                                          'niwa-view-collapsed)
+                       nil)))))))
+
+  :doc "TAB expand then collapse on thinking keeps surrounding
+headers intact (regression for the \"You/Assistant disappear\" bug
+when thinking-cons and turn-cons had equal-but-distinct values)."
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert "deep thoughts here\n"))
+   (with-current-buffer view-buf
+     (let ((inhibit-read-only t)
+           (thinking-src (cons 1 20))
+           (turn-src (cons 1 20)))
+       ;; User section (no source, mirrors `--insert-user-message').
+       (save-excursion
+         (goto-char (niwa-view-transcript-tail))
+         (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+         (unwind-protect
+             (let ((start (point)))
+               (insert (propertize "You\n"
+                                   'font-lock-face 'niwa-view-user-header))
+               (insert "Think about it.\n")
+               (insert (propertize "\n" 'font-lock-face 'niwa-view-separator))
+               (add-text-properties start (point)
+                                    '(read-only t niwa-view-type user)))
+           (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))
+       ;; Assistant turn: header + thinking summary + separator, with
+       ;; the turn-level fallback source equal-but-not-eq to thinking.
+       (save-excursion
+         (goto-char (niwa-view-transcript-tail))
+         (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+         (unwind-protect
+             (let ((insert-start (point)))
+               (insert (propertize "Assistant\n"
+                                   'font-lock-face 'niwa-view-assistant-header))
+               (insert (propertize "  … Thinking... (1 lines)\n"
+                                   'font-lock-face 'niwa-view-thinking-summary
+                                   'niwa-view-type 'thinking-summary
+                                   'niwa-view-collapsed t
+                                   'niwa-view-source thinking-src))
+               (insert (propertize "\n" 'font-lock-face 'niwa-view-separator))
+               (add-text-properties insert-start (point) '(read-only t))
+               (let ((pos insert-start))
+                 (while (< pos (point))
+                   (if (get-text-property pos 'niwa-view-source)
+                       (setq pos (or (next-single-property-change
+                                      pos 'niwa-view-source nil (point))
+                                     (point)))
+                     (let ((next (or (next-single-property-change
+                                      pos 'niwa-view-source nil (point))
+                                     (point))))
+                       (put-text-property pos next
+                                          'niwa-view-source turn-src)
+                       (setq pos next))))))
+           (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil))))
+     ;; Point at the exact start of the thinking line.
+     (goto-char (point-min))
+     (search-forward "Thinking...")
+     (goto-char (match-beginning 0))
+     ;; Expand.
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^You$" text))
+       (should (string-match-p "^Assistant$" text))
+       (should (string-match-p
+                (concat
+                 "^"
+                 (regexp-quote "  … Thinking... (1 lines)")
+                 "$")
+                text))
+       (should (= 1 (niwa-view-test--count-substring
+                     "Thinking..." text)))
+       (should (string-match-p "deep thoughts here" text))
+       (goto-char (point-min))
+       (search-forward "deep thoughts here")
+       (let ((body-start (match-beginning 0)))
+         (should (equal "    "
+                        (get-text-property body-start 'line-prefix)))
+         (should (equal "    "
+                        (get-text-property body-start 'wrap-prefix)))))
+     ;; Collapse back; the thinking summary must return and headers
+     ;; must still be intact.
+     (goto-char (point-min))
+     (search-forward "deep thoughts here")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^You$" text))
+       (should (string-match-p "^Assistant$" text))
+       (should (= 1 (niwa-view-test--count-substring
+                     "Thinking... (1 lines)" text)))
+       (should-not (string-match-p "deep thoughts here" text)))))
+
+  :doc "response text is a collapsible section (regression for
+earlier removal of the catch-all collapse branch that dropped
+response folding along with a dangerous best-guess preview path)."
+  (niwa-view-test--with-buffers
+   (niwa-view-test--insert-data
+    data-buf
+    "First line of reply.\nSecond line.\nThird line.\n"
+    'response)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     (goto-char (point-min))
+     (search-forward "First line of reply")
+     (goto-char (match-beginning 0))
+     (should (eq (get-text-property (point) 'niwa-view-type) 'response))
+     (should (eq (get-text-property (point) 'niwa-view-collapsed) nil))
+     ;; Collapse.
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "First line of reply" text))
+       (should-not (string-match-p "Second line" text))
+       (should (string-match-p "(3 lines)" text)))
+     ;; Expand back.
+     (goto-char (point-min))
+     (search-forward "First line of reply")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "Second line" text))
+       (should (string-match-p "Third line" text))
+       (should-not (string-match-p "(3 lines)" text)))))
+
+  :doc "response collapse and expand keep complete proposed-plan blocks hidden"
+  (niwa-view-test--with-buffers
+   (let* ((old-plan "# Hidden plan\n")
+          (session (niwa-session--create
+                    :name "test"
+                    :workspace nil
+                    :permission-mode 'ask)))
+     (with-current-buffer data-buf
+       (setq-local niwa--session session))
+     (with-current-buffer view-buf
+       (setq-local niwa--session session))
+     (niwa-view-test--insert-data
+      data-buf
+      (concat "Visible lead.\n<proposed_plan>\n"
+              old-plan
+              "</proposed_plan>\nVisible tail.\n")
+      'response)
+     (with-current-buffer data-buf
+       (niwa-view-stream-render-response (point-min) (point-max)))
+     (with-current-buffer view-buf
+       (goto-char (point-min))
+       (search-forward "Visible lead")
+       (goto-char (match-beginning 0))
+       (niwa-view-toggle-section)
+       (let ((collapsed (buffer-substring-no-properties
+                         (point-min) (niwa-view-transcript-tail))))
+         (should-not (string-match-p "<proposed_plan>" collapsed))
+         (should-not (string-match-p "# Hidden plan" collapsed)))
+       (goto-char (point-min))
+       (search-forward "Visible lead")
+       (goto-char (match-beginning 0))
+       (niwa-view-toggle-section)
+       (let ((expanded (buffer-substring-no-properties
+                        (point-min) (niwa-view-transcript-tail))))
+         (should (string-match-p "Visible tail" expanded))
+         (should-not (string-match-p "<proposed_plan>" expanded))
+         (should-not (string-match-p "# Hidden plan" expanded))))))
+
+  :doc "response table collapse and expand does not leave duplicate rows"
+  (niwa-view-test--with-buffers
+   (niwa-view-test--insert-data
+    data-buf
+    "| Name | Role |\n|------|------|\n| Alice | Engineer |\n| Bob | Designer |\n| Carol | Product Manager |\n"
+    'response)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     (goto-char (point-min))
+     (search-forward "Alice")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((collapsed (buffer-substring-no-properties
+                       (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "(5 lines)" collapsed))
+       (should-not (string-match-p "^| Bob" collapsed)))
+     (goto-char (point-min))
+     (search-forward "Name | Role")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((expanded (buffer-substring-no-properties
+                      (point-min) (niwa-view-transcript-tail))))
+       (should (= 1 (niwa-view-test--count-substring "Alice" expanded)))
+       (should (= 1 (niwa-view-test--count-substring "Bob" expanded)))
+       (should (= 1 (niwa-view-test--count-substring "Carol" expanded))))))
+
+  :doc "TAB on Assistant header folds the whole turn into a single
+summary line; TAB again restores it exactly."
+  (niwa-view-test--with-buffers
+   (niwa-view-test--insert-data data-buf "Hi\n" nil)
+   (niwa-view-test--insert-data
+    data-buf
+    "Here is the first line.\nSecond line.\nThird line.\n"
+    'response)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     (goto-char (point-min))
+     (search-forward "Assistant")
+     (goto-char (match-beginning 0))
+     (should (eq (get-text-property (point) 'niwa-view-type) 'turn-header))
+     ;; Fold the turn.
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "Assistant — Here is the first line" text))
+       (should-not (string-match-p "^Second line" text))
+       (should-not (string-match-p "^Third line" text))
+       ;; The user turn is untouched.
+       (should (string-match-p "^You$" text))
+       (should (string-match-p "^Hi$" text)))
+     ;; Expand back.
+     (goto-char (point-min))
+     (search-forward "Assistant — ")
+     (goto-char (match-beginning 0))
+     (should (eq (get-text-property (point) 'niwa-view-type) 'turn-summary))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^Assistant$" text))
+       (should (string-match-p "Here is the first line" text))
+       (should (string-match-p "Second line" text))
+       (should (string-match-p "Third line" text)))))
+
+  :doc "multi-line user turn folds to first-line summary
+Single-line user turns refuse to fold since they are already
+compact."
+  (niwa-view-test--with-buffers
+   ;; Multi-line user turn.
+   (niwa-view-test--insert-data
+    data-buf
+    "First prompt line.\nSecond prompt line.\nThird prompt line.\n"
+    nil)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     (goto-char (point-min))
+     (search-forward "You")
+     (goto-char (match-beginning 0))
+     (should (eq (get-text-property (point) 'niwa-view-type) 'turn-header))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "First prompt line" text))
+       (should-not (string-match-p "^Second prompt line" text))
+       (should (string-match-p "(3 lines)" text)))
+     ;; Expand.
+     (goto-char (point-min))
+     (search-forward "First prompt line")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^You$" text))
+       (should (string-match-p "Second prompt line" text))
+       (should (string-match-p "Third prompt line" text)))))
+  :doc "single-line user turn refuses to fold"
+  (niwa-view-test--with-buffers
+   (niwa-view-test--insert-data data-buf "One line only.\n" nil)
+   (with-current-buffer data-buf
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     (goto-char (point-min))
+     (search-forward "You")
+     (goto-char (match-beginning 0))
+     (should-error (niwa-view-toggle-section)
+                   :type 'user-error)))
+
+  :doc "folding and unfolding a turn preserves the expanded/collapsed
+state of its inner sections"
+  (niwa-view-test--with-buffers
+   (with-current-buffer data-buf
+     (let ((start (point)))
+       (insert "deep thoughts live here\n")
+       (put-text-property start (point) 'gptel 'ignore))
+     (let ((start (point)))
+       (insert "Visible response text.\n")
+       (put-text-property start (point) 'gptel 'response))
+     (niwa-view-stream-render-response (point-min) (point-max)))
+   (with-current-buffer view-buf
+     ;; Explicitly collapse and re-expand the initially open section first.
+     (goto-char (point-min))
+     (search-forward "Thinking...")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (should-not (string-search "deep thoughts live here" (buffer-string)))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "deep thoughts live here" text))
+       (should (string-match-p "Thinking\\.\\.\\." text)))
+     ;; Fold the whole turn.
+     (goto-char (point-min))
+     (search-forward "Assistant")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "Assistant — " text))
+       (should-not (string-match-p "deep thoughts live here" text)))
+     ;; Unfold; the thinking section must still be EXPANDED.
+     (goto-char (point-min))
+     (search-forward "Assistant — ")
+     (goto-char (match-beginning 0))
+     (niwa-view-toggle-section)
+     (let ((text (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail))))
+       (should (string-match-p "^Assistant$" text))
+       (should (string-match-p "deep thoughts live here" text))
+       (should (string-match-p "Thinking\\.\\.\\." text))
+       (should (string-match-p "Visible response text" text))))))
+
+(niwa-deftest niwa-view-disclosure-section-bounds ()
+  ,test
+  (test)
+  :doc "section boundaries preserve identity, narrowing, and point"
+  (dolist (property '(niwa-view-source niwa-view-hook-context-id
+                      niwa-view-turn-id niwa-view-type))
+    (with-temp-buffer
+      (insert "aaabbbccc...")
+      (let* ((user-p (eq property 'niwa-view-type))
+             (outer (if user-p 'response (cons 1 20)))
+             (inner (if user-p 'user-input-summary (cons 1 20))))
+        (put-text-property 1 4 property outer)
+        (put-text-property 4 7 property inner)
+        (put-text-property 7 10 property outer)
+        (let ((before (buffer-string)))
+          (dolist (restriction '((1 . 13) (2 . 9)))
+            (save-restriction
+              (narrow-to-region (car restriction) (cdr restriction))
+              (cl-loop for pos from (point-min) below (point-max)
+                       do
+                       (goto-char pos)
+                       (let ((expected
+                              (cond
+                               ((and (>= pos 4) (< pos 7)) '(4 . 7))
+                               ((< pos 4)
+                                (cons (point-min) 4))
+                               ((< pos 10)
+                                (cons 7 (min 10 (point-max)))))))
+                         (should (equal expected
+                                        (niwa-view-disclosure-section-bounds
+                                         property)))
+                         (should (= pos (point)))))))
+          (goto-char (point-max))
+          (should-not (niwa-view-disclosure-section-bounds property))
+          (should (equal-including-properties before (buffer-string)))))))
+  :doc "distinguishes equal-but-distinct source conses (regression)
+Thinking-cons and turn-fallback-cons can have equal values but be
+separate cons objects.  `section-bounds' must compare by `eq', not
+`equal', or it will treat them as one run and expand/collapse over
+the preceding header."
+  (let ((niwa-session--read-only-mode nil))
+    (niwa-view-test--with-buffers
+     (with-current-buffer data-buf
+       (insert "deep thoughts here\n"))
+     (with-current-buffer view-buf
+       (let ((inhibit-read-only t)
+             ;; Equal values, distinct objects; this matches the real render
+             ;; path where the thinking summary's source cons and the
+             ;; turn-level fallback cons may print identically.
+             (thinking-src (cons 1 20))
+             (turn-src (cons 1 20)))
+         (should (equal thinking-src turn-src))
+         (should-not (eq thinking-src turn-src))
+         (save-excursion
+           (goto-char (niwa-view-transcript-tail))
+           (set-marker-insertion-type (niwa-view-transcript-tail-marker) t)
+           (unwind-protect
+               (let ((insert-start (point)))
+                 (insert (propertize "Assistant\n"
+                                     'font-lock-face 'niwa-view-assistant-header))
+                 (insert (propertize "  … Thinking... (1 lines)\n"
+                                     'font-lock-face 'niwa-view-thinking-summary
+                                     'niwa-view-type 'thinking-summary
+                                     'niwa-view-collapsed t
+                                     'niwa-view-source thinking-src))
+                 (insert (propertize "\n" 'font-lock-face 'niwa-view-separator))
+                 (add-text-properties insert-start (point) '(read-only t))
+                 ;; Fill the header/separator gap with the turn-level
+                 ;; fallback cons, as `niwa-view--render-turn' does.
+                 (let ((pos insert-start))
+                   (while (< pos (point))
+                     (if (get-text-property pos 'niwa-view-source)
+                         (setq pos (or (next-single-property-change
+                                        pos 'niwa-view-source nil (point))
+                                       (point)))
+                       (let ((next (or (next-single-property-change
+                                        pos 'niwa-view-source nil (point))
+                                       (point))))
+                         (put-text-property pos next
+                                            'niwa-view-source turn-src)
+                         (setq pos next))))))
+             (set-marker-insertion-type (niwa-view-transcript-tail-marker) nil)))
+         ;; Point at the exact start of the thinking run; the boundary
+         ;; case where `previous-single-property-change' lands in the
+         ;; preceding "Assistant\n" run.
+         (goto-char (point-min))
+         (search-forward "Thinking...")
+         (goto-char (match-beginning 0))
+         (let ((bounds (niwa-view-disclosure-section-bounds)))
+           (should bounds)
+           (should (eq (get-text-property (car bounds)
+                                          'niwa-view-source)
+                       thinking-src))
+           (should (eq (get-text-property (point) 'niwa-view-source)
+                       thinking-src))
+           ;; The bounds must not reach into the Assistant header.
+           (let ((header-text (buffer-substring-no-properties
+                               (car bounds) (cdr bounds))))
+             (should-not (string-match-p "Assistant" header-text)))))))))
+
+
+(niwa-deftest niwa-view-disclosure-state-key/anchors ()
+  ,test
+  (test)
+  :doc "an empty-string tool id never becomes the source anchor"
+  (niwa-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max))
+        (goto-char start)
+        (insert "restored tool block text\n")
+        (setq end (point))
+        (put-text-property start end 'gptel '(tool . "")))
+      (with-current-buffer view-buf
+        (let ((key (niwa-view-disclosure-state-key
+                    (cons start end) 'tool-summary)))
+          (should key)
+          (should-not (equal (nth 3 key) '(tool "")))))))
+  :doc "a real tool id anchors the key"
+  (niwa-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max))
+        (goto-char start)
+        (insert "tool block text\n")
+        (setq end (point))
+        (put-text-property start end 'gptel '(tool . "call_9")))
+      (with-current-buffer view-buf
+        (should (equal '(tool "call_9")
+                       (nth 3 (niwa-view-disclosure-state-key
+                               (cons start end) 'tool-summary))))))))
+
+(niwa-deftest niwa-view-disclosure--state-key-at ()
+  ,test
+  (test)
+  :doc "a displaced child keeps its owner's type and discriminator"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data data-buf "Prefix\nChild body\n" 'response)
+    (with-current-buffer view-buf
+      (let ((source (niwa-view-disclosure-source-range
+                     data-buf 8 (with-current-buffer data-buf (point-max))))
+            (counts (make-hash-table :test #'equal))
+            (inhibit-read-only t))
+        (goto-char (point-min))
+        (insert (propertize "Child" 'niwa-view-type 'tool-child
+                            'niwa-view-source source
+                            'niwa-view-source-key
+                            '(source tool-summary 1 old-anchor child-id)))
+        (let ((key (niwa-view-disclosure--state-key-at (point-min) counts)))
+          (should (eq 'tool-summary (cadr key)))
+          (should (= 8 (nth 2 key)))
+          (should (equal '(child-id) (nthcdr 4 key)))
+          (should (= 0 (hash-table-count counts))))))))
+
+(niwa-deftest niwa-view-disclosure-state-snapshot ()
+  ,test
+  (test)
+  :doc "snapshots remembered choices without reading view text or losing explicit nil"
+  (with-temp-buffer
+    (niwa-view-disclosure-initialize)
+    (should-not (niwa-view-disclosure-state-snapshot))
+    (niwa-view-disclosure-record-state-for-key '(source tool-summary 1 a) nil)
+    (let ((snapshot (niwa-view-disclosure-state-snapshot)))
+      (should (equal snapshot '(((source tool-summary 1 a)))))
+      (niwa-view-disclosure-record-state-for-key '(source tool-summary 1 a) t)
+      (should-not (equal snapshot (niwa-view-disclosure-state-snapshot)))
+      (should-not (cdar snapshot)))))
+
+(niwa-deftest niwa-view-disclosure--next-state-change ()
+  ,test
+  (test)
+  :doc "retains eq boundaries across monotone steps, skips, and a bounded limit"
+  (with-temp-buffer
+    (insert "abcdefghijkl")
+    (let ((boundaries (make-vector 3 0))
+          (first (cons 1 2))
+          (second (cons 1 2)))
+      (should-not (eq first second))
+      (put-text-property 1 5 'niwa-view-source first)
+      (put-text-property 5 13 'niwa-view-source second)
+      (put-text-property 3 7 'niwa-view-type 'response)
+      (put-text-property 9 13 'niwa-view-mailbox-card t)
+      (should (= 3 (niwa-view-disclosure--next-state-change 1 11 boundaries)))
+      (should (= 5 (niwa-view-disclosure--next-state-change 3 11 boundaries)))
+      ;; A mailbox skip may jump past a retained boundary.
+      (should (= 9 (niwa-view-disclosure--next-state-change 8 11 boundaries)))
+      (should (= 11 (niwa-view-disclosure--next-state-change 9 11 boundaries))))))
+
+(niwa-deftest niwa-view-disclosure-capture-state ()
+  ,test
+  (test)
+  :doc "capture and restore agree after source movement and terminal key changes"
+  (dolist (mode '(stamped unstamped moved active settled))
+    (niwa-view-test--with-buffers
+      (niwa-view-test--insert-data data-buf "Prompt\n" nil)
+      (niwa-view-test--insert-data
+       data-buf "Unique response.\nSecond response line.\n" 'response)
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (goto-char (point-min))
+        (search-forward "Unique response")
+        (let* ((bounds (niwa-view-disclosure-section-bounds))
+               (source (get-text-property (point) 'niwa-view-source))
+               (original-start (niwa-view-disclosure-source-start source))
+               (niwa-view-disclosure--settling-p (eq mode 'settled)))
+          (when (memq mode '(active settled))
+            (setq niwa-view--data-turn-start
+                  (with-current-buffer data-buf
+                    (copy-marker original-start))))
+          (let ((inhibit-read-only t)
+                (niwa-view-disclosure--settling-p nil))
+            (put-text-property
+             (car bounds) (cdr bounds) 'niwa-view-source-key
+             (unless (eq mode 'unstamped)
+               (append (niwa-view-disclosure-state-key source 'response)
+                       '(owner-discriminator)))))
+          (when (eq mode 'moved)
+            (with-current-buffer data-buf
+              (goto-char (point-min))
+              (insert "Prefix\n")))
+          (let* ((states (niwa-view-disclosure-capture-state
+                          (car bounds) (cdr bounds)))
+                 (key (caar states)))
+            (should (= 1 (length states)))
+            (should-not (cdar states))
+            (should (= (nth 2 key)
+                       (+ original-start (if (eq mode 'moved) 7 0))))
+            (should (equal (nthcdr 4 key)
+                           (unless (eq mode 'unstamped) '(owner-discriminator))))
+            (should (eq (eq mode 'active)
+                        (equal (nth 3 key) '(in-flight))))
+            (niwa-view-toggle-section)
+            (should-not (string-search "Second response line" (buffer-string)))
+            (with-current-buffer (niwa-view-composer-buffer view-buf)
+              (goto-char (+ 4 (niwa-view-composer-draft-start view-buf))))
+            (should (niwa-view-disclosure-restore-state
+                     (point-min) (niwa-view-transcript-tail) states))
+            (should (= 1 (niwa-view-test--count-substring
+                          "Second response line" (buffer-string))))
+            (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text view-buf t)))
+            (should (= 4 (niwa-view-disclosure-test--caret-offset))))))))
+
+  :doc "identical mailbox cards keep independent captured fold states"
+  (niwa-view-test--with-buffers
+    (dotimes (_ 2)
+      (niwa-view-test--insert-data
+       data-buf
+       (concat "<agent-message type=\"MAIL\" sender=\"/root/worker\" recipient=\"/root\">\n"
+               "Repeated payload\n</agent-message>\n")
+       nil))
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (niwa-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (goto-char (point-min))
+      (search-forward "Repeated payload")
+      (niwa-view-toggle-section)
+      (let* ((states (niwa-view-disclosure-capture-state
+                      (point-min) (niwa-view-transcript-tail)))
+             (mailbox (cl-remove-if-not
+                       (lambda (entry) (eq (caar entry) 'mailbox-delivery))
+                       states)))
+        (should (= 2 (length mailbox)))
+        (should (equal '(2 1) (mapcar (lambda (entry) (car (last (car entry))))
+                                     mailbox)))
+        (should (equal '(t nil) (mapcar #'cdr mailbox)))
+        (dolist (ordinal '(1 2))
+          (goto-char (point-min))
+          (dotimes (_ ordinal) (search-forward "Repeated payload"))
+          (niwa-view-toggle-section))
+        (with-current-buffer (niwa-view-composer-buffer view-buf)
+          (goto-char (+ 4 (niwa-view-composer-draft-start view-buf))))
+        (should (niwa-view-disclosure-restore-state
+                 (point-min) (niwa-view-transcript-tail) states))
+        (should (equal states (niwa-view-disclosure-capture-state
+                               (point-min) (niwa-view-transcript-tail))))
+        (should (equal "> draft\nsecond line" (niwa-view-composer-draft-text view-buf t)))
+        (should (= 4 (niwa-view-disclosure-test--caret-offset))))))
+
+  :doc "forced expansion overrides captured collapsed state"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf "Required details.\nSecond detail line.\n" 'response)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Required details")
+      (niwa-view-toggle-section)
+      (let ((states (niwa-view-disclosure-capture-state
+                     (point-min) (niwa-view-transcript-tail))))
+        (niwa-view-toggle-section)
+        (let ((bounds (niwa-view-disclosure-section-bounds))
+              (inhibit-read-only t))
+          (put-text-property (car bounds) (cdr bounds)
+                             'niwa-view-force-expanded t))
+        (should-not (niwa-view-disclosure-restore-state
+                     (point-min) (niwa-view-transcript-tail) states))
+        (should (string-search "Second detail line" (buffer-string))))))
+
+  :doc "remembers chosen states but not sections shown in their default state"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data data-buf "Prompt\n" nil)
+    (niwa-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\ncontent\n"
+     '(tool . "call_1"))
+    (niwa-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (niwa-view-disclosure-reset-state)
+      (goto-char (point-min))
+      (search-forward "Read:")
+      (let ((tool (get-text-property (point) 'niwa-view-source))
+            (response (save-excursion
+                        (search-forward "Done.")
+                        (get-text-property (point) 'niwa-view-source))))
+        (niwa-view-disclosure-capture-state
+         (point-min) (niwa-view-transcript-tail))
+        ;; A collapsed tool row and an expanded response are defaults.
+        (should-not (niwa-view-disclosure-state-entry tool 'tool-summary))
+        (should-not (niwa-view-disclosure-state-entry response 'response))
+        ;; An expansion is a choice, and so is folding it again afterwards.
+        (niwa-view-toggle-section)
+        (niwa-view-disclosure-capture-state
+         (point-min) (niwa-view-transcript-tail))
+        (should (equal '(nil) (list (cdr (niwa-view-disclosure-state-entry
+                                          tool 'tool-summary)))))
+        (niwa-view-toggle-section)
+        (niwa-view-disclosure-capture-state
+         (point-min) (niwa-view-transcript-tail))
+        (should (eq t (cdr (niwa-view-disclosure-state-entry
+                            tool 'tool-summary)))))))
+
+  :doc "constant properties traverse formatted spans once in capture and matching restore"
+  (dolist (constant '(niwa-view-source niwa-view-type))
+    (with-temp-buffer
+      (insert (make-string (+ 16 (* 64 64)) ?x))
+      (let ((from 9)
+            (to (+ 9 (* 64 64)))
+            (source (cons 1 2))
+            (primitive (symbol-function 'next-single-property-change))
+            states)
+        (dotimes (i 64)
+          (let* ((start (+ from (* i 64)))
+                 (type (if (or (eq constant 'niwa-view-type)
+                               (zerop (% i 2)))
+                           'tool-summary 'thinking-summary)))
+            (add-text-properties
+             start (+ start 64)
+             (list 'niwa-view-source
+                   ;; Equal but non-eq sources must still delimit runs.
+                   (if (eq constant 'niwa-view-source) source (cons 1 2))
+                   'niwa-view-type type
+                   'niwa-view-source-key (list 'source type i 'fixed)
+                   'niwa-view-collapsed t))))
+        ;; Thousands of unrelated property runs make repeated suffix walks costly.
+        (dotimes (i (- to from))
+          (put-text-property (+ from i) (+ from i 1)
+                             'face (if (zerop (% i 2)) 'bold 'italic)))
+        (dolist (operation '(capture restore))
+          (let ((distance (make-hash-table :test #'eq))
+                (calls (make-hash-table :test #'eq)))
+            (cl-letf (((symbol-function 'next-single-property-change)
+                       (lambda (pos prop &optional object limit)
+                         (when (memq prop '(niwa-view-source niwa-view-type
+                                           niwa-view-mailbox-card))
+                           (should (= to limit))
+                           (puthash prop (1+ (gethash prop calls 0)) calls))
+                         (let ((next (funcall primitive pos prop object limit)))
+                           (when (memq prop '(niwa-view-source niwa-view-type
+                                             niwa-view-mailbox-card))
+                             (puthash prop (+ (gethash prop distance 0)
+                                              (- (or next limit) pos)) distance))
+                           next))))
+              (if (eq operation 'capture)
+                  (setq states (niwa-view-disclosure-capture-state from to))
+                (should-not (niwa-view-disclosure-restore-state from to states))))
+            (should (= 64 (length states)))
+            (should (equal (number-sequence 63 0 -1)
+                           (mapcar (lambda (entry) (nth 2 (car entry))) states)))
+            (should (= 1 (gethash constant calls)))
+            (should (= 1 (gethash 'niwa-view-mailbox-card calls)))
+            (dolist (prop '(niwa-view-source niwa-view-type
+                            niwa-view-mailbox-card))
+              (should (<= (gethash prop distance) (- to from)))))))))
+
+  :doc "duplicate keys keep the first display occurrence's state"
+  (with-temp-buffer
+    (let ((key '(source tool-summary 1 fixed)))
+      (insert (propertize "first" 'niwa-view-source (cons 1 2)
+                          'niwa-view-type 'tool-summary
+                          'niwa-view-source-key key
+                          'niwa-view-collapsed nil)
+              (propertize "second" 'niwa-view-source (cons 1 2)
+                          'niwa-view-type 'tool-summary
+                          'niwa-view-source-key key
+                          'niwa-view-collapsed t))
+      (should (equal (list (cons key nil))
+                     (niwa-view-disclosure-capture-state
+                      (point-min) (point-max)))))))
+
+(niwa-deftest niwa-view-disclosure--default-collapsed-p ()
+  ,test
+  (test)
+  :doc "responses, turns and thinking render open; tools render folded"
+  (should-not (niwa-view-disclosure--default-collapsed-p 'response))
+  (should-not (niwa-view-disclosure--default-collapsed-p 'turn-summary))
+  (should-not (niwa-view-disclosure--default-collapsed-p 'thinking-summary))
+  (dolist (type '(tool-summary tool-group tool-child))
+    (should (niwa-view-disclosure--default-collapsed-p type))))
+
+(niwa-deftest niwa-view-disclosure-restore-state ()
+  ,test
+  (test)
+  :doc "reseeds boundaries after real toggles grow and shrink several rows"
+  (let ((niwa-view-tool-group-collapse-threshold 0))
+    (niwa-view-test--with-buffers
+      (niwa-view-test--insert-data data-buf "Prompt\n" nil)
+      (dotimes (i 3)
+        (niwa-view-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"/tmp/%d.el\"))\n\nbody %d\n%s\n"
+                 i i (make-string (+ 300 (* i 100)) ?x))
+         (cons 'tool (format "restore-%d" i))))
+      (niwa-view-test--insert-data data-buf "Trailing response.\n" 'response)
+      (with-current-buffer view-buf
+        (niwa-view--full-rerender)
+        (niwa-view-test--insert-composer-draft "> keep\nsecond line" 4)
+        (let* ((collapsed (niwa-view-disclosure-capture-state
+                           (point-min) (niwa-view-transcript-tail)))
+               (expanded (mapcar (lambda (entry) (cons (car entry) nil)) collapsed))
+               (short-length (buffer-size)))
+          (dotimes (_ 2)
+            ;; First alist occurrence wins even if a later duplicate disagrees.
+            (should (niwa-view-disclosure-restore-state
+                     (point-min) (niwa-view-transcript-tail)
+                     (append expanded collapsed)))
+            (should (> (buffer-size) (+ short-length 800)))
+            (dotimes (i 3)
+              (should (= 1 (niwa-view-test--count-substring
+                            (format "body %d" i) (buffer-string)))))
+            (should (equal expanded (niwa-view-disclosure-capture-state
+                                    (point-min) (niwa-view-transcript-tail))))
+            (should (niwa-view-disclosure-restore-state
+                     (point-min) (niwa-view-transcript-tail) collapsed))
+            (should (= short-length (buffer-size)))
+            (dotimes (i 3)
+              (should-not (string-search (format "body %d" i) (buffer-string))))
+            (should (equal collapsed (niwa-view-disclosure-capture-state
+                                     (point-min) (niwa-view-transcript-tail))))
+            (should (string-search "Trailing response." (buffer-string)))
+            (should (equal "> keep\nsecond line" (niwa-view-composer-draft-text view-buf t)))
+            (should (= 4 (niwa-view-disclosure-test--caret-offset))))))))
+
+  :doc "returns non-nil only when a section was actually toggled"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\nrestorable body\n"
+     '(tool . "call_restore"))
+    (niwa-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (niwa-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (let ((key (get-text-property (point) 'niwa-view-source-key)))
+        (should key)
+        ;; Matching state toggles nothing.
+        (should-not (niwa-view-disclosure-restore-state
+                     (point-min)
+                     (niwa-view-transcript-tail)
+                     (list (cons key t))))
+        ;; A mismatch toggles the section and reports it.
+        (should (niwa-view-disclosure-restore-state
+                 (point-min)
+                 (niwa-view-transcript-tail)
+                 (list (cons key nil))))
+        (should (string-match-p
+                 "restorable body"
+                 (buffer-substring-no-properties
+                  (point-min) (niwa-view-transcript-tail)))))))
+  :doc "restores expanded reminders without duplicate headings or lost faces"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data data-buf "Continue\n" nil)
+    (niwa-view-test--insert-data
+     data-buf
+     (niwa--format-hook-audit-record
+      '(:type injected-reminders :phase turn-start
+        :items ((:type agent-roster :body "Child agent is running.")
+                (:type context-resources :body "Read shared working files."))))
+     'niwa-hook-audit)
+    (niwa-view-test--insert-data data-buf "Continuing.\n" 'response)
+    (with-current-buffer view-buf
+      (niwa-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "2 system reminders")
+      (niwa-view-toggle-section)
+      (niwa-view-test--insert-composer-draft "> quoted draft\nsecond line" 4)
+      (dotimes (_ 2)
+        (niwa-view--full-rerender)
+        (should (equal "> quoted draft\nsecond line" (niwa-view-composer-draft-text view-buf t)))
+        (should (= 4 (niwa-view-disclosure-test--caret-offset)))
+        (should (= 1 (niwa-view-test--count-substring
+                      "2 system reminders" (buffer-string))))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "Child agent is running.")
+          (should (eq (get-text-property (1- (point)) 'font-lock-face)
+                      'niwa-view-hook-audit)))))))
+
+(niwa-deftest niwa-view-toggle-section/live-tail ()
+  ,test
+  (test)
+  :doc "a toggle drops the retained live tail"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\ntail body\n"
+     '(tool . "call_tail"))
+    (niwa-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (niwa-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (setq niwa-view--live-data-tail-start
+            (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (setq niwa-view--live-view-tail-start
+            (copy-marker (point-min) nil))
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (niwa-view-toggle-section)
+      (should-not niwa-view--live-data-tail-start)
+      (should-not niwa-view--live-view-tail-start)))
+  :doc "an interior in-flight marker re-anchors at the section start"
+  (niwa-view-test--with-buffers
+    (niwa-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\nanchored body\n"
+     '(tool . "call_anchor"))
+    (niwa-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (niwa-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (let ((section-start (car (niwa-view-disclosure-section-bounds))))
+        ;; Park the in-flight marker inside the collapsed row.
+        (setq niwa-view--in-flight-turn-start
+              (copy-marker (+ (point) 2) nil))
+        (niwa-view-toggle-section)
+        (should (= section-start
+                   (niwa-view-stream-in-flight-turn-start-position)))))))
+
+(niwa-deftest niwa-view-disclosure-collapse-mailbox-body ()
+  ,test
+  (test)
+  :doc "visibility boundaries keep one terminator without changing payload bytes"
+  (dolist (payload '("\nBody.\n" "\n  Authored.\nSecond.\n\n" "\n" ""
+                     "\nNo terminator"))
+    (with-temp-buffer
+      (insert "Card\n")
+      (let ((start (point)))
+        (insert (propertize payload 'niwa-view-mailbox-body t
+                            'rear-nonsticky '(read-only keymap)))
+        (let ((end (point)))
+          (insert "Following\n")
+          (niwa-view-disclosure-collapse-mailbox-body start end)
+          (should (equal payload (buffer-substring-no-properties start end)))
+          (when (and (< start end) (eq (char-before end) ?\n))
+            (should (invisible-p (1- start)))
+            (should-not (invisible-p (1- end)))
+            (should-not (get-text-property (1- start) 'niwa-view-mailbox-body))
+            (should (get-text-property (1- end) 'niwa-view-mailbox-body))
+            ;; The command loop reads `get-pos-property' when adjusting
+            ;; point; the visible terminator must not inherit invisibility,
+            ;; or a click past the header moves point to the next row.
+            (should-not (get-pos-property (1- end) 'invisible)))
+          (should-not (get-pos-property end 'invisible))
+          (should-not (invisible-p end))))))
+  :doc "collapsing keeps existing rear-nonsticky properties"
+  (with-temp-buffer
+    (insert "Card\n")
+    (let ((start (point)))
+      (insert (propertize "\nBody.\n" 'rear-nonsticky '(read-only keymap)))
+      (niwa-view-disclosure-collapse-mailbox-body start (point))
+      (let ((nonsticky (get-text-property (- (point) 2) 'rear-nonsticky)))
+        (should (memq 'invisible nonsticky))
+        (should (memq 'read-only nonsticky))
+        (should (memq 'keymap nonsticky))))))
+
+(provide 'test-niwa-view-disclosure)
+;;; test-niwa-view-disclosure.el ends here

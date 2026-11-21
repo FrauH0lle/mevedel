@@ -26,7 +26,7 @@ retains the identity for retry on exit. A hard crash cannot guarantee deletion
 of adapter-owned files. Native abort/error leaves readable side evidence but
 requires a new side for further questions; gptel abort behavior is unchanged.
 Provider compaction remains internal to the fork: its notifications do not
-rotate mevedel segments, archive the side's tool rows, or publish reminders.
+rotate niwa segments, archive the side's tool rows, or publish reminders.
 
 Conversation ephemerality does not imply effect ephemerality. Inherently
 read-only tools and analyzer-proven read-only Bash run under the inherited
@@ -60,7 +60,7 @@ Native `/btw` was initially refused because a copied local transcript is not
 Claude's complete model history. The installed adapter's native fork/resume/
 delete operations provide independent stored history, removing that obstacle.
 The initial native boundary is settled history: the adapter forks its latest
-stored history, not mevedel's in-flight transcript boundary. Retaining the fork
+stored history, not niwa's in-flight transcript boundary. Retaining the fork
 until the side ends preserves the existing multi-turn capability without adding
 durable session lineage or mapping chronological checkpoints.
 

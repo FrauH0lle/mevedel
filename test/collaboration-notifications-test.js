@@ -57,7 +57,7 @@ async function testServiceWorker() {
   listeners.push({waitUntil(promise) { pending = promise; }});
   await pending;
   assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].title, 'New mevedel activity');
+  assert.equal(notifications[0].title, 'New niwa activity');
   assert.doesNotMatch(JSON.stringify(notifications[0]), /prompt|transcript|secret/i);
 
   let closed = false;
@@ -111,7 +111,7 @@ async function testNotificationsModule() {
   };
   const context = {
     window,
-    document: {title: 'mevedel', hidden: false, hasFocus: () => true,
+    document: {title: 'niwa', hidden: false, hasFocus: () => true,
                addEventListener() {}},
     navigator: {
       standalone: true,
@@ -146,10 +146,10 @@ async function testNotificationsModule() {
     Uint8Array, URL, encodeURIComponent, decodeURIComponent,
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
-  const api = window.mevedelViewerNotifications;
+  const api = window.niwaViewerNotifications;
   const parse = fragment => /^#[^.]{16}\..+/.test(fragment) ? {} : null;
-  storage.set('mevedel-last-share', 'storedstoredsto1.stored-secret');
-  tabStorage.set('mevedel-tab-share', 'tabtabtabtabtab1.tab-secret');
+  storage.set('niwa-last-share', 'storedstoredsto1.stored-secret');
+  tabStorage.set('niwa-tab-share', 'tabtabtabtabtab1.tab-secret');
   assert.equal(api.resolveShare(parse), 'tabtabtabtabtab1.tab-secret');
   tabStorage.clear();
   assert.equal(api.resolveShare(parse), 'storedstoredsto1.stored-secret');
@@ -190,8 +190,8 @@ async function testNotificationsModule() {
   await waitFor(() => !first.notifications.enabled(), 'first room opt-out');
   await waitFor(() => unsubscribed.length === 1, 'first room unsubscribe');
   assert.equal(second.notifications.enabled(), true);
-  assert.equal(storage.has(`mevedel-notify:${firstFragment}`), false);
-  assert.equal(storage.get(`mevedel-notify:${secondFragment}`), 'on');
+  assert.equal(storage.has(`niwa-notify:${firstFragment}`), false);
+  assert.equal(storage.get(`niwa-notify:${secondFragment}`), 'on');
   assert.deepEqual(unsubscribed, [`/pwa/${firstFragment}/`]);
   assert.deepEqual(unregistered, [`/pwa/${firstFragment}/`]);
   assert.equal(registrations.size, 1);
@@ -199,12 +199,12 @@ async function testNotificationsModule() {
 
   second.notifications.forget();
   await waitFor(() => unregistered.length === 2, 'second room unregister');
-  assert.equal(storage.has(`mevedel-notify:${secondFragment}`), false);
-  assert.equal(storage.has('mevedel-last-share'), false);
+  assert.equal(storage.has(`niwa-notify:${secondFragment}`), false);
+  assert.equal(storage.has('niwa-last-share'), false);
   assert.equal(registrations.size, 0);
 
   const failedFragment = 'failedroomroom12.room-secret-four';
-  storage.set(`mevedel-notify:${failedFragment}`, 'on');
+  storage.set(`niwa-notify:${failedFragment}`, 'on');
   const failed = make(failedFragment, async frame => {
     sent.push({fragment: failedFragment, frame});
     return false;
@@ -216,7 +216,7 @@ async function testNotificationsModule() {
 
   // A teardown send failure remains observable, but a queued setup still runs.
   const retryFragment = 'retryroomroom123.room-secret-six';
-  storage.set(`mevedel-notify:${retryFragment}`, 'on');
+  storage.set(`niwa-notify:${retryFragment}`, 'on');
   const retry = make(retryFragment, async frame => {
     if (frame.t === 'push-unsubscribe') throw new Error('send failed');
     sent.push({fragment: retryFragment, frame});
@@ -246,8 +246,8 @@ async function testNotificationsModule() {
   finishPermission('granted');
   await tick();
   await tick();
-  assert.equal(storage.has(`mevedel-notify:${terminalFragment}`), false);
-  assert.equal(storage.has('mevedel-last-share'), false);
+  assert.equal(storage.has(`niwa-notify:${terminalFragment}`), false);
+  assert.equal(storage.has('niwa-last-share'), false);
   assert.equal(sent.filter(item => item.frame.t === 'push-subscribe').length,
                subscribeAtTerminal);
   context.Notification.requestPermission = async () => 'granted';
@@ -276,10 +276,10 @@ async function testNotificationsModule() {
 
 async function testLivePageFallback() {
   const fragment = 'roomroomroomroom.room-secret';
-  const storage = new Map([[`mevedel-notify:${fragment}`, 'on']]);
+  const storage = new Map([[`niwa-notify:${fragment}`, 'on']]);
   const shown = [];
   const document = {
-    title: 'mevedel', hidden: false, hasFocus: () => !document.hidden,
+    title: 'niwa', hidden: false, hasFocus: () => !document.hidden,
     addEventListener() {},
   };
   const window = {addEventListener() {}};
@@ -297,7 +297,7 @@ async function testLivePageFallback() {
     Uint8Array, encodeURIComponent,
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
-  const notifications = window.mevedelViewerNotifications.create({
+  const notifications = window.niwaViewerNotifications.create({
     state: {fragment, connected: true, pushSubscribed: false},
     button: null, decode() {}, flash() {}, send: async () => {},
   });
@@ -309,7 +309,7 @@ async function testLivePageFallback() {
   assert.equal(shown.length, 1);
   assert.equal(shown[0].title, 'Away');
   assert.equal(shown[0].options.body, 'shown');
-  storage.set(`mevedel-notify:${fragment}`, 'off');
+  storage.set(`niwa-notify:${fragment}`, 'off');
   notifications.maybeNotify('Opted out', 'ignored');
   assert.equal(shown.length, 1);
 }

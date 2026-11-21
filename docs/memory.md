@@ -1,6 +1,6 @@
 # Persistent Memory
 
-mevedel reads persistent memory from configured `.mevedel/memory/` and
+niwa reads persistent memory from configured `.niwa/memory/` and
 `.agents/memory/` roots, both workspace-local and user-global. Memory is
 model-writable and persists across conversations, but it is
 selective by default: optional saves should preserve durable context useful to

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a mevedel checkout for Eask tests without changing dependencies."""
+"""Prepare a niwa checkout for Eask tests without changing dependencies."""
 
 import argparse
 import hashlib
@@ -66,7 +66,7 @@ def run(argv, cwd, **kwargs):
 def pin_affected_base(root, base):
     """Pin BASE or the branch's recorded creation commit in this worktree."""
     config = ["git", "config", "--worktree"]
-    key = "mevedel.affectedBase"
+    key = "niwa.affectedBase"
     if base:
         commit = run(["git", "rev-parse", "--verify", "--end-of-options",
                       f"{base}^{{commit}}"], root)
@@ -89,7 +89,7 @@ def prepare(root, base=None):
     root = root.resolve(strict=True)
     top = Path(run(["git", "rev-parse", "--show-toplevel"], root)).resolve()
     if root != top or not (root / "Eask").is_file():
-        raise RuntimeError("Expected a mevedel repository root containing Eask")
+        raise RuntimeError("Expected a niwa repository root containing Eask")
     common = Path(run(["git", "rev-parse", "--git-common-dir"], root))
     if not common.is_absolute():
         common = root / common
@@ -143,10 +143,10 @@ def prepare(root, base=None):
     print(f"Eask: {run(command + ['--version'], root, env=environment)}", flush=True)
     # npx needs its normal cache to find Eask offline.  Isolate Emacs itself,
     # before loading any dependency, including its startup native cache.
-    with tempfile.TemporaryDirectory(prefix="mevedel-bootstrap-") as home:
-        environment["MEVEDEL_BOOTSTRAP_HOME"] = home
+    with tempfile.TemporaryDirectory(prefix="niwa-bootstrap-") as home:
+        environment["NIWA_BOOTSTRAP_HOME"] = home
         isolation = r'''
-(let ((home (getenv "MEVEDEL_BOOTSTRAP_HOME")))
+(let ((home (getenv "NIWA_BOOTSTRAP_HOME")))
   (setenv "HOME" home)
   (dolist (name '("XDG_CACHE_HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME"
                   "XDG_STATE_HOME" "XDG_RUNTIME_DIR"))

@@ -6,7 +6,7 @@ Use Glob for filenames and Read for a known contiguous range.
   file or directory. Supported resources: `work://`, `artifact://`, a selected `skill://` package,
   `memory://journal/`, `memory://root` or a memory descendant, `history://saved`
   or its descendants, `history://root` or a retained-agent history descendant,
-  `shared://` text views, `notes://` or a returned note address, and `mevedel://` or its descendants.
+  `shared://` text views, `notes://` or a returned note address, and `niwa://` or its descendants.
   Bare `history://` and `skill://` are Read-only discovery roots; agent and MCP
   addresses do not support Grep.
 - Patterns use ripgrep syntax. For literal parentheses or braces, character
@@ -25,7 +25,7 @@ Use Glob for filenames and Read for a known contiguous range.
   label partial results. Narrow the scope when results are partial; absence in
   a partial result is not proof of absence. Follow-up searches are valid.
 - For resource aliases, search caps, and partial-output details, read
-  `mevedel://tools/files.md`. If unavailable, stay within the known contract.
+  `niwa://tools/files.md`. If unavailable, stay within the known contract.
 
 Grep(pattern="authentication failed", path="src", output_mode="content", context=3)
 returns matches with three lines of surrounding context.

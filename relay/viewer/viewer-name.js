@@ -25,8 +25,8 @@
     [['Sunny', 'Swift', 'Spirited'], ['Sparrow', 'Seal', 'Squirrel']],
     [['Warm', 'Wise', 'Witty'], ['Wombat', 'Wolf', 'Wren']],
   ];
-  const CHOSEN = 'mevedel-chosen-name';
-  const RANDOM = 'mevedel-random-name';
+  const CHOSEN = 'niwa-chosen-name';
+  const RANDOM = 'niwa-random-name';
   // How long a new tab waits for an open one to share its random name.
   const ASK_MS = 150;
   const MAX = 32;
@@ -55,7 +55,7 @@
     let chosen = read(localStorage, CHOSEN);
     let reported = null;
     const channel = typeof BroadcastChannel === 'function'
-      ? new BroadcastChannel('mevedel-guest-name') : null;
+      ? new BroadcastChannel('niwa-guest-name') : null;
     const current = () => chosen || random;
     const menu = document.getElementById('you-menu');
     const form = document.getElementById('you-form');
@@ -167,5 +167,5 @@
     return Object.freeze({ready, current, choose, randomize});
   }
 
-  window.mevedelGuestName = Object.freeze({create});
+  window.niwaGuestName = Object.freeze({create});
 })();

@@ -45,7 +45,7 @@ merge and failure-retry behavior; it does not introduce another writer.
 
 ## Consequences
 
-- Buddy remarks carry `mevedel-instruction-type note` and persist through the
+- Buddy remarks carry `niwa-instruction-type note` and persist through the
   ordinary note record codec; no directive activity codec or migration is used.
 - The shared label renderer replaces Buddy's separate current-line/eol layout
   and its per-line relayout hook. No new rendering timer is introduced.
@@ -56,7 +56,7 @@ merge and failure-retry behavior; it does not introduce another writer.
 
 ## Decision history
 
-Originally Buddy notes deliberately omitted `mevedel-instruction`, making them
+Originally Buddy notes deliberately omitted `niwa-instruction`, making them
 invisible to instruction navigation and persistence. That avoided teaching
 every binary reference/directive path to skip ephemeral annotations. The notes
 redesign reverses that choice: one persistent note concept now has explicit
@@ -66,13 +66,13 @@ structural exclusion would prevent those capabilities rather than protect them.
 Buddy was ported from [llm-buddy](https://github.com/ahyatt/llm-buddy). The port
 avoided adding its `llm` provider abstraction beside gptel. At the time of that
 comparison, the upstream forced-tool loop needed an explicit end tool, and its
-buffer read/note placement lacked mevedel's bounded buffer scope and captured
-markers. Mevedel chose ordinary no-more-tools settlement, request-local tools,
+buffer read/note placement lacked niwa's bounded buffer scope and captured
+markers. Niwa chose ordinary no-more-tools settlement, request-local tools,
 workspace scope from default-directory, and bounded marker-based reads/notes.
 Those observations describe the port's motivation, not a claim about every
 current upstream release.
 
-The upstream replace-content auto-fix path was not ported because mevedel already
+The upstream replace-content auto-fix path was not ported because niwa already
 has permission-gated patch proposals and review. Passive annotations also do not
 write durable memory: the removed Tutor experiment had accumulated an unread
 hints file indefinitely. Durable guidance uses explicit instruction/memory

@@ -22,7 +22,7 @@ protocol, so those methods use the classic path.
 The channel is forced per spawn rather than through a connection-local
 profile.  A profile flips every `make-process` on that host for the whole
 Emacs session, including other packages' processes; forcing the TRAMP
-predicate around mevedel's own spawn changes exactly one process, in both
+predicate around niwa's own spawn changes exactly one process, in both
 directions -- a TTY spawn stays classic even on a connection where
 something else enabled direct-async.
 
@@ -32,7 +32,7 @@ binary output; nothing in the stop path depends on it, because signals
 reach the process group by number over the control connection, through
 the group marker captured at launch -- direct-async never sets a
 `remote-pid`, and `interrupt-process` never reaches the remote job, but
-mevedel never used either.
+niwa never used either.
 
 The execution environment travels as an explicit `env` prefix inside the
 group wrapper.  TRAMP transfers only the difference between the current
@@ -54,7 +54,7 @@ in Emacs 30.2 remains present in the inspected Emacs 31.1 sources:
 the spawn asks for its ssh options through a function TRAMP
 renamed, silently receiving none -- which loses not only ControlMaster
 sharing but any option routed through the same-named variable, such as
-the -F config a host alias needs to resolve at all.  mevedel routes
+the -F config a host alias needs to resolve at all.  niwa routes
 the intended call for each direct-async spawn's extent -- a scoped
 rebinding, not a global alias -- so the spawn carries the user's
 options and reuses the master socket while still running outside the

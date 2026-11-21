@@ -2,7 +2,7 @@
 
 ## On-demand review
 
-`/remember [focus]` and `M-x mevedel-remember` run bounded consolidation over
+`/remember [focus]` and `M-x niwa-remember` run bounded consolidation over
 eligible digests, captured memory, and applicable instructions. In `manual` and `propose` modes, resulting proposals wait in the memory cockpit
 for accept/reject decisions; inspection alone edits no curated files. `propose`
 is the default. The bundled `$learn` skill provides a separate, explicitly
@@ -12,11 +12,11 @@ requested workflow for writing durable session findings to instructions or memor
 
 Journal generation and memory consolidation have independent `journal` and
 `memory` workloads, both defaulting to the `balanced` tier. They use the ordinary
-`mevedel-model-workloads` and preset `:model-workloads` configuration:
+`niwa-model-workloads` and preset `:model-workloads` configuration:
 
 ```elisp
-(mevedel-define-preset my-preset
-  :parents (mevedel-implement)
+(niwa-define-preset my-preset
+  :parents (niwa-implement)
   :model-workloads ((journal :tier balanced)
                     (memory :tier balanced)))
 ```
@@ -34,7 +34,7 @@ configure its workload globally when a consistent background policy is needed.
 ## Review evidence and proposal format
 
 The consolidation output contract is implemented in
-`mevedel-memory-proposal-parse`. It validates the complete reply against captured
+`niwa-memory-proposal-parse`. It validates the complete reply against captured
 root IDs, admitted files, complete filename observations for creation, and
 admitted digest and note IDs before returning any proposals. The sections are
 Promote, Update, Merge, Remove, Instructions, and No action. There is no Notes
@@ -66,11 +66,11 @@ are invalid. Sections may appear in any order
 and a reply may end without `## No action`; text between proposal blocks still
 invalidates the reply. These accept shapes real replies
 produced, which previously discarded whole reviews. A rejected reply is retained,
-newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
+newest eight, under `.niwa/state/diagnostics/rejected-replies/` for
 diagnosis; it never becomes proposals. Failed or rejected reviews create no
 disposals (see [Shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle)).
 
-`mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
+`niwa-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
 them: at most 32 KiB per file and 256 KiB total, with a 256-entry inventory per
 memory root. Topics are taken in name order starting at an offset that changes
@@ -92,12 +92,12 @@ acquire write ownership or commit files; the application coordinator must hold
 the required ownership across checking and mutation.
 
 The captured source boundary accepts relative paths only within the original
-workspace target. It excludes VCS metadata, `.mevedel` state, symlinks, and all
+workspace target. It excludes VCS metadata, `.niwa` state, symlinks, and all
 configured memory roots, including roots omitted because their index was
 unavailable. Omitting a memory root does not make its contents available through
 a source-file fallback.
 
-`mevedel-memory-reference-check` inspects backticked references in the admitted
+`niwa-memory-reference-check` inspects backticked references in the admitted
 topic snapshots, returning at most 200 distinct topic/token observations with
 dates. Its current check is workspace-relative **path existence**, including
 references with line-number suffixes. A found path does not verify a lesson or
@@ -113,7 +113,7 @@ from 56,258 to 19,567 bytes, so more notes fit under the same input bound.
 
 ### Investigation tools
 
-`mevedel-memory-investigation` supplies request-local gptel Read, Glob, and Grep
+`niwa-memory-investigation` supplies request-local gptel Read, Glob, and Grep
 tools. Each call names `workspace`, `journal`, or an admitted root ID, plus a
 relative path. This is a scoped tool argument, not another resource-address
 family. Memory and journal reads use captured evidence; source Read uses the
@@ -147,8 +147,8 @@ Omitted, unavailable, and excluded source paths produce a partial-search
 notice. Narrowing the subtree or reading a named source file supports further
 investigation. Results use relative filenames and omit private copy paths.
 Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
-across 64 calls. The module constants `mevedel-memory-investigation--max-calls`
-and `mevedel-memory-investigation--max-bytes` supply these aggregate limits to
+across 64 calls. The module constants `niwa-memory-investigation--max-calls`
+and `niwa-memory-investigation--max-bytes` supply these aggregate limits to
 both enforcement and the review prompt. Exceeding either limit retires the investigation and
 reports failure to its request owner. Stopping cancels active search helpers,
 removes their copies, and suppresses late delivery. The owner still supplies
@@ -175,7 +175,7 @@ model understood evidence or used it for any particular note.
 
 ### Request limits and settlement
 
-`mevedel-memory-review-request` combines that scope, reference pre-check, and
+`niwa-memory-review-request` combines that scope, reference pre-check, and
 investigation in a sessionless request using the `memory` workload (default
 tier `balanced`). It admits a prefix of at most 20 complete candidate digests and
 reports omissions. The
@@ -187,8 +187,8 @@ set requires an explicit memory-only request. Focus and recent rejection text
 are each bounded to 8 KiB.
 
 The request has a 180-second deadline. Its cumulative output budgets default to
-64,000 tokens (`mevedel-memory-review-max-tokens`) and 256 KiB
-(`mevedel-memory-review-max-bytes`). Both settings must be positive integers and
+64,000 tokens (`niwa-memory-review-max-tokens`) and 256 KiB
+(`niwa-memory-review-max-bytes`). Both settings must be positive integers and
 are captured at request start. Reasoning, intermediate replies, and tool-call
 arguments share these budgets with the final reply. Both the client token
 estimate and available provider-reported output usage must fit the token budget;
@@ -271,11 +271,11 @@ the request, stops active searches, and suppresses late results. The validated
 callback includes the exact validated reply, admitted digests, and cumulative
 provider usage. It does not publish proposals or coverage. Connecting the
 request to pass selection, storage, and cancellation is handled by
-`mevedel-memory-pass-start`.
+`niwa-memory-pass-start`.
 
 ## Selecting and accepting a review
 
-`mevedel-memory-pass-select` supplies candidate selection from a fresh journal
+`niwa-memory-pass-select` supplies candidate selection from a fresh journal
 observation. General passes select uncovered digests; focused passes can reuse
 covered ones. Selection returns at most twenty, oldest first with digest ID as
 the tie breaker, and reports the eligible backlog beyond that batch. Later
@@ -287,7 +287,7 @@ needs no source-session authority: it changes neither session state nor review
 coverage. The coordinator still acquires journal/consolidation ownership and pins
 freshly validated evidence before a review starts.
 
-`mevedel-memory-store` supplies private prepared and accepted pass storage. The
+`niwa-memory-store` supplies private prepared and accepted pass storage. The
 caller holds the 180-second consolidation claim. Preparation acquires journal
 mutation ownership, recovers accepted expiry, checks that selected entries still
 match their public source bytes, and then pins them. This order prevents a pass
@@ -295,11 +295,11 @@ from reviving evidence already committed for expiry. The prepared record retains
 the original scope, complete digest bodies, source fingerprints, and focus.
 Focus must fit the public record's 4 KiB bound before inference begins.
 
-Private records live in `.mevedel/state/journal/passes/<pass-id>/prepared.el` and `accepted.el`.
+Private records live in `.niwa/state/journal/passes/<pass-id>/prepared.el` and `accepted.el`.
 They use bounded durable Lisp data, preserving literal byte strings in captured
 before-state; each record is limited to 5 MiB. Reading disables evaluation and
 circular-reader syntax. Evidence pins live under
-`.mevedel/state/journal/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
+`.niwa/state/journal/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
 hash. These records are internal storage, outside `memory://journal/`; displaying their
 memory bodies still requires the original scope's authority checks.
 
@@ -326,7 +326,7 @@ separate [checked operations](memory-recovery.md).
 
 ### Pass ownership
 
-`mevedel-memory-pass-start` coordinates one 180-second workspace claim. Before
+`niwa-memory-pass-start` coordinates one 180-second workspace claim. Before
 selecting evidence, it recovers accepted older pass publications and releases
 pins belonging to fenced unsuccessful attempts. Selection runs under journal
 mutation ownership after accepted expiry recovery. Preparation rechecks the
@@ -355,10 +355,10 @@ until publication returns. Cancellation fences an unaccepted reply; an already
 accepted outcome retains its bundle and pins for publication recovery. Provider
 usage and errors remain visible through the ordinary pass callback.
 
-The returned state is available through `mevedel-memory-pass-running`. Its
+The returned state is available through `niwa-memory-pass-running`. Its
 `:request` is populated after preparation and contains the read-only review
 buffer; the pass remains registered while its result is being published.
-`mevedel-memory-pass-cancel`, or closing
+`niwa-memory-pass-cancel`, or closing
 that buffer, retires only this client's attempt. Failure and expired callbacks
 cannot publish fresh results or change a successor's claim or pins. Success
 returns the immutable public review, usage, and remaining frozen backlog count;
@@ -372,7 +372,7 @@ coverage counts, and remaining backlog without private content.
 
 ### Automatic review and application
 
-`mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
+`niwa-memory-consolidation-mode` supports `manual`, `propose` (the default),
 and `auto`. Manual runs only on request. Propose schedules a read-only review at
 eligible completed, durably saved root turns, digest publication, session
 opening and idle maintenance (see [Digest generation](memory-journal.md#digest-generation)), and
@@ -388,8 +388,8 @@ later journal review.
 
 The **journal-only** gate checks mode, then elapsed time since the last successful
 journal-bearing general review, then the eligible unreviewed digest count. The settings
-`mevedel-memory-consolidation-min-hours` and
-`mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
+`niwa-memory-consolidation-min-hours` and
+`niwa-memory-consolidation-min-digests` default to 24 hours and five digests.
 Automatic and general on-demand reviews that admit journal digests move this
 clock; focused and note-only reviews do not. Retirement records preserve the
 journal-bearing distinction and clock after ordinary review-history expiry.
@@ -414,7 +414,7 @@ batch per day. Use an explicit general `/remember` or `/remember drain` to revie
 sooner; explicit review bypasses timing, not safety checks.
 Under the existing workspace claim, it freezes a bounded finite
 cohort of eligible path/version metadata before starting bounded batches. The
-private `.mevedel/state/shared-notes/cycle.el` record binds the workspace identity,
+private `.niwa/state/shared-notes/cycle.el` record binds the workspace identity,
 physical shared root and execution target. It contains cycle identity, admission
 time, frozen cohort and hash, attempted members with accepted pass identities,
 deferred members and reasons, an in-flight original pass/claim reservation, and
@@ -438,7 +438,7 @@ not only before immutable preparation. A failed preparation that returns no
 bundle can be adopted for metadata recovery only when its exact original claim
 still owns the slot; fresh ownership then reconciles and pauses it. Cleanup pins
 the reserved predecessor even when no prepared record exists. The strict
-`mevedel-memory-cycle-inflight-claim` observation supplies that retention pin,
+`niwa-memory-cycle-inflight-claim` observation supplies that retention pin,
 never admission or mutation authority.
 
 Each frozen version is attempted at most once in that cycle. Attempts are
@@ -499,7 +499,7 @@ new memory is correct.
 
 ## Memory cockpit
 
-`M-x mevedel-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
+`M-x niwa-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
 the memory table with **Candidates**, **Memories**, and **History** views.
 Switch with the clickable header or `1`, `2`, and `3`. Opening uses the
 workspace's last proposal counts (the observation the main cockpit's Memory
@@ -584,7 +584,7 @@ header (or a loading notice before any observation), and replaces them after
 display; `g` keeps rows visible while they refresh. A retired table stops its
 remaining reads; rows observed under a changed workspace root or memory
 configuration are discarded and observed again. Frontmatter in the
-form mevedel writes (JSON-string name, plain type word) is read without a YAML
+form niwa writes (JSON-string name, plain type word) is read without a YAML
 parse; any other frontmatter is parsed as YAML. `RET` inspects the full
 stored body, `o` opens the actual file, and `d` asks for confirmation naming the
 exact topic. Inspection reads a fresh bounded snapshot. Deletion freshly
@@ -629,7 +629,7 @@ Shared-note rows show their disposition as the action and `note`, `attachment`
 or `directory` as the type; a disposal whose extraction is undecided shows
 `awaits extraction`. Attachment diffs show size and hash.
 `D` starts a **backlog drain**; `k` stops it, including between requests or while
-waiting for running memory work. `/remember drain` and `M-x mevedel-remember-drain`
+waiting for running memory work. `/remember drain` and `M-x niwa-remember-drain`
 start the same operation. The header shows batch number, status and the last
 observed notes-remaining count (frozen members past the batch; one changed since
 freezing counts until its own batch defers it); completion messages report each batch's notes
@@ -661,7 +661,7 @@ drain can service remaining eligible ordinary digests without admitting new
 notes. There is no rolling successful-batch cap.
 
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
-`/remember [focus]` command and `M-x mevedel-remember` use the same bounded
+`/remember [focus]` command and `M-x niwa-remember` use the same bounded
 sessionless pass, allow explicit current-memory review without eligible digests,
 and open this table. Completion refreshes an existing matching table without
 reopening a closed table or altering the composer. The command may run while a

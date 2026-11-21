@@ -15,7 +15,7 @@ Role, tone, shared task policy, and memory use/save policy are separate
 components. Main owns the general collaboration tone; worker, explorer, and
 verifier share a reporting tone. Main and worker select memory saving guidance.
 Buddy selects memory context and use policy without saving instructions. The
-save policy requires retrieving `mevedel://memory.md` before mutations; that
+save policy requires retrieving `niwa://memory.md` before mutations; that
 manual owns root selection, frontmatter, and index maintenance.
 
 Retained agents freeze their behavioral system content and selected observation

@@ -18,7 +18,7 @@ view logs, with selected credential headers redacted and owner-only file modes.
 Those logs retain other sensitive contents and are not covered by a claim of
 complete payload redaction.
 
-Normal telemetry includes one start and at most one finish per mevedel-owned
+Normal telemetry includes one start and at most one finish per niwa-owned
 provider dispatch. These sparse events retain frozen call identity, duration,
 and gptel-normalized token counts, not payloads. Root turns, retained agents,
 and session-owned helpers are distinguishable; sessionless background work

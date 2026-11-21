@@ -1,0 +1,109 @@
+;;; test-niwa-resource-mcp.el --- MCP resource provider tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Focused tests for the MCP resource-address provider.
+
+;;; Code:
+
+(require 'mcp)
+(require 'mcp-hub)
+(require 'niwa-resource)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+(niwa-deftest niwa-resource-mcp-provider ()
+  ,test
+  (test)
+  :doc "lists MCP metadata and reads fresh text through the mention seam"
+  (let* ((server "srv/name")
+         (uri "file:///a b?x#frag")
+         (connection (make-symbol "mcp-connection"))
+         (connections (make-hash-table :test #'equal))
+         (servers (list (list :name server :status 'connected
+                              :resources
+                              (list (list :uri uri :name "Example")))))
+         (calls 0)
+         (address (format "mcp://%s/%s"
+                          (niwa-resource-encode-component server)
+                          (niwa-resource-encode-component uri))))
+    (puthash server connection connections)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () servers))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (_connection _uri)
+                 (cl-incf calls)
+                 (list :contents
+                       (vector (list :type "text" :text "one")
+                               (list :type "text" :text "two"))))))
+      (let ((mcp-server-connections connections))
+        (let* ((listing
+                (niwa-resource-execute
+                 (niwa-resource-prepare 'read "mcp://" nil)))
+               (resources
+                (niwa-resource-execute
+                 (niwa-resource-prepare
+                  'read (format "mcp://%s"
+                                (niwa-resource-encode-component server))
+                  nil)))
+               (attempt (niwa-resource-prepare 'read address nil)))
+          (should (string-match-p "mcp://srv%2Fname"
+                                  (plist-get listing :result)))
+          (should (string-match-p (regexp-quote address)
+                                  (plist-get resources :result)))
+          (should (equal "one\ntwo"
+                         (plist-get
+                          (niwa-resource-execute attempt) :result)))
+          (let ((fresh (niwa-resource-prepare 'read address nil)))
+            (should (equal "one\ntwo"
+                           (plist-get
+                            (niwa-resource-execute fresh) :result))))
+          (should (= 2 calls))))))
+  :doc "rejects unknown MCP servers without falling back to all-server listing"
+  (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () nil)))
+    (should-error
+     (niwa-resource-execute
+      (niwa-resource-prepare 'read "mcp://unknown" nil)))))
+
+(niwa-deftest niwa-resource-execute/mcp-diagnostics ()
+  ,test
+  (test)
+  :doc "connection and provider failures identify the authored resource"
+  (let* ((address "mcp://server/resource")
+         (mcp-server-connections (make-hash-table :test #'equal))
+         servers)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () servers))
+              ((symbol-function 'mcp-read-resource) (lambda (&rest _) (error "Provider failure"))))
+      (dolist (entry '((nil "Unknown MCP server")
+                       (((:name "server" :status disconnected)) "not connected")
+                       (((:name "server" :status connected)) "No active MCP connection")))
+        (setq servers (car entry))
+        (let ((failure (should-error
+                        (niwa-resource-execute (niwa-resource-prepare 'read address nil)))))
+          (should (string-search (cadr entry) (cadr failure)))
+          (should (string-search address (cadr failure)))))
+      (puthash "server" t mcp-server-connections)
+      (let ((failure (should-error
+                      (niwa-resource-execute (niwa-resource-prepare 'read address nil)))))
+        (should (string-search "Provider failure" (cadr failure)))
+        (should (string-search address (cadr failure))))))
+  :doc "successful empty and non-text MCP responses explain the text-only surface"
+  (let ((mcp-server-connections (make-hash-table :test #'equal)) response)
+    (puthash "server" t mcp-server-connections)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () '((:name "server" :status connected))))
+              ((symbol-function 'mcp-read-resource) (lambda (&rest _) response)))
+      (dolist (entry '(((:contents []) "returned no content")
+                       ((:contents [(:blob "AAAA")]) "exposes text content only")))
+        (setq response (car entry))
+        (let ((text (plist-get
+                     (niwa-resource-execute
+                      (niwa-resource-prepare 'read "mcp://server/resource" nil)) :result)))
+          (should (string-search (cadr entry) text))
+          (should (string-search "mcp://server/resource" text)))))))
+
+(provide 'test-niwa-resource-mcp)
+;;; test-niwa-resource-mcp.el ends here

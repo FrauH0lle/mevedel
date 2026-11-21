@@ -8,11 +8,11 @@ import { serve } from './mcp.mjs';
 import { openRoom } from './room.mjs';
 import { readStore, storePath, writeStore } from './store.mjs';
 
-const USAGE = `usage: mevedel-remote-artifact attach LINK [--name NAME] [--as DISPLAY-NAME]
-       mevedel-remote-artifact detach NAME
-       mevedel-remote-artifact mcp
+const USAGE = `usage: niwa-remote-artifact attach LINK [--name NAME] [--as DISPLAY-NAME]
+       niwa-remote-artifact detach NAME
+       niwa-remote-artifact mcp
 
-attach  remember an artifact link shared from a mevedel origin, named by the
+attach  remember an artifact link shared from a niwa origin, named by the
         artifact's id there unless --name chooses another; --as sets the name
         your edits carry at the origin
 detach  forget an attached artifact
@@ -92,7 +92,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout,
       stderr.write(USAGE);
       return 2;
     }
-    stderr.write(`mevedel-remote-artifact: ${error.message}\n`);
+    stderr.write(`niwa-remote-artifact: ${error.message}\n`);
     return 1;
   }
 }

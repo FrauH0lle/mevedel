@@ -1,12 +1,12 @@
-site_name: mevedel docs
-site_description: User and architecture manual for mevedel, for humans and agents.
-site_url: https://frauh0lle.github.io/mevedel/
-repo_url: https://github.com/FrauH0lle/mevedel
+site_name: niwa docs
+site_description: User and architecture manual for niwa, for humans and agents.
+site_url: https://frauh0lle.github.io/niwa/
+repo_url: https://github.com/FrauH0lle/niwa
 edit_uri: edit/master/docs/
 docs_dir: docs
 nav:
   - Home: index.md
-  - Using mevedel:
+  - Using niwa:
       - Conversation and workspace view: view.md
       - Browser collaboration: collaboration.md
       - Plans: plan-mode.md

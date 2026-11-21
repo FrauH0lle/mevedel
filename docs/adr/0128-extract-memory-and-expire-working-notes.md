@@ -73,7 +73,7 @@ new hand-edited README, index, per-topic manifest or permanent note catalogue.
 Use the execution target's current time and the file's **last modification time**:
 
 Every note and attachment uses one defcustom,
-`mevedel-working-note-max-age-days`, default **14 days**; nil disables automatic
+`niwa-working-note-max-age-days`, default **14 days**; nil disables automatic
 disposal. Empty-folder housekeeping uses the same age setting. Fourteen days
 means elapsed multiples of 86,400 seconds, inclusive at the boundary. Reading,
 listing and review time do not reset this clock; an actual modification does.

@@ -6,7 +6,7 @@ to `shared://sessions/<session>/notes.md`?
 
 This is a behavioral experiment, not a production implementation of `shared://`.
 Both arms expose identical Read, Glob, Grep and ApplyPatch tools. The adapter maps
-addresses onto private temporary directories and uses mevedel's real patch
+addresses onto private temporary directories and uses niwa's real patch
 parser, matcher and transaction. Memory and journal remain read-only, matching
 today's ordinary tools. No messages, real project data or live configuration are
 changed. All evidence is synthetic.
@@ -46,18 +46,18 @@ are a small diagnostic sample, not a statistically conclusive model ranking.
 
 Export a private provider snapshot with the existing
 `test/manual/memory-quality/export-provider.el` from the running Emacs, setting
-`MEVEDEL_QUALITY_BACKEND` to Codex or DeepSeek. Pass its returned pathname only:
+`NIWA_QUALITY_BACKEND` to Codex or DeepSeek. Pass its returned pathname only:
 
 ```sh
 npx @emacs-eask/cli clean elc
-MEVEDEL_SCOPE_PROVIDER=/tmp/PRIVATE-CONFIG.el \
-MEVEDEL_SCOPE_MODEL=gpt-5.6-sol \
-MEVEDEL_SCOPE_OUTPUT=/tmp/scope-sol.json \
+NIWA_SCOPE_PROVIDER=/tmp/PRIVATE-CONFIG.el \
+NIWA_SCOPE_MODEL=gpt-5.6-sol \
+NIWA_SCOPE_OUTPUT=/tmp/scope-sol.json \
 npx @emacs-eask/cli test ert test/manual/memory-scope/run.el
 ```
 
 The runner deletes its provider snapshot. It saves a JSON checkpoint after every
-case. `MEVEDEL_SCOPE_SMOKE=1` runs only local adapter checks and needs no provider.
+case. `NIWA_SCOPE_SMOKE=1` runs only local adapter checks and needs no provider.
 Do not run this file via an ordinary wildcard or retain credentials in results.
 
 Render the measurements and review sheet from the directory of model JSON files:
@@ -73,7 +73,7 @@ fail to recover a finding.
 
 ## Follow-up: nested shared address
 
-Set `MEVEDEL_SCOPE_NESTED=1` to run only the third arm, `nested-shared`.
+Set `NIWA_SCOPE_NESTED=1` to run only the third arm, `nested-shared`.
 It uses the same three cases, two trials, tools, facts, limits and model settings.
 Project notes live at `local://shared/sessions/<session>/notes.md`; plans and other
 local files stay session-owned. Searching `local://` includes the visible shared
@@ -90,7 +90,7 @@ Results: [nested schema follow-up](NESTED-RESULTS.md).
 
 ## Follow-up: agent-chosen organization
 
-Set `MEVEDEL_SCOPE_FREEFORM=1` to run `freeform-work`: the same three scenarios
+Set `NIWA_SCOPE_FREEFORM=1` to run `freeform-work`: the same three scenarios
 and two trials, now using only `work://`, `memory://` and `journal://`. This adds
 36 requests across Sol, Luna and Flash. No notes filename or directory layout is
 supplied. Guidance says to put notes in `work://shared/`, search before creating,

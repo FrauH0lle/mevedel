@@ -113,7 +113,7 @@ future writable behavior needs its own evaluation.
 
 Both arms had identical tools and address capabilities. The difference was the
 default notes location and whether publishing was a separate decision. The
-adapter used real temporary files and mevedel's patch parser, matcher and
+adapter used real temporary files and niwa's patch parser, matcher and
 transaction, but it was not the production resource resolver. No production
 `shared://` support or live model configuration was changed.
 

@@ -46,7 +46,7 @@ test('attach stores no origin when the welcome names none', async (t) => {
   const env = tempEnv(t);
   const named = await room(t);
   assert.equal((await run(env, 'attach', named.link())).code, 0);
-  assert.equal(stored(env).artifacts['snt-pipeline'].origin, 'snt-app on mevedel-host');
+  assert.equal(stored(env).artifacts['snt-pipeline'].origin, 'snt-app on niwa-host');
   const older = await room(t, { bindings: { $ORIGIN: undefined } });
   assert.equal((await run(env, 'attach', older.link(), '--name', 'older')).code, 0);
   assert.ok(!Object.hasOwn(stored(env).artifacts.older, 'origin'));
@@ -101,7 +101,7 @@ test('attach reports an unavailable origin and a protocol mismatch', async (t) =
   const mismatch = await room(t, { mode: 'mismatch' });
   const old = await run(env, 'attach', mismatch.link());
   assert.equal(old.code, 1);
-  assert.match(old.err, /host speaks 4.*update mevedel or the remote-artifact package/);
+  assert.match(old.err, /host speaks 4.*update niwa or the remote-artifact package/);
 });
 
 test('detach forgets an artifact and refuses an unknown name', async (t) => {
@@ -122,6 +122,6 @@ test('usage errors name the commands', async (t) => {
   for (const argv of [[], ['attach'], ['detach'], ['frobnicate'], ['attach', 'x', '--name']]) {
     const result = await run(env, ...argv);
     assert.equal(result.code, 2, argv.join(' '));
-    assert.match(result.err, /usage: mevedel-remote-artifact/);
+    assert.match(result.err, /usage: niwa-remote-artifact/);
   }
 });

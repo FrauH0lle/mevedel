@@ -12,7 +12,7 @@ its original directive-activity scope is historical.
 **The workspace owns its current notes in one store.** Notes, their text,
 anchors, authorship, lifecycle, conversation links, waiting prepared changes,
 recently-closed records and display-id state live in
-`<workspace>/.mevedel/instructions.el` on the
+`<workspace>/.niwa/instructions.el` on the
 execution target. Sessions write no instruction snapshots. Ordinary resume loads
 the store; it no longer loads or clears the workspace set from a session.
 Conversations live in their sessions, not the store. There is no directive record
@@ -20,7 +20,7 @@ kind, frozen-history reader or old-data conversion.
 
 **One whole-set record, refused when stale.** The store is read and written
 through the pinned control-file programs. Writes hold a lock on
-`.mevedel/leases/instructions/` and name the hash they were based on. A stale
+`.niwa/leases/instructions/` and name the hash they were based on. A stale
 write is merged per instruction UUID against the record this client last
 observed:
 
@@ -51,13 +51,13 @@ has since changed.
 - Any other difference merges as a write would.
 - Activation skips a remote root without a live connection, since resolving a
   workspace must not open one; the next listing or resume observes it.
-- Activation happens when `mevedel-workspace-get-or-create` registers a new
+- Activation happens when `niwa-workspace-get-or-create` registers a new
   workspace. It costs a state-directory check plus at most one read or hash:
   bounded I/O, but I/O. Callers avoid creating workspaces on hot paths such as
   redisplay, timers or process filters.
 - File visits are a separate, nonblocking activation path that the user enables
-  with `mevedel-notes-global-mode`. Presenting a file's notes first loads
-  `mevedel`, so the user's configuration of it, such as note keybindings,
+  with `niwa-notes-global-mode`. Presenting a file's notes first loads
+  `niwa`, so the user's configuration of it, such as note keybindings,
   applies before any note overlay exists. A local roots-only
   index remembers remote workspaces whose observed or written store has notes,
   and removes roots when their store has none. The first visit under an indexed
@@ -77,7 +77,7 @@ unknown format or an unreadable record refuses without clearing live state or
 writing. An absent store is told apart from a corrupt one. An unreadable store
 is reported once and read again only at the next observation point, not after
 every command. A failed write is likewise not retried after every command: a
-workspace waits `mevedel-session-checkpoint-interval` seconds, while exit and
+workspace waits `niwa-session-checkpoint-interval` seconds, while exit and
 session saves still try. Exports carry the same `:format`, so an
 export from another installation imports here. A file
 written before they carried it imports only on the version that wrote it.
@@ -87,11 +87,11 @@ mark the workspace and are written after the command, at every session save,
 and at exit. While a minibuffer is active the write waits: editing a request
 there changes it on every keystroke, and it is written once the command that
 read it returns. The first note in a recognized project root (VCS or project.el)
-creates `.mevedel/` and its store. Outside a project, an existing `.mevedel/`
+creates `.niwa/` and its store. Outside a project, an existing `.niwa/`
 still permits automatic store creation; otherwise notes stay in memory with a
 one-time notice that they are not saved, and no workspace state is created.
 Imports do not create workspace state in arbitrary directories either.
-`mevedel-save-instructions` and `mevedel-load-instructions`
+`niwa-save-instructions` and `niwa-load-instructions`
 remain export and import. An import replaces the store after its
 confirmation. It is refused unless this client last observed exactly the
 store's current record, so it cannot discard instructions it never saw. An
@@ -201,7 +201,7 @@ synchronous explicit-operation boundaries.
 
 ### 2026-11-12: First-note activation in recognized projects
 
-Previously all automatic store creation required an existing `.mevedel/`
+Previously all automatic store creation required an existing `.niwa/`
 directory. Notes now persist without a start button: the first note may create
 state at a recognized VCS or project.el root, and reports missing `.gitignore`
 coverage without changing ignore policy. Arbitrary directories still do not
@@ -220,16 +220,16 @@ annotated files and about 52 ms at 200. Rewind always settles and prunes
 through the store; when no store file exists yet, it prunes the live notes in
 memory. Redo settles the store for the restored turn count instead of loading
 the head's snapshot. Old snapshot files stay on disk and are ignored. The user
-approved the removal; `mevedel-save-instructions` remains the export command.
+approved the removal; `niwa-save-instructions` remains the export command.
 
 ### 2026-11-15: File-visit activation becomes an opt-in global mode
 
 The visit hook was added to `find-file-hook` by an autoload cookie, so reading
 the package autoloads changed every file visit, with no command to turn it off.
 The Elisp coding conventions require that loading a package not change editing
-behavior. It also let notes appear before `mevedel` loaded, so keybindings set in
-the user's `mevedel` configuration missed the first note overlays. The hook now
-belongs to `mevedel-notes-global-mode`, which users enable in their init; its
+behavior. It also let notes appear before `niwa` loaded, so keybindings set in
+the user's `niwa` configuration missed the first note overlays. The hook now
+belongs to `niwa-notes-global-mode`, which users enable in their init; its
 visit check stays dependency-free and still needs no chat. Presenting notes now
-loads `mevedel` first. The user chose this over a default-on option that keeps
+loads `niwa` first. The user chose this over a default-on option that keeps
 the autoloaded hook.

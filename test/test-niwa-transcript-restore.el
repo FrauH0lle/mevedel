@@ -1,0 +1,348 @@
+;;; test-niwa-transcript-restore.el --- Transcript restoration tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Tests for persisted gptel property restoration.
+
+;;; Code:
+
+(require 'niwa-transcript-restore)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+;; `gptel'
+(defvar gptel-mode)
+
+;; `org'
+(declare-function org-entry-get
+                  "org" (pom property &optional inherit literal-nil))
+(declare-function org-entry-put "org" (pom property value))
+
+
+;;
+;;; Bounds sanitation
+
+(niwa-deftest niwa-transcript-restore-sanitize-bounds ()
+  ,test
+  (test)
+  :doc "clamps stale GPTEL_BOUNDS ranges before gptel restore"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999) (999 1000)) (ignore (1 2)))\n"
+            ":END:\n"
+            "Body\n")
+    (niwa-transcript-restore-sanitize-bounds)
+    (let* ((max (point-max))
+           (bounds (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+           (response (alist-get 'response bounds)))
+      (should (= max (cadar response)))
+      (should (= 1 (length response)))
+      (dolist (entry bounds)
+        (dolist (range (cdr entry))
+          (should (<= (cadr range) max))))))
+  :doc "keeps side-channel bounds anchored when removing truncated entries"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "Answer.\n"
+            (niwa-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 49.0)))
+    (dotimes (_ 4)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "Answer.")
+        (let ((answer-start (match-beginning 0)))
+          (search-forward "<!-- niwa-render-data -->")
+          (org-entry-put
+           (point-min) "GPTEL_BOUNDS"
+           (prin1-to-string
+            `((response (,answer-start ,(match-beginning 0)) ...)
+              (niwa-render-data (,(match-beginning 0) ,(point-max)))))))))
+    (set-buffer-modified-p nil)
+    (let ((print-length 1) (print-level 1))
+      (niwa-transcript-restore-properties))
+    (should-not (buffer-modified-p))
+    (goto-char (point-min))
+    (search-forward "<!-- niwa-render-data -->")
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'niwa-render-data))
+    (should-not (string-match-p "\\.\\.\\."
+                                (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+  :doc "deletes unreadable GPTEL_BOUNDS"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: #<marker>\n"
+            ":END:\n"
+            "Body\n")
+    (niwa-transcript-restore-sanitize-bounds)
+    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS")))
+  :doc "discards dotted bounds lists without aborting restoration"
+  (dolist (raw '("((response (2 3)) . broken)"
+                 "((response . broken))"
+                 "((response (2 . 3)))"
+                 "((response (2 3 . broken)))"))
+    (ert-info ((format "Malformed bounds: %s" raw))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: " raw "\n:END:\nBody\n")
+        (set-buffer-modified-p nil)
+        (niwa-transcript-restore-properties)
+        (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))
+        (should-not (buffer-modified-p)))))
+  :doc "discards circular bounds lists without looping during restoration"
+  (dolist (raw '("#1=((response (2 3)) . #1#)"
+                 "(#1=(response (2 3) . #1#))"
+                 "((response #1=(2 3 . #1#)))"))
+    (ert-info ((format "Malformed bounds: %s" raw))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: " raw "\n:END:\nBody\n")
+        (set-buffer-modified-p nil)
+        (niwa-transcript-restore-properties)
+        (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))
+        (should-not (buffer-modified-p)))))
+  :doc "keeps valid sibling ranges and values when malformed entries are removed"
+  (dolist (malformed '("(response . broken)"
+                      "#1=(response (2 3) . #1#)"
+                      "(42 (2 3))"
+                      "(response (2 . 3))"
+                      "(response #1=(2 3 . #1#))"))
+    (ert-info ((format "Malformed entry: %s" malformed))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\nAnswer\nTool\n")
+        (dotimes (_ 5)
+          (goto-char (point-min))
+          (search-forward "Answer")
+          (let ((beg (match-beginning 0)) (end (match-end 0)))
+            (search-forward "Tool")
+            (org-entry-put
+             (point-min) "GPTEL_BOUNDS"
+             (format "((response (%d %d) (2 . 3) #2=(2 3 . #2#)) (tool (%d %d \"call-id\")) %s)"
+                     beg end (match-beginning 0) (match-end 0) malformed))))
+        (set-buffer-modified-p nil)
+        ;; Test the saved format directly without structural grammar changing
+        ;; the fixture's intentionally minimal tool span.
+        (niwa-transcript-restore-sanitize-bounds)
+        (gptel--restore-props (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+        (goto-char (point-min))
+        (search-forward "Answer")
+        (should (eq 'response (get-text-property (match-beginning 0) 'gptel)))
+        (search-forward "Tool")
+        (should (equal '(tool . "call-id")
+                       (get-text-property (match-beginning 0) 'gptel)))
+        (should-not (buffer-modified-p)))))
+  :doc "does not mark buffers modified while clamping bounds"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999)))\n"
+            ":END:\n"
+            "Body\n")
+    (set-buffer-modified-p nil)
+    (niwa-transcript-restore-sanitize-bounds)
+    (should-not (buffer-modified-p))
+    (pcase-let ((`((response (,beg ,end)))
+                 (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+      (should (= beg 2))
+      (should (= end (point-max))))))
+
+
+;;
+;;; Property restoration
+
+(niwa-deftest niwa-transcript-restore-properties-present-p ()
+  ,test
+  (test)
+  :doc "detects gptel properties anywhere in the requested range"
+  (with-temp-buffer
+    (insert "plain response tail")
+    (put-text-property 7 (point-max) 'gptel 'response)
+    (should (eq t (niwa-transcript-restore-properties-present-p
+                   (point-min) (point-max))))
+    (should-not (niwa-transcript-restore-properties-present-p 1 7))
+    (should-not (niwa-transcript-restore-properties-present-p 7 7))
+    (should-not (niwa-transcript-restore-properties-present-p 8 7))
+    (should (eq t (niwa-transcript-restore-properties-present-p 7 8)))
+    (put-text-property 7 (point-max) 'gptel nil)
+    (should-not (niwa-transcript-restore-properties-present-p 1 (point-max)))))
+
+(niwa-deftest niwa-transcript-restore-properties ()
+  ,test
+  (test)
+  :doc "hydrates persisted bounds then applies canonical structural properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "User prompt\n"
+            "#+begin_reasoning\nThinking.\n#+end_reasoning\n"
+            "Assistant answer.\n")
+    (dotimes (_ 3)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "Assistant answer.")
+        (org-entry-put
+         (point-min) "GPTEL_BOUNDS"
+         (prin1-to-string
+          `((response (,(match-beginning 0) ,(match-end 0))))))))
+    (set-buffer-modified-p nil)
+    (niwa-transcript-restore-properties)
+    (should-not (buffer-modified-p))
+    (goto-char (point-min))
+    (search-forward "Thinking.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'ignore))
+    (search-forward "Assistant answer.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'response)))
+  :doc "normalizes the body after sanitation substantially shrinks the drawer"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "#+begin_reasoning\nThinking.\n#+end_reasoning\n"
+            "Answer.\n")
+    (dotimes (_ 5)
+      (goto-char (point-min))
+      (search-forward "Answer.")
+      (org-entry-put
+       (point-min) "GPTEL_BOUNDS"
+       (prin1-to-string
+        `((response (,(match-beginning 0) ,(match-end 0))
+                    ,@(make-list 100 '...))))))
+    (set-buffer-modified-p nil)
+    (niwa-transcript-restore-properties)
+    (should-not (buffer-modified-p))
+    (goto-char (point-min))
+    (search-forward "Thinking.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'ignore))
+    (search-forward "Answer.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'response)))
+  :doc "does not overwrite newer live properties when restoring only if missing"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "Old persisted response.\n"
+            "New live response.\n")
+    (dotimes (_ 3)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "Old persisted response.")
+        (org-entry-put
+         (point-min) "GPTEL_BOUNDS"
+         (prin1-to-string
+          `((response (,(match-beginning 0) ,(match-end 0))))))))
+    (goto-char (point-min))
+    (search-forward "New live response.")
+    (put-text-property (match-beginning 0) (match-end 0)
+                       'gptel 'response)
+    (niwa-transcript-restore-properties t)
+    (goto-char (point-min))
+    (search-forward "Old persisted response.")
+    (should-not (get-text-property (match-beginning 0) 'gptel))
+    (search-forward "New live response.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'response))))
+
+(niwa-deftest niwa-transcript-restore-gptel-state ()
+  ,test
+  (test)
+  :doc "does not dirty resumed buffers while repairing bounds and properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999)))\n"
+            ":END:\n"
+            "#+begin_tool\n"
+            "(:name \"Bash\" :args (:command \"true\"))\n"
+            "ok\n"
+            "#+end_tool\n"
+            "Focused tests passed\n")
+    (setq-local gptel-mode nil)
+    (set-buffer-modified-p nil)
+    (cl-letf (((symbol-function 'gptel-mode)
+               (lambda (&optional _arg)
+                 (setq-local gptel-mode t)
+                 (save-excursion
+                   (goto-char (point-min))
+                   (search-forward "#+begin_tool")
+                   (let ((tool-start (match-beginning 0)))
+                     (search-forward "sed tests")
+                     (add-text-properties
+                      tool-start (match-beginning 0)
+                      '(gptel (tool . "stale"))))
+                   (goto-char (point-min))
+                   (search-forward "sed tests")
+                   (add-text-properties
+                    (match-beginning 0) (point-max)
+                    '(gptel response))))))
+      (niwa-transcript-restore-gptel-state))
+    (should-not (buffer-modified-p))
+    (save-excursion
+      (goto-char (point-min))
+      (search-forward "Focused tests")
+      (should (eq (get-text-property (match-beginning 0) 'gptel)
+                  'response)))))
+
+(niwa-deftest niwa-transcript-enable-gptel-mode ()
+  ,test
+  (test)
+  :doc "enables gptel-mode without gptel restoring config from the drawer"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BACKEND: stale-backend\n"
+            ":GPTEL_MODEL: stale-model\n"
+            ":GPTEL_BOUNDS: ((response (2 3)))\n"
+            ":END:\n"
+            "Body\n")
+    ;; gptel only restores state for file-visiting buffers; fake a name
+    ;; without ever writing it so the suppression path is exercised.
+    (setq buffer-file-name
+          (file-name-concat temporary-file-directory
+                            "niwa-test-restore.chat.org"))
+    (set-buffer-modified-p nil)
+    (let (restore-reached)
+      (cl-letf (((symbol-function 'gptel--restore-state)
+                 (lambda () (setq restore-reached t))))
+        (niwa-test--with-captured-diagnostics nil
+          (niwa-transcript-restore-gptel-state)))
+      (should (bound-and-true-p gptel-mode))
+      (should-not restore-reached)))
+
+  :doc "keeps a transcript unfontified, without JIT or the gptel annotator"
+  (let ((font-hook-ran nil))
+    (with-temp-buffer
+      (niwa--transcript-org-mode)
+      (insert "Body\n")
+      (let ((font-lock-mode-hook (list (lambda () (setq font-hook-ran t)))))
+        (niwa-transcript-enable-gptel-mode)
+        (should (bound-and-true-p gptel-mode))
+        (should-not font-lock-mode)
+        (should-not (bound-and-true-p jit-lock-mode))
+        (should-not (memq 'gptel-org--annotate-links jit-lock-functions))
+        (should-not font-hook-ran)
+        ;; Idempotent: a second call does not re-enable anything.
+        (niwa-transcript-enable-gptel-mode)
+        (should-not font-lock-mode)
+        (should-not (bound-and-true-p jit-lock-mode))
+        ;; A change's tick delta is unspecified; prove the suffix, not +1.
+        (let ((tick (buffer-modified-tick))
+              (proof (niwa-transcript-source-create (point-min)))
+              (start (point-max)))
+          (niwa-transcript-source-accept proof)
+          (goto-char start)
+          (insert "more")
+          (should (> (buffer-modified-tick) tick))
+          (should (= (1- start) (niwa-transcript-source-change proof)))
+          (should (= (buffer-modified-tick) (niwa-transcript-source-tick proof)))
+          (let ((after-insert (buffer-modified-tick)))
+            (redisplay)
+            (accept-process-output nil 0.01)
+            (should (= after-insert (buffer-modified-tick)))))
+        (should-not (text-property-any (point-min) (point-max)
+                                       'fontified t))))))
+
+(provide 'test-niwa-transcript-restore)
+;;; test-niwa-transcript-restore.el ends here

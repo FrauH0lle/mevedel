@@ -1,0 +1,1368 @@
+;;; niwa-tool-exec.el --- Bash and Eval tool adapters -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Bash and Eval lifecycle adapters, result formatting, and rendering.
+;; Registration lives in `niwa-tool-exec-registration'.
+;; `niwa-execution' owns their operating-system children;
+;; `niwa-tool-exec-permission' and `niwa-bash-policy' own authorization.
+
+;;; Code:
+
+(eval-when-compile
+  (require 'niwa-tool-registry))
+
+(require 'backtrace)
+(require 'cl-lib)
+(require 'niwa-agent-control)
+(require 'niwa-agent-runtime)
+(require 'niwa-bash-analysis)
+(require 'niwa-bash-policy)
+(require 'niwa-eval-capture)
+(require 'niwa-eval-sandbox)
+(require 'niwa-execution)
+(require 'niwa-pipeline)
+(require 'niwa-sandbox)
+(require 'niwa-telemetry)
+(require 'niwa-tool-exec-permission)
+(require 'niwa-turn)
+(require 'niwa-utilities)
+(require 'niwa-workspace)
+(require 'seq)
+(require 'subr-x)
+(require 'xml)
+
+;; `gptel'
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(defvar read-eval)
+
+;; `niwa-agent-control'
+(declare-function niwa-agent-control-notify
+                  "niwa-agent-control" (session key function))
+(autoload 'niwa-agent-control-notify "niwa-agent-control")
+(declare-function niwa-agent-control-enqueue-execution-result
+                  "niwa-agent-control"
+                  (session owner body &optional execution-id wake meta
+                           acknowledgement))
+
+;; `niwa-agent-runtime'
+(declare-function niwa-agent-runtime-queue-execution-completion
+                  "niwa-agent-runtime"
+                  (context owner body &optional meta acknowledgement))
+
+;; `niwa-agents'
+(defvar niwa--agent-invocation)
+
+;; `niwa-bash-analysis'
+(declare-function niwa-bash-analysis-analyze
+                  "niwa-bash-analysis" (source))
+(declare-function niwa-bash-analysis-prepare-read-only
+                  "niwa-bash-analysis" (source analysis &optional temporary-root))
+
+;; `niwa-execution'
+(declare-function niwa-execution-list
+                  "niwa-execution" (session owner))
+(declare-function niwa-execution-observe
+                  "niwa-execution"
+                  (session owner execution-id callback &rest keys))
+(declare-function niwa-execution-start-bash
+                  "niwa-execution" (callback &rest keys))
+(declare-function niwa-execution-stop
+                  "niwa-execution"
+                  (session owner execution-id callback))
+
+;; `niwa-execution-target'
+(declare-function niwa-execution-target-environment
+                  "niwa-execution-target" (target))
+(declare-function niwa-execution-target-expand-path
+                  "niwa-execution-target" (target path &optional directory))
+(declare-function niwa-execution-target-native-path
+                  "niwa-execution-target" (target path))
+(declare-function niwa-execution-target-remote-p
+                  "niwa-execution-target" (target))
+
+;; `niwa-interaction-prompt'
+(declare-function niwa--prompt-attribution-line
+                  "niwa-interaction-prompt" (origin))
+
+(autoload 'niwa--prompt-attribution-line "niwa-interaction-prompt")
+
+;; `niwa-pending-inputs'
+(declare-function niwa-pending-inputs-offer-root-event
+                  "niwa-pending-inputs" (session &optional data-buffer))
+(autoload 'niwa-pending-inputs-offer-root-event "niwa-pending-inputs")
+
+;; `niwa-pipeline'
+(declare-function niwa-pipeline-active-permission-approvals
+                  "niwa-pipeline" ())
+(declare-function niwa-pipeline-active-tool-use-id
+                  "niwa-pipeline" ())
+(declare-function niwa-pipeline-tool-results-dir
+                  "niwa-pipeline"
+                  (session buffer &optional request existing-only-p))
+
+;; `niwa-queue'
+(declare-function niwa-queue--current-session "niwa-queue" ())
+(autoload 'niwa-queue--current-session "niwa-queue")
+
+;; `niwa-sandbox'
+(declare-function niwa-sandbox-status-text "niwa-sandbox" (facts))
+
+;; `niwa-structs'
+(declare-function niwa-request-p "niwa-structs" (cl-x))
+(declare-function niwa-session-execution-target
+                  "niwa-structs" (cl-x) t)
+(declare-function niwa-session-p "niwa-structs" (cl-x))
+(defvar niwa--current-request)
+(defvar niwa--data-buffer)
+(defvar niwa--session)
+
+;; `niwa-telemetry'
+(declare-function niwa-telemetry-record-audit
+                  "niwa-telemetry" (session event &rest props))
+
+;; `niwa-tool-exec-permission'
+(declare-function niwa-tool-exec-permission-check-bash-async
+                  "niwa-tool-exec-permission" (tool-struct input cont))
+(declare-function niwa-tool-exec-permission-check-eval-async
+                  "niwa-tool-exec-permission" (tool-struct input cont))
+(declare-function niwa-tool-exec-permission-current-context
+                  "niwa-tool-exec-permission"
+                  (tool-name args &optional session))
+(declare-function niwa-tool-exec-permission-default-directory
+                  "niwa-tool-exec-permission" ())
+(declare-function niwa-tool-exec-permission-effective-sandbox-request
+                  "niwa-tool-exec-permission"
+                  (input tool-name detail &optional eval-mode
+                         permission-context))
+(declare-function niwa-tool-exec-permission-eval-mode
+                  "niwa-tool-exec-permission" (args))
+(declare-function niwa-tool-exec-permission-eval-preserve-ui-p
+                  "niwa-tool-exec-permission" (args))
+
+;; `niwa-turn'
+(declare-function niwa-current-origin "niwa-turn" ())
+
+;; `niwa-utilities'
+(declare-function niwa--duration-label "niwa-utilities" (seconds))
+(autoload 'niwa--duration-label "niwa-utilities")
+(declare-function niwa--clamped-integer
+                  "niwa-utilities" (value default minimum maximum))
+(declare-function niwa--warn-once
+                  "niwa-utilities" (scope key format &rest args))
+
+;; `niwa-view-composer'
+(declare-function niwa-view-call-preserving-window-configuration
+                  "niwa-view-composer" (thunk))
+(autoload 'niwa-view-call-preserving-window-configuration
+  "niwa-view-composer")
+
+;; `niwa-workspace'
+(declare-function niwa--all-allowed-roots
+                  "niwa-workspace" (&optional buffer))
+
+;; `xml'
+(declare-function xml-escape-string "xml" (string))
+
+
+;;
+
+;;; Bash
+
+(defun niwa-tool-exec--bash-yield-time-ms (input)
+  "Return the Bash yield time in milliseconds from INPUT.
+The declared schema range is enforced by the input-repair pipeline
+before the handler runs, so only the omitted-argument default remains
+handler policy."
+  (or (plist-get input :yield_time_ms) 10000))
+
+(defun niwa-tool-exec--write-wait-time-ms (input chars)
+  "Return the observation wait from INPUT and CHARS.
+The input-repair pipeline enforces the declared union range.  The
+mode-dependent bounds stay here because they depend on CHARS: input
+writes use 250-30000ms and pure polls use 5000-300000ms."
+  (let ((input-p (and (stringp chars) (not (string-empty-p chars)))))
+    (niwa--clamped-integer (plist-get input :yield_time_ms)
+                              (if input-p 250 5000)
+                              (if input-p 250 5000)
+                              (if input-p 30000 300000))))
+
+(defun niwa-tool-exec--execution-artifact-directory (session read-only-p)
+  "Return SESSION's retained execution artifact directory, if available.
+Return nil for remote targets so live Bash and Monitor output stays in a
+client-local spool.  A process filter must not write into a busy TRAMP
+connection.  Recoverable output is published to the session separately.
+For READ-ONLY-P commands, do not initialize storage or Git exclusions;
+unsaved readers use the execution module's temporary spool instead."
+  (unless (and (niwa-session-execution-target session)
+               (niwa-execution-target-remote-p
+                (niwa-session-execution-target session)))
+    (when-let* ((root
+                 (niwa-pipeline-tool-results-dir
+                  session
+                  (or (and (boundp 'niwa--data-buffer)
+                           niwa--data-buffer)
+                      (current-buffer))
+                  nil read-only-p)))
+      (file-name-concat root "executions"))))
+
+(defun niwa-tool-exec--sandbox-temporary-root (workdir)
+  "Return the execution target's temporary directory for WORKDIR."
+  (let* ((session (and (boundp 'niwa--session) niwa--session))
+         (target (and session (niwa-session-execution-target session))))
+    (if (and target (niwa-execution-target-remote-p target))
+        (niwa-execution-target-expand-path
+         target
+         (or (cdr (assoc "TMPDIR"
+                         (niwa-execution-target-environment target)))
+             "/tmp")
+         workdir)
+      temporary-file-directory)))
+
+(defun niwa-tool-exec--sandbox-writable-roots (workdir)
+  "Return writable child-confinement roots for WORKDIR."
+  (let* ((session (and (boundp 'niwa--session) niwa--session))
+         (target (and session (niwa-session-execution-target session)))
+         (remote (and target
+                      (niwa-execution-target-remote-p target)))
+         (temporary-root (niwa-tool-exec--sandbox-temporary-root workdir))
+         (roots
+         (condition-case nil
+              (niwa--all-allowed-roots (current-buffer))
+            (error nil))))
+    (when remote
+      (setq roots
+            (cl-remove-if-not
+             (lambda (root)
+               (equal (file-remote-p root)
+                      (file-remote-p workdir)))
+             roots)))
+    (delete-dups
+     (append (or roots
+                 (list (file-name-as-directory (expand-file-name workdir))))
+             (list (file-name-as-directory
+                    (expand-file-name temporary-root)))))))
+
+(defconst niwa-tool-exec--sandbox-recovery-guidance
+  (concat
+   "This command ran with network/path confinement. If confinement caused "
+   "the failure, retry with `with_additional_permissions` and request only "
+   "the required network or exact path capability. Use `require_escalated` "
+   "only when additive permissions cannot represent the requirement.")
+  "Model guidance appended to failed confined child results.")
+
+(defun niwa-tool-exec--sandbox-disclosure
+    (text child-result &optional suppress-p failed-p scope)
+  "Append CHILD-RESULT confinement facts and recovery guidance to TEXT.
+SUPPRESS-P hides model-facing disclosure.  FAILED-P identifies a failed tool
+operation rather than a successful or semantic non-error result.
+SCOPE identifies the workspace for local suppressed-disclosure warnings."
+  (let ((facts (plist-get child-result :sandbox-facts)))
+    (cond
+     ((not facts) text)
+     (suppress-p
+     (when (and (eq (plist-get facts :filesystem) 'unrestricted)
+                (not (eq (plist-get facts :sandbox) 'unavailable)))
+        (niwa--warn-once
+         (niwa-diagnostic-scope scope)
+         'exec-skill-unconfined
+         "Skill shell expansion ran without confinement: %s"
+         (niwa-sandbox-status-text facts)))
+     text)
+     (t
+      (string-join
+       (delq
+        nil
+        (list
+         (unless (string-empty-p (or text "")) text)
+         (when (plist-get facts :first-direct-fallback)
+           "Confinement was unavailable, so this invocation ran directly.")
+         (concat "[" (niwa-sandbox-status-text facts) "]")
+         (when (and failed-p (plist-get facts :git-common-directories))
+           (format
+            (concat "Linked Git shared metadata (objects and refs): %s. "
+                    "A grant to only the worktree's index directory does not "
+                    "include these locations. This location information does "
+                    "not establish the cause of the child failure.")
+            (string-join (plist-get facts :git-common-directories) ", ")))
+         (cond
+          ((and failed-p (eq (plist-get facts :sandbox) 'refused))
+           (concat
+            "The command did not run. Resolve the reported resource or "
+            "grant-preparation problem before submitting a new invocation."))
+          ((and failed-p (plist-get facts :refused))
+           (concat
+            "Confinement is required but unavailable. Only a new invocation "
+            "with `require_escalated` and a justification can request direct "
+            "execution."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap)
+                (string-match-p
+                 (concat "^Bad owner or permissions on /etc/ssh/ssh_config"
+                         "\\(?:\\.d/[^\r\n]+\\)?\r?$")
+                 (or text "")))
+           (concat
+            "OpenSSH rejected system SSH configuration ownership. "
+            "Bubblewrap's user namespace can map host root-owned files to "
+            "the overflow UID (often 65534); read access does not make that "
+            "owner acceptable to OpenSSH. This diagnostic alone does not "
+            "prove a namespace cause: compare ownership and a non-connecting "
+            "`ssh -G` check on the host. Network or exact-path grants do not "
+            "change UID mapping. Git fetches from the workspace repository's "
+            "SSH remotes do not need this: a local confined command naming "
+            "`git` reaches them through the fetch-only transport. If "
+            "confirmed and the operation is still needed, submit a new Bash "
+            "invocation with "
+            "`require_escalated` "
+            "and a justification, requesting invocation-only approval to run "
+            "on the execution target outside confinement. Command approval "
+            "still applies; no retry is automatic. Keep SSH ownership and "
+            "configuration checks intact; do not bypass configuration or "
+            "change its permissions to work around the namespace."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap)
+                (string-match-p "/run/user/[0-9]+/bus\\(?:[^[:alnum:]_.-]\\|\\'\\)"
+                                (or text "")))
+           (concat
+            "The session D-Bus is hidden from confined commands, because its "
+            "systemd manager would run commands outside confinement. Tools "
+            "that read credentials from the keyring over it, such as `gh`, "
+            "`glab` and `secret-tool`, cannot authenticate here, and grants "
+            "for paths at, below or above `/run/user` are refused. If the "
+            "user's task needs such a tool, submit a new Bash invocation with "
+            "`require_escalated` and a justification, requesting "
+            "invocation-only approval to run outside confinement. Command "
+            "approval still applies; no retry is automatic."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap))
+           niwa-tool-exec--sandbox-recovery-guidance))))
+       "\n\n")))))
+
+(defun niwa-tool-exec--execution-facts-xml (facts)
+  "Return compact model-visible XML derived from canonical FACTS."
+  (let (attributes)
+    (dolist (entry '((:execution-id . "execution_id")
+                     (:kind . "kind")
+                     (:description . "description")
+                     (:expires-at . "expires_at")
+                     (:event-count . "event_count")
+                     (:command . "command")
+                     (:state . "state")
+                     (:termination . "termination")
+                     (:exit-code . "exit_code")
+                     (:pipeline-exit-codes . "pipeline_exit_codes")
+                     (:pipeline-failed-stages . "pipeline_failed_stages")
+                     (:pipeline-classification . "pipeline_classification")
+                     (:outcome . "outcome")
+                     (:wall-time-seconds . "wall_time_seconds")
+                     (:output-bytes . "output_bytes")
+                     (:output-lines . "output_lines")
+                     (:omitted-output-bytes . "omitted_output_bytes")
+                     (:tty . "tty")
+                     (:output-path . "output_path")))
+      (let ((value (plist-get facts (car entry))))
+        (when (or value (eq (car entry) :tty))
+          (push
+           (format "%s=\"%s\"" (cdr entry)
+                   (xml-escape-string
+                    (cond
+                     ((eq value t) "true")
+                     ((null value) "false")
+                     ((listp value) (mapconcat #'number-to-string value " "))
+                     ;; A model reads a calendar time, not epoch seconds.
+                     ((eq (car entry) :expires-at)
+                      (format-time-string "%FT%T%z" value))
+                     ((floatp value) (format "%.3f" value))
+                     (t (format "%s" value)))))
+           attributes))))
+    (format "<%s-execution %s/>"
+            (pcase (plist-get facts :kind)
+              ('monitor "monitor") ('eval "eval") (_ "bash"))
+            (string-join (nreverse attributes) " "))))
+
+(defun niwa-tool-exec-format-execution-metadata (facts)
+  "Return compact UI metadata for execution FACTS."
+  (string-join
+   (delq nil
+         (list
+          (when (eq (plist-get facts :kind) 'monitor)
+            (format "Watching: %s" (or (plist-get facts :description) "")))
+          (when-let* ((expires (plist-get facts :expires-at)))
+            (format "expires %s" (format-time-string "%H:%M:%S" expires)))
+          (when (plist-get facts :event-count)
+            (format "%d events" (plist-get facts :event-count)))
+          (when-let* ((state (plist-get facts :state)))
+            (symbol-name (if (eq state 'completed)
+                             (or (plist-get facts :outcome) state)
+                           state)))
+          (when (and (integerp (plist-get facts :exit-code))
+                     (memq (plist-get facts :termination)
+                           '(nil exited signaled interrupted)))
+            (format "%s %d"
+                    (if (memq (plist-get facts :termination)
+                              '(signaled interrupted))
+                        "signal" "exit")
+                    (plist-get facts :exit-code)))
+          (when-let* ((termination (plist-get facts :termination))
+                      ((not (eq termination 'exited))))
+            (symbol-name termination))
+          (when (and (not (eq (plist-get facts :kind) 'monitor))
+                     (plist-member facts :wall-time-seconds))
+            (niwa--duration-label (plist-get facts :wall-time-seconds)))
+          (when (plist-member facts :output-lines)
+            (format "%d lines" (or (plist-get facts :output-lines) 0)))
+          (when (plist-member facts :output-bytes)
+            (format "%d bytes" (or (plist-get facts :output-bytes) 0)))
+          (when-let* ((workdir (plist-get facts :workdir)))
+            (format "cwd %s" workdir))
+          (plist-get facts :execution-id)))
+   " · "))
+
+(defun niwa-tool-exec--bash-outcome (analysis exit-code termination)
+  "Derive a canonical outcome from ANALYSIS, EXIT-CODE, and TERMINATION."
+  (let* ((commands (plist-get analysis :commands))
+         (command
+          (and (= (length commands) 1)
+               (not (memq (plist-get analysis :class) '(complex dangerous)))
+               (caar commands)))
+         (exit-one-outcome
+          (pcase command
+            ((or "grep" "rg") 'no-match)
+            ("diff" 'different)
+            ((or "test" "[") 'false))))
+    (cond
+     ((not (eq termination 'exited)) 'failure)
+     ((and (integerp exit-code) (zerop exit-code)) 'success)
+     ((and (equal exit-code 1) exit-one-outcome) exit-one-outcome)
+     (t 'failure))))
+
+(defun niwa-tool-exec-completion (termination outcome)
+  "Return (STATUS . VERB) for a completion's TERMINATION and OUTCOME.
+Each is a symbol, a string from a mailbox tag, or nil; strings are compared
+by name and never interned.  STATUS is one of `stopped', `timed-out',
+`lost', `failed', `completed' and `ended'; VERB is its display word.  The first
+matching rule wins:
+  1. a stop termination (stopped, interrupted, cancelled, owner-stopped)
+  2. a timeout termination (timeout, timed-out, expired)
+  3. termination or outcome lost: the end was never observed, so it is `lost'
+  4. a failure outcome (failure, errored)
+  5. a Bash outcome that is not a failure (success, no-match, different, false)
+  6. anything else, such as a monitor that exited without an outcome or an
+     unknown outcome value: `ended', which claims neither success nor failure."
+  (let ((termination (and termination (format "%s" termination)))
+        (outcome (and outcome (format "%s" outcome))))
+    (cond
+     ((member termination '("stopped" "interrupted" "cancelled" "owner-stopped"))
+      '(stopped . "stopped"))
+     ((member termination '("timeout" "timed-out" "expired"))
+      '(timed-out . "timed out"))
+     ((or (equal termination "lost") (equal outcome "lost"))
+      '(lost . "lost"))
+     ((member outcome '("failure" "errored"))
+      '(failed . "failed"))
+     ((member outcome '("success" "no-match" "different" "false"))
+      '(completed . "completed"))
+     (t '(ended . "ended")))))
+
+(defun niwa-tool-exec--pipeline-source (source marker &optional original-source)
+  "Append a final outer pipeline snapshot to SOURCE using private MARKER.
+No traps or shell options change.  Explicit exit/exec may bypass the snapshot.
+Sources that can install EXIT traps are left untouched.  ORIGINAL-SOURCE,
+when non-nil, supplies the authored source before trusted Git hardening."
+  (if (not (niwa-bash-analysis-snapshot-safe-p (or original-source source)))
+      source
+    (let ((variable (concat "__niwa_" marker)))
+      (concat source "\n"
+              variable "=$? " variable "_stages=(\"${PIPESTATUS[@]}\")\n"
+              "builtin printf -v " variable "_frame '%s ' \"${" variable "_stages[@]}\"\n"
+              "builtin printf '\\036" marker ":%s\\037' \"$" variable "_frame\"\n"
+              "exit \"$" variable "\""))))
+
+(defun niwa-tool-exec--pipeline-facts (source codes)
+  "Return final pipeline facts for SOURCE and observed CODES.
+Expected grep/diff/test statuses retain their ordinary Bash outcomes.
+Upstream SIGPIPE is benign when a downstream stage succeeded."
+  (let* ((stages (niwa-bash-analysis-final-pipeline source (length codes)))
+         (index 0)
+         failures outcome)
+    (if (null stages)
+        '(:pipeline-classification unavailable)
+      (dolist (code codes)
+        (setq outcome (niwa-tool-exec--bash-outcome (pop stages) code 'exited))
+        (unless (or (memq outcome '(success no-match different false))
+                    (and (= code 141) (memq 0 (nthcdr (1+ index) codes))))
+          (push (1+ index) failures))
+        (setq index (1+ index)))
+      (list :pipeline-failed-stages (nreverse failures)
+            :pipeline-outcome (if failures 'failure outcome)
+            :pipeline-classification 'observed))))
+
+(defun niwa-tool-exec--compound-profile-hint (observation)
+  "Explain unattached segment profiles in a failed confined OBSERVATION.
+Only path-related denial output selects a captured matching fact.  This is
+matching information, not a diagnosis inferred from untrusted child output."
+  (let* ((facts (plist-get observation :facts))
+         (output (or (plist-get observation :output) ""))
+         (workdir (plist-get facts :workdir))
+         (case-fold-search t)
+         selected)
+    (when (and (eq (plist-get facts :state) 'completed)
+               (eq (plist-get facts :termination) 'exited)
+               (eq (plist-get facts :outcome) 'failure)
+               (not (plist-get observation :error))
+               (eq (plist-get (plist-get observation :sandbox-facts) :sandbox) 'bubblewrap))
+      (dolist (miss (plist-get observation :compound-profile-misses))
+        (let* ((path (file-local-name (plist-get miss :path)))
+               (relative (and workdir (file-relative-name (plist-get miss :path) workdir)))
+               (paths (delete-dups (delq nil (list path
+                                                   (and relative
+                                                        (not (string-prefix-p "../" relative))
+                                                        relative))))))
+          (when (and (< (length selected) 3)
+                     (cl-some
+                      (lambda (line)
+                        (and (string-match-p
+                              "\\b\\(?:Read-only file system\\|Permission denied\\|Operation not permitted\\)\\b"
+                              line)
+                             (let ((case-fold-search nil))
+                               (cl-some (lambda (path)
+                                          (string-match-p
+                                           (concat "\\(?:\\`\\|[\"'`:[:space:]=]\\)"
+                                                   (unless (file-name-absolute-p path) "\\(?:\\./\\)?")
+                                                   (regexp-quote (directory-file-name path))
+                                                   "\\(?:/\\|[\"'`:[:space:]]\\|\\'\\)")
+                                           line)) paths))))
+                      (split-string (substring output 0 (min (length output) 16384)) "\n" t)))
+            (push miss selected))))
+      (when selected
+        (let ((print-escape-newlines t)
+              (print-escape-control-characters t))
+          (cl-flet ((excerpt (text width)
+                      (prin1-to-string
+                       (truncate-string-to-width
+                        (if (> (length text) width)
+                            (concat (substring text 0 (- width 3)) "...")
+                          text)
+                        width nil nil "..."))))
+            (concat
+             "Command-scoped filesystem profile not attached: "
+             (mapconcat
+              (lambda (miss)
+                (format (concat "segment %s matches %s rule %s (path %s), "
+                                "but another command in the line is neither read-only "
+                                "nor allowed by a direct rule")
+                        (excerpt (plist-get miss :segment) 120)
+                        (substring (symbol-name (plist-get miss :bucket)) 1)
+                        (excerpt (plist-get miss :pattern) 100)
+                        (excerpt (file-local-name (plist-get miss :path)) 160)))
+              (nreverse selected) "; ")
+             ". Segment profiles attach only when the rest of the line is read-only or "
+             "allowed. This does not establish the failure cause. "
+             "Use separate Bash calls or a fresh invocation with explicit, justified authority; "
+             "inspect prior effects first. No grant or retry is automatic.")))))))
+
+(defun niwa-tool-exec--observation-envelope
+    (observation &optional suppress-sandbox-disclosure-p force-success-p scope)
+  "Return a handler envelope for managed OBSERVATION.
+
+SUPPRESS-SANDBOX-DISCLOSURE-P preserves trusted internal expansion behavior.
+FORCE-SUCCESS-P makes control-tool completion successful independently of the
+stopped command's outcome.  SCOPE owns any local diagnostic report."
+  (let* ((facts (plist-get observation :facts))
+         (output (or (plist-get observation :output) ""))
+         (error-data (plist-get observation :error))
+         (failed-p
+          (and (not force-success-p)
+               (eq (plist-get facts :state) 'completed)
+               (eq (plist-get facts :outcome) 'failure)))
+         (body (if (plist-get observation :result)
+                   (plist-get observation :result)
+                 (if error-data
+                   (format "Failed to start process: %s" error-data)
+                 (concat output
+                         (when-let* ((stages (plist-get facts :pipeline-failed-stages)))
+                           (format "\nPipeline failed at stage(s) %s (exit codes: %s)."
+                                   (mapconcat #'number-to-string stages ", ")
+                                   (mapconcat #'number-to-string
+                                              (plist-get facts :pipeline-exit-codes) " ")))))))
+         (with-sandbox
+          (string-join
+           (delq nil
+                 (list (niwa-tool-exec--sandbox-disclosure
+                        body observation suppress-sandbox-disclosure-p failed-p scope)
+                       (and failed-p (not suppress-sandbox-disclosure-p)
+                            (niwa-tool-exec--compound-profile-hint observation))))
+           "\n\n"))
+         (result
+          (if (or suppress-sandbox-disclosure-p
+                  (and (eq (plist-get facts :kind) 'eval)
+                       (not force-success-p)
+                       (eq (plist-get facts :state) 'completed)))
+              with-sandbox
+            (concat with-sandbox
+                    (unless (string-empty-p with-sandbox) "\n\n")
+                    (niwa-tool-exec--execution-facts-xml facts))))
+         (status
+          (cond
+           ;; A start failure has no completed state to judge by; facts
+           ;; alone would report the command successful with a "Failed
+           ;; to start process" body.
+           (error-data 'error)
+           (force-success-p 'success)
+           ((or (not (eq (plist-get facts :state) 'completed))
+                (memq (plist-get facts :outcome)
+                      '(success no-match different false)))
+            'success)
+           (t 'error))))
+    (list :result result
+          :status status
+          :render-data
+          (append (copy-sequence facts)
+                  (list :sandbox-facts
+                        (plist-get observation :sandbox-facts)
+                        :model-result-envelope-p
+                        (not suppress-sandbox-disclosure-p))))))
+
+(defun niwa-tool-exec--facts-meta (facts &rest keys)
+  "Return the mailbox metadata plist of FACTS restricted to KEYS.
+Values are plain strings and integers; unknown or nil facts are omitted."
+  (let (meta)
+    (dolist (key keys)
+      (when-let* ((value (plist-get facts key)))
+        (setq meta
+              (append meta
+                      (list key
+                            (cond ((memq key '(:termination :outcome))
+                                   (symbol-name value))
+                                  ((eq key :command)
+                                   (truncate-string-to-width value 120 nil nil "…"))
+                                  (t value)))))))
+    meta))
+
+(defun niwa-tool-exec--enqueue-monitor-lines
+    (owner-context facts lines omitted wake &optional terminal acknowledgement)
+  "Queue each framed monitor line of LINES as its own record for OWNER-CONTEXT.
+OMITTED lines are summarized on the last record, whose model text carries the
+original omission note.  FACTS identify the monitor; WAKE marks every record.
+TERMINAL, an entry (BODY META t), follows the lines.  All records share one
+durable commit, so a failed flush leaves nothing queued and a retry cannot
+duplicate events.  ACKNOWLEDGEMENT, if given, is passed to the mailbox and
+runs once when the commit is secured or has failed."
+  (let ((entries nil))
+    (when (and (null lines) (> omitted 0))
+      (setq lines (list "")))
+    (while lines
+      (let* ((line (pop lines))
+             (omit (and (null lines) (> omitted 0))))
+        (push (list (if omit
+                        (format "%s\n\n[%d more event lines in the output file]"
+                                line omitted)
+                      line)
+                    (and omit (list :omitted omitted)))
+              entries)))
+    (when terminal
+      (push terminal entries))
+    (niwa-agent-control-enqueue-monitor-events
+     owner-context (plist-get facts :execution-id)
+     (or (plist-get facts :description) "") (nreverse entries) wake
+     acknowledgement)))
+
+(defun niwa-tool-exec--secured-acknowledgement
+    (acknowledgement owner-context data-buffer wake)
+  "Return an acknowledgement that forwards to ACKNOWLEDGEMENT, then wakes.
+On success the producer's record is secured, ACKNOWLEDGEMENT settles the
+execution, and only then, when WAKE, is OWNER-CONTEXT's root offered the
+event for DATA-BUFFER.  The offer goes through the session's coalesced
+notifier, never the mutation preparation queue: it runs at once when nothing
+is blocked and otherwise after the gate, and offers for one buffer coalesce.
+The notifier contains a failing wake, so it never turns a secured delivery
+into a failure.  The facade is always invoked; the offer itself rechecks at
+run time and never wakes a session that is stopping."
+  (lambda (success error)
+    (funcall acknowledgement success error)
+    (when (and success wake)
+      (niwa-agent-control-notify
+       owner-context (list 'root-wake data-buffer)
+       (lambda ()
+         (unless (niwa-session-publication-stopping-p owner-context)
+           (niwa-pending-inputs-offer-root-event
+            owner-context data-buffer)))))))
+
+(defun niwa-tool-exec-handle-execution-event
+    (event owner-context acknowledgement)
+  "Secure an independently delivered execution EVENT in its owner mailbox.
+ACKNOWLEDGEMENT, called with SUCCESS and ERROR exactly once, runs after the
+record is durable or has definitively failed.  Return `pending' when it will
+run later, else t after it ran.  A yielded root result that ended on its own
+wakes an idle model once secured; a stopped one does not."
+  (pcase (plist-get event :type)
+    ('monitor-batch
+     (let ((facts (plist-get event :facts)))
+       (niwa-tool-exec--delivery-result
+        (niwa-tool-exec--enqueue-monitor-lines
+         owner-context facts (plist-get event :monitor-lines)
+         (or (plist-get event :monitor-omitted) 0) t nil
+         (niwa-tool-exec--secured-acknowledgement
+          acknowledgement owner-context (plist-get event :data-buffer) t)))))
+    ((and 'terminal (guard (eq (plist-get event :delivery) 'mailbox)))
+     (let* ((args (plist-get event :tool-args))
+            (facts (plist-get event :facts))
+            (observation (plist-get event :observation))
+            (meta (niwa-tool-exec--facts-meta
+                   facts :execution-id :description :command :termination
+                   :outcome :exit-code :output-path :output-bytes
+                   :omitted-output-bytes))
+            (meta (if (eq (plist-get facts :kind) 'eval)
+                      (plist-put meta :kind "eval") meta))
+            (root-p (and (niwa-session-p owner-context)
+                         (equal (plist-get event :owner) "/root")))
+            (wake (and root-p
+                       (not (eq (plist-get facts :termination) 'stopped))))
+            (secured
+             (niwa-tool-exec--secured-acknowledgement
+              acknowledgement owner-context (plist-get event :data-buffer)
+              wake)))
+       (niwa-tool-exec--delivery-result
+        (cond
+         ((eq (plist-get facts :kind) 'monitor)
+          (niwa-tool-exec--enqueue-monitor-lines
+           owner-context facts (plist-get event :monitor-lines)
+           (or (plist-get event :monitor-omitted) 0) wake
+           (list (niwa-tool-exec--monitor-terminal-body event)
+                 (niwa-tool-exec--facts-meta
+                  facts :event-count :termination :outcome :exit-code)
+                 t)
+           secured))
+         ((niwa-session-p owner-context)
+          (niwa-agent-control-enqueue-execution-result
+           owner-context
+           (plist-get event :owner)
+           (plist-get
+            (niwa-tool-exec--observation-envelope
+             observation (plist-get args :suppress-sandbox-disclosure-p) nil
+             (niwa-diagnostic-scope (plist-get event :session)))
+            :result)
+           (plist-get facts :execution-id) wake meta secured))
+         (t
+          (niwa-agent-runtime-queue-execution-completion
+           owner-context
+           (plist-get event :owner)
+           (plist-get
+            (niwa-tool-exec--observation-envelope
+             observation (plist-get args :suppress-sandbox-disclosure-p) nil
+             (niwa-diagnostic-scope (plist-get event :session)))
+            :result)
+           meta secured))))))
+    (_
+     (funcall acknowledgement nil "Unsupported mailbox event")
+     nil)))
+
+(defun niwa-tool-exec--delivery-result (result)
+  "Return `pending' when mailbox RESULT awaits acknowledgement, else t."
+  (if (eq result 'pending) 'pending t))
+
+(defun niwa-tool-exec--monitor-terminal-body (event)
+  "Return EVENT's terminal notice."
+  (let* ((facts (plist-get event :facts))
+         (termination (plist-get facts :termination))
+         (notice
+          (pcase termination
+            ('timed-out "timed out; re-arm explicitly to keep watching")
+            ('flood "stopped for flooding; restart with a tighter filter")
+            ('stopped "stopped")
+            ('exited (format "exited with code %s" (plist-get facts :exit-code)))
+            (_ (format "ended (%s)" termination)))))
+    (format "Monitor %s: %s (%d events)."
+            (or (plist-get facts :description) "") notice
+            (or (plist-get facts :event-count) 0))))
+
+(defun niwa-tool-exec--monitor (callback args)
+  "Start a root-owned stdout event monitor from ARGS; return via CALLBACK."
+  (unless (equal (niwa-current-origin) "/root")
+    (error "Monitor is available only to /root"))
+  (when (plist-member args :tty)
+    (error "Monitor does not support tty"))
+  (niwa-tool-exec--bash callback args 'monitor))
+
+(defun niwa-tool-exec--bash (callback args &optional kind)
+  "Execute a Bash command and return its output.
+CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
+  (let ((command (plist-get args :command))
+        (tty (plist-get args :tty)))
+    (unless (stringp command)
+      (error "Parameter command is required"))
+    (unless (memq tty '(nil t :json-false))
+      (error "Parameter tty must be a boolean"))
+    (let* ((analysis (niwa-bash-analysis-analyze command))
+           (_ (when (plist-get analysis :background-p)
+                (error "Shell-native background execution is not supported; use yield_time_ms")))
+           (read-only-p (eq (plist-get analysis :class) 'read-only))
+           (session (niwa-queue--current-session))
+           (workdir (niwa-tool-exec-permission-default-directory))
+           (temporary-root (niwa-tool-exec--sandbox-temporary-root workdir))
+           (pipeline-marker (make-temp-name "pipeline_"))
+           (launch-command
+            (if read-only-p
+                ;; -p suppresses startup files and inherited shell functions
+                ;; and shell-option variables.  It grants no OS authority.
+                (list "bash" "--noprofile" "--norc" "-p" "-c"
+                      (niwa-tool-exec--pipeline-source
+                       (niwa-bash-analysis-prepare-read-only
+                        command analysis
+                        (niwa-execution-target-native-path
+                         (and session (niwa-session-execution-target session))
+                         temporary-root))
+                       pipeline-marker command))
+              (list "bash" "-lc"
+                    (niwa-tool-exec--pipeline-source command pipeline-marker))))
+           (permission-context
+            (niwa-tool-exec-permission-current-context "Bash" args session))
+           (sandbox-request
+            (niwa-tool-exec-permission-effective-sandbox-request
+             args "Bash" command nil permission-context))
+           (profile-misses
+            (niwa-tool-exec-permission-compound-profile-misses
+             command analysis sandbox-request permission-context))
+           (invocation
+            niwa--agent-invocation)
+           (owner (niwa-current-origin))
+           (yield-time-ms
+            (unless (plist-get args :wait-for-completion-p)
+              (niwa-tool-exec--bash-yield-time-ms args))))
+      (unless session
+        (error "Bash requires an active session"))
+      (niwa-execution-start-bash
+       (lambda (observation)
+         (funcall
+          callback
+          (niwa-tool-exec--observation-envelope
+           observation (plist-get args :suppress-sandbox-disclosure-p) nil
+           (niwa-diagnostic-scope session))))
+       :session session :data-buffer (current-buffer)
+       :owner owner :request niwa--current-request
+       :kind (or kind 'bash) :description (plist-get args :description)
+       :timeout-ms (or (plist-get args :timeout_ms) 300000)
+       :owner-context (or invocation session)
+       :tool-args (if (or profile-misses (plist-member args :compound-profile-misses))
+                      (plist-put (copy-sequence args) :compound-profile-misses profile-misses)
+                    args)
+       :tool-use-id (niwa-pipeline-active-tool-use-id)
+       :permission-approvals (niwa-pipeline-active-permission-approvals)
+       :command launch-command
+       :pipeline-marker pipeline-marker
+       :pipeline-facts-function
+       (lambda (codes) (niwa-tool-exec--pipeline-facts command codes))
+       :workdir workdir
+       :writable-roots (niwa-tool-exec--sandbox-writable-roots workdir)
+       :temporary-root temporary-root
+       :outcome-function
+       (lambda (exit-code termination)
+         (niwa-tool-exec--bash-outcome analysis exit-code termination))
+       :read-only-p read-only-p
+       :tty (eq tty t)
+       :yield-time-ms yield-time-ms
+       :artifact-directory
+       (niwa-tool-exec--execution-artifact-directory session read-only-p)
+       :additional-permissions
+       (plist-get sandbox-request :additional-permissions)
+       :sandbox-permissions
+       (plist-get sandbox-request :sandbox-permissions)))))
+
+(defun niwa-tool-exec--write-stdin (callback args)
+  "Poll or write to one owner-scoped yielded execution from ARGS."
+  (let* ((execution-id (plist-get args :execution_id))
+         (chars (or (plist-get args :chars) ""))
+         (requested-yield-time-ms (plist-get args :yield_time_ms))
+         (session (niwa-queue--current-session))
+         (owner (niwa-current-origin))
+         (wait-ms (niwa-tool-exec--write-wait-time-ms args chars)))
+    (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
+      (error "Parameter execution_id is required"))
+    (unless (stringp chars)
+      (error "Parameter chars must be a string"))
+    (unless session
+      (error "WriteStdin requires an active session"))
+    (niwa-telemetry-record-audit
+     session 'execution-observe-requested
+     :execution-id execution-id
+     :owner owner
+     :input-p (not (string-empty-p chars))
+     :requested-yield-time-ms requested-yield-time-ms
+     :effective-wait-ms wait-ms)
+    (niwa-execution-observe
+     session owner execution-id
+     (lambda (observation)
+       ;; The model now holds the terminal result; its mailbox copy must
+       ;; not wake it again.
+       (when (eq (plist-get (plist-get observation :facts) :state) 'completed)
+         (niwa-agent-control-clear-wake session owner execution-id))
+       (let* ((envelope
+               ;; Keep the model-visible tool status unchanged.  Presentation
+               ;; separately distinguishes a collected command failure from
+               ;; a failed control operation.
+               (niwa-tool-exec--observation-envelope observation))
+              (render-data
+               (copy-sequence (plist-get envelope :render-data))))
+         (setq render-data
+               (plist-put render-data :execution-control
+                          (if (string-empty-p chars) 'poll 'input)))
+         (setq render-data
+               (plist-put
+                render-data :observation-output-p
+                (not (string-empty-p (or (plist-get observation :output)
+                                         "")))))
+         (setq render-data
+               (plist-put render-data :control-succeeded-p
+                          (not (plist-get observation :error))))
+         (funcall callback
+                  (plist-put envelope :render-data render-data))))
+     :chars chars :wait-ms wait-ms :request niwa--current-request)))
+
+(defun niwa-tool-exec--list-executions (_args)
+  "Return yielded executions visible to the current model owner."
+  (let ((session (niwa-queue--current-session))
+        (owner (niwa-current-origin)))
+    (unless session
+      (error "ListExecutions requires an active session"))
+    (let* ((facts (niwa-execution-list session owner))
+           (result
+            (if facts
+                (mapconcat #'niwa-tool-exec--execution-facts-xml facts "\n")
+              "No yielded executions.")))
+      (list :result result :status 'success))))
+
+(defun niwa-tool-exec--stop-execution (callback args)
+  "Stop one owner-scoped yielded execution named by ARGS."
+  (let ((execution-id (plist-get args :execution_id))
+        (session (niwa-queue--current-session))
+        (owner (niwa-current-origin)))
+    (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
+      (error "Parameter execution_id is required"))
+    (unless session
+      (error "StopExecution requires an active session"))
+    (niwa-execution-stop
+     session owner execution-id
+     (lambda (observation)
+       (niwa-agent-control-clear-wake session owner execution-id)
+       (let ((envelope (niwa-tool-exec--observation-envelope
+                        observation nil t)))
+         (funcall callback
+                  (plist-put
+                   envelope :render-data
+                   (plist-put (plist-get envelope :render-data)
+                              :execution-control 'stop))))))))
+
+
+;;
+;;; Eval
+
+(defun niwa-tool-exec--eval-format-result
+    (value output result-format &optional messages backtrace err)
+  "Format printed VALUE and OUTPUT for RESULT-FORMAT.
+Include nonempty MESSAGES and, on printed error ERR, BACKTRACE.
+VALUE is already printed with shared and circular structure labels,
+so child values need not be read."
+  (concat
+   (cond (err (concat "Error: Eval failed with error " err))
+         ((equal result-format "injection") value)
+         (t (concat "Result:\n" value)))
+   (mapconcat
+    (lambda (section)
+      (unless (string-empty-p (or (cdr section) ""))
+        (format "\n\n%s:\n%s" (car section) (cdr section))))
+    `(("STDOUT" . ,output) ("MESSAGES" . ,messages)
+      ("BACKTRACE" . ,(and err backtrace))) "")))
+
+(defun niwa-tool-exec--eval-live (callback expression result-format preserve-ui)
+  "Evaluate EXPRESSION in the live Emacs process.
+CALLBACK receives the result envelope.  RESULT-FORMAT controls
+the model-facing shape.  PRESERVE-UI restores the selected frame's
+window configuration after evaluation."
+  (let ((standard-output (generate-new-buffer " *niwa-eval-elisp*"))
+        result err backtrace messages response)
+    (unwind-protect
+        (progn
+          (condition-case failure
+              (let ((set-message-functions
+                     (cons (lambda (text) (push text messages) nil)
+                           set-message-functions)))
+                (handler-bind
+                    ((error (lambda (_err)
+                              (setq backtrace
+                                    (niwa-tool-exec--eval-capture-backtrace)))))
+                  (let ((default-directory
+                         (niwa-tool-exec-permission-default-directory)))
+                    (setq result
+                          (if preserve-ui
+                              (niwa-view-call-preserving-window-configuration
+                               (lambda () (eval (read expression) t)))
+                            (eval (read expression) t))))))
+            (error (setq err failure)))
+          (let ((print-circle t))
+            (setq response
+                  (niwa-tool-exec--eval-format-result
+                   (format "%S" result)
+                   (with-current-buffer standard-output (buffer-string))
+                   result-format (string-join (nreverse messages) "\n")
+                   backtrace (and err (format "%S: %S" (car err) (cdr err)))))))
+      (kill-buffer standard-output))
+    (unless (equal result-format "injection")
+      (setq response
+            (concat
+             response
+             "\n\nExecution: Live Eval ran inside Emacs without child-process confinement.")))
+    (funcall callback (list :result response))))
+
+(defun niwa-tool-exec--eval-fresh-script
+    (expression result-file workdir load-path-value)
+  "Return fresh Eval source for EXPRESSION writing RESULT-FILE.
+WORKDIR and LOAD-PATH-VALUE configure the child Emacs."
+  (let ((print-circle t) (print-gensym t) (print-length nil) (print-level nil))
+    (concat
+     ";;; -*- lexical-binding: t -*-\n"
+     (prin1-to-string
+      `(progn
+         (require 'backtrace)
+         (let ((load-path ',load-path-value)
+               (default-directory ,workdir)
+               (expression ,expression)
+               (result-file ,result-file))
+           (let ((payload ,(macroexpand-all '(niwa-eval-capture (eval (read expression) t) nil t))))
+             (with-temp-file result-file
+               (prin1 (plist-put payload :status (if (plist-get payload :error) 'error 'ok))
+                      (current-buffer))))))))))
+
+(defun niwa-tool-exec--eval-read-fresh-result (result-file)
+  "Read the fresh Eval result plist from RESULT-FILE."
+  (when (file-exists-p result-file)
+    (with-temp-buffer
+      (insert-file-contents result-file)
+      (let ((read-eval nil))
+        (read (current-buffer))))))
+
+(defun niwa-tool-exec--eval-fresh
+    (callback expression result-format additional-permissions
+              &optional sandbox-permissions args)
+  "Evaluate EXPRESSION in a child process and call CALLBACK.
+ADDITIONAL-PERMISSIONS is the validated additive execution profile.
+SANDBOX-PERMISSIONS may be `require-escalated' after authorization.
+ARGS carries the original tool arguments, including the yield interval."
+  (let* ((workdir (niwa-tool-exec-permission-default-directory))
+         (session (niwa-queue--current-session))
+         (owner (niwa-current-origin))
+         (script-file (make-temp-file "niwa-eval-fresh-" nil ".el"))
+         (result-file (make-temp-file "niwa-eval-fresh-result-" nil ".el"))
+         (script (niwa-tool-exec--eval-fresh-script
+                  expression result-file workdir load-path))
+         cleaned
+         (cleanup
+          (lambda ()
+            (unless cleaned
+              (setq cleaned t)
+              (ignore-errors (delete-file script-file))
+              (ignore-errors (delete-file result-file))))))
+    (condition-case err
+        (progn
+          (with-temp-file script-file
+            (insert script))
+          (niwa-execution-start-bash
+           (lambda (observation)
+             (funcall callback (niwa-tool-exec--observation-envelope observation)))
+           :kind 'eval :data-buffer (current-buffer)
+           :request niwa--current-request
+           :owner-context (or niwa--agent-invocation session)
+           :tool-args args
+           :tool-use-id (niwa-pipeline-active-tool-use-id)
+           :permission-approvals (niwa-pipeline-active-permission-approvals)
+           :yield-time-ms (niwa-tool-exec--bash-yield-time-ms args)
+           :artifact-directory
+           (niwa-tool-exec--execution-artifact-directory session nil)
+           :result-function
+           (lambda (child-result)
+             (let* ((exit-code (plist-get child-result :exit-code))
+                    (diagnostics
+                     (let ((text (or (plist-get child-result :output) "")))
+                       (if (> (length text) 16000)
+                           (concat (substring text 0 16000) "\n[Output truncated]")
+                         text)))
+                    (payload
+                     (condition-case nil
+                         (niwa-tool-exec--eval-read-fresh-result
+                          result-file)
+                       (error nil)))
+                    (success-p
+                     (and (eq (plist-get payload :status) 'ok)
+                          (eq (plist-get child-result :termination) 'exited)
+                          (integerp exit-code)
+                          (zerop exit-code))))
+               (list
+                :outcome (if success-p 'success 'failure)
+                :output
+                (cond
+                 ((eq (plist-get child-result :termination) 'stopped)
+                  (concat "Eval stopped"
+                          (if (string-empty-p (or diagnostics ""))
+                              "."
+                            (format ":\n%s" diagnostics))))
+                 ((memq (plist-get payload :status) '(ok error))
+                  (niwa-tool-exec--eval-format-result
+                   (plist-get payload :value) (plist-get payload :output)
+                   result-format diagnostics
+                   (plist-get payload :backtrace)
+                   (plist-get payload :error)))
+                 ((plist-get child-result :error)
+                  (format "Failed to start Eval fresh process: %s"
+                          (plist-get child-result :error)))
+                 (t
+                  (format
+                   "Error: Eval fresh process failed with exit code %s%s"
+                   exit-code
+                   (if (string-empty-p (or diagnostics ""))
+                       ""
+                     (format ":\n%s" diagnostics))))))))
+           :command
+           (list (niwa--emacs-executable)
+                 "-Q" "--batch" "-l" script-file)
+           :workdir workdir
+           :writable-roots (niwa-tool-exec--sandbox-writable-roots workdir)
+           :temporary-root (niwa-tool-exec--sandbox-temporary-root workdir)
+           :additional-permissions additional-permissions
+           :sandbox-permissions sandbox-permissions
+           :session session
+           :owner owner
+           :teardown-function cleanup))
+      (error
+       (funcall cleanup)
+       (funcall callback
+                (list :result
+                      (format "Failed to start Eval fresh process: %s" err)
+                      :status 'error))
+       nil))))
+
+(defun niwa-tool-exec--eval-sandbox (callback args)
+  "Run managed sandbox Eval ARGS, delivering observations to CALLBACK."
+  (let* ((workdir (niwa-tool-exec-permission-default-directory))
+         (session (niwa-queue--current-session))
+         (owner (niwa-current-origin)))
+    (niwa-execution-start-service-call
+     (lambda (observation)
+       (funcall callback (niwa-tool-exec--observation-envelope observation)))
+     (lambda (call)
+          (niwa-eval-sandbox-call
+           session owner
+           (plist-get args :expression)
+           (lambda (reply)
+             (niwa-execution-service-call-settle
+              call (list :output
+                            (concat
+                             (niwa-tool-exec--eval-format-result
+                              (plist-get reply :value) (plist-get reply :output)
+                              (plist-get args :result-format) (plist-get reply :messages)
+                              (plist-get reply :backtrace) (plist-get reply :error))
+                             (when (plist-get reply :features)
+                               (format "\n\nSandbox %s; features: %s."
+                                       (if (plist-get reply :started) "started" "reused")
+                                       (plist-get reply :features)))
+                             (when (and (plist-get reply :features)
+                                        (plist-get reply :state-lost))
+                               " Earlier definitions are gone."))
+                            :outcome (if (plist-get reply :error) 'failure 'success))))
+           :call call
+           :reset (eq (plist-get args :reset) t)
+           :workdir workdir :writable-roots (niwa-tool-exec--sandbox-writable-roots workdir)
+           :temporary-root (niwa-tool-exec--sandbox-temporary-root workdir)))
+     :session session :owner owner :data-buffer (current-buffer)
+     :owner-context (or niwa--agent-invocation session)
+     :request niwa--current-request :tool-args args
+     :tool-use-id (niwa-pipeline-active-tool-use-id)
+     :permission-approvals (niwa-pipeline-active-permission-approvals)
+     :workdir workdir :yield-time-ms (niwa-tool-exec--bash-yield-time-ms args))))
+
+(defun niwa-tool-exec--eval (callback args)
+  "Evaluate an Elisp expression and return the result.
+CALLBACK receives the result envelope.  ARGS is a plist with :expression."
+  (let ((expression (plist-get args :expression))
+        (result-format (plist-get args :result-format))
+        (mode (niwa-tool-exec-permission-eval-mode args)))
+    (unless (stringp expression)
+      (error "Parameter expression is required"))
+    (when (eq (plist-get args :tty) t)
+      (error "Eval does not support TTY execution"))
+    (let* ((session (niwa-queue--current-session))
+           (request
+            (niwa-tool-exec-permission-effective-sandbox-request
+             args "Eval" expression mode
+             (niwa-tool-exec-permission-current-context
+              "Eval" args session))))
+      (pcase mode
+        ('sandbox (niwa-tool-exec--eval-sandbox callback args))
+        ('live
+         (niwa-tool-exec--eval-live
+          callback expression result-format
+          (niwa-tool-exec-permission-eval-preserve-ui-p args)))
+        ('fresh
+         (niwa-tool-exec--eval-fresh
+          callback expression result-format
+          (plist-get request :additional-permissions)
+          (plist-get request :sandbox-permissions) args))))))
+
+
+;;
+;;; Renderers
+
+(defun niwa-tool-exec--render-bash (name args result render-data)
+  "Rendering plist for the Bash tool.
+NAME is \"Bash\".  ARGS carries `:command'.  RESULT is stdout/stderr.
+Header shows the command and minimal state; the expanded body retains
+the full command, bounded output and execution details."
+  (when (stringp result)
+    (let* ((write-stdin-p (equal name "WriteStdin"))
+           (stop-p (equal name "StopExecution"))
+           (cmd (or (plist-get args :command) ""))
+           (first-line (car (split-string cmd "\n")))
+           (control
+            (or (plist-get render-data :execution-control)
+                (and write-stdin-p
+                     (if (string-empty-p (or (plist-get args :chars) ""))
+                         'poll 'input))
+                (and stop-p 'stop)))
+           (status (if (and (memq control '(input poll))
+                            (plist-get render-data :control-succeeded-p))
+                       'success
+                     (plist-get render-data :status)))
+           (state (plist-get render-data :state))
+           (facts (and state
+                       (niwa-tool-exec-format-execution-metadata
+                        render-data)))
+           (body
+            (unless (bound-and-true-p niwa-tool-render-summary-only)
+              (let ((output
+                     (if (and (plist-get render-data :model-result-envelope-p)
+                              (not (plist-member render-data :execution-output))
+                              (not (plist-get render-data :live-execution-p)))
+                         (replace-regexp-in-string
+                          "\n*<\\(?:bash\\|monitor\\)-execution [^\n]*/>[ \t\r\n]*\\'" "" result)
+                       ;; Canonical output and unmarked results are not tool
+                       ;; envelopes, even if the command printed this XML.
+                       result)))
+                (string-join
+                 (delq nil
+                       (list (unless (or write-stdin-p stop-p)
+                               (concat "$ " cmd))
+                             (and (eq control 'input)
+                                  (format "Submitted input:\n%s"
+                                          (plist-get args :chars)))
+                             (when-let* ((execution-error
+                                          (plist-get render-data :execution-error)))
+                               (format "%s: %s"
+                                       (if (eq (plist-get render-data :termination)
+                                               'spawn-failed)
+                                           "Failed to start process"
+                                         "Execution error")
+                                       execution-error))
+                             (unless (string-empty-p output) output)
+                             (and facts (format "Details: %s" facts))
+                             (when-let* ((path (plist-get render-data :output-path)))
+                               (format "Retained output: %s" path))))
+                 "\n\n"))))
+           (stopped-p (and (eq state 'completed)
+                           (memq (plist-get render-data :termination)
+                                 '(stopped owner-stopped interrupted))))
+           (label
+            (cond
+             ((eq state 'lost) "lost execution")
+             ((and (eq state 'completed)
+                   (eq (plist-get render-data :termination) 'signaled))
+              "signaled")
+             (stopped-p "stopped")
+             ((and (eq state 'completed)
+                   (eq (plist-get render-data :termination) 'timed-out))
+              "timed out")
+             ((eq state 'unknown) "completion unavailable")
+             ((eq state 'running)
+              (if (eq (plist-get render-data :kind) 'monitor) "watching" "running"))
+             ((eq state 'completed)
+              (if (eq (plist-get render-data :outcome) 'failure)
+                  "failed" "finished"))
+             ((eq status 'error) "failed")
+             (state (symbol-name state)))))
+      (list :header
+            (cond
+             ((eq control 'poll)
+              (format "WriteStdin: observation %s"
+                      (if (and (eq status 'error)
+                               (not (plist-get render-data :control-succeeded-p)))
+                          "failed" (or label "finished"))))
+             ((eq control 'input)
+              (format "WriteStdin: %s%s"
+                      (if (equal (plist-get args :chars) "\C-c")
+                          "interrupted process" "sent input")
+                      (if (and (eq status 'error)
+                               (not (plist-get render-data :control-succeeded-p)))
+                          " · failed" "")))
+             (stop-p (format "StopExecution: %s"
+                             (if (eq status 'error) "failed"
+                               (or label "stopped"))))
+             (t (concat
+                 (if (eq (plist-get render-data :kind) 'monitor)
+                     (format "Watching: %s" (or (plist-get render-data :description)
+                                               (plist-get args :description) ""))
+                   (format "%s: %s" (or name "Bash")
+                           (niwa--truncate-display first-line 60 "...")))
+                 (and label (format " · %s" label))
+                 (when (and (not (eq (plist-get render-data :kind) 'monitor))
+                            (plist-member render-data :wall-time-seconds))
+                   (format " · %s" (niwa--duration-label
+                                    (plist-get render-data :wall-time-seconds))))
+                 (when (or (plist-get render-data :output-preview-truncated-p)
+                           (> (or (plist-get render-data :omitted-output-bytes) 0) 0))
+                   " · output truncated"))))
+            :body body
+            :body-mode 'sh-mode
+            ;; The call that started a still-live command succeeded, but the
+            ;; command has not: its row must not read as finished.
+            ;; A requested stop is neutral, not a failure; the outcome fact
+            ;; stays `failure' for the model.
+            :status (cond
+                     ((and (null control) (eq state 'running)
+                           (not (memq status '(error failed denied blocked))))
+                      'running)
+                     ((and stopped-p (eq status 'error)) 'cancelled)
+                     (t status))
+            :execution-control-id
+            (and (memq control '(input stop))
+                 (or (plist-get render-data :execution-id)
+                     (plist-get args :execution_id)))
+            :hidden-p (and (eq control 'poll)
+                           (or (eq status 'success)
+                               (plist-get render-data :control-succeeded-p)))
+            :initially-collapsed-p t))))
+
+(defun niwa-tool-exec--render-eval (name args result render-data)
+  "Return rendering plist for Eval NAME with ARGS, RESULT and RENDER-DATA."
+  (when (stringp result)
+    (let* ((expression (or (plist-get args :expression) ""))
+           (first-line (car (split-string expression "\n")))
+           (mode (let ((raw (plist-get args :mode)))
+                   (if (or (null raw)
+                           (eq raw :json-false)
+                           (and (stringp raw) (string-empty-p raw)))
+                       "live"
+                     raw)))
+           (status (or (and (memq (plist-get render-data :state) '(running queued))
+                            'running)
+                       (plist-get render-data :status)
+                       (and (string-prefix-p "Error:" result) 'error)))
+           (result (if (plist-get render-data :execution-output)
+                       (niwa-tool-exec--sandbox-disclosure
+                        (plist-get render-data :execution-output) render-data
+                        nil (eq status 'error))
+                     result)))
+      (list :header (format "%s: %s %s"
+                            (or name "Eval")
+                            mode
+                            (niwa--truncate-display first-line 60 "..."))
+            :body result
+            :body-mode 'emacs-lisp-mode
+            :status status
+            :initially-collapsed-p t))))
+
+(provide 'niwa-tool-exec)
+;;; niwa-tool-exec.el ends here

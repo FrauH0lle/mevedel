@@ -2,7 +2,7 @@
 
 Recorded frame exchanges between a consumer of an artifact link and the
 origin's artifact room. Both sides test against the same files: the origin's
-ERT tests (`test/test-mevedel-collaboration-artifact-room.el`) check that the
+ERT tests (`test/test-niwa-collaboration-artifact-room.el`) check that the
 origin produces them through the stub relay, and the remote-artifact
 package's Node tests (`remote-artifact/test/`) replay them from a fake room.
 
@@ -35,7 +35,7 @@ write refused because the file changed).
 ## HTML file writes
 
 An HTML artifact has one write, which every consumer uses, the package's
-file tools and a mevedel consumer's `ApplyPatch` alike: replace or create a
+file tools and a niwa consumer's `ApplyPatch` alike: replace or create a
 whole file if its SHA-256 still matches. The request body is
 
 ```json

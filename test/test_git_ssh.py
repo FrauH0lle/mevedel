@@ -19,7 +19,7 @@ import time
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts/mevedel-git-ssh.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/niwa-git-ssh.py"
 SPEC = importlib.util.spec_from_file_location("git_ssh", SCRIPT)
 broker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(broker)
@@ -222,7 +222,7 @@ class BrokerTests(unittest.TestCase):
             stdin=subprocess.PIPE, env=dict(self.git_env, STUB_SSH_LOG=str(self.log)))
         self.addCleanup(self.stop_broker)
         self.client_env = dict(
-            self.git_env, GIT_SSH_VARIANT="ssh", MEVEDEL_GIT_SSH_SOCKET=str(self.socket),
+            self.git_env, GIT_SSH_VARIANT="ssh", NIWA_GIT_SSH_SOCKET=str(self.socket),
             GIT_SSH_COMMAND=f"{sys.executable} -I {SCRIPT} client")
 
     def stop_broker(self):
@@ -268,7 +268,7 @@ class BrokerTests(unittest.TestCase):
             with self.subTest(args=args):
                 result = self.confined_git(*args)
                 self.assertNotEqual(0, result.returncode)
-                self.assertIn("mevedel-git-ssh:", result.stderr)
+                self.assertIn("niwa-git-ssh:", result.stderr)
         # A client that bypasses Git entirely gets the same verdicts.
         for argv in [["-o", "ProxyCommand=touch pwned", "fake", COMMAND],
                      ["fake", "sh -c 'touch pwned'"]]:
@@ -310,7 +310,7 @@ class BrokerTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 status, stderr = self.raw_request(argv)
                 self.assertEqual(f"{broker.REFUSED_STATUS}\n".encode(), status)
-                self.assertTrue(stderr.startswith(b"mevedel-git-ssh: "))
+                self.assertTrue(stderr.startswith(b"niwa-git-ssh: "))
                 self.assertTrue(stderr.isascii(), stderr)
         self.assertEqual("", self.log.read_text())
 

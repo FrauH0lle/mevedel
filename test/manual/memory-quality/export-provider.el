@@ -3,15 +3,15 @@
 ;;; Commentary:
 
 ;; Evaluate the first form in the user's existing Emacs. Return only the temporary pathname.
-;; This does not load or replace any mevedel code in that process.
+;; This does not load or replace any niwa code in that process.
 
 ;;; Code:
-(let* ((policy (if-let* ((name (getenv "MEVEDEL_QUALITY_BACKEND")))
+(let* ((policy (if-let* ((name (getenv "NIWA_QUALITY_BACKEND")))
                    (let ((backend (cdr (assoc name gptel--known-backends))))
                      (unless backend (error "Unknown configured backend: %s" name))
                      (list :backend backend :model (car (gptel-backend-models backend))))
-                 (mevedel-model-resolve-workload
-                  (intern (or (getenv "MEVEDEL_QUALITY_WORKLOAD") "journal")))))
+                 (niwa-model-resolve-workload
+                  (intern (or (getenv "NIWA_QUALITY_WORKLOAD") "journal")))))
        (backend (plist-get policy :backend))
        (model (plist-get policy :model))
        (gptel-backend backend)
@@ -33,11 +33,11 @@
                            :request-params (gptel-backend-request-params backend)
                            :curl-args (gptel-backend-curl-args backend))
                              authentication)))
-       (path (make-temp-file "/tmp/mevedel-memory-quality-provider-" nil ".el")))
+       (path (make-temp-file "/tmp/niwa-memory-quality-provider-" nil ".el")))
   (set-file-modes path #o600)
   (with-temp-file path
     (let ((print-length nil) (print-level nil)) (prin1 config (current-buffer))))
   path)
 
-(provide 'mevedel-memory-quality-export-provider)
+(provide 'niwa-memory-quality-export-provider)
 ;;; export-provider.el ends here

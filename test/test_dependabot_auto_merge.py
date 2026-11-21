@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 HEAD = 'a' * 40
 MERGE = 'b' * 40
-REPO = 'FrauH0lle/mevedel'
+REPO = 'FrauH0lle/niwa'
 
 FAKE_GH = r'''
 import json, os, pathlib, subprocess, sys
@@ -140,7 +140,7 @@ class AutoMergeWorkflowTests(unittest.TestCase):
                 elif change == 'human':
                     pr['user']['login'] = 'someone'
                 elif change == 'fork':
-                    pr['head']['repo']['full_name'] = 'someone/mevedel'
+                    pr['head']['repo']['full_name'] = 'someone/niwa'
                 else:
                     pr['base']['ref'] = 'another-branch'
                 self.assertEqual(self.run_workflow(data), ([], []))

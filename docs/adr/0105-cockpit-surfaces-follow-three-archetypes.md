@@ -15,7 +15,7 @@ Each cockpit surface uses one of three forms:
   sections; memory details use a section index and a reading pane.
 
 Plugins, skills, tools, remembered authority, and worktree lists share generic
-table plumbing in `mevedel-cockpit.el`: owner context, stable selection, refresh,
+table plumbing in `niwa-cockpit.el`: owner context, stable selection, refresh,
 row details, and back navigation. Resource modules own rows, actions, state
 changes, and detail content. The helper does not interpret their semantics.
 
@@ -36,10 +36,10 @@ and every layout binds the same keys. Row values are capped in width and
 nominal values are dimmed. A related family of actions with its own state,
 such as sharing, gets a submenu behind one key rather than a column of rows.
 
-Information panels share `mevedel-report.el`. Owners supply exact content and
+Information panels share `niwa-report.el`. Owners supply exact content and
 explicit section identities, and retain responsibility for validation and actions.
 The renderer owns only faces, visual wrapping, folds, reading positions and
-windows. It uses built-in Emacs buttons and windows plus existing mevedel
+windows. It uses built-in Emacs buttons and windows plus existing niwa
 fontification; pacfiles-mode is visual inspiration, with no dependency.
 
 Memory proposals, journal captures and running consolidation expose their own
@@ -47,7 +47,7 @@ content groups. The memory index moves above the reader in narrow windows.
 Opening and refreshing inspectors preserve the composer and table state.
 
 Temporary window ownership is shared by tables, information panels and menus.
-`mevedel-window.el` records the invoking window separately from session ownership
+`niwa-window.el` records the invoking window separately from session ownership
 and restores the frame actually used for display. Tables and reports use native
 `display-buffer` and `quit-window`, followed by exact configuration restoration
 only when the other windows still match their post-display buffers and geometry.

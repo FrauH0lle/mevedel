@@ -19,7 +19,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   await context.route('**/transport.js',async route => {
     const source=await readFile(new URL('../../relay/viewer/transport.js',import.meta.url),'utf8');
     await route.fulfill({contentType:'text/javascript',body:source+`
-      window.mevedelViewerTransport={...window.mevedelViewerTransport,create(options){
+      window.niwaViewerTransport={...window.niwaViewerTransport,create(options){
         window.receiveTest=options.onFrame;window.connectionTest=options.onConnection;window.giveUpTest=options.onGiveUp;window.sentTest=[];
         return {connect(){
           if(window.closedRoomTest){options.onGiveUp();return;}
@@ -68,14 +68,14 @@ test('room appearance, navigation and decisions preserve work', async t => {
   await page.reload();
   await page.locator('#editing-status').getByText('Shared editing is ready.',{exact:true}).waitFor();
   assert.equal(await label.innerText(),generatedName);
-  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),null);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('niwa-chosen-name')),null);
   // Another tab takes the name from the open one.
   const second=await context.newPage();
   await second.goto(`${url}/room#designroom000001.${Buffer.alloc(64).toString('base64url')}`);
   await second.locator('#you-label').getByText(generatedName,{exact:true}).waitFor();
   // A browser with none of its tabs open is someone new.
   const elsewhere=await browser.newContext();
-  await elsewhere.route('**/transport.js',route=>route.fulfill({contentType:'text/javascript',body:'window.mevedelViewerTransport={parseFragment(){return null;}};'}));
+  await elsewhere.route('**/transport.js',route=>route.fulfill({contentType:'text/javascript',body:'window.niwaViewerTransport={parseFragment(){return null;}};'}));
   await elsewhere.addInitScript(first=>{
     // Pick the family after the open tab's, so the names cannot match.
     const family='BCDEFGHJKLMPQRSW'.indexOf(first);
@@ -100,7 +100,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'Roland55'});
   assert.equal(await label.innerText(),'Roland55');
   assert.equal(await page.locator('#you-menu').getAttribute('open'),null);
-  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),'Roland55');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('niwa-chosen-name')),'Roland55');
   await second.locator('#you-label').getByText('Roland55',{exact:true}).waitFor();
   assert.deepEqual(await second.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'Roland55'});
   assert.equal(await page.locator('#composer-input').inputValue(),'Keep this unsent draft');
@@ -109,7 +109,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   await nameInput.fill('   ');
   await page.getByRole('button',{name:'Save',exact:true}).click();
   assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:generatedName});
-  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),null);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('niwa-chosen-name')),null);
   // A new random name of one's own reaches the other open tabs too.
   await page.locator('#you-menu > summary').click();
   await page.waitForFunction(()=>document.activeElement?.id==='you-name');
@@ -140,7 +140,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'ui-response',reqId:7,feedback:'Keep the wider sidebar.'});
   await page.locator('.decision-feedback > summary').click();
   const directory=new URL('../../.scratch/design-integration/screenshots/',import.meta.url).pathname;
-  if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await mkdir(directory,{recursive:true});
+  if(process.env.NIWA_DESIGN_SCREENSHOTS) await mkdir(directory,{recursive:true});
   await page.evaluate(()=>window.receiveTest({t:'status',busy:true,model:'Test model',mode:'ask'}));
   for(const width of [1600,390]) for(const palette of ['cool','warm']) for(const theme of ['light','dark']) {
     await page.setViewportSize({width,height:1000});
@@ -155,7 +155,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
       assert.notEqual(color,'auto');
     }
     assert.equal(await page.locator('#composer-input').inputValue(),'Keep this unsent draft');
-    if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/room-${palette}-${theme}-${width}.png`});
+    if(process.env.NIWA_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/room-${palette}-${theme}-${width}.png`});
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#appearance-menu').getAttribute('open'),null);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -213,7 +213,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   assert.equal(await page.evaluate(()=>window.sentTest.filter(f=>f.t==='history-get').length),2,'reopening a loaded segment preserves its content');
   for(const width of [1600,390]) {
     await page.setViewportSize({width,height:1000});
-    if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/room-history-${width}.png`});
+    if(process.env.NIWA_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/room-history-${width}.png`});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   }
   const conversation=await page.locator('#transcript').innerText();
@@ -242,7 +242,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
     assert.ok(Math.abs(panel.y+panel.height/2-450)<80,'closed-room notice sits near the center');
     assert.ok(await closed.locator('#terminal-title').evaluate(node=>parseFloat(getComputedStyle(node).fontSize)>=24),'terminal heading is prominent');
     assert.ok(await closed.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await closed.screenshot({path:`${directory}/room-closed-${palette}-${theme}-${width}.png`});
+    if(process.env.NIWA_DESIGN_SCREENSHOTS) await closed.screenshot({path:`${directory}/room-closed-${palette}-${theme}-${width}.png`});
   }
   assert.deepEqual(errors,[]);
   await context.close();

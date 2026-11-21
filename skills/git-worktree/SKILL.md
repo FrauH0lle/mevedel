@@ -56,7 +56,7 @@ Mirror `/worktree` defaults when creating through Bash:
 - Map branch `worktree/foo` to directory `.worktrees/foo`.
 - Run a project setup command in the new worktree only when the user has
   explicitly authorized it. `/worktree` uses the separate
-  `mevedel-worktree-setup-enabled` and `mevedel-worktree-setup-command` options
+  `niwa-worktree-setup-enabled` and `niwa-worktree-setup-command` options
   (including approved source-checkout directory locals). Bash fallback must
   honor the same authorization; a script's presence is not permission to run it.
   If enabled setup fails, stop before implementation and report its output and

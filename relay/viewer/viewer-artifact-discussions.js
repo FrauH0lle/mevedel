@@ -7,7 +7,7 @@
  * is typed into the viewer, never into the frame, so an artifact cannot read
  * or forge what a participant writes.
  *
- * Frame -> viewer messages carry {mevedelDiscussion: TYPE, ...}:
+ * Frame -> viewer messages carry {niwaDiscussion: TYPE, ...}:
  *   pick    {anchor, rect, context}  a click, word, text selection or box
  *   peek    {id, rect} / unpeek {}   pointer over / off a discussion marker
  *   open    {id, rect}               a marker was clicked
@@ -21,7 +21,7 @@
  */
 'use strict';
 
-function mevedelArtifactDiscussionRuntime() {
+function niwaArtifactDiscussionRuntime() {
   const LIMITS = {selector: 1000, label: 128, quote: 512, words: 40,
                   text: 2000, html: 4000, markers: 200, kids: 16};
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role=heading]';
@@ -44,7 +44,7 @@ function mevedelArtifactDiscussionRuntime() {
   let segmenter;
 
   const post = (type, data) => {
-    try { parent.postMessage(Object.assign({mevedelDiscussion: type}, data || {}), '*'); }
+    try { parent.postMessage(Object.assign({niwaDiscussion: type}, data || {}), '*'); }
     catch (_error) { /* the viewer went away */ }
   };
 
@@ -548,7 +548,7 @@ function mevedelArtifactDiscussionRuntime() {
 
   function ensureLayer() {
     if (layerHost && layerHost.isConnected) return;
-    layerHost = document.createElement('mevedel-discussion-layer');
+    layerHost = document.createElement('niwa-discussion-layer');
     layerHost.setAttribute('data-undiscussable', '');
     layerHost.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;'
       + 'overflow:visible;margin:0;padding:0;border:0;z-index:2147483647;'
@@ -571,8 +571,8 @@ function mevedelArtifactDiscussionRuntime() {
       .pin[data-state=working]::after{content:"";position:absolute;inset:-6px;
         box-sizing:border-box;border-radius:50%;border:2.5px solid transparent;
         border-top-color:#d97757;border-right-color:#d97757;
-        animation:mevedel-discussion-spin .9s linear infinite;pointer-events:none}
-      @keyframes mevedel-discussion-spin{to{transform:rotate(360deg)}}
+        animation:niwa-discussion-spin .9s linear infinite;pointer-events:none}
+      @keyframes niwa-discussion-spin{to{transform:rotate(360deg)}}
       @media (prefers-reduced-motion:reduce){.pin[data-state=working]::after{
         animation:none;border-style:dashed;border-color:#d97757}}
       .pin[data-unread]::before{content:"";position:absolute;top:-5px;right:-5px;
@@ -1178,7 +1178,7 @@ function createArtifactDiscussionController(options) {
 
   // -- Sidebar ----------------------------------------------------------
 
-  const sidebar = window.mevedelDiscussionSidebar.create({
+  const sidebar = window.niwaDiscussionSidebar.create({
     root: sideRoot, noun: 'artifact',
     canWrite: () => !!view.frame && canDiscuss(),
     visible: () => !side.hidden,
@@ -1387,8 +1387,8 @@ function createArtifactDiscussionController(options) {
   function onMessage(event) {
     if (!view.frame || event.source !== view.frame.contentWindow) return;
     const data = event.data;
-    if (!data || typeof data !== 'object' || typeof data.mevedelDiscussion !== 'string') return;
-    const type = data.mevedelDiscussion;
+    if (!data || typeof data !== 'object' || typeof data.niwaDiscussion !== 'string') return;
+    const type = data.niwaDiscussion;
     if (type === 'pick') {
       if (!view.mode) return;
       const anchor = cleanAnchor(data.anchor);
@@ -1519,9 +1519,9 @@ function createArtifactDiscussionController(options) {
   });
 }
 
-window.mevedelArtifactDiscussions = Object.freeze({
-  runtime: mevedelArtifactDiscussionRuntime,
+window.niwaArtifactDiscussions = Object.freeze({
+  runtime: niwaArtifactDiscussionRuntime,
   // The source inlined into each artifact frame's srcdoc.
-  script: () => '<script>(' + mevedelArtifactDiscussionRuntime.toString() + ')()<\/script>',
+  script: () => '<script>(' + niwaArtifactDiscussionRuntime.toString() + ')()<\/script>',
   create: createArtifactDiscussionController,
 });

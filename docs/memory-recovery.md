@@ -3,7 +3,7 @@
 ## Proposal decisions
 
 The decision module owns each proposal decision as one transaction. Callers use
-`mevedel-memory-decision-apply`, `-reject`, or `-reverse`;
+`niwa-memory-decision-apply`, `-reject`, or `-reverse`;
 they do not acquire locks or interpret child replies.
 The write module is private implementation, apart from its control-directory
 used for target locking.
@@ -21,8 +21,8 @@ carry its opaque `:continuation` to the next operation; it carries no reusable
 proposal, target or file authority. Do not reuse it across commands.
 
 For automatic application, construct an opaque origin binding with
-`mevedel-memory-decision-automatic-context`. It can be reused within the request;
-each job has separate bookkeeping, while `mevedel-memory-decision-cancel`
+`niwa-memory-decision-automatic-context`. It can be reused within the request;
+each job has separate bookkeeping, while `niwa-memory-decision-cancel`
 cancels the shared context and its active work. `automatic-current-p` checks the
 original actor's live policy and workspace identity rather than the timer's
 current buffer. The context is not frozen permission.
@@ -31,7 +31,7 @@ Without a callback, application is synchronous and signals errors and quit.
 A foreground decision can reuse its local control process until it returns.
 Calling the synchronous verb in a quit-inhibited timer or process callback
 refuses before admission; it must not block the callback waiting for a helper.
-`mevedel-memory-decision-interrupted` carries any already-accounted decision.
+`niwa-memory-decision-interrupted` carries any already-accounted decision.
 With `:callback`, application delivers one result, including admission failure,
 as `:error` or `:cancelled` when appropriate; confirmed effects and updated-file
 accounting survive cancellation and publication failure. Exceptions from the
@@ -42,7 +42,7 @@ remote targets retain checked synchronous execution. `pending` selects undecided
 automatic identities through the same child boundary when given both arguments;
 otherwise it is a read-only selection without acquiring a claim.
 
-`mevedel-memory-decision-inspect` supplies detached provisional proposal/write
+`niwa-memory-decision-inspect` supplies detached provisional proposal/write
 snapshots for the cockpit, copying mutable strings and lists. Inspection grants
 no authority: actions freshly authenticate state. `retention` reports whether
 decision/write evidence still prevents history expiry.
@@ -50,7 +50,7 @@ decision/write evidence still prevents history expiry.
 ### What decides a proposal
 
 The authoritative result is an immutable private slot in
-`.mevedel/state/journal/decision-slots/`. An application or rejection elects
+`.niwa/state/journal/decision-slots/`. An application or rejection elects
 `<proposal>.el`; a reversal elects `<proposal>.reverse.el`. Numbered attempt
 slots record stale or unavailable attempts without blocking an explicit retry.
 Reading a slot verifies its metadata, its source pass and the derived before
@@ -75,7 +75,7 @@ through the proposal cockpit as well as their internal APIs.
 
 ### Checked application
 
-`mevedel-memory-apply-changes` prepares complete topic/index or instruction
+`niwa-memory-apply-changes` prepares complete topic/index or instruction
 changes from accepted before-state without writing them. Topic frontmatter is
 generated from the validated name, description, and type. Index updates escape
 labels and filenames, retain unrelated lines, and reject duplicate or invalid

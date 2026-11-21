@@ -45,7 +45,7 @@ user's feedback asks for a revision.
   context is a locator for later hunks. Include a changing hunk unless the Update
   moves the file.
 - For unchanged locator hunks, multiple hunks, repeated matches, line/context
-  anchors, or move details, first read `mevedel://tools/applypatch.md`. The manual
+  anchors, or move details, first read `niwa://tools/applypatch.md`. The manual
   defines detailed matching behavior. If unavailable, use only grammar described
   here when it meets the user's requested method; otherwise report the missing
   guidance.

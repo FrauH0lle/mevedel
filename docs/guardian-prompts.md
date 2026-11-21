@@ -1,6 +1,6 @@
 # Permission approval reviewer
 
-`mevedel-permission-reviewer` selects `user` (the default) or `auto`. Automatic
+`niwa-permission-reviewer` selects `user` (the default) or `auto`. Automatic
 review runs only when Ask or Edits needs permission, before a human card appears.
 It reuses the `guardian` model workload. Ordinary confined work in Edits needs
 no review; Full Access bypasses it entirely. [Permissions](permissions.md)
@@ -103,7 +103,7 @@ free text, not redacted text, and may quote evidence. It is diagnostic, not
 authority, and is excluded from unified telemetry and forwarded side audits.
 
 `ask`, malformed responses, provider failures and the 20-second default timeout
-(`mevedel-permission-review-timeout`) display the ordinary human card, whose
+(`niwa-permission-review-timeout`) display the ordinary human card, whose
 details state why review deferred, including the reviewer's reason. `deny`
 blocks the operation with its reason. A later deliberate user override is a new
 action, not a retry through another tool. Cancellation or timeout during evidence

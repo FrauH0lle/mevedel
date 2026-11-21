@@ -1,0 +1,653 @@
+;;; test-niwa-bash-analysis.el --- Tests for Bash analysis -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Tests for normalized conservative Bash analysis.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'niwa-bash-analysis)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+
+;;
+;;; Analysis
+
+(niwa-deftest niwa-bash-analysis-snapshot-safe-p ()
+  ,test
+  (test)
+  :doc "admits ordinary final pipelines, including stderr redirection"
+  (should (niwa-bash-analysis-snapshot-safe-p "npx test 2>&1 | tail -2"))
+  (should (niwa-bash-analysis-snapshot-safe-p "(exit 7) | yes | head"))
+  :doc "admits plain parameters as arguments and plain for loops"
+  (dolist (source '("cmd \"$x\" | tail"
+                    "cmd $x ${x} \"$@\" $# $? | tail"
+                    "for f in *.el; do printf '%s\\n' \"${f}\"; done | tail"
+                    "for f; do false; done | tail"
+                    "cmd \"$\\\nx\" | tail"))
+    (should (niwa-bash-analysis-snapshot-safe-p source)))
+  :doc "declines traps, dynamic shell code, and function definitions"
+  (dolist (source '("trap 'echo done' EXIT; false | cat"
+                    "tr''ap 'echo done' EXIT; false | cat"
+                    "builtin trap 'echo done' EXIT; false | cat"
+                    "2>/dev/null trap 'echo done' EXIT; false | cat"
+                    "! 2>/dev/null trap 'echo done' EXIT; false | cat"
+                    "eval 'false | cat'"
+                    "exec > output; false | cat"
+                    "mapfile -C 'trap done EXIT' -c 1 < input; false | cat"
+                    "source hooks; false | cat"
+                    ". hooks; false | cat"
+                    "f() { false | cat; }; f"
+                    "$runner | tail -2"))
+    (should-not (niwa-bash-analysis-snapshot-safe-p source))))
+
+(niwa-deftest niwa-bash-analysis--snapshot-expansions-safe-p ()
+  ,test
+  (test)
+  :doc "rejects code-bearing expansion forms, even inside quotes"
+  (dolist (source '("cmd $(trap x EXIT) | tail" "cmd `trap x EXIT` | tail"
+                    "cmd <(echo x) | tail" "cmd > >(cat) | tail"
+                    "cmd $((x)) | tail" "(( x )); false | cat"
+                    "cmd ${x:-$(trap x EXIT)} | tail"
+                    "cmd ${x@P} | tail" "cmd ${!x} | tail"
+                    "cmd ${a[$x]} | tail" "cmd $'\\x74rap' | tail"
+                    "cmd \"$(echo x)\" | tail" "cmd '$((x))' | tail"
+                    "cmd $RANDOM | tail" "cmd ${OPTIND} | tail"
+                    "cmd $_ | tail" "cmd $1 | tail" "cmd $$ | tail"
+                    "cmd $! | tail" "cmd $@ | tail"
+                    "cmd $xUpper | tail" "cmd ${_} | tail"
+                    "for RANDOM in x; do false; done | cat"
+                    "for OPTIND in x; do false; done | cat"
+                    "for SECONDS in x; do false; done | cat"
+                    "for _ in x; do false; done | cat"))
+    (should-not (niwa-bash-analysis-snapshot-safe-p source))))
+
+(niwa-deftest niwa-bash-analysis--snapshot-command-safe-p ()
+  ,test
+  (test)
+  :doc "rejects dynamic executables and caller-shell evaluation builtins"
+  (dolist (source '("\"${runner}\" arg | tail" "do $runner arg; done | tail"
+                    "${dir}/runner arg | tail" "tr?p x EXIT; false | cat"
+                    "for f in x; do trap 'exit 42' EXIT; done; false | cat"
+                    "for f in x; do 2>/dev/null trap x EXIT; done; false | cat"
+                    "for f in x; do eval \"$x\"; done | tail"
+                    "declare -n x=y; cmd \"$x\" | tail"
+                    "unset \"$x\"; false | cat" "read \"$x\"; false | cat"
+                    "test -v \"$x\"; false | cat" "export \"$x\"; false | cat"
+                    "printf -v \"$x\" %s value; false | cat"
+                    "printf \"$x\" value; false | cat"
+                    "printf '%n' \"$x\"; false | cat"
+                    "enable -f \"$x\" name; false | cat"
+                    "compgen -F \"$x\"; false | cat"))
+    (should-not (niwa-bash-analysis-snapshot-safe-p source))))
+
+(niwa-deftest niwa-bash-analysis-final-pipeline ()
+  ,test
+  (test)
+  :doc "identifies a sole final outer pipeline without mistaking quoted connectors"
+  (dolist (source '("grep needle file | head"
+                    "printf 'x|y'; grep needle file | head"
+                    "true && grep needle file | head"))
+    (should (equal '(("grep" "needle" "file") ("head"))
+                   (mapcar (lambda (stage) (car (plist-get stage :commands)))
+                           (niwa-bash-analysis-final-pipeline source 2)))))
+  :doc "declines earlier or ambiguous pipeline identities"
+  (dolist (source '("false | cat || grep absent | cat"
+                    "grep absent | cat || false | cat"
+                    "grep absent | cat || true"
+                    "grep absent | cat; printf done"))
+    (should-not (niwa-bash-analysis-final-pipeline source 2))))
+
+(niwa-deftest niwa-bash-analysis-snapshot-safe-p/subscripts ()
+  ,test
+  (test)
+  :doc "declines implicit arithmetic and variable-targeting builtin forms"
+  (dolist (source '("test -v a[x]; false | cat" "[ -v a[x] ]; false | cat"
+                    "test -R a; false | cat" "[[ -v a[x] ]]; false | cat"
+                    "(( x )); false | cat" "let x; false | cat"
+                    "declare -i x; false | cat" "unset a[x]; false | cat"
+                    "printf -v a[x] %s value; false | cat"
+                    "printf %n a; false | cat" "printf '%1$n' a; false | cat"
+                    "printf '%+1n' a; false | cat" "printf '%1n' a; false | cat"
+                    "printf '%ln' a; false | cat" "printf '%hn' a; false | cat"
+                    "printf '%lln' a; false | cat"))
+    (should-not (niwa-bash-analysis-snapshot-safe-p source)))
+  (should (niwa-bash-analysis-snapshot-safe-p "printf '%s\\n' value | cat")))
+
+(niwa-deftest niwa-bash-analysis--snapshot-command-spans ()
+  ,test
+  (test)
+  :doc "keeps a loop's complete source as one conservative pipeline stage"
+  (let* ((loop "for f in *.el; do printf '%s\\n' \"$f\"; false; done")
+         (stages (niwa-bash-analysis-final-pipeline (concat loop " | tail") 2)))
+    (should (equal (niwa-bash-analysis-analyze loop) (car stages)))
+    (should (eq 'complex (plist-get (car stages) :class)))
+    (should (equal '(("tail")) (plist-get (cadr stages) :commands))))
+  :doc "declines nested, incomplete, and pipeline-containing loop bodies"
+  (dolist (source '("for f in x; do for g in y; do echo $g; done; done | tail"
+                    "for f in x; printf '%s' $f; done | tail"
+                    "for f in x; do printf '%s' $f | cat; done | tail"
+                    "do printf '%s' $f; done | tail"
+                    "for f in x; do printf '%s' $f | tail"))
+    (should-not (niwa-bash-analysis-snapshot-safe-p source))
+    (should-not (niwa-bash-analysis-final-pipeline source 2))))
+
+(niwa-deftest niwa-bash-analysis-analyze ()
+  ,test
+  (test)
+  :doc "normalized result:
+`niwa-bash-analysis-analyze' returns every required fact"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis (niwa-bash-analysis-analyze "pwd && cat ./README.md")))
+      (should (equal 'read-only (plist-get analysis :class)))
+      (should (equal '(("pwd") ("cat" "./README.md"))
+                     (plist-get analysis :commands)))
+      (should (equal 'heuristic (plist-get analysis :parser)))
+      (should (equal '("./README.md") (plist-get analysis :resources)))
+      (should (consp (plist-get analysis :reasons)))))
+  :doc "Unicode heredoc bodies retain conservative authority and source text"
+  (dolist (source '("cat <<'EOF'\n\u2192 & coproc $(sleep 1 &)\nEOF\nprintf done"
+                    "cat <<EOF\n\u2192 & coproc\nEOF\nprintf done"
+                    "cat <<'\u03bb'\n\u2192\n\u03bb\nprintf done"))
+    (let ((original (copy-sequence source))
+          (analysis (niwa-bash-analysis-analyze source)))
+      (should (eq 'complex (plist-get analysis :class)))
+      (should-not (plist-get analysis :background-p))
+      (should (equal original source))))
+  :doc "Unicode substitutions preserve nesting, background detection and source text"
+  (dolist (case '(("echo \"$(printf '\u2192')\"" nil)
+                  ("echo \"$(echo \"$(printf '\u2192')\")\"" nil)
+                  ("echo `printf '\u2192'`" nil)
+                  ("echo \"$(printf '\u2192' &)\"" t)
+                  ("echo \"$(echo \"$(printf '\u2192' &)\")\"" t)
+                  ("cat <<EOF\n\u2192 $(printf '\u03bb' &)\nEOF" t)
+                  ("cat <<'EOF'\n\u2192\nEOF\nprintf '\u03bb' &" t)))
+    (let* ((source (copy-sequence (car case)))
+           (analysis (niwa-bash-analysis-analyze source)))
+      (should (eq 'complex (plist-get analysis :class)))
+      (should (eq (cadr case) (plist-get analysis :background-p)))
+      (should (equal (car case) source))))
+  :doc "large Unicode payloads and ordinary arguments remain immutable"
+  (let* ((payload (make-string 16384 ?\u2192))
+         (source (concat "cat <<'EOF'\n" payload " & coproc\nEOF\nprintf done"))
+         (original (copy-sequence source))
+         (analysis (niwa-bash-analysis-analyze source)))
+    (should (eq 'complex (plist-get analysis :class)))
+    (should-not (plist-get analysis :background-p))
+    (should (equal original source))
+    (let* ((argument "echo '\u2192\u03bb' out")
+           (plain (niwa-bash-analysis-analyze argument)))
+      (should (eq 'read-only (plist-get plain :class)))
+      (should (equal '(("echo" "\u2192\u03bb" "out")) (plist-get plain :commands)))
+      (should (equal "echo '\u2192\u03bb' out" argument))))
+  :doc "bare directory resources:
+`niwa-bash-analysis-analyze' preserves current and parent directory operands"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should
+     (equal '("." "..")
+            (plist-get
+             (niwa-bash-analysis-analyze "rg TODO . && rg TODO ..")
+             :resources))))
+  :doc "unknown command:
+`niwa-bash-analysis-analyze' classifies an understood command conservatively"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should (equal 'unknown
+                   (plist-get (niwa-bash-analysis-analyze "make test")
+                              :class))))
+  :doc "path-qualified executable:
+`niwa-bash-analysis-analyze' does not trust a known basename at another path"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should (equal 'unknown
+                   (plist-get (niwa-bash-analysis-analyze "./cat file")
+                              :class))))
+  :doc "test brackets:
+`niwa-bash-analysis-analyze' recognizes literal bracket command delimiters"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis (niwa-bash-analysis-analyze "[ 1 = 2 ]")))
+      (should (equal 'read-only (plist-get analysis :class)))
+      (should (equal '(("[" "1" "=" "2" "]"))
+                     (plist-get analysis :commands))))
+    (should (equal 'complex
+                   (plist-get (niwa-bash-analysis-analyze "echo [12]")
+                              :class))))
+  :doc "Bash escaping:
+`niwa-bash-analysis-analyze' returns shell-accurate plain argv"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((shell-file-name-quote-list nil))
+      (should (equal '(("echo" "foo bar"))
+                     (plist-get
+                      (niwa-bash-analysis-analyze "echo foo\\ bar")
+                      :commands)))))
+  :doc "literal quoting preserves separators and double-quote backslashes"
+  (dolist (case '(("echo 'git status; && |'" ("echo" "git status; && |"))
+                  ("echo 'a\\'" ("echo" "a\\"))
+                  ("echo \"a\\q\"" ("echo" "a\\q"))
+                  ("echo '' ab\"cd\"'ef'" ("echo" "" "abcdef"))
+                  ("echo \"a\\\"b\"" ("echo" "a\"b"))))
+    (let ((analysis (niwa-bash-analysis-analyze (car case))))
+      (should (eq 'read-only (plist-get analysis :class)))
+      (should (equal (list (cadr case)) (plist-get analysis :commands)))))
+  :doc "line continuation:
+`niwa-bash-analysis-analyze' removes Bash backslash-newline pairs"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (niwa-bash-analysis-analyze
+            (concat "cat ~/.ss\\" "\n" "h/id_rsa"))))
+      (should (equal '(("cat" "~/.ssh/id_rsa"))
+                     (plist-get analysis :commands)))
+      (should (equal '("~/.ssh/id_rsa")
+                     (plist-get analysis :resources)))))
+  :doc "quoted line continuation:
+`niwa-bash-analysis-analyze' preserves backslash-newline in single quotes"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should
+     (equal `(("echo" ,(concat "a\\" "\n" "b")))
+            (plist-get
+             (niwa-bash-analysis-analyze
+              (concat "echo 'a\\" "\n" "b'"))
+             :commands))))
+  :doc "dangerous precedence:
+`niwa-bash-analysis-analyze' lets a dangerous compound component win"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((niwa-bash-dangerous-commands '("rm")))
+      (should (equal 'dangerous
+                     (plist-get
+                      (niwa-bash-analysis-analyze "pwd && rm ./file")
+                      :class)))))
+  :doc "complex forms:
+`niwa-bash-analysis-analyze' rejects unsupported shell effects"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (dolist (source '("echo x > out"
+                      "echo $(pwd)"
+                      "echo `pwd`"
+                      "echo $HOME"
+                      "FOO=bar make test"
+                      "FOO+=bar make test"
+                      "(pwd)"
+                      "pwd
+cat file"
+                      "cat <<EOF\nx\nEOF"
+                      "if true; then pwd; fi"
+                      "coproc cat file"
+                      "echo x & pwd"
+                      "echo \"unterminated"))
+      (should (equal 'complex
+                     (plist-get (niwa-bash-analysis-analyze source)
+                                :class)))))
+  :doc "dangerous harvesting:
+`niwa-bash-analysis-analyze' detects danger inside complex input"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((niwa-bash-dangerous-commands '("rm")))
+      (let ((analysis
+             (niwa-bash-analysis-analyze "echo $(rm ./file)")))
+        (should (equal 'dangerous (plist-get analysis :class)))
+        (should (member "rm ./file" (plist-get analysis :candidates))))))
+  :doc "nested candidate harvesting:
+`niwa-bash-analysis-analyze' splits command chains inside substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (niwa-bash-analysis-analyze
+            "echo \"$(pwd && rm file && echo x)\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))))
+  :doc "quoted parentheses in substitutions:
+`niwa-bash-analysis-analyze' does not truncate nested command facts"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (niwa-bash-analysis-analyze
+            "echo \"$(printf ')' && cat .git/config && rm file)\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))
+      (should (member ".git/config" (plist-get analysis :resources)))))
+  :doc "nested substitution parsing:
+`niwa-bash-analysis-analyze' preserves recursively quoted substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (niwa-bash-analysis-analyze
+            "echo \"$(printf ')' && echo \"$(rm file)\")\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))))
+  :doc "complex resource harvesting:
+`niwa-bash-analysis-analyze' preserves literal protected-path candidates"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((shell-file-name-quote-list nil))
+      (should (equal '("~/.ssh/my key" ".git/config")
+                     (plist-get
+                      (niwa-bash-analysis-analyze
+                       "FOO=bar cat ~/.ssh/my\\ key >.git/config")
+                      :resources)))))
+  :doc "substitution resource harvesting:
+`niwa-bash-analysis-analyze' preserves paths inside quoted substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should (member ".git/config"
+                    (plist-get
+                     (niwa-bash-analysis-analyze
+                      "echo \"$(cat .git/config)\"")
+                     :resources))))
+  :doc "tree-sitter source:
+`niwa-bash-analysis-analyze' uses the configured Bash grammar when present"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (let ((analysis (niwa-bash-analysis-analyze "pwd && cat README.md")))
+      (should (equal 'treesit (plist-get analysis :parser)))
+      (should (equal '(("pwd") ("cat" "README.md"))
+                     (plist-get analysis :commands)))))
+  :doc "tree-sitter agreement:
+`niwa-bash-analysis-analyze' reads a construct the same way either parser does"
+  ;; Installing the grammar must not reclassify a command.  These two are the
+  ;; ones the grammar sees as their own node types where the scanner sees
+  ;; plain words, so they are where the analyzers drift apart first.
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (dolist (source '("NODE_ENV=test npm run test" "[ 1 = 2 ]"
+                      "diff -u one two | head -10"
+                      "git status --short && git diff --stat"
+                      "git -C './repo space' log --oneline -1 || pwd; ls"))
+      (let ((grammar (niwa-bash-analysis-analyze source))
+            (scanner (cl-letf (((symbol-function 'treesit-language-available-p)
+                                (lambda (_language) nil)))
+                       (niwa-bash-analysis-analyze source))))
+        (should (equal 'treesit (plist-get grammar :parser)))
+        (should (equal (plist-get scanner :class)
+                       (plist-get grammar :class)))
+        (should (equal (plist-get scanner :commands)
+                       (plist-get grammar :commands))))))
+  :doc "tree-sitter double brackets:
+`niwa-bash-analysis-analyze' keeps `[[' complex, unlike `['"
+  ;; It changes quoting and globbing, so the single-bracket allowance below
+  ;; must not extend to it.
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (should (equal 'complex
+                   (plist-get (niwa-bash-analysis-analyze "[[ -f x ]]")
+                              :class))))
+  :doc "tree-sitter complex syntax:
+`niwa-bash-analysis-analyze' rejects redirection structurally"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (dolist (source '("echo x > out" "pwd\ncat file"))
+      (should (equal 'complex
+                     (plist-get (niwa-bash-analysis-analyze source)
+                                :class)))))
+  :doc "background fact:
+`niwa-bash-analysis-analyze' distinguishes native background operators"
+  (progn
+    (should (plist-get (niwa-bash-analysis-analyze "sleep 1 &")
+                       :background-p))
+    (should (plist-get (niwa-bash-analysis-analyze "coproc sleep 1")
+                       :background-p))
+    (dolist (source '("if true; then coproc sleep 1; fi"
+                      "while true; do coproc sleep 1; done"
+                      "if false; then :; else coproc sleep 1; fi"
+                      "{ coproc sleep 1; }"
+                      "time coproc sleep 1"
+                      "time -p ! coproc sleep 1"
+                      "! time -p coproc sleep 1"
+                      "if true; then time coproc sleep 1; fi"
+                      "echo \"$(sleep 1 &)\""
+                      "echo `sleep 1 &`"
+                      "echo $(( $(sleep 1 &) + 1 ))"
+                      "(( $(sleep 1 &) + 1 ))"))
+      (should (plist-get (niwa-bash-analysis-analyze source)
+                         :background-p)))
+    (should-not (plist-get (niwa-bash-analysis-analyze
+                            "printf '%s' '&'")
+                           :background-p))
+    (dolist (source '("printf hi 2>&1" "printf hi &>out" "a |& b"))
+      (should-not (plist-get (niwa-bash-analysis-analyze source)
+                             :background-p)))
+    (should-not (plist-get (niwa-bash-analysis-analyze
+                            "echo \"$((1 & 2))\"")
+                           :background-p))
+    (dolist (source '("echo $((1 & 2))"
+                      "((1 & 2))"
+                      "for ((i = 0; i & 3; i++)); do :; done"
+                      "printf %s '$(sleep 1 &)'"
+                      "printf %s '`sleep 1 &`'"
+                      "printf %s \"\\$(sleep 1 &)\""
+                      "printf %s \"\\`sleep 1 &\\`\""))
+      (should-not (plist-get (niwa-bash-analysis-analyze source)
+                             :background-p)))))
+
+(niwa-deftest niwa-bash-analysis--quote-word ()
+  ,test
+  (test)
+  :doc "Bash quoting round-trips literal words independent of host shell"
+  (dolist (word '("" "simple" "a b" "a'b" "a\\b" "$HOME; `pwd`"))
+    (should (equal (list word)
+                   (niwa-bash-analysis--split-command
+                    (niwa-bash-analysis--quote-word word))))))
+
+(niwa-deftest niwa-bash-analysis--heredoc-context ()
+  ,test
+  (test)
+  :doc "separates ordered bodies, quote-removed delimiters and tab stripping"
+  (let* ((source "cat <<A <<-B\" C\"\nfirst &\nA\n\tsecond &\n\tB C\necho done &")
+         (context (niwa-bash-analysis--heredoc-context source)))
+    (should (equal '("first &\n") (cadr context)))
+    (should (string-prefix-p "cat <<A <<-B\" C\"\n" (car context)))
+    (should (string-suffix-p "echo done &" (car context)))
+    (should (= (length source) (length (car context)))))
+  :doc "does not treat arithmetic shifts, here-strings or comments as heredocs"
+  (dolist (source '("echo $((1 << 2))\nsleep 1 &"
+                    "((1 << 2))\nsleep 1 &"
+                    "cat <<< data\nsleep 1 &"
+                    "echo hi # <<EOF\nsleep 1 &"))
+    (should (equal (list source nil)
+                   (niwa-bash-analysis--heredoc-context source)))))
+
+(niwa-deftest niwa-bash-analysis--background-p ()
+  ,test
+  (test)
+  :doc "heredoc payload is data, including quotes, operators and coproc words"
+  (dolist (source '("cat <<EOF\na & b\ncoproc sleep 1\nEOF"
+                    "cat <<'EOF'\n$(sleep 1 &)\n`coproc sleep 1`\nEOF"
+                    "cat <<\"EOF\"\n' & \"\nEOF"
+                    "cat <<E\\OF\n$(sleep 1 &)\nEOF"
+                    "cat <<EOF\n$(printf '%s' '&')\nEOF"
+                    "cat <<EOF\n\\$(sleep 1 &)\nEOF"
+                    "echo \"$(cat <<'EOF'\n$(sleep 1 &)\nEOF)\""
+                    "cat <<-EOF\n\tx & y\n\tEOF"
+                    "cat <<A <<B\none &\nA\ntwo &\nB"))
+    (should-not (niwa-bash-analysis--background-p source))
+    (let ((analysis (niwa-bash-analysis-analyze source)))
+      (should-not (plist-get analysis :background-p))
+      (should (plist-get analysis :complex-p))))
+  :doc "background work still executes outside bodies and in expanding substitutions"
+  (dolist (source '("cat <<'EOF' &\npayload &\nEOF"
+                    "cat <<EOF\npayload &\nEOF\nsleep 1 &"
+                    "cat <<EOF\n$(sleep 1 &)\nEOF"
+                    "cat <<EOF\n'$(sleep 1 &)'\nEOF"
+                    "cat <<EOF\n`coproc sleep 1`\nEOF"
+                    "cat <<A <<B\nliteral &\nA\n$(sleep 1 &)\nB"
+                    "cat <<$'EOF'\ndata\nEOF\nsleep 1 &\n$EOF"
+                    "cat <<$\"EOF\"\ndata\nEOF\nsleep 1 &\n$EOF"
+                    "echo \"$(cat <<'EOF'\npayload &\nEOF\nsleep 1 &)\""))
+    (should (niwa-bash-analysis--background-p source))
+    (should (plist-get (niwa-bash-analysis-analyze source) :background-p)))
+  :doc "nested substitution descendants are inspected only once"
+  (let ((source "printf '%s' '&'")
+        (inspect (symbol-function 'niwa-bash-analysis--heredoc-context))
+        (count 0))
+    (dotimes (_ 12) (setq source (format "echo \"$(%s)\"" source)))
+    (cl-letf (((symbol-function 'niwa-bash-analysis--heredoc-context)
+               (lambda (fragment)
+                 (cl-incf count)
+                 (funcall inspect fragment))))
+      (should-not (niwa-bash-analysis--background-p source)))
+    (should (= 13 count)))
+  :doc "heredoc continuation joining follows delimiter quoting, not payload quotes"
+  (let ((join (string ?\\ ?\n)))
+    (dolist (prefix '("" "'\n"))
+      (let ((source (concat "cat <<EOF\n" prefix "E" join "OF\nprintf marker &\nwait")))
+        (should (niwa-bash-analysis--background-p source))
+        (should (plist-get (niwa-bash-analysis-analyze source) :background-p))
+        (with-temp-buffer
+          (should (zerop (process-file "bash" nil t nil "--noprofile" "--norc" "-c" source)))
+          (should (string-suffix-p "marker" (buffer-string))))))
+    (dolist (source (list (concat "cat <<'EOF'\nE" join "OF\nbody &\nEOF")
+                         (concat "echo \"$(cat <<'EOF'\nE" join "OF\nbody &\nEOF)\"")
+                         (concat "cat <<EOF\nE\\" join "OF\nbody &\nEOF")))
+      (should-not (niwa-bash-analysis--background-p source))
+      (should-not (plist-get (niwa-bash-analysis-analyze source) :background-p))))
+  :doc "continuations can form substitutions and conjunctions around heredocs"
+  (let ((join (string ?\\ ?\n)))
+    (dolist (source (list (concat "echo \"$" join "(printf marker &)\"")
+                         (concat "cat <<EOF\n'\n$" join "(printf marker &)\nEOF")))
+      (should (niwa-bash-analysis--background-p source))
+      (should (plist-get (niwa-bash-analysis-analyze source) :background-p)))
+    (let ((source (concat "cat <<'EOF' &" join "& printf done\nbody &\nEOF")))
+      (should-not (niwa-bash-analysis--background-p source))
+      (should-not (plist-get (niwa-bash-analysis-analyze source) :background-p)))))
+
+(niwa-deftest niwa-bash-analysis-prepare-read-only ()
+  ,test
+  (test)
+  :doc "preserves ordinary source and shell connectors"
+  (let* ((source "[ -f './a b' ] && cat './a b' | head -1 || pwd; ls")
+         (analysis (niwa-bash-analysis-analyze source)))
+    (should (eq 'read-only (plist-get analysis :class)))
+    (should (equal source
+                   (niwa-bash-analysis-prepare-read-only source analysis))))
+  :doc "hardens only Git spans, including quoted connector characters"
+  (let* ((source "echo 'git status; && |' && git -C './a b' status --short || git diff --stat | head -1; pwd")
+         (analysis (niwa-bash-analysis-analyze source))
+         (prepared (niwa-bash-analysis-prepare-read-only source analysis)))
+    (should (string-prefix-p "echo 'git status; && |' && " prepared))
+    (should (string-suffix-p "| head -1; pwd" prepared))
+    (should (string-match-p "--no-optional-locks" prepared))
+    (should (string-match-p (regexp-quote "'./a b'") prepared))
+    (should (string-match-p " || " prepared)))
+  :doc "rejects parser disagreement instead of falling back"
+  (let* ((source "git status --short")
+         (analysis (niwa-bash-analysis-analyze source)))
+    (should-error (niwa-bash-analysis-prepare-read-only
+                   "git reset --hard" analysis))
+    (should-error (niwa-bash-analysis-prepare-read-only
+                   source '(:class unknown))))
+  :doc "comments and effectful compounds never enter preparation"
+  (dolist (source '("git status # comment" "git status && touch file"
+                    "git diff >out" "git log --output=out"
+                    "IFS=,; false | cat" "IFS=,; git status --short"))
+    (let ((analysis (niwa-bash-analysis-analyze source)))
+      (should-not (eq 'read-only (plist-get analysis :class)))
+      (should-error (niwa-bash-analysis-prepare-read-only source analysis)))))
+
+(niwa-deftest niwa-bash-analysis-prepare-read-only/ripgrep-config ()
+  ,test
+  (test)
+  :doc "suppresses inherited helper config while preserving literal compounds"
+  (progn
+    (unless (and (executable-find "rg") (executable-find "bash"))
+      (ert-skip "Ripgrep and Bash required"))
+    (let* ((root (make-temp-file "niwa-rg-config-" t))
+         (default-directory (file-name-as-directory root))
+         (config (file-name-concat root "rg.conf"))
+         (helper (file-name-concat root "helper"))
+         (marker (file-name-concat root "marker"))
+         (data (file-name-concat root "data.txt"))
+         (source "rg needle ./data.txt")
+         (analysis (niwa-bash-analysis-analyze source))
+         (process-environment
+          (cons (concat "RIPGREP_CONFIG_PATH=" config) process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file data (insert "needle\n"))
+          (with-temp-file helper
+            (insert "#!/bin/sh\nprintf ran > "
+                    (niwa-bash-analysis--quote-word marker)
+                    "\ncat \"$1\"\n"))
+          (set-file-modes helper #o700)
+          (with-temp-file config (insert "--pre=" helper "\n"))
+          (should (eq 'read-only (plist-get analysis :class)))
+          ;; Positive control: privileged Bash alone does not stop rg config.
+          (with-temp-buffer
+            (should (zerop (process-file "bash" nil t nil "--noprofile" "--norc"
+                                         "-p" "-c" source))))
+          (should (file-exists-p marker))
+          (delete-file marker)
+          (with-temp-buffer
+            (should (zerop (process-file
+                            "bash" nil t nil "--noprofile" "--norc" "-p" "-c"
+                            (niwa-bash-analysis-prepare-read-only source analysis))))
+            (should (string-search "needle" (buffer-string))))
+          (should-not (file-exists-p marker))
+          (let* ((compound "echo 'rg; &&' && rg 'needle' './data.txt' | head -1; pwd")
+                 (prepared (niwa-bash-analysis-prepare-read-only
+                            compound (niwa-bash-analysis-analyze compound))))
+            (should (string-prefix-p "echo 'rg; &&' && 'rg' '--no-config'" prepared))
+            (should (string-suffix-p " | head -1; pwd" prepared))))
+      (delete-directory root t)))))
+
+(niwa-deftest niwa-bash-analysis--treesit ()
+  ,test
+  (test)
+  :doc "scanner parity:
+`niwa-bash-analysis--treesit' matches the scanner on syntax it rejects"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    ;; A configured grammar must not make analysis less precise than the
+    ;; conservative scanner alone.  Every source here is one the grammar
+    ;; either rejects outright or, for single-bracket predicates, must
+    ;; accept exactly as the scanner does.
+    (dolist (source '("NODE_ENV=test npm run test"
+                      "IFS=,; false | cat"
+                      "IFS=,; git status --short"
+                      "git status --short; IFS=,"
+                      "IFS=,"
+                      "A=1 B=2"
+                      "DOCKER_HOST=tcp://example docker ps"
+                      "FOO='bar baz' rm file"
+                      "A+=1 cmd"
+                      "[ 1 = 2 ]"
+                      "[ -f x ]"
+                      "[ ! -f x ]"
+                      "[[ 1 = 2 ]]"
+                      "grep needle >out"
+                      "for f in *; do echo $f; done"))
+      (let ((treesit (niwa-bash-analysis--treesit source))
+            (heuristic (niwa-bash-analysis--heuristic source)))
+        (dolist (key '(:class :commands :segments :candidates :resources))
+          (should (equal (plist-get heuristic key)
+                         (plist-get treesit key)))))))
+  :doc "deny surface:
+`niwa-bash-analysis--treesit' keeps candidates for rejected syntax"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    ;; An environment assignment must not hide the command it prefixes,
+    ;; because explicit deny rules match against `:candidates'.
+    (let ((analysis (niwa-bash-analysis--treesit "FOO='bar baz' rm file")))
+      (should (equal 'treesit (plist-get analysis :parser)))
+      (should (member "rm file" (plist-get analysis :candidates)))))
+  :doc "single-bracket predicates:
+`niwa-bash-analysis--treesit' reports `[' as a plain command"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (let ((analysis (niwa-bash-analysis--treesit "[ 1 = 2 ]")))
+      (should (equal '(("[" "1" "=" "2" "]")) (plist-get analysis :commands)))
+      (should-not (plist-get analysis :complex-p)))
+    ;; The extended form, negation, and patterns stay unsupported.
+    (dolist (source '("[[ 1 = 2 ]]" "[ ! -f x ]" "[ a != b* ]"))
+      (should (plist-get (niwa-bash-analysis--treesit source) :complex-p)))))
+
+(provide 'test-niwa-bash-analysis)
+
+;;; test-niwa-bash-analysis.el ends here

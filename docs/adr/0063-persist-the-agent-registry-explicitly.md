@@ -22,7 +22,7 @@ so their partial responses enter the interruption result. Frozen configuration,
 mailbox and topology do not depend on buffer residency. Failed hydration does not
 publish a partial resident buffer or start a provider request.
 
-Frozen built-in tool references resolve through their owning mevedel registrars
+Frozen built-in tool references resolve through their owning niwa registrars
 when a cold editor has not loaded those tools yet. Registration reconstructs the
 same current schema without executing a tool. Unknown names and foreign-category
 paths remain invalid persisted data; they are not substituted with another tool.

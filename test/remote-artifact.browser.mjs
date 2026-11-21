@@ -26,7 +26,7 @@ import { join, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const { chromium } = require('playwright');
-const cli = join(root, 'remote-artifact/bin/mevedel-remote-artifact.mjs');
+const cli = join(root, 'remote-artifact/bin/niwa-remote-artifact.mjs');
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function until(fn, ms = 20000) {
@@ -93,7 +93,7 @@ test(
   'artifact link: MCP and browser edit one whiteboard live, and revoking cuts the package off',
   { timeout: 180000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'mevedel-remote-artifact-')),
+    const directory = await mkdtemp(join(tmpdir(), 'niwa-remote-artifact-')),
       port = await freePort();
     const logs = [],
       errors = [];
@@ -133,8 +133,8 @@ test(
       host = spawn('emacs', [
         '-Q', '--batch', '-L', root, '-L', join(root, 'test'), ...deps,
         '-l', join(root, 'shared-editing/test/room.el'),
-      ], { env: { ...isolated, MEVEDEL_EDITING_TEST_ROOT: directory,
-        MEVEDEL_EDITING_RELAY: `ws://127.0.0.1:${port}` } });
+      ], { env: { ...isolated, NIWA_EDITING_TEST_ROOT: directory,
+        NIWA_EDITING_RELAY: `ws://127.0.0.1:${port}` } });
       host.stdout.on('data', (d) => logs.push(String(d)));
       host.stderr.on('data', (d) => logs.push(String(d)));
       const links = await until(async () => {

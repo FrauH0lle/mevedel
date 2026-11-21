@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* loadbot.mjs -- headless guests that measure mevedel collaboration latency.
+/* loadbot.mjs -- headless guests that measure niwa collaboration latency.
 
    Every simulated guest speaks the viewer's sealed protocol (protocol 3)
    through the real relay, so one process measures send -> seen on a single

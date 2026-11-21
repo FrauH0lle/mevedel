@@ -12,7 +12,7 @@ async function main() {
   const frames = [], updates = [];
   const sidebar = {view: {kind: 'list'}};
   const document = {createElement: tag => new Element(tag)};
-  const window = {mevedelDiscussionSidebar: {create(options) {
+  const window = {niwaDiscussionSidebar: {create(options) {
     sidebar.options = options;
     return {update(next = {}) { updates.push(next); Object.assign(sidebar, next); options.onRender(); },
       view: () => sidebar.view, show(view) { sidebar.view = view; options.onRender(); },
@@ -26,7 +26,7 @@ async function main() {
     crypto: require('node:crypto').webcrypto, addEventListener() {},
   });
   const side = new Element('div'); side.hidden = true;
-  const controller = window.mevedelArtifactDiscussions.create({
+  const controller = window.niwaArtifactDiscussions.create({
     send(frame) {
       frames.push(frame);
       if (sendFailure === 'throw') throw new Error('Sealing failed');

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Temporary instrumentation for a live mevedel host.  Load it into the
+;; Temporary instrumentation for a live niwa host.  Load it into the
 ;; daemon (emacsclient --eval '(load "host-trace.el")'), drive traffic
 ;; with loadbot.mjs, then read `(host-trace-report)' and remove the
 ;; advice with `(host-trace-stop)'.
@@ -20,43 +20,43 @@
 (defvar host-trace-functions
   '(;; inbound
     websocket-outer-filter
-    mevedel-collaboration--transport-receive
-    mevedel-collaboration--unseal
-    mevedel-collaboration--frame-decode
-    mevedel-collaboration--dispatch-frame
-    mevedel-collaboration-editing-handle
-    mevedel-collaboration-editing--dispatch
-    mevedel-collaboration-editing--presence
-    mevedel-collaboration--handle-prompt
+    niwa-collaboration--transport-receive
+    niwa-collaboration--unseal
+    niwa-collaboration--frame-decode
+    niwa-collaboration--dispatch-frame
+    niwa-collaboration-editing-handle
+    niwa-collaboration-editing--dispatch
+    niwa-collaboration-editing--presence
+    niwa-collaboration--handle-prompt
     ;; editing queue
-    mevedel-shared-editing-call
-    mevedel-shared-editing--drain
-    mevedel-shared-editing--read
-    mevedel-shared-editing--parse
-    mevedel-shared-editing--json
-    mevedel-shared-editing--send
-    mevedel-shared-editing--accept
-    mevedel-shared-editing--commit
-    mevedel-shared-editing-commit-file
-    mevedel-artifact-lease-ensure
-    mevedel-artifact-lease-write
-    mevedel-shared-editing--finish
-    mevedel-collaboration-editing--changed
-    mevedel-collaboration-editing--send
+    niwa-shared-editing-call
+    niwa-shared-editing--drain
+    niwa-shared-editing--read
+    niwa-shared-editing--parse
+    niwa-shared-editing--json
+    niwa-shared-editing--send
+    niwa-shared-editing--accept
+    niwa-shared-editing--commit
+    niwa-shared-editing-commit-file
+    niwa-artifact-lease-ensure
+    niwa-artifact-lease-write
+    niwa-shared-editing--finish
+    niwa-collaboration-editing--changed
+    niwa-collaboration-editing--send
     ;; transcript publication
-    mevedel-collaboration--publish
-    mevedel-collaboration--publish-timer
-    mevedel-collaboration--project-records
-    mevedel-collaboration--canonical-records
-    mevedel-collaboration--reuse-record-ids
-    mevedel-collaboration--publish-queue
-    mevedel-collaboration--publish-status
-    mevedel-collaboration--publish-history
-    mevedel-collaboration--publish-agents
-    mevedel-collaboration--publish-tasks
+    niwa-collaboration--publish
+    niwa-collaboration--publish-timer
+    niwa-collaboration--project-records
+    niwa-collaboration--canonical-records
+    niwa-collaboration--reuse-record-ids
+    niwa-collaboration--publish-queue
+    niwa-collaboration--publish-status
+    niwa-collaboration--publish-history
+    niwa-collaboration--publish-agents
+    niwa-collaboration--publish-tasks
     ;; outbound
-    mevedel-collaboration--transport-send
-    mevedel-collaboration--seal
+    niwa-collaboration--transport-send
+    niwa-collaboration--seal
     json-encode
     websocket-send)
   "Functions `host-trace-start' advises.")
@@ -70,27 +70,27 @@
 (defun host-trace--detail (name args)
   "Return a short label for traced NAME called with ARGS."
   (pcase name
-    ('mevedel-collaboration--dispatch-frame (plist-get (nth 2 args) :t))
-    ('mevedel-collaboration-editing-handle (plist-get (nth 2 args) :t))
-    ('mevedel-collaboration-editing--dispatch (plist-get (nth 4 args) :action))
-    ('mevedel-collaboration--transport-send (plist-get (nth 2 args) :t))
-    ('mevedel-shared-editing-call (plist-get (nth 1 args) :action))
-    ('mevedel-session-control-fs-run-program
+    ('niwa-collaboration--dispatch-frame (plist-get (nth 2 args) :t))
+    ('niwa-collaboration-editing-handle (plist-get (nth 2 args) :t))
+    ('niwa-collaboration-editing--dispatch (plist-get (nth 4 args) :action))
+    ('niwa-collaboration--transport-send (plist-get (nth 2 args) :t))
+    ('niwa-shared-editing-call (plist-get (nth 1 args) :action))
+    ('niwa-session-control-fs-run-program
      (format "%s<-%s" (mapcar (lambda (op) (plist-get op :op)) (car args))
              (host-trace--callers)))
-    ((or 'mevedel-collaboration--seal 'json-encode)
+    ((or 'niwa-collaboration--seal 'json-encode)
      (and (stringp (car (last args))) (string-bytes (car (last args)))))))
 
 (defun host-trace--callers ()
-  "Return the nearest mevedel callers outside the control-fs module."
+  "Return the nearest niwa callers outside the control-fs module."
   (let (callers)
     (cl-loop for i from 4 to 60
              for frame = (backtrace-frame i)
              while (and frame (< (length callers) 3))
              do (let ((fn (cadr frame)))
                   (when (and (symbolp fn)
-                             (string-prefix-p "mevedel-" (symbol-name fn))
-                             (not (string-prefix-p "mevedel-session-control-fs" (symbol-name fn)))
+                             (string-prefix-p "niwa-" (symbol-name fn))
+                             (not (string-prefix-p "niwa-session-control-fs" (symbol-name fn)))
                              (not (memq fn callers)))
                     (push fn callers))))
     (mapconcat #'symbol-name (nreverse callers) "<")))
@@ -138,10 +138,10 @@
   "Return per-function and per-detail statistics in milliseconds."
   (let ((groups (make-hash-table :test #'equal)) rows)
     (dolist (span host-trace--spans)
-      (let ((key (if (memq (car span) '(mevedel-collaboration--transport-send
-                                        mevedel-collaboration--dispatch-frame
-                                        mevedel-collaboration-editing--dispatch
-                                        mevedel-shared-editing-call))
+      (let ((key (if (memq (car span) '(niwa-collaboration--transport-send
+                                        niwa-collaboration--dispatch-frame
+                                        niwa-collaboration-editing--dispatch
+                                        niwa-shared-editing-call))
                      (format "%s[%s]" (car span) (nth 4 span))
                    (symbol-name (car span)))))
         (push span (gethash key groups))))

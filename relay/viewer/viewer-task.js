@@ -70,5 +70,5 @@
     return Object.freeze({show});
   }
 
-  window.mevedelTaskView = Object.freeze({create});
+  window.niwaTaskView = Object.freeze({create});
 })();

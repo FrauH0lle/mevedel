@@ -29,7 +29,7 @@ Explain shared rationale once, then identify changed files and affected function
 or variables. Separate distinct changes in the same file with a blank line:
 
 ```text
-* mevedel-example.el (example-start, example-stop): Share cleanup.
+* niwa-example.el (example-start, example-stop): Share cleanup.
 
 (example-status): Report the settled outcome.
 ```

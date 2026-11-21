@@ -1,18 +1,18 @@
 ;; -*- mode: eask; lexical-binding: t -*-
 
-(package "mevedel"
+(package "niwa"
          "0.5.0"
          "Instructed LLM programmer/assistant")
 
-(website-url "https://github.com/FrauH0lle/mevedel")
+(website-url "https://github.com/FrauH0lle/niwa")
 (keywords "convenience" "tools" "llm" "gptel")
 
-(package-file "mevedel.el")
+(package-file "niwa.el")
 (files :defaults
        '("native" "native/*.c" "native/*.eld")
-       '("scripts" "scripts/mevedel-mcp-stdio.py"
-         "scripts/mevedel-execution-spool.py" "scripts/mevedel-git-ssh.py"
-         "scripts/mevedel-landlock.py" "scripts/mevedel-pin.py")
+       '("scripts" "scripts/niwa-mcp-stdio.py"
+         "scripts/niwa-execution-spool.py" "scripts/niwa-git-ssh.py"
+         "scripts/niwa-landlock.py" "scripts/niwa-pin.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/goals" "prompts/goals/*.md")
@@ -41,10 +41,10 @@
 
 (script "check" "sh scripts/check.sh")
 (script "test" "python3 test/run_tests.py")
-(script "graphical-check" "eask clean elc && eask emacs --batch -L . -L test -l test/graphical-check.el --funcall mevedel-graphical-check-run --")
-(script "terminal-check" "eask clean elc && eask emacs --batch -L . -L test -l test/terminal-check.el --funcall mevedel-terminal-check-run")
-(script "bench-gate" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- gate")
-(script "bench-twin" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- twin")
+(script "graphical-check" "eask clean elc && eask emacs --batch -L . -L test -l test/graphical-check.el --funcall niwa-graphical-check-run --")
+(script "terminal-check" "eask clean elc && eask emacs --batch -L . -L test -l test/terminal-check.el --funcall niwa-terminal-check-run")
+(script "bench-gate" "eask emacs --batch -L . -L benchmark -l benchmark/niwa-bench-runner.el -- gate")
+(script "bench-twin" "eask emacs --batch -L . -L benchmark -l benchmark/niwa-bench-runner.el -- twin")
 
 ;; Eask's script exporter inherits its source file's CRLF coding on some
 ;; installations, which otherwise becomes part of the last shell argument.
@@ -66,13 +66,13 @@
  (depends-on "evil")
  (depends-on "mcp"))
 
-(defun mevedel-eask--isolate-test-home ()
+(defun niwa-eask--isolate-test-home ()
   "Run ERT without shared archive I/O or access to real home state."
   ;; Eask activates installed dependencies before this hook, then refreshes
   ;; archives before loading tests.  Parallel workers must neither read nor
   ;; rewrite that shared cache; dependency installation is a separate step.
   (setq package-archives nil)
-  (let ((home (make-temp-file "mevedel-test-home-" t)))
+  (let ((home (make-temp-file "niwa-test-home-" t)))
     (setq default-directory (expand-file-name default-directory))
     (setenv "HOME" home)
     ;; Emacs cached the real home the first time anything abbreviated a file
@@ -102,4 +102,4 @@
               (lambda ()
                 (ignore-errors (delete-directory home t))))))
 
-(add-hook 'eask-before-test/ert-hook #'mevedel-eask--isolate-test-home)
+(add-hook 'eask-before-test/ert-hook #'niwa-eask--isolate-test-home)

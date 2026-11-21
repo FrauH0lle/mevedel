@@ -6,10 +6,10 @@
 
 ;;; Code:
 
-(setq load-path (read (getenv "MEVEDEL_TEST_LOAD_PATH")))
-(require 'mevedel-view)
-(require 'mevedel-view-composer)
-(require 'mevedel-view-segments)
+(setq load-path (read (getenv "NIWA_TEST_LOAD_PATH")))
+(require 'niwa-view)
+(require 'niwa-view-composer)
+(require 'niwa-view-segments)
 
 (run-at-time
  0.1 nil
@@ -18,20 +18,20 @@
      (condition-case err
          (progn
            (select-frame (make-frame-on-display
-                          (getenv "MEVEDEL_NATIVE_DISPLAY")
+                          (getenv "NIWA_NATIVE_DISPLAY")
                           '((width . 80) (height . 25))))
            (sit-for 0.1)
            (with-temp-buffer
              (switch-to-buffer (current-buffer))
              (insert "Continued answer\n"
-                     (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt")
+                     (propertize "Prompt\n" 'niwa-view-prompt-preview "Prompt")
                      "More answer\n")
-             (mevedel-view-transcript-tail-initialize)
-             (mevedel-view-composer-create)
-             (mevedel-view-composer-insert "> draft\nsecond line")
-             (setq-local mevedel-view--continuation-prompt-cache
+             (niwa-view-transcript-tail-initialize)
+             (niwa-view-composer-create)
+             (niwa-view-composer-insert "> draft\nsecond line")
+             (setq-local niwa-view--continuation-prompt-cache
                          '(nil nil nil nil (:segment 1 :pos 1 :preview "Archived prompt")))
-             (setq-local header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
+             (setq-local header-line-format '(:eval (niwa-view--sticky-prompt-line)))
              (goto-char (point-min))
              (set-window-start nil (point-min) t)
              (let ((probe (lambda (original &rest args)
@@ -41,30 +41,30 @@
                                   (setq maximum (max depth maximum))
                                   (when (< depth 3) (apply original args)))
                               (cl-decf depth)))))
-               (advice-add 'mevedel-view--sticky-prompt-line :around probe)
+               (advice-add 'niwa-view--sticky-prompt-line :around probe)
                (unwind-protect
                    (let (visible hidden)
                      (redisplay t)
                      (sit-for 0.05)
-                     (set-window-parameter nil 'mevedel-view--prompt-on-screen nil)
-                     (setq visible (mevedel-view--sticky-prompt-line))
+                     (set-window-parameter nil 'niwa-view--prompt-on-screen nil)
+                     (setq visible (niwa-view--sticky-prompt-line))
                      ;; A content change invalidates the per-window answer.
                      (goto-char (point-min))
                      (insert (apply #'concat (make-list 80 "Continued answer\n")))
                      (goto-char (point-min))
                      (set-window-start nil (point-min) t)
                      (redisplay t)
-                     (setq hidden (mevedel-view--sticky-prompt-line))
+                     (setq hidden (niwa-view--sticky-prompt-line))
                      (setq observations
                            (list :depth maximum :visible visible
                                  :hidden (and hidden (substring-no-properties hidden))
-                                 :draft (mevedel-view-composer-draft-text nil t)
+                                 :draft (niwa-view-composer-draft-text nil t)
                                  :header-restored
                                  (equal header-line-format
-                                        '(:eval (mevedel-view--sticky-prompt-line))))))
-                 (advice-remove 'mevedel-view--sticky-prompt-line probe)))))
+                                        '(:eval (niwa-view--sticky-prompt-line))))))
+                 (advice-remove 'niwa-view--sticky-prompt-line probe)))))
        (error (setq status 1 observations (list :error (error-message-string err)))))
-     (with-temp-file (getenv "MEVEDEL_NATIVE_RESULT") (prin1 observations (current-buffer)))
+     (with-temp-file (getenv "NIWA_NATIVE_RESULT") (prin1 observations (current-buffer)))
      (kill-emacs status))))
 
 ;;; view-header-wayland.el ends here

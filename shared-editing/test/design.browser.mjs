@@ -195,7 +195,7 @@ test('approved editor controls on the production bundle', async t => {
   });
   await t.test('both palettes fit desktop and phone, and read-only editors expose no editing controls', async () => {
     const directory=new URL('../../.scratch/design-integration/screenshots/',import.meta.url).pathname;
-    if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await mkdir(directory,{recursive:true});
+    if(process.env.NIWA_DESIGN_SCREENSHOTS) await mkdir(directory,{recursive:true});
     for(const kind of ['document','whiteboard']) for(const palette of ['cool','warm']) for(const theme of ['light','dark']) for(const width of [1600,390]) {
       const {page,frame}=await open({kind,content:kind==='document'?content:undefined,appearance:{palette,theme,accents:'selective'},viewport:{width,height:900}});
       assert.equal(await frame.locator('html').getAttribute('data-palette'),palette);
@@ -213,7 +213,7 @@ test('approved editor controls on the production bundle', async t => {
         assert.ok(b.x>=0&&b.x+b.width<=width);
         await page.keyboard.press('Escape');
       }
-      if(process.env.MEVEDEL_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/${kind}-${palette}-${theme}-${width}.png`});
+      if(process.env.NIWA_DESIGN_SCREENSHOTS) await page.screenshot({path:`${directory}/${kind}-${palette}-${theme}-${width}.png`});
       await page.close();
     }
     for(const kind of ['document','whiteboard']) {

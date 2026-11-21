@@ -22,7 +22,7 @@ verify the dependencies actually loaded in that setup and in the isolated
 runner. A refreshed upstream checkout or matching model configuration does not
 establish equivalence when the user runs a local dependency branch. Record loaded
 library paths and source hashes; use a frozen copy of the intended dependency
-sources in the runner before loading mevedel. Before paid calls, check the native
+sources in the runner before loading niwa. Before paid calls, check the native
 dry-run request for consequential controls such as reasoning effort and output
 limits in that same runner. A policy variable being set is insufficient if the
 loaded transport does not serialize it. Keep any intentionally different
@@ -31,7 +31,7 @@ dependency configuration explicit in the protocol and conclusions.
 Preserve and check the configured backend's concrete type, not just its name,
 model and endpoint. Reconstructing a Codex OAuth backend as a generic Responses
 backend changes native request controls: OAuth omits unsupported server output
-limits while mevedel retains its client-side guards. Preflight must exercise the
+limits while niwa retains its client-side guards. Preflight must exercise the
 configured backend type through the native request path; matching an expected
 payload from a substituted type does not establish configuration equivalence.
 
@@ -52,10 +52,10 @@ Bootstrap pins the branch's creation commit for [affected checks](#affected-tier
 when its branch reflog records it. `--base REV` pins an explicit commit instead;
 the pin is worktree-local and retained by later bootstrap runs without `--base`.
 This repo's `.dir-locals.el` configures creation-time setup, requiring Emacs
-approval. The separate `mevedel-worktree-setup-enabled` flag defaults off;
-`mevedel-worktree-setup-command` holds argv. Both creation paths and the skill
+approval. The separate `niwa-worktree-setup-enabled` flag defaults off;
+`niwa-worktree-setup-command` holds argv. Both creation paths and the skill
 honor that authorization; see [the worktree ADR](adr/0001-worktree-command-and-skill.md).
-Setup output stays in `*mevedel worktree setup*`; failure retains the checkout.
+Setup output stays in `*niwa worktree setup*`; failure retains the checkout.
 
 ## Dependency maintenance
 
@@ -108,7 +108,7 @@ not establish them.
 
 ## gptel source rule
 
-mevedel is tightly coupled to gptel. Before
+niwa is tightly coupled to gptel. Before
 implementing or changing behavior that touches prompts, requests, callbacks,
 tool calls, presets, buffers, transcripts, session flow, agents, or
 coordination, consult gptel source and reuse its existing
@@ -155,7 +155,7 @@ fast tier decides on its own when a change needs the full suite.
   avoid a failure.
 
 After installing the Eask development dependencies, run the fail-fast check
-(`--affected`, `--jobs` and the `MEVEDEL_AFFECTED_BASE` environment variable
+(`--affected`, `--jobs` and the `NIWA_AFFECTED_BASE` environment variable
 pass through to the test runner):
 
 ```bash
@@ -165,11 +165,11 @@ eask run script check
 # The pre-commit tier:
 eask run script check -- --affected
 # Override the default affected base for this run:
-MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
+NIWA_AFFECTED_BASE=BASE eask run script check -- --affected
 # Limit test concurrency on smaller machines:
 npx @emacs-eask/cli run script check -- --jobs 4
 # Or once for every run, including the pre-commit hook:
-export MEVEDEL_TEST_JOBS=4
+export NIWA_TEST_JOBS=4
 ```
 
 The test runner raises its own OOM score, so under memory pressure the kernel
@@ -200,7 +200,7 @@ shared `core.worktree` or `core.bare=true` setting to the primary checkout's
 `git config --worktree --unset core.hooksPath` (or restore your previous value).
 The hook requires Python 3, Emacs, installed Eask development dependencies and
 either `eask` on `PATH` or Node/npx, and runs `check -- --affected` (worker
-count from `MEVEDEL_TEST_JOBS`). It checks the
+count from `NIWA_TEST_JOBS`). It checks the
 working tree, not a temporary copy of the index: when partially staging files,
 ensure the staged change passes independently too. CI runs the check even when
 the hook is not installed or is bypassed; required branch checks are a separate
@@ -268,11 +268,11 @@ Enforced invariants:
   here` footer (optional final period) in root Lisp libraries and immediate
   `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
   executable fixtures are not libraries and are outside this layout check.
-- Use the composer draft interface for input and `mevedel-view-transcript-tail`
-  (or `mevedel-view-transcript-tail-marker`) for the transcript boundary. The
+- Use the composer draft interface for input and `niwa-view-transcript-tail`
+  (or `niwa-view-transcript-tail-marker`) for the transcript boundary. The
   checker rejects literal references to the retired inline input marker
-  (`mevedel-view--input-marker` or `mevedel-view--input-marker-position`) in
-  Lisp files outside `mevedel-view-composer.el` and `test/` directories.
+  (`niwa-view--input-marker` or `niwa-view--input-marker-position`) in
+  Lisp files outside `niwa-view-composer.el` and `test/` directories.
 - Local inline/image and explicit reference Markdown links in `docs/` resolve
   to files/directories and, for Markdown fragments, heading or explicit HTML
   anchors. Fenced and inline code examples are ignored. This is not a full
@@ -284,7 +284,7 @@ Enforced invariants:
 - An ADR added since the merge base may not reuse a number the base branch's
   current tip has given another ADR meanwhile; renumber before merging.
 - Literal ERT names are unique across Lisp test files, including the numbered
-  cases generated by `mevedel-deftest`. The checker reads sources without loading
+  cases generated by `niwa-deftest`. The checker reads sources without loading
   tests or expanding arbitrary macros; quoted test definitions are data. Files
   defining ERT tests cannot `require` or `load` one another by literal feature
   or file name. Put reusable fixtures in helper files such as `*-test-helpers.el`.
@@ -313,7 +313,7 @@ Enforced invariants:
   do not substitute for the explicit owner import. External functions and
   functions defined in the test library itself are outside this check. Quoted
   data is ignored, while executable backquote unquotes are checked. Literal
-  `mevedel-deftest` templates and their setup, teardown and variable options are
+  `niwa-deftest` templates and their setup, teardown and variable options are
   checked per generated case, without evaluating template expressions. Other
   macros are not expanded. Diagnostics point to the
   containing top-level form. This is a literal-source check, not a proof of
@@ -354,11 +354,11 @@ test names; reports retain every failure.
 
 ```bash
 # Single file
-npx @emacs-eask/cli run script test -- test/test-mevedel-compact.el
+npx @emacs-eask/cli run script test -- test/test-niwa-compact.el
 # Related files; quote patterns so the runner diagnoses unmatched patterns
-python3 test/run_tests.py 'test/test-mevedel-compact*.el'
+python3 test/run_tests.py 'test/test-niwa-compact*.el'
 # A cold-loading check: only one test file is loaded per Emacs
-python3 test/run_tests.py --fresh-files 'test/test-mevedel-compact*.el'
+python3 test/run_tests.py --fresh-files 'test/test-niwa-compact*.el'
 # Replay exactly one worker's saved file roster and test sequence
 python3 test/run_tests.py --replay .scratch/test-suite-performance/RUN/0-partition.json
 # The pre-commit tier: files affected by changes since the merge base with master
@@ -453,16 +453,16 @@ the ordinary ERT command. Conditional skips remain visible in reports.
 HEAD`: committed changes, staged and unstaged edits,
 deletions, and untracked files that are not ignored. It reads the repository's
 own `require` and `provide` forms; there is no hand-maintained mapping.
-An explicit `REV` wins; otherwise the runner uses `MEVEDEL_AFFECTED_BASE`
-when nonempty, then the worktree's `mevedel.affectedBase` pin, then `master`.
+An explicit `REV` wins; otherwise the runner uses `NIWA_AFFECTED_BASE`
+when nonempty, then the worktree's `niwa.affectedBase` pin, then `master`.
 The variable also passes through
 `eask run script check -- --affected` and the pre-commit hook. It does not enable
 affected mode on its own, and does not replace the standards check's independent
 `CHECK_BASE` setting. For example:
 
 ```bash
-MEVEDEL_AFFECTED_BASE=BASE python3 test/run_tests.py --affected --jobs 4
-CHECK_BASE=BASE MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
+NIWA_AFFECTED_BASE=BASE python3 test/run_tests.py --affected --jobs 4
+CHECK_BASE=BASE NIWA_AFFECTED_BASE=BASE eask run script check -- --affected
 ```
 
 - A changed root or `test/` library selects the test files that require one of
@@ -478,8 +478,8 @@ CHECK_BASE=BASE MEVEDEL_AFFECTED_BASE=BASE eask run script check -- --affected
   support (`Eask`, `scripts/check.sh`, `test/run_tests.py`,
   `test/affected_tests.py`, `test/ert-runner.el`, `test/helpers.el`), a library
   that more than a quarter of the test files require directly (today
-  `mevedel-structs.el`), or a non-documentation file no test file names.
-- Documentation (`docs/`, `.mevedel/`, Markdown, text and images) that no test
+  `niwa-structs.el`), or a non-documentation file no test file names.
+- Documentation (`docs/`, `.niwa/`, Markdown, text and images) that no test
   names, and deleted test files, add nothing beyond the smoke set.
 - Node and browser tests (`test/*.js`, `test/*.mjs`) that no ERT file names
   also add nothing: they run under their own runners (see
@@ -507,11 +507,11 @@ The runner's own checks are:
 
 ```bash
 python3 test/test_run_tests.py
-python3 test/run_tests.py test/test-mevedel-test-helpers.el test/test-mevedel-test-runner.el
+python3 test/run_tests.py test/test-niwa-test-helpers.el test/test-niwa-test-runner.el
 ```
 
-Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
-(including the `mevedel-deftest` macro) are in `test/helpers.el`. Tests
+Test files mirror modules: `test/test-niwa-MODULE.el`. Shared helpers
+(including the `niwa-deftest` macro) are in `test/helpers.el`. Tests
 use real temp files/directories rather than mocking. Eask gives ERT a temporary
 `HOME` and XDG roots; the shared helper rejects unsafe test invocations that
 could reach real user state.
@@ -531,7 +531,7 @@ The helpers also fail a case that sends a real provider request: gptel's curl or
 `url-retrieve` launch, or an installed `claude`/`claude-agent-acp` outside the
 case's owned roots. Stub the transport, or copy a fake CLI into the case root.
 A test that drives the real transport against a local fake server binds
-`mevedel-test-allow-provider-requests` around it.
+`niwa-test-allow-provider-requests` around it.
 
 The Eask startup hook also redirects the native compilation cache into that
 temporary HOME before loading test files or their dependencies.  ERT's own
@@ -590,7 +590,7 @@ unavailable Wayland sockets, inaccessible displays and missing export support;
 a bounded parent process terminates a hung graphical child. A relative Wayland
 socket is resolved against the original runtime directory before isolation;
 X authentication is preserved separately from HOME.
-Inside mevedel's command confinement only a Wayland display is reachable:
+Inside niwa's command confinement only a Wayland display is reachable:
 `/tmp/.X11-unix` and the runtime directory's X authority are masked.
 
 Both **`markdown` and `markdown-inline` tree-sitter grammars** must load in the
@@ -678,7 +678,7 @@ The batch-safe runner regression tests are included in the normal suite:
 
 ```bash
 npx @emacs-eask/cli clean elc
-npx @emacs-eask/cli test ert test/test-mevedel-graphical-check.el
+npx @emacs-eask/cli test ert test/test-niwa-graphical-check.el
 python3 -m unittest test/test_graphical_check_private_kwin.py
 ```
 
@@ -817,11 +817,11 @@ draft beginning with `>`. Five warmups precede each sample. Fixture setup and
 output assertions are outside the measured operation:
 
 - `stream-chunk`: append a fixed response chunk to a prepared in-flight turn,
-  then call `mevedel-view--render-stream-update` directly.
+  then call `niwa-view--render-stream-update` directly.
 - `composer-keystroke`: `self-insert-command` followed by the actual view's
   `post-command-hook`, with window geometry primed before measurement.
 - `zone-tick`: cross a deterministic second boundary in
-  `mevedel-view--spinner-tick`, rewriting the progress rail from `12s` to `13s`.
+  `niwa-view--spinner-tick`, rewriting the progress rail from `12s` to `13s`.
   Static spinner styles isolate the semantic elapsed-label update.
 
 The gate checks that each update modified the buffer and produced its intended
@@ -833,7 +833,7 @@ string characters, vector cells and GC count. Only conses gate acceptance;
 budgets are the recorded baseline plus 100 conses per operation. A breach
 signals an error and returns a nonzero process status. The baseline and
 repeatability evidence live in
-[`benchmark/profiler-optimization-results.md`](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md).
+[`benchmark/profiler-optimization-results.md`](https://github.com/FrauH0lle/niwa/blob/master/benchmark/profiler-optimization-results.md).
 ERT covers counter arithmetic and path guards, not absolute budgets.
 
 ### Minimal-edit twin report
@@ -932,25 +932,25 @@ both builds.
 ### Reloading into a running Emacs
 
 Load compiled code into a live editor, never bare sources. Interpreted
-mevedel is several times slower and allocates on every call: on a large
+niwa is several times slower and allocates on every call: on a large
 session the transcript parser took 67 ms and 6.4 MB interpreted against
 19 ms and 1.6 MB compiled, and garbage collection dominated interactive
 pauses. Compile into a temporary directory so no bytecode is left beside
 the sources or in a package build, where it could shadow later edits:
 
 ```elisp
-(let* ((dir (make-temp-file "mevedel-reload-" t))
+(let* ((dir (make-temp-file "niwa-reload-" t))
        (byte-compile-dest-file-function
         (lambda (file)
           (file-name-concat dir (concat (file-name-base file) ".elc")))))
-  (dolist (file '("mevedel-view-composer.el"))
-    (let ((source (expand-file-name file "~/Projekte/mevedel/")))
+  (dolist (file '("niwa-view-composer.el"))
+    (let ((source (expand-file-name file "~/Projekte/niwa/")))
       (byte-compile-file source)
       (load (funcall byte-compile-dest-file-function source) nil t))))
 ```
 
 A package build without `.elc` files loads every module from source. Check
-with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
+with `(interpreted-function-p (symbol-function 'niwa-transcript-segments))`.
 
 ## Code style
 
@@ -964,13 +964,13 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   `;; \`gptel'` style comment headers. Sort source-package groups
   alphabetically; within each group, put all `declare-function` forms first
   alphabetically, then all `defvar` forms alphabetically.
-- **Customization**: `defcustom` uses `:group 'mevedel`
-- **Private symbols**: double-dash `--` (e.g. `mevedel--workspace`,
-  `mevedel-tools--validate-params`)
+- **Customization**: `defcustom` uses `:group 'niwa`
+- **Private symbols**: double-dash `--` (e.g. `niwa--workspace`,
+  `niwa-tools--validate-params`)
 - **Path construction**: use `file-name-concat`, not `concat`, to join
   filesystem path components.
-- **Provide**: each file ends with `(provide 'mevedel-MODNAME)` and
-  `;;; mevedel-MODNAME.el ends here`
+- **Provide**: each file ends with `(provide 'niwa-MODNAME)` and
+  `;;; niwa-MODNAME.el ends here`
 - **ASCII in code, unicode only in UI-facing strings**: comments,
   identifiers, and non-UI strings stay ASCII (use `->` not `→`,
   `lambda`/`fn` not `λ`). Unicode is fine in `propertize`, overlays,
@@ -990,30 +990,30 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   lowercase, quote it instead of changing its spelling: `(error "'pdftoppm' not
   installed")`.
 - **Human-facing warnings and errors**: use the diagnostic reporters in
-  `mevedel-utilities.el`. Their body is `mevedel [/absolute/workspace/root/]:
+  `niwa-utilities.el`. Their body is `niwa [/absolute/workspace/root/]:
   ...`; machine-wide facilities explicitly use `global`. Missing ownership is
   `workspace unavailable`, never an arbitrary current project. The scope
   argument is a captured root, `global`, or `unavailable`.
-  `mevedel-diagnostic-scope` extracts a root from an explicit workspace,
+  `niwa-diagnostic-scope` extracts a root from an explicit workspace,
   session, or buffer's cached ownership without discovery or filesystem I/O.
   Capture it before scheduling callbacks that can outlive their originating
   buffers. Synchronous source commands resolve their normal operation workspace
   at entry. Reporters and deferred callbacks must never discover/register a
   workspace, resolve symlinks, or connect to a remote target to obtain scope.
-  Use `mevedel-diagnostic-message`, `mevedel-diagnostic-warning`, and
-  `mevedel-diagnostic-user-error` at human reporting boundaries; the warning
+  Use `niwa-diagnostic-message`, `niwa-diagnostic-warning`, and
+  `niwa-diagnostic-user-error` at human reporting boundaries; the warning
   reporter retains `display-warning`'s category and severity arguments.
   Local commands that call shared refusal guards can wrap their body with
-  `mevedel-with-diagnostic-errors`; it captures the explicit scope once and
+  `niwa-with-diagnostic-errors`; it captures the explicit scope once and
   attributes generic errors, user errors and file errors without changing
   their type or other data fields. Other Lisp conditions and quit stay
   unchanged; their string operands are not necessarily message text.
-  `mevedel--warn-once` and its site reset both take scope before the existing
+  `niwa--warn-once` and its site reset both take scope before the existing
   arguments, isolating suppression and recovery between workspaces.
   Attribute local failure cards/reports when rendering, not in canonical
   stored issues or tool/provider payloads. Keep browser redaction unchanged:
   a local attribution must not put host paths into shared payloads.
-- **Ordinary progress and success messages**: lowercase `"mevedel: ..."`
+- **Ordinary progress and success messages**: lowercase `"niwa: ..."`
   remains fine. The diagnostic change does not require attributing every
   informational message or third-party diagnostic.
 
@@ -1031,10 +1031,10 @@ must not need a load-order recipe.
   the declaration with an `autoload` in the calling module; an `autoload` in a
   module that is not loaded yet has no effect. Buffer-local state that
   several owners read lives in an eagerly loaded module such as
-  `mevedel-structs`, not behind `boundp` guards.
+  `niwa-structs`, not behind `boundp` guards.
 - **Keep M-x entry points reachable**. Top-level commands carry
   `;;;###autoload` cookies for package installs and an `autoload` in
-  `mevedel.el` for source checkouts. Mode-local and transient suffix commands
+  `niwa.el` for source checkouts. Mode-local and transient suffix commands
   load with the module that binds them.
 - **Load dependencies at feature boundaries**. When a runtime dependency is
   not autoloaded or otherwise guaranteed to be loaded, `require` it once in a
@@ -1053,7 +1053,7 @@ must not need a load-order recipe.
 - **Verify cold first use and the tradeoff**. Exercise changed boundaries
   through caller entry points in a fresh isolated Emacs, including code
   byte-compiled in one process as package managers do; preloaded fixtures can
-  hide missing dependencies. `test/test-mevedel-loading.el` runs installation,
+  hide missing dependencies. `test/test-niwa-loading.el` runs installation,
   first composer send, session resume, note commands and M-x
   reachability this way. Check that optional
   features remain unloaded or inactive until needed. Measure package load,
@@ -1063,9 +1063,9 @@ must not need a load-order recipe.
 
 ## Testing conventions
 
-- **Framework**: ERT via `mevedel-deftest` macro (`test/helpers.el`)
-- **Naming**: the primary `test/test-mevedel-{module}.el` matches source.
-  Focused `test/test-mevedel-{module}-{subject}.el` supplements are allowed
+- **Framework**: ERT via `niwa-deftest` macro (`test/helpers.el`)
+- **Naming**: the primary `test/test-niwa-{module}.el` matches source.
+  Focused `test/test-niwa-{module}-{subject}.el` supplements are allowed
   when a single-function suite would make the primary file unwieldy.
 - **One deftest per function**: all cases in one macro call; label with
   `:doc` strings. Rare exceptions are allowed where setup differs drastically.
@@ -1086,7 +1086,7 @@ must not need a load-order recipe.
   point, window start and the selected window do not move.
 - **New functions need tests**; modify tests when behavior changes
 - **Silent output**: a test run prints only ERT's own progress lines
-  (`passed N/M name (time)`) and its final summary. No `mevedel:` messages,
+  (`passed N/M name (time)`) and its final summary. No `niwa:` messages,
   no `Warning`/`Error` lines, no Emacs notices such as `Making
   gptel-org-branching-context buffer-local while locally let-bound!`, and
   nothing at all during the loading phase. Noise hides real failures and is
@@ -1097,16 +1097,16 @@ must not need a load-order recipe.
     is legitimate, the test must assert it rather than emit it.
   - Loading a test file must have no side effects: no sessions, no requests,
     no messages. Anything that runs belongs inside a test body.
-  - `mevedel-test--with-captured-diagnostics` captures messages and warnings;
-    `mevedel-test--with-captured-messages` captures messages only, for a case
+  - `niwa-test--with-captured-diagnostics` captures messages and warnings;
+    `niwa-test--with-captured-messages` captures messages only, for a case
     that still inspects the warnings it raises. Both take a place to bind the
     captured text, or nil when the durable state the diagnostic echoes is what
     the case asserts. A capture must not forward to the original function:
     that re-prints what it just captured.
-  - `mevedel-test--muted-message-regexps` in `test/helpers.el` drops the few
-    third-party progress messages mevedel cannot suppress at their source.
-    Nothing mevedel itself emits belongs there.
-  - `mevedel-deftest`'s `:quiet t` captures the messages and warnings every
+  - `niwa-test--muted-message-regexps` in `test/helpers.el` drops the few
+    third-party progress messages niwa cannot suppress at their source.
+    Nothing niwa itself emits belongs there.
+  - `niwa-deftest`'s `:quiet t` captures the messages and warnings every
     case of one deftest provokes. Use it when the function under test
     correctly reports to the echo area on the paths its cases take and those
     cases assert the durable state the diagnostic echoes. Prefer an explicit
@@ -1130,17 +1130,17 @@ must not need a load-order recipe.
   does not fix this ordering. The standards checker ratchets existing violations
   against the merge base; do not add new ones.
 - **Permission callers run the real queue**: a test of code that asks for a
-  permission (`mevedel-permission-request`) uses
-  `test/mevedel-permission-queue-test-support.el`: the real request path in a
+  permission (`niwa-permission-request`) uses
+  `test/niwa-permission-queue-test-support.el`: the real request path in a
   session with a live view, answered through the card's own keys
-  (`mevedel-pq-test--press`) or, for a delayed or repeated answer, the closure
-  that card captured (`mevedel-pq-test--answer-captured`). Never fetch the
+  (`niwa-pq-test--press`) or, for a delayed or repeated answer, the closure
+  that card captured (`niwa-pq-test--answer-captured`). Never fetch the
   queue head to answer, fabricate a closure, or bypass review or validation:
   a stale answer must not reach the next request. Cases that settle without a
   card (automatic review, cancelled, held) keep that behaviour and are checked
-  through the log (`mevedel-pq-test--requested-p`) or the queue. Stubbing
-  `mevedel-permission-request` needs a one-line reason beside the stub, for
+  through the log (`niwa-pq-test--requested-p`) or the queue. Stubbing
+  `niwa-permission-request` needs a one-line reason beside the stub, for
   caller isolation with real-queue coverage elsewhere, or for a case that has
-  no session or view. `test/test-mevedel-permission-queue-decisions.el` is the
+  no session or view. `test/test-niwa-permission-queue-decisions.el` is the
   decision table for the queue's mode, reviewer, hold, settle-once and
   coalescing behaviour; it must pass unchanged when the request path changes.

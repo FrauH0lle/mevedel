@@ -1,0 +1,5303 @@
+;;; test-niwa-pipeline.el --- Tests for pipeline engine -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
+
+(require 'niwa-tool-patch-registration)
+
+(require 'niwa-tool-exec-registration)
+
+(require 'niwa-structs)
+(require 'niwa-agents)
+(require 'niwa-pipeline)
+(require 'niwa-sandbox)
+(require 'niwa-tool-media)
+(require 'niwa-tool-render-data)
+(require 'niwa-permissions)
+(require 'niwa-skills-core)
+(require 'niwa-execution)
+(require 'niwa-execution-target)
+(require 'niwa-tool-exec)
+(require 'niwa-tool-fs)
+(require 'niwa-tool-registry)
+(require 'niwa-transport)
+(require 'niwa-tool-patch)
+(require 'niwa-plan-mode)
+(require 'niwa-reminders)
+(require 'niwa-patch-review)
+(require 'niwa-tools)
+(require 'niwa-view)
+(require 'niwa-session-durability)
+(require 'niwa-session-persistence)
+(require 'niwa-permission-log)
+(require 'niwa-permission-rules)
+(require 'niwa-permission-prompt)
+(require 'niwa-permission-queue)
+(require 'niwa-permission-queue-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "niwa-permission-queue-test-support"))
+(require 'niwa-telemetry)
+;; gptel-request needed for niwa-define-tool tests
+(require 'gptel-request nil t)
+(require 'gptel-anthropic nil t)
+(require 'gptel-bedrock nil t)
+(require 'gptel-openai nil t)
+(require 'gptel-openai-responses nil t)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
+
+(defvar gptel--known-tools)
+(defvar niwa-bash-dangerous-commands)
+(defvar niwa-resource--attempt-table)
+(defvar niwa-tool--registry)
+(defvar warning-minimum-level)
+
+(defun test-niwa-pipeline--format-media-data-block
+    (media &optional session buffer tool-use-id)
+  "Format MEDIA for tests using SESSION, BUFFER, and TOOL-USE-ID."
+  (niwa-tool-media--format-media-data-block
+   media
+   (and session
+        (niwa-pipeline-tool-results-dir session buffer))
+   tool-use-id))
+
+(defun test-niwa-pipeline--extract-media-data
+    (string &optional session buffer expected-tool-use-id)
+  "Extract media from STRING for SESSION, BUFFER, and EXPECTED-TOOL-USE-ID."
+  (niwa-tool-media-extract
+   string
+   (and session
+        (niwa-pipeline-tool-results-dir session buffer))
+   expected-tool-use-id))
+
+(defun test-niwa-pipeline--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
+(defun test-niwa-pipeline--run-tool-and-wait (tool args)
+  "Run TOOL with ARGS and return its eventual pipeline result.
+Running without a session in context is exactly what these cases mean to
+cover, so the permission step's warning about it is captured here."
+  (let ((deadline (+ (float-time) 5.0))
+        done result)
+    (niwa-test--with-captured-diagnostics nil
+      (niwa-pipeline-run-tool
+       tool
+       (lambda (value)
+         (setq result value
+               done t))
+       args)
+      (while (and (not done) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
+    (should done)
+    result))
+
+
+;;
+;;; Pipeline runner
+
+(niwa-deftest niwa-pipeline-handler-resumable ()
+  ,test
+  (test)
+  :doc "continues an asynchronous handler in its buffer and bindings"
+  (let (resume seen)
+    (with-temp-buffer
+      (let ((buffer (current-buffer))
+            (niwa-pipeline--active-tool-use-id "tool-7")
+            (niwa-pipeline--canonical-path-map '(("a" . "b"))))
+        (setq resume (niwa-pipeline-handler-resumable
+                      (lambda (value)
+                        (setq seen (list value
+                                         niwa-pipeline--active-tool-use-id
+                                         niwa-pipeline--canonical-path-map
+                                         (eq buffer (current-buffer)))))))))
+    (should-not niwa-pipeline--active-tool-use-id)
+    (funcall resume 'result)
+    (should (equal '(result "tool-7" (("a" . "b")) nil) seen))
+    (should-not niwa-pipeline--active-tool-use-id))
+
+  :doc "restores the dispatch buffer while it is live"
+  (let (resume seen)
+    (with-temp-buffer
+      (let ((buffer (current-buffer)))
+        (setq resume (niwa-pipeline-handler-resumable
+                      (lambda () (setq seen (eq buffer (current-buffer))))))
+        (with-temp-buffer (funcall resume))))
+    (should seen)))
+
+(niwa-deftest niwa-pipeline--provider-result
+  ()
+  ,test
+  (test)
+
+  :doc "retains accumulated audit records on failure results"
+  (let* ((audit
+          (niwa-tool-repair-audit-record
+           'committed
+           '((:rule wrap-array-singleton :source generic
+                   :paths ((names)) :before string :after array))))
+         (result
+          (niwa-pipeline--provider-result
+           (niwa-pipeline--settlement
+            (list :hook-audit-records (list audit))
+            'pipeline-error "handler failed"))))
+    (should (string-prefix-p "Error: handler failed" result))
+    (should (eq 'tool-input-repair
+                (plist-get
+                 (car (niwa-test--hook-audit-records result))
+                 :type))))
+
+  :doc "audit formatting errors return the bare failure with a safe warning"
+  (let (warning)
+    (cl-letf (((symbol-function 'niwa-pipeline--append-hook-audit-records)
+               (lambda (&rest _) (error "private audit sentinel")))
+              ((symbol-function 'display-warning)
+              (lambda (_type message &rest _) (setq warning message))))
+      (should
+       (equal "Error: handler failed"
+              (niwa-pipeline--provider-result
+               (niwa-pipeline--settlement
+                '(:hook-audit-records ((:bad t)))
+                'pipeline-error "handler failed")))))
+    (should warning)
+    (should-not (string-match-p "private\|sentinel" warning)))
+
+  :doc "keeps structured failure results free of provider audit prose"
+  (let* ((audit
+          (niwa-tool-repair-audit-record
+           'committed
+           '((:rule wrap-array-singleton :source generic
+                   :paths ((names)) :before string :after array))))
+         (outcome
+          (niwa-pipeline--settlement
+           (list :hook-audit-records (list audit))
+           'permission-denied "Permission denied")))
+    (should-not (niwa-test--hook-audit-records
+                 (plist-get outcome :result)))
+    (should (= 1 (length
+                  (niwa-test--hook-audit-records
+                   (niwa-pipeline--provider-result outcome))))))
+
+  :doc "appends context audit records missing from an audited reason"
+  (let* ((embedded
+          '(:type tool-permission :event "PreToolUse" :outcome "deny"))
+         (context-only
+          (niwa-tool-repair-audit-record
+           'committed
+           '((:rule wrap-array-singleton :source generic
+                   :paths ((names)) :before string :after array))))
+         (result
+          (niwa-pipeline--provider-result
+           (niwa-pipeline--settlement
+            (list :hook-audit-records (list embedded context-only))
+            'permission-denied "Permission denied"))))
+    (should (equal (list embedded context-only)
+                   (niwa-test--hook-audit-records result)))))
+
+(niwa-deftest niwa-pipeline--run ()
+		 ,test
+		 (test)
+		 :doc "empty step list calls callback with result"
+		 (let (called-with)
+		   (niwa-pipeline--run nil
+					  (lambda (r) (setq called-with r))
+					  '(:result "done"))
+		   (should (equal (plist-get called-with :result) "done")))
+		 :doc "steps execute in order"
+		 (let ((order nil))
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next _fail)
+			    (push 1 order)
+			    (funcall next ctx))
+			  (lambda (ctx next _fail)
+			    (push 2 order)
+			    (funcall next ctx))
+			  (lambda (ctx next _fail)
+			    (push 3 order)
+			    (funcall next (plist-put ctx :result "final"))))
+		    (lambda (_r) (push 'done order))
+		    nil)
+		   (should (equal (nreverse order) '(1 2 3 done))))
+		 :doc "context threads through steps"
+		 (let (result)
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :count 1)))
+			  (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :count
+						     (1+ (plist-get ctx :count)))))
+			  (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :result
+						     (plist-get ctx :count)))))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (should (equal result 2)))
+		 :doc "steps run under the context default-directory"
+		 (let* ((root (make-temp-file "niwa-pipeline-root-" t))
+			(other (make-temp-file "niwa-pipeline-other-" t))
+			(context (list :default-directory root))
+			seen)
+		   (unwind-protect
+		       (let ((default-directory other))
+			 (niwa-pipeline--run
+			  (list (lambda (ctx next _fail)
+				  (setq seen default-directory)
+				  (funcall next (plist-put ctx :result "ok"))))
+			  #'ignore
+			  context)
+			 (should (equal seen (file-name-as-directory root))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "error in step calls callback with error string"
+		 (let (result)
+		   (niwa-pipeline--run
+		    (list (lambda (_ctx _next _fail)
+			    (error "Something broke")))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (should (string-prefix-p "Error:" result)))
+		 :doc "validation error produces error callback"
+		 (let (result)
+		   (niwa-pipeline--run
+		    (list (lambda (_ctx _next _fail)
+			    (signal 'niwa-validation-error '("Bad input"))))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (should (string-match-p "Bad input" result)))
+		 :doc "permission denied produces error callback"
+		 (let (result)
+		   (niwa-pipeline--run
+		    (list (lambda (_ctx _next _fail)
+			    (signal 'niwa-permission-denied '("Not allowed"))))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (should (string-match-p "Permission denied" result))
+		   (should (string-match-p "Not allowed" result)))
+		 :doc "async step suspends and resumes"
+		 (let (result saved-next saved-ctx)
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next _fail)
+			    ;; Save continuation for later
+			    (setq saved-next next saved-ctx ctx))
+			  (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :result "after-async"))))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   ;; Not yet called
+		   (should-not result)
+		   ;; Resume
+		   (funcall saved-next saved-ctx)
+		   (should (equal result "after-async")))
+		 :doc "async continuation resumes under the context default-directory"
+		 (let* ((root (make-temp-file "niwa-pipeline-root-" t))
+			(other (make-temp-file "niwa-pipeline-other-" t))
+			(context (list :default-directory root))
+			saved-next saved-ctx seen)
+		   (unwind-protect
+		       (progn
+			 (niwa-pipeline--run
+			  (list (lambda (ctx next _fail)
+				  (setq saved-next next saved-ctx ctx))
+				(lambda (ctx next _fail)
+				  (setq seen default-directory)
+				  (funcall next (plist-put ctx :result "resumed"))))
+			  #'ignore
+			  context)
+			 (let ((default-directory other))
+			   (funcall saved-next saved-ctx))
+			 (should (equal seen (file-name-as-directory root))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "error after async step still calls callback"
+		 (let (result saved-next saved-ctx)
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next _fail)
+			    (setq saved-next next saved-ctx ctx))
+			  (lambda (_ctx _next _fail)
+			    (error "Async failure")))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (funcall saved-next saved-ctx)
+		   (should (string-prefix-p "Error:" result)))
+		 :doc "fail continuation produces Error: callback"
+		 (let (result)
+		   (niwa-pipeline--run
+		    (list (lambda (_ctx _next fail)
+			    (funcall fail "Something went wrong")))
+		    (lambda (r) (setq result (plist-get r :result)))
+		    nil)
+		   (should (equal result "Error: Something went wrong")))
+		 :doc "second next on the same step is dropped"
+		 (let (results saved-next saved-ctx)
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next _fail)
+			    (setq saved-next next saved-ctx ctx))
+			  (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :result "first"))))
+		    (lambda (r) (push (plist-get r :result) results))
+		    nil)
+		   (funcall saved-next saved-ctx)
+		   ;; Latch: a second invocation must not re-enter the chain.
+		   (niwa-test--with-captured-diagnostics nil
+		     (funcall saved-next saved-ctx))
+		   (should (equal results '("first"))))
+		 :doc "calling fail after next is a no-op (latch)"
+		 (let (results saved-fail saved-next saved-ctx)
+		   (niwa-pipeline--run
+		    (list (lambda (ctx next fail)
+			    (setq saved-next next saved-fail fail saved-ctx ctx))
+			  (lambda (ctx next _fail)
+			    (funcall next (plist-put ctx :result "ok"))))
+		    (lambda (r) (push (plist-get r :result) results))
+		    nil)
+		   (funcall saved-next saved-ctx)
+		   (niwa-test--with-captured-diagnostics nil
+		     (funcall saved-fail "ignored"))
+		   (should (equal results '("ok"))))
+
+  :doc "signal classes preserve failure, telemetry, directory and cancellation cleanup"
+  (let ((root (make-temp-file "niwa-pipeline-failure-" t))
+        (other (make-temp-file "niwa-pipeline-outside-" t)))
+    (unwind-protect
+        (dolist (case '((niwa-validation-error nil validation validation "Validation error")
+                        (niwa-validation-error ("bad input") validation validation "bad input")
+                        (niwa-resource-error nil invalid-resource validation "Invalid resource address")
+                        (niwa-resource-error ("bad address") invalid-resource validation "bad address")
+                        (niwa-permission-denied nil permission-denied permission-denied "Permission denied")
+                        (niwa-permission-denied ("blocked") permission-denied permission-denied "Permission denied: blocked")
+                        (niwa-pipeline-error nil pipeline-error pipeline "Pipeline error")
+                        (niwa-pipeline-error ("failed step") pipeline-error pipeline "failed step")
+                        (error ("failed operation") pipeline-error error "failed operation")))
+          (let* ((cancel-cell (list nil))
+                 (context (list :tool (niwa-tool--create :name "Failure")
+                                :session (niwa-session--create)
+                                :tool-use-id "failure-id" :call-source 'ptc
+                                :default-directory root :cancel-cell cancel-cell))
+                 result telemetry)
+            (cl-letf (((symbol-function 'niwa-telemetry-detailed-p)
+                       (lambda (_) t))
+                      ((symbol-function 'niwa-telemetry-start)
+                       (lambda (&rest _) 'span))
+                      ((symbol-function 'niwa-telemetry-finish)
+                       (lambda (_span &rest properties) (push properties telemetry))))
+              (niwa-pipeline--run
+               (list (lambda (_context _next _fail)
+                       (should (functionp (car cancel-cell)))
+                       (let ((default-directory other))
+                         (signal (nth 0 case) (nth 1 case)))))
+               (lambda (outcome)
+                 (should (equal default-directory (file-name-as-directory root)))
+                 (should-not (car cancel-cell))
+                 (setq result outcome))
+               context))
+            (should (eq 'error (plist-get result :status)))
+            (should (eq (nth 2 case) (plist-get result :reason)))
+            (should (equal (concat "Error: " (nth 4 case)) (plist-get result :result)))
+            (should (equal "failure-id" (plist-get result :tool-use-id)))
+            (should (eq 'ptc (plist-get result :source)))
+            (should (equal (list (list :outcome 'error :error-class (nth 3 case)))
+                           telemetry))))
+      (delete-directory root t)
+      (delete-directory other t))))
+
+
+;;
+;;; Validate step
+
+(niwa-deftest niwa-pipeline--step-validate ()
+		 ,test
+		 (test)
+		 :doc "passes with valid args"
+		 (let* ((tool (niwa-tool--create
+			       :name "TestTool"
+			       :args '((name string :required "Name"))))
+			(ctx (list :tool tool :args '(:name "hello")))
+			called)
+		   (niwa-pipeline--step-validate
+		    ctx (lambda (_c) (setq called t)) #'ignore)
+		   (should called))
+		 :doc "signals validation error for missing required arg"
+		 (let* ((tool (niwa-tool--create
+			       :name "TestTool"
+			       :args '((name string :required "Name"))))
+			(ctx (list :tool tool :args nil)))
+		   (should-error
+		    (niwa-pipeline--step-validate ctx #'ignore #'ignore)
+		    :type 'niwa-validation-error))
+		 :doc "signals validation error for wrong type"
+		 (let* ((tool (niwa-tool--create
+			       :name "TestTool"
+			       :args '((count integer :required "Count"))))
+			(ctx (list :tool tool :args '(:count "not-a-number"))))
+		   (should-error
+		    (niwa-pipeline--step-validate ctx #'ignore #'ignore)
+		    :type 'niwa-validation-error))
+		 :doc "passes with nil args spec"
+		 (let* ((tool (niwa-tool--create :name "NoArgs" :args nil))
+			(ctx (list :tool tool :args nil))
+			called)
+		   (niwa-pipeline--step-validate
+		    ctx (lambda (_c) (setq called t)) #'ignore)
+		   (should called)))
+
+
+;;
+;;; Path normalization step
+
+(niwa-deftest niwa-pipeline--normalize-path-value ()
+		 ,test
+		 (test)
+		 :doc "substitutes environment references before expanding"
+		 (let ((process-environment
+			(cons "NIWA_TEST_ROOT=/tmp/probe" process-environment)))
+		   (should (equal "/tmp/probe/x"
+				  (niwa-pipeline--normalize-path-value
+				   "$NIWA_TEST_ROOT/x"))))
+		 :doc "collapses a doubled leading slash that Emacs would keep"
+		 (should (equal "/home/user/.ssh/id"
+				(niwa-pipeline--normalize-path-value "//home/user/.ssh/id")))
+		 :doc "expands a relative path against `default-directory'"
+		 (let ((default-directory "/tmp/root/"))
+		   (should (equal "/tmp/root/a/b"
+				  (niwa-pipeline--normalize-path-value "a/b"))))
+		 :doc "keeps an unresolvable reference literal on both sides"
+		 (let ((default-directory "/tmp/root/"))
+		   (should (equal "/tmp/root/$UNSET_NIWA_VAR/x"
+				  (niwa-pipeline--normalize-path-value
+				   "$UNSET_NIWA_VAR/x"))))
+		 :doc "leaves non-string and empty values untouched"
+		 (progn
+		   (should (equal "" (niwa-pipeline--normalize-path-value "")))
+		   (should (null (niwa-pipeline--normalize-path-value nil)))
+		   (should (equal 7 (niwa-pipeline--normalize-path-value 7))))
+		 :doc "expands against the execution target environment"
+		 (let ((target (niwa-execution-target-create
+			       "/ssh:user@host:/srv/project/")))
+		   (setf (niwa-execution-target-environment target)
+			 '(("HOME" . "/home/user")
+			   ("PROJECT_ROOT" . "/srv/project")))
+		   (should
+		    (equal "/ssh:user@host:/srv/project/lib/a.el"
+			   (niwa-pipeline--normalize-path-value
+			    "$PROJECT_ROOT/lib/a.el" target "/srv/project/"))))
+		 :doc "rejects unknown target environment variables"
+		 (let ((target (niwa-execution-target-create
+			       "/docker:dev:/workspace/")))
+		   (setf (niwa-execution-target-environment target)
+			 '(("HOME" . "/root")))
+		   (should-error
+		    (niwa-pipeline--normalize-path-value
+		     "$UNKNOWN_NIWA_ROOT/a.el" target "/workspace/")
+		    :type 'niwa-execution-target-error)))
+
+(niwa-deftest niwa-pipeline--canonicalize-path-value ()
+		 ,test
+		 (test)
+		 :doc "resolves a symlink ancestor while preserving a nonexistent tail"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "niwa-canonical-root-" t)))
+			(outside (file-name-as-directory
+				  (make-temp-file "niwa-canonical-outside-" t)))
+			(link (file-name-concat root "linked"))
+			(path (file-name-concat link "missing" "file.txt"))
+			(expected
+			 (file-name-concat outside "missing" "file.txt")))
+		   (unwind-protect
+		       (progn
+			 (make-symbolic-link outside link)
+			 (should
+			  (equal expected
+				 (niwa-pipeline--canonicalize-path-value path))))
+		     (delete-directory root t)
+		     (delete-directory outside t)))
+		 :doc "a symlink to a doubled-slash target canonicalizes to one leading slash"
+		 (let* ((root (file-name-as-directory
+			       (file-truename (make-temp-file "niwa-canonical-slash-" t))))
+			(link (file-name-concat root "linked")))
+		   (unwind-protect
+		       (progn
+			 (make-symbolic-link (concat "/" root) link)
+			 (should (equal (concat root "file.txt")
+					(niwa-pipeline--canonicalize-path-value
+					 (file-name-concat link "file.txt")))))
+		     (delete-directory root t))))
+
+(niwa-deftest niwa-pipeline-canonical-path ()
+		 ,test
+		 (test)
+		 :doc "returns only paths precomputed for the active handler"
+		 (let ((niwa-pipeline--canonical-path-map
+			'(("/workspace/link" . "/outside/target"))))
+		   (should
+		    (equal "/outside/target"
+			   (niwa-pipeline-canonical-path "/workspace/link")))
+		   (should
+		    (equal "/workspace/other"
+			   (niwa-pipeline-canonical-path "/workspace/other")))))
+
+(niwa-deftest niwa-pipeline--step-normalize-paths ()
+		 ,test
+		 (test)
+			 :doc "canonicalizes `path' and ordinary `path-or-resource' args"
+		 (let* ((default-directory "/tmp/root/")
+			(tool (niwa-tool--create
+			       :name "Mixed"
+			       :args '((file_path path :required "Path")
+				       (label string :required "Label"))))
+			(ctx (list :tool tool
+				   :args '(:file_path "a/b" :label "c/d")))
+			updated)
+		   (niwa-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (equal "/tmp/root/a/b"
+				  (plist-get (plist-get updated :args) :file_path)))
+		   (should (equal "c/d"
+				  (plist-get (plist-get updated :args) :label))))
+		 :doc "leaves authored resource addresses unchanged"
+		 (let* ((default-directory "/tmp/root/")
+			(tool (niwa-tool--create
+			       :name "Resource"
+			       :args '((file_path path-or-resource :required "Path"))))
+			(args '(:file_path "memory://root/topic.md"))
+			(ctx (list :tool tool :args args))
+			updated)
+		   (niwa-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (eq args (plist-get updated :args)))
+		   (should (equal "memory://root/topic.md"
+				  (plist-get (plist-get updated :args) :file_path))))
+		 :doc "normalizes ordinary `path-or-resource' values before authorization"
+		 (let* ((default-directory "/tmp/root/")
+			(process-environment
+			 (cons "NIWA_TEST_ROOT=/tmp/probe" process-environment))
+			(tool (niwa-tool--create
+			       :name "Resource"
+			       :args '((file_path path-or-resource :required "Path"))))
+			(ctx (list :tool tool :args '(:file_path "$NIWA_TEST_ROOT/x")))
+			updated)
+		   (niwa-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (equal "/tmp/probe/x"
+				  (plist-get (plist-get updated :args) :file_path))))
+			 :doc "leaves args untouched when nothing needs canonicalizing"
+		 (let* ((tool (niwa-tool--create
+			       :name "Absolute"
+			       :args '((file_path path :required "Path"))))
+			(args '(:file_path "/tmp/already"))
+			(ctx (list :tool tool :args args))
+			updated)
+		   (niwa-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (eq args (plist-get updated :args))))
+		 :doc "canonicalizes an ordinary `path-or-resource' symlink and maps read access only"
+		 (let* ((root (file-name-as-directory
+		               (make-temp-file "niwa-normalize-read-" t)))
+		        (target (file-name-concat root "target.png"))
+		        (link (file-name-concat root "link.png"))
+		        (spec '(source path-or-resource :required "S"))
+		        updated)
+		   (unwind-protect
+		       (progn
+		         (with-temp-file target (insert "x"))
+		         (make-symbolic-link target link)
+		         (dolist (access '(read nil))
+		           (niwa-pipeline--step-normalize-paths
+		            (list :tool (niwa-tool--create
+		                         :name "ReadsOne"
+		                         :args (list (if access (append spec '(:access read)) spec)))
+		                  :args (list :source link))
+		            (lambda (c) (setq updated c)) #'ignore)
+		           (should (equal (file-truename target)
+		                          (plist-get (plist-get updated :args) :source)))
+		           (should (equal (and access (list (cons (file-truename target)
+		                                                  (file-truename target))))
+		                          (plist-get updated :canonical-path-map)))))
+		     (delete-directory root t)))
+		 :doc "uses the session target before authorization"
+		 (let ((root (file-name-as-directory
+			     (make-temp-file "niwa-normalize-remote-" t))))
+		   (unwind-protect
+		       (niwa-test--with-local-shell-tramp '("normalize")
+			 (let* ((remote-root
+				 (format "/niwamock:normalize:%s" root))
+				(target (niwa-execution-target-create remote-root))
+				(session (niwa-session--create
+					  :name "remote-path-normalization"
+					  :execution-target target
+					  :working-directory remote-root))
+				(tool (niwa-tool--create
+				       :name "RemotePath"
+				       :args '((file_path path :required "Path"))))
+				(context (list :tool tool
+					       :session session
+					       :default-directory remote-root
+					       :args '(:file_path "lib/a.el")))
+				updated)
+			   (niwa-pipeline--step-normalize-paths
+			    context (lambda (value) (setq updated value)) #'ignore)
+			   (should
+			    (equal (file-name-concat remote-root "lib/a.el")
+				   (plist-get
+				    (plist-get updated :args) :file_path)))))
+		     (delete-directory root t)))
+		 :doc "rejects explicit client paths before remote authorization"
+		 (let* ((target (niwa-execution-target-create
+			 "/ssh:user@host:/srv/project/"))
+		(session (niwa-session--create
+			  :name "remote-client-path"
+			  :execution-target target
+			  :working-directory "/ssh:user@host:/srv/project/"))
+		(tool (niwa-tool--create
+		       :name "RemotePath"
+		       :args '((file_path path :required "Path"))))
+		(context (list :tool tool
+			       :session session
+			       :default-directory "/ssh:user@host:/srv/project/"
+			       :args '(:file_path "/::/etc/passwd"))))
+		   (should-error
+		    (niwa-pipeline--step-normalize-paths
+		     context #'ignore #'ignore)
+		    :type 'niwa-execution-target-error))
+		 :doc "rejects quoted local paths before authorization"
+		 (let* ((target (niwa-execution-target-create "/srv/project/"))
+			(session (niwa-session--create
+			          :name "local-quoted-path"
+			          :execution-target target
+			          :working-directory "/srv/project/"))
+			(tool (niwa-tool--create
+			       :name "LocalPath"
+			       :args '((file_path path :required "Path"))))
+			(context (list :tool tool
+			               :session session
+			               :default-directory "/srv/project/"
+			               :args '(:file_path "/:/home/user/.ssh/id_rsa"))))
+		   (should-error
+		    (niwa-pipeline--step-normalize-paths
+		     context #'ignore #'ignore)
+		    :type 'niwa-execution-target-error))
+		 :doc "authorization and handler observe one identical path"
+		 (let* ((root (file-name-as-directory
+				 (make-temp-file "niwa-normalize-" t)))
+			(workspace (niwa-workspace--create
+			            :type 'project :id root :root root))
+			(session (niwa-session--create
+				  :name "path-normalization"
+				  :workspace workspace
+				  :working-directory root
+				  :permission-mode 'full-auto))
+			(niwa--session session)
+			(process-environment
+			 (cons (concat "NIWA_TEST_ROOT=" (directory-file-name root))
+			       process-environment))
+			(expected (file-name-concat root "secret"))
+			(get-path-values nil)
+			handler-value
+			(tool (niwa-tool--create
+			       :name "PathEcho"
+			       :category "niwa"
+			       :handler (lambda (args)
+					  (setq handler-value
+						(plist-get args :file_path))
+					  '(:result "ok"))
+			       :args '((file_path path :required "Path"))
+			       :get-path (lambda (args)
+					   (let ((path (plist-get args :file_path)))
+					     (push path get-path-values)
+					     path))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-tool-register tool)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (niwa-pipeline-run-tool
+			  tool (lambda (value) (setq result value))
+			  '(:file_path "$NIWA_TEST_ROOT/secret"))
+			 (should (equal "ok" result))
+			 (should get-path-values)
+			 ;; The decision chain must see the substituted target, not the
+			 ;; literal "$NIWA_TEST_ROOT/secret" the handler would resolve.
+			 (should (seq-every-p (lambda (value) (equal expected value))
+					      get-path-values))
+			 (should (equal expected handler-value)))
+		     (niwa-tool-clear-registry)
+		     (delete-directory root t))))
+
+;;
+;;; Handler step
+
+(niwa-deftest niwa-pipeline-active-tool-use-id ()
+		 ,test
+		 (test)
+		 :doc "returns the dynamically scoped handler identity"
+		 (let ((niwa-pipeline--active-tool-use-id "call-17"))
+		   (should (equal "call-17"
+				  (niwa-pipeline-active-tool-use-id)))))
+
+(niwa-deftest niwa-pipeline--step-handler ()
+		 ,test
+		 (test)
+		 :doc "sync handler sets result in context"
+		 (let* ((tool (niwa-tool--create
+			       :name "SyncTool"
+			       :handler (lambda (args)
+					  (list :result
+						(format "got %s" (plist-get args :name))))
+			       :async-p nil))
+			(ctx (list :tool tool :args '(:name "test")))
+			result-ctx)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
+		   (should (equal (plist-get result-ctx :result) "got test"))
+		   (should (eq 'success
+			       (plist-get result-ctx :handler-status))))
+		 :doc "async handler calls continuation with result"
+		 (let* ((tool (niwa-tool--create
+			       :name "AsyncTool"
+			       :handler (lambda (callback args)
+					  (funcall callback
+						   (list :result
+							 (format "async %s"
+								 (plist-get args :val)))))
+			       :async-p t))
+			(ctx (list :tool tool :args '(:val "data")))
+			result-ctx)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
+		   (should (equal (plist-get result-ctx :result) "async data")))
+		 :doc "binds the durable tool-use id while an async handler starts"
+		 (let* (seen
+			(tool (niwa-tool--create
+			       :name "IdentifiedTool"
+			       :handler
+			       (lambda (callback _args)
+				 (setq seen (niwa-pipeline-active-tool-use-id))
+				 (funcall callback '(:result "ok")))
+			       :async-p t))
+			(ctx (list :tool tool :args nil :tool-use-id "call-42")))
+		   (niwa-pipeline--step-handler ctx #'ignore #'ignore)
+		   (should (equal "call-42" seen)))
+		 :doc "async handler can defer continuation"
+		 (let* (saved-cb
+			(tool (niwa-tool--create
+			       :name "DeferTool"
+			       :handler (lambda (callback _args)
+					  (setq saved-cb callback))
+			       :async-p t))
+			(ctx (list :tool tool :args nil))
+			result-ctx)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
+		   (should-not result-ctx)
+		   (funcall saved-cb '(:result "deferred-result"))
+		   (should (equal (plist-get result-ctx :result) "deferred-result")))
+		 :doc "handler runs in the captured dispatch buffer"
+		 (let* ((dispatch-buffer (generate-new-buffer " *handler-dispatch*"))
+			(tool (niwa-tool--create
+			       :name "ContextTool"
+			       :handler (lambda (_args)
+					  (list :result default-directory))
+			       :async-p nil))
+			(ctx (list :tool tool :args nil :buffer dispatch-buffer))
+			result-ctx)
+		   (unwind-protect
+		       (progn
+			 (with-current-buffer dispatch-buffer
+			   (setq-local default-directory "/captured-dispatch/"))
+			 (with-temp-buffer
+			   (niwa-pipeline--step-handler
+			    ctx (lambda (value) (setq result-ctx value)) #'ignore))
+			 (should (equal (plist-get result-ctx :result)
+					"/captured-dispatch/")))
+		     (kill-buffer dispatch-buffer)))
+		 :doc "handler plist stores render-data and leaves status absent"
+		 (let* ((tool (niwa-tool--create
+			       :name "PlistReturn"
+			       :handler (lambda (_args)
+					  (list :result "ok"
+						:render-data '(:kind diff :patch "p")))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))
+		   (should (equal '(:kind diff :patch "p") (plist-get out :render-data)))
+		   (should-not (plist-member out :status))
+		   (should (eq 'success (plist-get out :handler-status))))
+		 :doc "handler plist stores explicit status"
+		 (let* ((tool (niwa-tool--create
+			       :name "StatusReturn"
+			       :handler (lambda (_args)
+					  (list :result "plain failure" :status 'error))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status))))
+		 :doc "legacy error text is normalized at the handler boundary"
+		 (let* ((tool (niwa-tool--create
+			       :name "LegacyFailure"
+			       :handler (lambda (_args)
+					  (list :result "Error: failed"))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should-not (plist-member out :status))
+		   (should (eq 'error (plist-get out :handler-status))))
+		 :doc "handler plist stores media"
+		 (let* ((tool (niwa-tool--create
+			       :name "MediaReturn"
+			       :handler (lambda (_args)
+					  (list :result "ok"
+						:media '((:path "/tmp/a.png"
+							 :mime "image/png"))))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))
+		   (should (equal '((:path "/tmp/a.png" :mime "image/png"))
+				  (plist-get out :media))))
+		 :doc "handler returning a bare string becomes a canonical handler failure"
+		 (let* ((tool (niwa-tool--create
+			       :name "StringReturn"
+			       :handler (lambda (_args) "invalid")))
+			(ctx (list :tool tool :args nil))
+			out
+			failure)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (next-context) (setq out next-context))
+		    (lambda (reason) (setq failure reason)))
+		   (should-not failure)
+		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status)))
+		   (should (string-match-p "expected a plist containing :result"
+					   (plist-get out :result))))
+		 :doc "a signaling handler becomes a canonical handler failure"
+		 (let* ((tool (niwa-tool--create
+			       :name "SignalingTool"
+			       :handler (lambda (_args) (error "Handler exploded"))))
+			(ctx (list :tool tool :args nil))
+			out
+			failure)
+		   (niwa-pipeline--step-handler
+		    ctx (lambda (next-context) (setq out next-context))
+		    (lambda (reason) (setq failure reason)))
+		   (should-not failure)
+		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status)))
+		   (should (equal "Error: Handler exploded" (plist-get out :result))))
+		 :doc "normalizes raw byte result strings before callback"
+		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
+			(tool (niwa-tool--create
+			       :name "RawByteReturn"
+			       :handler (lambda (_args) (list :result raw))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "\\x80" (plist-get out :result)))
+		   (should (equal "\\x80" (plist-get out :raw-result)))
+		   (should (json-serialize (list :result (plist-get out :result)))))
+		 :doc "normalizes non-Unicode result characters before callback"
+		 (let* ((invalid
+			 (decode-coding-string
+			  (unibyte-string #xf4 #x90 #x80 #x80) 'utf-8-unix t))
+			(tool (niwa-tool--create
+			       :name "NonUnicodeReturn"
+			       :handler (lambda (_args) (list :result invalid))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (niwa-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "\\xF4\\x90\\x80\\x80"
+				  (plist-get out :result)))
+		   (should (json-serialize (list :result (plist-get out :result))))))
+
+
+;;
+;;; Step list builder
+
+(niwa-deftest niwa-pipeline--step-snapshot ()
+  ,test
+  (test)
+  :doc "snapshots every path declared by one aggregate edit"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-multi-snapshot-" t)))
+         (path-a (file-name-concat root "a.txt"))
+         (path-b (file-name-concat root "b.txt"))
+         (missing (file-name-concat root "new.txt"))
+         (request (niwa-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (niwa--current-request request)
+         (tool (niwa-tool--create
+                :name "ApplyPatch" :snapshot-p t
+                :get-paths (lambda (_args)
+                             (list path-a path-b missing))))
+         next-called)
+    (unwind-protect
+        (progn
+          (with-temp-file path-a (insert "a"))
+          (with-temp-file path-b (insert "b"))
+          (niwa-pipeline--step-snapshot
+           (list :tool tool :args nil :request request)
+           (lambda (_context) (setq next-called t)) #'ignore)
+          (should next-called)
+          (let ((snapshots (niwa-request-file-snapshots request)))
+            (should (= 3 (hash-table-count snapshots)))
+            (should (equal "a" (gethash path-a snapshots)))
+            (should (equal "b" (gethash path-b snapshots)))
+            (let ((absent (make-symbol "absent")))
+              (should-not (eq absent (gethash missing snapshots absent))))))
+      (delete-directory root t)))
+  :doc "never snapshots a path the tool only reads"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-read-snapshot-" t)))
+         (source (file-name-concat root "plot.png"))
+         (written (file-name-concat root "out.txt"))
+         (request (niwa-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (tool (niwa-tool--create
+                :name "ReadsOne" :snapshot-p t
+                :args '((source path-or-resource :required "S" :access read))
+                :get-path (lambda (args) (plist-get args :out)))))
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "image"))
+          (with-temp-file written (insert "old"))
+          (niwa-pipeline--step-snapshot
+           (list :tool tool :args (list :source source :out written)
+                 :request request)
+           #'ignore #'ignore)
+          (let ((snapshots (niwa-request-file-snapshots request)))
+            (should (= 1 (hash-table-count snapshots)))
+            (should (equal "old" (gethash written snapshots)))))
+      (delete-directory root t))))
+
+(niwa-deftest niwa-pipeline--step-goal-budget-warning ()
+  ,test (test)
+  :doc "queues the budget warning as a turn event and leaves the result alone"
+  (let ((chat-buf (generate-new-buffer " *niwa-test-budget*"))
+        out)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local niwa--current-request
+                        (niwa-request--create :id "budget-request")))
+          (cl-letf (((symbol-function
+                      'niwa-goal-tool-result-budget-warnings)
+                     (lambda (_session _fsm)
+                       (list (list :key 'goal-budget-100
+                                   :body "Wrap up now."
+                                   :commit #'ignore)))))
+            (niwa-pipeline--step-goal-budget-warning
+             (list :result "tool output" :session 'session :engine 'fsm
+                   :buffer chat-buf)
+             (lambda (context) (setq out context)) #'ignore))
+          (should (equal "tool output" (plist-get out :result)))
+          (with-current-buffer chat-buf
+            (should (equal
+                     "Wrap up now."
+                     (plist-get
+                      (cdr (assoc 'goal-budget-100
+                                  (plist-get niwa-reminders--turn-events
+                                             :items)))
+                      :body)))
+            (should (functionp
+                     (plist-get
+                      (cdr (assoc 'goal-budget-100
+                                  (plist-get niwa-reminders--turn-events
+                                             :items)))
+                      :commit)))))
+      (kill-buffer chat-buf))))
+
+
+;;
+;;; Pre-tool hook step
+
+(niwa-deftest niwa-pipeline--step-pre-tool-hooks
+		 (:doc "routes PreToolUse denials through PermissionDenied hooks")
+		 ,test
+		 (test)
+		 (let* ((tool (niwa-tool--create
+			       :name "Write"
+			       :args '((file_path string :required "Path"))))
+			(context (list :tool tool
+				       :args '(:file_path "/tmp/out")
+				       :default-directory default-directory))
+			permission-denied-p
+			provenance
+			failure-context
+			result)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(pcase event
+				  ('PreToolUse
+				   (funcall callback
+					    '(:permission-decision deny
+								   :permission-reason "hook denied")))
+				  ('PermissionDenied
+				   (setq permission-denied-p t)
+				   (setq provenance
+					 (plist-get payload :permission-provenance))
+				   (funcall callback
+					    '(:permission-reason "rewritten denial")))))))
+		     (niwa-pipeline--step-pre-tool-hooks
+		      context
+		      (lambda (_ctx) (setq result "next"))
+		      (lambda (reason &optional ctx _kind)
+		        (setq result reason failure-context ctx))))
+		   (should permission-denied-p)
+		   (should (eq 'PreToolUse provenance))
+		   (should (equal result "rewritten denial"))
+		   (let ((record (car (plist-get failure-context
+					       :hook-audit-records))))
+                     (should (eq (plist-get record :type) 'tool-permission))
+                     (should (equal (plist-get record :event) "PreToolUse"))
+                     (should (equal (plist-get record :outcome) "deny"))))
+		 :doc "PreToolUse-denied Bash diagnostics use sanitized command summary"
+			 (let* ((dir (file-name-as-directory
+				      (make-temp-file "niwa-permission-log-" t)))
+				(session (niwa-session--create
+					  :name "test" :save-path dir))
+				(tool (niwa-tool--create
+				       :name "Bash"
+				       :get-pattern (lambda (args)
+						      (plist-get args :command))))
+				(context (list :tool tool
+					       :args '(:command "printf SECRET_TOKEN")
+					       :session session))
+				(niwa-permission-log-enabled t)
+				failure
+				failure-context)
+			   (unwind-protect
+			       (progn
+				 (cl-letf (((symbol-function 'niwa-hooks-run-event)
+					    (lambda (_event _payload callback &rest _)
+					      (funcall callback
+						       '(:continue nil
+							 :stop-reason "blocked")))))
+				   (niwa-pipeline--step-pre-tool-hooks
+				    context #'ignore
+				    (lambda (reason &optional ctx _kind)
+				      (setq failure reason failure-context ctx))))
+				 (should (equal failure "blocked by PreToolUse: blocked"))
+                                 (let ((record (car (plist-get failure-context
+                                                               :hook-audit-records))))
+                                   (should (eq (plist-get record :type)
+                                               'tool-permission))
+                                   (should (equal (plist-get record :event)
+                                                  "PreToolUse"))
+                                   (should (equal (plist-get record :outcome)
+                                                  "deny")))
+                                 (let ((entry (car (niwa-test--permission-log-entries
+						    session))))
+				   (should (eq 'permission-decision
+					       (plist-get entry :event)))
+				   (should (eq 'deny (plist-get entry :outcome)))
+				   (should (eq 'pre-tool-hook (plist-get entry :via)))
+				   (should (equal "printf"
+						  (plist-get entry :specifier-value)))
+				   (should-not (equal "printf SECRET_TOKEN"
+						      (plist-get entry :specifier-value)))))
+			     (delete-directory dir t)))
+			 :doc "fails without continuing when updated input is invalid"
+		 (let* ((tool (niwa-tool--create
+			       :name "Write"
+			       :args '((file_path string :required "Path"))))
+			(context (list :tool tool
+				       :args '(:file_path "/tmp/out")
+				       :default-directory default-directory))
+			next-called
+			failure)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback '(:updated-input (:nope t))))))
+		     (niwa-pipeline--step-pre-tool-hooks
+		      context
+		      (lambda (_ctx) (setq next-called t))
+		      (lambda (reason &rest _) (setq failure reason))))
+		   (should-not next-called)
+		   (should failure))
+		 :doc "audits valid updated input before continuing"
+		 (let* ((tool (niwa-tool--create
+			       :name "Write"
+			       :args '((file_path string :required "Path"))))
+			(context (list :tool tool
+				       :args '(:file_path "/tmp/old")
+				       :default-directory default-directory))
+			next-context
+			failure)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback
+					 '(:updated-input
+					   (:file_path "/tmp/new")
+					   :system-message "normalized")))))
+		     (niwa-pipeline--step-pre-tool-hooks
+		      context
+		      (lambda (ctx) (setq next-context ctx))
+		      (lambda (reason) (setq failure reason))))
+		   (should-not failure)
+		   (should (equal '(:file_path "/tmp/new")
+				  (plist-get next-context :args)))
+		   (let ((record (car (plist-get next-context
+						  :hook-audit-records))))
+		     (should (eq (plist-get record :type)
+				 'tool-input-rewrite))
+		     (should (equal (plist-get record :event) "PreToolUse"))
+		     (should (equal (plist-get record :original-input)
+				    '(:file_path "/tmp/old")))
+		     (should (equal (plist-get record :updated-input)
+				    '(:file_path "/tmp/new")))
+		     (should (equal (plist-get record :reason)
+				    "normalized"))))
+		 :doc "routes PreToolUse stop decisions through PermissionDenied once"
+		 (let* ((tool (niwa-tool--create :name "Write"))
+			(context (list :tool tool :args nil))
+			events
+			provenance
+			failure)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(push event events)
+				(when (eq event 'PermissionDenied)
+				  (setq provenance
+					(plist-get payload :permission-provenance)))
+				(funcall callback
+					 (and (eq event 'PreToolUse)
+					      '(:continue nil :stop-reason "stopped"))))))
+		     (niwa-pipeline--step-pre-tool-hooks
+		      context #'ignore (lambda (reason &rest _) (setq failure reason))))
+		   (should (equal '(PreToolUse PermissionDenied) (nreverse events)))
+		   (should (eq 'PreToolUse provenance))
+		   (should (string-match-p "stopped" failure))))
+
+
+;;
+;;; Post-tool hook step
+
+(niwa-deftest niwa-pipeline--step-post-tool-hooks
+		 (:doc "passes captured request, invocation, and response payload to post hooks")
+		 ,test
+		 (test)
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(request (list :request t))
+			(invocation (list :invocation t))
+			(context (list :tool tool
+				       :args nil
+				       :result "ok"
+				       :request request
+				       :invocation invocation
+				       :default-directory default-directory))
+			seen-request
+			seen-invocation
+			seen-payload
+			result)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event payload callback
+					      &optional _session _workspace req inv)
+				(setq seen-request req
+				      seen-invocation inv
+				      seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks
+		      context
+		      (lambda (ctx) (setq result (plist-get ctx :result)))
+		      #'ignore))
+		   (should (eq seen-request request))
+		   (should (eq seen-invocation invocation))
+		   (should (equal (plist-get seen-payload :tool-response) "ok"))
+		   (should (equal result "ok")))
+		 :doc "uses explicit error status for the failure hook and payload"
+		 (let* ((tool (niwa-tool--create :name "Bash"))
+			(context (list :tool tool
+				       :args nil
+				       :tool-use-id "toolu_1"
+				       :result "plain failure"
+				       :raw-result "plain failure"
+				       :status 'error
+				       :default-directory default-directory))
+			seen-event
+			seen-payload)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(setq seen-event event seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (eq 'PostToolUseFailure seen-event))
+		   (should (equal "plain failure" (plist-get seen-payload :error))))
+		 :doc "canonical handler status, not result text, selects the event"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(context (list :tool tool
+				       :args nil
+				       :result "Error: visible success"
+				       :raw-result "Error: visible success"
+				       :handler-status 'success
+				       :default-directory default-directory))
+			seen-event)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(setq seen-event event)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (eq 'PostToolUse seen-event)))
+		 :doc "updated hook results retain explicit status for rendering"
+		 (let* ((tool (niwa-tool--create :name "Bash"))
+			(context (list :tool tool
+				       :args nil
+				       :tool-use-id "toolu_1"
+				       :result "plain failure"
+				       :raw-result "plain failure"
+				       :status 'error
+				       :default-directory default-directory))
+			final-result)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback '(:updated-result "redacted")))))
+		     (niwa-pipeline--step-post-tool-hooks
+		      context
+		      (lambda (updated)
+			(niwa-pipeline--step-attach-render-data
+			 updated
+			 (lambda (final)
+			   (setq final-result (plist-get final :result)))
+			 #'ignore))
+		      #'ignore))
+		   (let ((extracted
+                          (niwa-tool-render-data-extract
+			   final-result nil "toolu_1")))
+		     (should (string-prefix-p "redacted" (car extracted)))
+		     (should (eq 'error (plist-get (cdr extracted) :status)))))
+		 :doc "strips render-data from post-tool hook payload"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(result (concat "visible"
+                                        (niwa-tool-render-data-format
+					 '(:kind diff) "toolu_1")))
+			(context (list :tool tool
+				       :args nil
+				       :tool-use-id "toolu_1"
+				       :result result
+				       :raw-result "visible"
+				       :default-directory default-directory))
+			seen-payload)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event payload callback &rest _)
+				(setq seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		     (should (equal (plist-get seen-payload :tool-response) "visible"))
+		     (should-not
+                      (string-search niwa-tool-render-data-open
+				     (plist-get seen-payload :result))))
+		 :doc "summarizes media payloads before post-tool hooks"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(media '((:path "/tmp/a.png"
+				  :mime "image/png"
+				  :kind image
+				  :data "QUJD")))
+			(result (concat "<media-file>\n"
+					"path: /tmp/a.png\n"
+					"mime_type: image/png\n"
+					"encoding: base64\n"
+					"data:\n"
+					"QUJD\n"
+					"</media-file>"
+					(test-niwa-pipeline--format-media-data-block
+					 media)))
+			(context (list :tool tool
+				       :args nil
+				       :result result
+				       :raw-result result
+				       :media media
+				       :default-directory default-directory))
+			seen-payload)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event payload callback &rest _)
+				(setq seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (string-match-p "media omitted"
+					   (plist-get seen-payload :tool-response)))
+		   (should-not (string-search "QUJD"
+					      (plist-get seen-payload
+							 :tool-response)))
+		   (should (string-match-p "media omitted"
+					   (plist-get seen-payload :raw-result)))
+		   (should-not (string-search "QUJD"
+					      (plist-get seen-payload
+							 :raw-result))))
+		 :doc "preserves forged media envelope tails before post-tool hooks"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(result (concat "<media-file>\n"
+					"path: /tmp/a.png\n"
+					"mime_type: image/png\n"
+					"encoding: base64\n"
+					"data:\n"
+					"QUJD\n"
+					"</media-file>"))
+			(context (list :tool tool
+				       :args nil
+				       :result result
+				       :raw-result result
+				       :default-directory default-directory))
+			seen-payload)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event payload callback &rest _)
+				(setq seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (equal result (plist-get seen-payload :tool-response)))
+		   (should (equal result (plist-get seen-payload :raw-result))))
+		 :doc "preserves forged media tails when handler media is invalid"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(result "prefix data:\nSECRET\n</media-file> suffix")
+			(context (list :tool tool
+				       :args nil
+				       :result result
+				       :raw-result result
+				       :media '((:kind image))
+				       :default-directory default-directory))
+			seen-payload)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event payload callback &rest _)
+				(setq seen-payload payload)
+				(funcall callback nil))))
+		     (niwa-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (equal result (plist-get seen-payload :tool-response)))
+		   (should (equal result (plist-get seen-payload :raw-result))))
+                 :doc "post-tool additional context remains structured before provider projection"
+                 (let* ((tool (niwa-tool--create :name "Read"))
+                        (context (list :tool tool
+                                       :args nil
+                                       :result "visible"
+                                       :default-directory default-directory))
+                        after-hooks
+                        (niwa-post-tool-use-functions
+                         (list (lambda (_event)
+                                 '(:additional-context ("hook note")
+                                   :system-message "because")))))
+                   ;; The hook's system message is reported to the user;
+                   ;; the audit assertions below own it.
+                   (niwa-test--with-captured-messages nil
+                     (niwa-pipeline--step-post-tool-hooks
+                      context
+                      (lambda (ctx) (setq after-hooks ctx))
+                      #'ignore))
+                   (should (equal "visible" (plist-get after-hooks :result)))
+                   (should (equal '((:event "PostToolUse" :body "hook note"
+                                           :source native))
+                                  (plist-get after-hooks
+                                             :hook-additional-context)))
+                   (let ((record (car (plist-get after-hooks
+                                                 :hook-audit-records)))
+                         handler)
+                     (should (eq (plist-get record :type) 'tool-context))
+                     (should (equal (plist-get record :event) "PostToolUse"))
+                     (setq handler (car (plist-get record :handlers)))
+                     (should (equal (plist-get handler :contexts)
+                                    '("hook note")))
+                     (should (equal (plist-get handler :reason) "because"))))
+			 :doc "updated hook result clears stale media before later attachment"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(media '((:path "/tmp/a.png"
+				  :mime "image/png"
+				  :kind image
+				  :data "QUJD")))
+			(context (list :tool tool
+				       :args nil
+				       :result "<media-file>\ndata:\nQUJD\n</media-file>"
+				       :media media
+				       :default-directory default-directory))
+			after-hooks
+			after-media)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback
+					 '(:updated-result
+					   "<media-file>\ndata:\nHOOK\n</media-file>")))))
+		     (niwa-pipeline--step-post-tool-hooks
+		      context (lambda (ctx) (setq after-hooks ctx)) #'ignore))
+		   (should (equal "<media-file>\ndata:\nHOOK\n</media-file>"
+				  (plist-get after-hooks :result)))
+                   (let ((record (car (plist-get after-hooks
+                                                 :hook-audit-records))))
+                     (should (eq (plist-get record :type)
+                                 'tool-result-rewrite))
+                     (should (equal (plist-get record :event) "PostToolUse"))
+                     (should (equal (plist-get record :updated-result)
+                                    "<media-file>\ndata:\nHOOK\n</media-file>")))
+		   (should-not (plist-get after-hooks :media))
+		   (niwa-pipeline--step-attach-media-data
+		    after-hooks (lambda (ctx) (setq after-media ctx)) #'ignore)
+			   (should-not (string-search niwa-tool-media--data-open
+					      (plist-get after-media :result))))
+			 :doc "updated hook results retain committed repair audit metadata"
+			 (let* ((tool (niwa-tool--create :name "Collect"))
+				(repair-audit
+				 (niwa-tool-repair-audit-record
+				  'committed
+				  '((:rule wrap-array-singleton :source generic
+				          :paths ((names)) :before string :after array))))
+				(context (list :tool tool :args nil :result "original"
+					       :hook-audit-records (list repair-audit)
+					       :default-directory default-directory))
+				after-hooks)
+			   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+				      (lambda (_event _payload callback &rest _)
+					(funcall callback '(:updated-result "updated")))))
+			     (niwa-pipeline--step-post-tool-hooks
+			      context
+			      (lambda (ctx) (setq after-hooks ctx))
+			      #'ignore))
+			   (should (equal "updated" (plist-get after-hooks :result)))
+			   (should
+			    (cl-some
+			     (lambda (record)
+			       (eq 'tool-input-repair (plist-get record :type)))
+                             (plist-get after-hooks :hook-audit-records)))))
+
+(niwa-deftest niwa-pipeline--step-post-tool-hooks/no-block
+		 (:doc "does not fail the pipeline for post-tool blocking decisions")
+		 ,test
+		 (test)
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(context (list :tool tool
+				       :args nil
+				       :result "ok"
+				       :default-directory default-directory))
+			result
+			failed)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback
+					 '(:continue nil :stop-reason "too late")))))
+		     (niwa-pipeline--step-post-tool-hooks
+		      context
+		      (lambda (ctx) (setq result (plist-get ctx :result)))
+		      (lambda (reason) (setq failed reason))))
+		   (should-not failed)
+		   (should (equal result "ok"))))
+
+(niwa-deftest niwa-pipeline--stop-turn-for-hook
+  ()
+  ,test
+  (test)
+  :doc "a post-tool stop keeps the result, ends the root turn, and pauses its Goal"
+  (with-temp-buffer
+    (let* ((goal (niwa-goal--create :id "g" :objective "Ship" :status 'active))
+           (session (niwa-session--create :name "main" :goal goal))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer))))
+           (context (list :tool (niwa-tool--create :name "Read")
+                          :args nil :result "ok" :engine fsm
+                          :buffer (current-buffer)
+                          :default-directory default-directory))
+           messages result)
+      (setq-local niwa--session session)
+      (cl-letf (((symbol-function 'niwa-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback '(:continue nil :stop-reason "halt"))))
+                ((symbol-function 'niwa-session-artifacts-save) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (niwa-pipeline--step-post-tool-hooks
+         context (lambda (ctx) (setq result (plist-get ctx :result))) #'ignore)
+        ;; A second stop in the same turn changes nothing.
+        (niwa-pipeline--stop-turn-for-hook context 'PostToolUse
+                                              '(:continue nil)))
+      (should (equal "ok" result))
+      (should (eq 'hook-stop (niwa-turn-end-requested-p (gptel-fsm-info fsm))))
+      (should (eq 'paused (niwa-goal-status goal)))
+      (should (equal "PostToolUse hook stopped the turn: halt"
+                     (niwa-goal-reason goal)))
+      (should (equal '("niwa [workspace unavailable]: PostToolUse hook stopped the turn: halt")
+                     messages))))
+
+  :doc "an agent's stop ends only the agent turn"
+  (with-temp-buffer
+    (let* ((goal (niwa-goal--create :id "g" :objective "Ship" :status 'active))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+      (setq-local niwa--session
+                  (niwa-session--create :name "main" :goal goal))
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (niwa-pipeline--stop-turn-for-hook
+         (list :engine fsm :buffer (current-buffer)
+               :invocation (niwa-agent-invocation--create))
+         'PreToolUse '(:continue nil :stop-reason "no")))
+      (should (eq 'hook-stop (niwa-turn-end-requested-p (gptel-fsm-info fsm))))
+      (should (eq 'active (niwa-goal-status goal))))))
+
+(niwa-deftest niwa-pipeline--step-post-tool-hooks/buffer-local
+		 (:doc "runs native post hooks in the captured dispatch buffer")
+		 ,test
+		 (test)
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(buffer (generate-new-buffer " *niwa-post-hook-test*"))
+			(context (list :tool tool
+				       :args nil
+				       :result "ok"
+				       :buffer buffer
+				       :default-directory default-directory))
+			seen
+			result)
+		   (unwind-protect
+		       (progn
+			 (with-current-buffer buffer
+			   (setq-local niwa-post-tool-use-functions
+				       (list (lambda (event)
+					       (setq seen (plist-get event :result))
+					       nil))))
+			 (with-temp-buffer
+			   (niwa-pipeline--step-post-tool-hooks
+			    context
+			    (lambda (ctx) (setq result (plist-get ctx :result)))
+			    #'ignore))
+			 (should (equal seen "ok"))
+			 (should (equal result "ok")))
+		     (when (buffer-live-p buffer)
+		       (kill-buffer buffer)))))
+
+
+;;
+;;; Full pipeline
+
+(niwa-deftest niwa-pipeline-apply-patch-resources
+  (:vars* ((root (file-name-as-directory
+                  (make-temp-file "niwa-pipeline-patch-resource-" t)))
+           (save-path (make-temp-file "niwa-pipeline-patch-save-" t))
+           (ordinary-path (file-name-concat root "ordinary.txt"))
+           (local-path (file-name-concat save-path "local" "notes" "new.txt"))
+           (workspace (niwa-workspace--create
+                       :type 'test :id root :root root :name "patch-resource"
+                       :file-cache (niwa-test-file-cache-create)))
+           (session (niwa-session--create
+                     :name "patch-resource" :workspace workspace
+                     :save-path save-path :working-directory root
+                     :permission-mode 'full-auto
+                     :touched-files (make-hash-table :test #'equal)))
+           (buffer (generate-new-buffer " *niwa-pipeline-patch-resource*")))
+   :before-each
+   (with-temp-file ordinary-path (insert "old\n"))
+   :after-each
+   (progn
+     (when (buffer-live-p buffer) (kill-buffer buffer))
+     (when (file-directory-p root) (delete-directory root t))
+     (when (file-directory-p save-path) (delete-directory save-path t))))
+  ,test
+  (test)
+  :doc "Rejects malformed ApplyPatch resources before permission, handler, or post-use"
+  (let ((permission-called nil)
+        (handler-called nil)
+        (post-called nil)
+        result
+        (tool (niwa-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (_args)
+                          (setq handler-called t)
+                          '(:result "unexpected"))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p nil)))
+    (cl-letf (((symbol-function 'niwa-hooks-run-event)
+               (lambda (event _payload callback &rest _)
+                 (when (memq event '(PostToolUse PostToolUseFailure))
+                   (setq post-called t))
+                 (funcall callback nil)))
+              ((symbol-function
+                'niwa-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome allow :raw-outcome allow)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    niwa--workspace workspace
+                    niwa--session session)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Add File: work://notes/../bad.txt"
+                         "+bad"
+                         "*** End Patch")
+                       "\n")))))
+    (should (string-match-p "Error:" result))
+    (should (string-match-p "work://notes/../bad.txt" result))
+    (should-not permission-called)
+    (should-not handler-called)
+    (should-not post-called))
+
+  :doc "Prepares one mixed proposal once and keeps ordinary paths in bookkeeping"
+  (let* ((parsed-proposal nil)
+         (prepared-context nil)
+         (parse-count 0)
+         (request (niwa-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (patch (string-join
+                 '("*** Begin Patch"
+                   "*** Update File: ordinary.txt"
+                   "@@"
+                   "-old"
+                   "+new"
+                   "*** Add File: work://notes/new.txt"
+                   "+created"
+                   "*** End Patch")
+                 "\n"))
+         (original-parse (symbol-function 'niwa-tool-patch-parse))
+         (tool (niwa-tool--create
+                :name "ApplyPatch"
+                :handler (lambda (_args) '(:result "prepared"))
+                :args '((patch string :required "Patch"))
+                :read-only-p nil
+                :async-p t
+                :groups '(edit)
+                :snapshot-p t
+                :get-paths #'niwa-tool-patch--get-paths)))
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  niwa--workspace workspace
+                  niwa--session session)
+      (cl-letf (((symbol-function 'niwa-tool-patch-parse)
+                 (lambda (&rest args)
+                   (setq parse-count (1+ parse-count))
+                   (setq parsed-proposal (apply original-parse args)))))
+        (niwa-pipeline--step-prepare-resources
+         (list :tool tool :args (list :patch patch)
+               :session session :workspace workspace :request request
+               :buffer buffer :default-directory root)
+         (lambda (context) (setq prepared-context context)) #'ert-fail)
+        (should (eq 'apply-patch
+                    (niwa-pipeline--resource-operation tool)))
+        (should (= 1 parse-count))
+        (should (eq parsed-proposal
+                    (plist-get prepared-context :patch-proposal)))
+        (should (equal (list ordinary-path)
+                       (niwa-tool-permission-paths
+                        tool (list :patch patch) prepared-context)))
+        (should-not (plist-get (plist-get prepared-context :patch-proposal)
+                               :session-only-p))
+        (should (eq parsed-proposal
+                    (plist-get prepared-context :patch-proposal)))))
+
+  :doc "The actual ApplyPatch handler consumes the pipeline proposal once"
+  (let* ((parse-count 0)
+         (prepare-count 0)
+         (prepared nil)
+         (materialized nil)
+         (result nil)
+         (patch (string-join
+                 '("*** Begin Patch"
+                   "*** Update File: ordinary.txt"
+                   "@@"
+                   "-old"
+                   "+new"
+                   "*** Add File: work://notes/new.txt"
+                   "+created"
+                   "*** End Patch")
+                 "\n"))
+         (tool (niwa-tool-ensure "ApplyPatch"))
+         (original-parse (symbol-function 'niwa-tool-patch-parse))
+         (original-prepare
+          (symbol-function 'niwa-tool-patch-prepare-resources))
+         (original-materialize
+          (symbol-function 'niwa-tool-patch--materialize-resources)))
+    (cl-letf (((symbol-function 'niwa-tool-patch-parse)
+               (lambda (&rest args)
+                 (setq parse-count (1+ parse-count))
+                 (apply original-parse args)))
+              ((symbol-function 'niwa-tool-patch-prepare-resources)
+               (lambda (proposal &optional materialize)
+                 (setq prepare-count (1+ prepare-count)
+                       prepared proposal)
+                 (funcall original-prepare proposal materialize)))
+              ((symbol-function 'niwa-tool-patch--materialize-resources)
+               (lambda (proposal)
+                 (setq materialized proposal)
+                 (funcall original-materialize proposal))))
+      (should (eq 'apply-patch (niwa-pipeline--resource-operation tool)))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    niwa--workspace workspace
+                    niwa--session session)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (list :patch patch))))
+    (should (= 1 parse-count))
+    (should (= 1 prepare-count))
+    (should (eq prepared materialized))
+    (should (string-match-p "Applied patch" result))
+    (should (equal "new\n"
+                   (with-temp-buffer
+                     (insert-file-contents ordinary-path)
+                     (buffer-string))))
+    (should (equal "created\n"
+                   (with-temp-buffer
+                     (insert-file-contents local-path)
+                     (buffer-string))))))
+
+  :doc "A malformed mixed proposal leaves both ordinary and local targets unchanged"
+  (let ((permission-called nil)
+        (handler-called nil)
+        result
+        (tool (niwa-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (callback args)
+                          (setq handler-called t)
+                          (niwa-tool-patch-handler callback args))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p t
+               :groups '(edit)
+               :snapshot-p t
+               :get-paths #'niwa-tool-patch--get-paths)))
+    (cl-letf (((symbol-function 'niwa-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function
+                'niwa-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome allow :raw-outcome allow)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    niwa--workspace workspace
+                    niwa--session session)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Update File: ordinary.txt"
+                         "@@"
+                         "-does-not-match"
+                         "+should-not-apply"
+                         "*** Add File: work://notes/new.txt"
+                         "+bad"
+                         "*** End Patch")
+                       "\n")))))
+    (should (string-match-p "Error:" result))
+    (should permission-called)
+    (should-not (file-exists-p local-path))
+    (should (equal "old\n"
+                   (with-temp-buffer
+                     (insert-file-contents ordinary-path)
+                   (buffer-string)))))
+
+  :doc "Denied local proposals do not materialize session state"
+  (let ((permission-called nil)
+        result
+        (tool (niwa-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (_callback _args)
+                          '(:result "unexpected"))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p t
+               :groups '(edit)
+               :snapshot-p t
+               :get-paths #'niwa-tool-patch--get-paths)))
+    (setf (niwa-session-save-path session) nil)
+    (cl-letf (((symbol-function 'niwa-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function
+                'niwa-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome deny :raw-outcome deny)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    niwa--workspace workspace
+                    niwa--session session)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Add File: work://notes/denied.txt"
+                         "+denied"
+                         "*** End Patch")
+                       "\n")))))
+    (should permission-called)
+    (should (string-match-p "Error:" result))
+    (should-not (niwa-session-save-path session))
+    (should-not (file-exists-p (file-name-concat root "local" "notes"
+                                                 "denied.txt"))))
+
+  :doc "Plan permits add update delete and move within session-owned working files"
+  (let* ((tool (niwa-tool-ensure "ApplyPatch"))
+         (local-root (file-name-concat save-path "local"))
+         (update-path (file-name-concat local-root "notes" "update.txt"))
+         (delete-path (file-name-concat local-root "notes" "delete.txt"))
+         (move-path (file-name-concat local-root "notes" "move.txt"))
+         (moved-path (file-name-concat local-root "notes" "moved.txt"))
+         (add-path (file-name-concat local-root "notes" "add.txt"))
+         result)
+    (make-directory (file-name-directory update-path) t)
+    (with-temp-file update-path (insert "old\n"))
+    (with-temp-file delete-path (insert "delete\n"))
+    (with-temp-file move-path (insert "move\n"))
+    (setf (niwa-session-plan-mode session) t)
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  niwa--workspace workspace
+                  niwa--session session)
+      (niwa-pipeline-run-tool
+       tool (lambda (value) (setq result value))
+       (list :patch
+             (string-join
+              (list "*** Begin Patch"
+                    "*** Update File: work://notes/update.txt"
+                    "@@"
+                    "-old"
+                    "+new"
+                    "*** Add File: work://notes/add.txt"
+                    "+added"
+                    "*** Delete File: work://notes/delete.txt"
+                    "*** Update File: work://notes/move.txt"
+                    "*** Move to: work://notes/moved.txt"
+                    "*** End Patch")
+              "\n"))))
+    (should (string-match-p "Applied patch" result))
+    (should (equal "new\n"
+                   (with-temp-buffer
+                     (insert-file-contents update-path)
+                     (buffer-string))))
+    (should (equal "added\n"
+                   (with-temp-buffer
+                     (insert-file-contents add-path)
+                     (buffer-string))))
+    (should-not (file-exists-p delete-path))
+    (should-not (file-exists-p move-path))
+    (should (equal "move\n"
+                   (with-temp-buffer
+                     (insert-file-contents moved-path)
+                     (buffer-string))))
+    (should (= 0 (hash-table-count (niwa-session-touched-files session)))))
+
+  :doc "Plan denies ordinary mixed malformed and non-local proposals before materialization"
+  (let* ((tool (niwa-tool-ensure "ApplyPatch"))
+         (patches
+          (list
+           (string-join
+            '("*** Begin Patch" "*** Update File: ordinary.txt" "@@"
+              "-old" "+ordinary" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Update File: ordinary.txt" "@@"
+              "-old" "+mixed" "*** Add File: work://notes/mixed.txt"
+              "+mixed" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Add File: work://notes/../bad.txt"
+              "+bad" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch"
+              "*** Update File: work://notes/bare-source.txt"
+              "*** Move to: work://" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Add File: artifact://notes/bad.txt"
+              "+bad" "*** End Patch") "\n")))
+         (niwa-memory-dirs '(".niwa/memory"))
+         result)
+    (dolist (address '("work://shared/correction.md" "memory://local-niwa/lesson.md"))
+      (push (format "*** Begin Patch\n*** Add File: %s\n+denied\n*** End Patch" address) patches)
+      (push (format "*** Begin Patch\n*** Update File: work://plans/current.md\n*** Move to: %s\n*** End Patch" address) patches))
+    (setf (niwa-session-plan-mode session) t
+          (niwa-session-save-path session) nil)
+    (dolist (patch patches)
+      (setq result nil)
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    niwa--workspace workspace
+                    niwa--session session)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (list :patch patch)))
+      (should (string-match-p "Error:" result))
+      (should (equal "old\n"
+                     (with-temp-buffer
+                       (insert-file-contents ordinary-path)
+                       (buffer-string))))
+      (should-not (file-exists-p (file-name-concat save-path "local")))
+      (should-not (file-exists-p (file-name-concat save-path "tool-results"))))
+    (should-not (niwa-session-save-path session))
+    (should (= 0 (hash-table-count (niwa-session-touched-files session)))))
+
+  )
+
+(niwa-deftest niwa-pipeline-run-tool
+  (:before-each
+   (advice-add 'display-warning :around
+               #'niwa-test--drop-sessionless-permission-warning)
+   :after-each
+   (advice-remove 'display-warning
+                  #'niwa-test--drop-sessionless-permission-warning))
+  ,test
+  (test)
+
+  :doc "sync tool runs through pipeline"
+  (let* ((tool (niwa-tool--create
+                :name "Echo"
+                :handler (lambda (args)
+                           (list :result (plist-get args :msg)))
+                :args '((msg string :required "Message"))
+                :read-only-p t
+                :async-p nil))
+         result)
+    (niwa-pipeline-run-tool
+     tool (lambda (value) (setq result value)) '(:msg "hello"))
+    (should (equal result "hello")))
+
+  :doc "ordinary code reads do not queue unsolicited navigation workflows"
+  (let* ((root (make-temp-file "niwa-read-discovery-" t))
+         (path (file-name-concat root "sample.el"))
+         (workspace (niwa-workspace--create :root root))
+         (session (niwa-session--create
+                   :name "read-discovery" :workspace workspace
+                   :tool-catalog '((("niwa" "Imenu") . "outline")
+                                   (("niwa" "XrefReferences") . "references")
+                                   (("niwa" "Treesitter") . "syntax")
+                                   (("niwa" "EmacsDescribe") . "source"))))
+         (tool (niwa-tool--create
+                :name "Read" :read-only-p t
+                :args '((file_path string :required "Path"))
+                :handler (lambda (args)
+                           (with-temp-buffer
+                             (insert-file-contents (plist-get args :file_path))
+                             (list :result (buffer-string))))))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun sample () nil)\n" nil path nil 'silent)
+          (with-temp-buffer
+            (setq-local niwa--session session
+                        niwa--current-request
+                        (niwa-request--create :id "read-discovery" :session session))
+            (niwa-pipeline-run-tool
+             tool (lambda (value) (setq result value)) (list :file_path path))
+            (should (equal "(defun sample () nil)\n" result))
+            (should-not (plist-get niwa-reminders--turn-events :items))))
+      (delete-directory root t)))
+
+  :doc "unknown remote outcome blocks mutation but permits read-only tools"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-unknown-" t)))
+         (remote-root (format "/niwamock:unknown:%s" root))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "unknown-remote"
+           :file-cache (niwa-test-file-cache-create)))
+         session
+         mutation-permission-called
+         mutation-handler-called
+         read-permission-called
+         read-handler-called
+         (mutating-tool
+          (niwa-tool--create
+           :name "WriteThing" :read-only-p nil
+           :check-permission-async
+           (lambda (_tool _input cont)
+             (setq mutation-permission-called t)
+             (funcall cont 'allow))
+           :handler
+           (lambda (_args)
+             (setq mutation-handler-called t)
+             (list :result "mutated"))))
+         (read-tool
+          (niwa-tool--create
+           :name "Read" :read-only-p t
+           :check-permission-async
+           (lambda (_tool _input cont)
+             (setq read-permission-called t)
+             (funcall cont 'allow))
+           :handler
+           (lambda (_args)
+             (setq read-handler-called t)
+             (list :result "read"))))
+         mutation-result read-result)
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp '("unknown")
+          (setq session
+                (niwa-session-create
+                 "unknown-remote" workspace remote-root))
+          (puthash
+           (niwa-execution-target-identity
+            (niwa-session-execution-target session))
+           t niwa-session-durability--disclosed-targets)
+          (with-temp-buffer
+            (setq-local default-directory remote-root)
+            (setq-local niwa--workspace workspace)
+            (setq-local niwa--session session)
+            (niwa-session-artifacts-assert-mutation-authority
+             session (current-buffer))
+            (should
+             (niwa-session-durability-set-unsettled-mutation
+              session t))
+            (setq mutation-result
+                  (test-niwa-pipeline--run-tool-and-wait
+                   mutating-tool nil))
+            (setq read-result
+                  (test-niwa-pipeline--run-tool-and-wait
+                   read-tool nil)))
+          (should (string-match-p
+                   "unknown remote outcome" mutation-result))
+          (should-not mutation-permission-called)
+          (should-not mutation-handler-called)
+          (should read-permission-called)
+          (should read-handler-called)
+          (should (equal read-result "read")))
+      (when session
+        (niwa-execution-teardown-session session))
+      (delete-directory root t)))
+  :doc "remote project hook rewrites cannot cross execution targets"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-hook-root-" t)))
+         (foreign-root (file-name-as-directory
+                        (make-temp-file "niwa-pipeline-hook-foreign-" t)))
+         (remote-root (format "/niwamock:%s:%s"
+                              (system-name) root))
+         (foreign-path (format "/niwamock:foreign:%sfile.txt"
+                               foreign-root))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "remote-hook-boundary"
+           :file-cache (niwa-test-file-cache-create)))
+         session
+         (tool
+          (niwa-tool--create
+           :name "Read" :args '((file_path path :required "Path"))
+           :groups '(read) :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))
+           :check-permission-async
+           (lambda (&rest _)
+             (ert-fail "Cross-target hook rewrite reached permission"))
+           :handler (lambda (_args)
+                      (ert-fail "Cross-target hook rewrite reached handler"))))
+         (niwa-hooks-persist-log nil)
+         (niwa-permission-mode 'ask)
+         (niwa-protected-paths nil)
+         json result)
+    (unwind-protect
+        (niwa-test--with-local-shell-tramp '("foreign")
+          (setq session
+                (niwa-session-create
+                 "remote-hook-boundary" workspace remote-root))
+          (setq json
+                (format "{\"updatedInput\":{\"file_path\":%s}}"
+                        (json-encode-string foreign-path)))
+          (setf
+           (niwa-session-hook-rules session)
+           `((PreToolUse
+              ((:matcher "Read"
+                :hooks ((:type command
+                         :source project-file
+                         :source-root ,remote-root
+                         :command
+                         ,(format "printf '%%s' %s"
+                                  (shell-quote-argument json)))))))))
+          (with-temp-buffer
+            (setq-local default-directory remote-root)
+            (setq-local niwa--workspace workspace)
+            (setq-local niwa--session session)
+            (setq result
+                  (test-niwa-pipeline--run-tool-and-wait
+                   tool '(:file_path "inside.txt"))))
+          (should (string-prefix-p "Error:" result))
+          (should (string-match-p "another execution target" result)))
+      (delete-directory root t)
+      (delete-directory foreign-root t)))
+  :doc "remote same-target additional roots authorize the normal pipeline"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-root-" t)))
+         (extra (file-name-as-directory
+                 (make-temp-file "niwa-pipeline-extra-" t)))
+         (path (file-name-concat extra "file.txt"))
+         (remote-root (format "/niwamock:%s:%s"
+                              (system-name) root))
+         (remote-extra (format "/niwamock:%s:%s"
+                               (system-name) extra))
+         (native-path (file-name-concat extra "file.txt"))
+         (remote-path (file-name-concat remote-extra "file.txt"))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "remote-additional-root"
+           :file-cache (niwa-test-file-cache-create)))
+         session
+         seen-path
+         (tool
+          (niwa-tool--create
+           :name "Read" :args '((file_path path :required "Path"))
+           :groups '(read) :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))
+           :handler
+           (lambda (args)
+             (setq seen-path (plist-get args :file_path))
+             (list :result
+                   (with-temp-buffer
+                     (insert-file-contents seen-path)
+                     (buffer-string))))))
+         (niwa-workspace-additional-roots
+          (list (cons remote-root (list remote-extra))))
+         (niwa-memory-dirs nil)
+         (niwa-permission-mode 'ask)
+         (niwa-protected-paths nil)
+         result)
+    (unwind-protect
+        (progn
+          (write-region "same-target" nil path nil 'silent)
+          (niwa-test--with-local-shell-tramp nil
+            (setq session
+                  (niwa-session-create
+                   "remote-additional-root" workspace remote-root))
+            (niwa-execution-target-probe
+             (niwa-session-execution-target session) nil 'off)
+            (with-temp-buffer
+              (setq-local default-directory remote-root)
+              (setq-local niwa--workspace workspace)
+              (setq-local niwa--session session)
+              (let ((niwa-permission-log-enabled t))
+                (setq result
+                      (test-niwa-pipeline--run-tool-and-wait
+                       tool (list :file_path native-path)))
+                (should-not (niwa-pq-test--requested-p session)))))
+          (should (equal "same-target" result))
+          (should (equal remote-path seen-path)))
+      (delete-directory root t)
+      (delete-directory extra t)))
+  :doc "rejects malformed resource addresses before permission or post-use hooks"
+  (let* ((permission-called nil)
+         (post-called nil)
+         (handler-called nil)
+         result
+         (tool (niwa-tool--create
+                :name "Read"
+                :handler (lambda (_args)
+                           (setq handler-called t)
+                           '(:result "unexpected"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (cl-letf (((symbol-function 'niwa-hooks-run-event)
+               (lambda (event _payload callback &rest _)
+                 (when (memq event '(PostToolUse PostToolUseFailure))
+                   (setq post-called t))
+                 (funcall callback nil)))
+              ((symbol-function
+                'niwa-check-permission-async-with-metadata)
+               (lambda (&rest _)
+                 (setq permission-called t))))
+      (with-temp-buffer
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         '(:file_path "work://notes/../secret"))))
+    (should (string-match-p "Error:" result))
+    (should-not permission-called)
+    (should-not post-called)
+    (should-not handler-called))
+
+  :doc "pre-tool rewrites are prepared after rewrite validation"
+  (let* ((save-path (make-temp-file "niwa-pipeline-resource-" t))
+         (session (niwa-session--create
+                   :name "resource"
+                   :save-path save-path))
+         (attempt-seen nil)
+         result
+         (tool (niwa-tool--create
+                :name "Read"
+                :handler
+                (lambda (args)
+                  (setq attempt-seen
+                        (niwa-resource-current-attempt
+                         (plist-get args :file_path)))
+                  '(:result "prepared"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat save-path "local") t)
+          (cl-letf (((symbol-function 'niwa-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (if (eq event 'PreToolUse)
+                         (funcall callback
+                                  '(:updated-input
+                                    (:file_path "work://rewritten.txt")))
+                       (funcall callback nil))))
+                  ((symbol-function
+                    'niwa-check-permission-async-with-metadata)
+                   (lambda (_name callback &rest _)
+                     (funcall callback
+                              '(:outcome allow :raw-outcome allow)))))
+          (with-temp-buffer
+            (setq-local niwa--session session)
+            (niwa-pipeline-run-tool
+             tool (lambda (value) (setq result value))
+             '(:file_path "work://original.txt")))
+          (should (string-prefix-p "prepared" result))
+          (should attempt-seen)))
+      (delete-directory save-path t)))
+
+  :doc "pre-tool skill aliases resolve before permission without replacing authored input"
+  (let* ((root (make-temp-file "niwa-pipeline-skill-alias-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (workspace (niwa-workspace--create
+                     :type 'test :id root :root root
+                     :name "pipeline-skill-alias"))
+         (skill (niwa-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'niwa :source-file skill-file
+                 :source-dir skill-dir))
+         (session (niwa-session--create
+                   :workspace workspace :skills (list skill)))
+         (alias "skill://local-niwa/demo")
+         (digest (niwa-resource-skill-digest skill-file))
+         (exact (format "skill://demo@%s" digest))
+         permission-data permission-input permission-attempt
+         handler-input handler-attempt pre-input post-input result
+         (tool (niwa-tool--create
+                :name "Read"
+                :handler
+                (lambda (args)
+                  (setq handler-input (plist-get args :file_path)
+                        handler-attempt
+                        (niwa-resource-current-attempt handler-input))
+                  '(:result "prepared"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (with-temp-file skill-file (insert "skill body\n"))
+          (cl-letf (((symbol-function 'niwa-hooks-run-event)
+                     (lambda (event payload callback &rest _)
+                       (pcase event
+                         ('PreToolUse
+                          (setq pre-input (plist-get payload :tool-input))
+                          (funcall callback
+                                   (list :updated-input
+                                         (list :file_path alias))))
+                         ('PostToolUse
+                          (setq post-input (plist-get payload :tool-input))
+                          (funcall callback nil))
+                         (_ (funcall callback nil)))))
+                    ((symbol-function 'niwa-tool-permission-step)
+                     (lambda (context next _fail)
+                       (setq permission-input (plist-get context :args)
+                             permission-attempt
+                             (cdr (assoc alias
+                                         (plist-get context
+                                                    :resource-attempts)))
+                             permission-data
+                             (copy-tree
+                              (gethash permission-attempt
+                                       niwa-resource--attempt-table)))
+                       (funcall next context))))
+            (with-temp-buffer
+              (setq-local niwa--workspace workspace
+                          niwa--session session)
+              (niwa-pipeline-run-tool
+               tool (lambda (value) (setq result value))
+               '(:file_path "plain.txt"))))
+          (should (string-prefix-p "prepared" result))
+          (should (equal '(:file_path "plain.txt") pre-input))
+          (should (equal (list :file_path alias) permission-input))
+          (should (equal alias handler-input))
+          (should (equal (list :file_path alias) post-input))
+          (should (eq permission-attempt handler-attempt))
+          (should (equal alias (plist-get permission-data :address)))
+          (should (equal skill-file (plist-get permission-data :source-file)))
+          (should (equal digest (plist-get permission-data :source-key)))
+          (should (equal exact (plist-get permission-data :exact-address))))
+      (delete-directory root t)))
+
+  :doc "unknown and ambiguous skill aliases stop before permission, handler, or post-use"
+  (let* ((first (niwa-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'niwa
+                 :source-file "/tmp/pipeline-first/SKILL.md"
+                 :source-dir "/tmp/pipeline-first"))
+         (second (niwa-skill--create
+                  :name "niwa:demo" :raw-name "demo" :source 'project
+                  :source-family 'niwa
+                  :source-file "/tmp/pipeline-second/SKILL.md"
+                  :source-dir "/tmp/pipeline-second"))
+         (tool (niwa-tool--create
+                :name "Read"
+                :handler (lambda (_args)
+                           (ert-fail "Unresolved alias reached handler"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (dolist (case
+             (list
+              (list "skill://local-niwa/missing" (list first))
+              (list "skill://local-niwa/demo" (list first second))))
+      (let ((session (niwa-session--create :skills (cadr case)))
+            permission-called post-called result)
+        (cl-letf (((symbol-function 'niwa-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (when (memq event '(PostToolUse PostToolUseFailure))
+                       (setq post-called t))
+                     (funcall callback nil)))
+                  ((symbol-function 'niwa-tool-permission-step)
+                   (lambda (_context _next _fail)
+                     (setq permission-called t))))
+          (with-temp-buffer
+            (setq-local niwa--session session)
+            (niwa-pipeline-run-tool
+             tool (lambda (value) (setq result value))
+             (list :file_path (car case)))))
+        (should (string-prefix-p "Error:" result))
+        (should-not permission-called)
+        (should-not post-called))))
+
+  :doc "Read authorizes a workspace symlink as its outside target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-symlink-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "niwa-pipeline-symlink-outside-" t)))
+         (secret (file-name-concat outside "secret.txt"))
+         (link (file-name-concat root "innocent.txt"))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id root :root root :name "symlink-root"))
+         (tool
+          (niwa-tool--create
+           :name "Read"
+           :handler #'niwa-tool-fs-read :async-p t
+           :args '((file_path path :required "Path"))
+           :groups '(read)
+           :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))))
+         (niwa-permission-rules
+          (list (list "Read" :path secret :action 'deny)))
+         (niwa-protected-paths nil)
+         (niwa-permission-mode 'full-auto)
+         results)
+    (unwind-protect
+        (progn
+          (write-region "TOP-SECRET\n" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local niwa--workspace workspace)
+            (dolist (path (list secret link))
+              (let (result)
+                (niwa-pipeline-run-tool
+                 tool (lambda (value) (setq result value))
+                 (list :file_path path))
+                (push result results))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "remote Read authorizes a symlink as its target-native destination"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-remote-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "niwa-pipeline-remote-outside-" t)))
+         (secret (file-name-concat outside "secret.txt"))
+         (link (file-name-concat root "innocent.txt"))
+         (tool
+          (niwa-tool--create
+           :name "Read"
+           :handler #'niwa-tool-fs-read :async-p t
+           :args '((file_path path :required "Path"))
+           :groups '(read)
+           :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))))
+         (niwa-protected-paths nil)
+         results)
+    (unwind-protect
+        (progn
+          (write-region "REMOTE-SECRET\n" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (niwa-test--with-local-shell-tramp '("read-link")
+            (let* ((remote-root
+                    (format "/niwamock:read-link:%s" root))
+                   (remote-secret
+                    (format "/niwamock:read-link:%s" secret))
+                   (remote-link
+                    (format "/niwamock:read-link:%s" link))
+                   (target
+                    (niwa-execution-target-create remote-root))
+                   (workspace
+                    (niwa-workspace--create
+                     :type 'project :id remote-root :root remote-root
+                     :name "remote-symlink-root"
+                     :file-cache (niwa-test-file-cache-create)))
+                   (session
+                    (niwa-session--create
+                     :name "remote-symlink" :workspace workspace
+                     :execution-target target
+                     :working-directory remote-root
+                     :permission-mode 'full-auto
+                     :permission-rules
+                     (list (list "Read" :path remote-secret
+                                 :action 'deny)))))
+              (niwa-execution-target-probe target nil 'off)
+              (with-temp-buffer
+                (setq-local default-directory remote-root)
+                (setq-local niwa--workspace workspace)
+                (setq-local niwa--session session)
+                (dolist (path (list remote-secret remote-link))
+                  (let (result)
+                    (niwa-pipeline-run-tool
+                     tool (lambda (value) (setq result value))
+                     (list :file_path path))
+                    (push result results))))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "Glob and Grep authorize a symlink root as its outside directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-search-root-" t)))
+         (outside-directory (file-name-as-directory
+                         (make-temp-file
+                          "niwa-pipeline-search-outside-" t)))
+         (outside (directory-file-name outside-directory))
+         (link (file-name-concat root "search-root"))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id root :root root :name "search-symlink-root"))
+         (session
+          (niwa-session--create
+           :name "search-symlink" :workspace workspace
+           :working-directory root :permission-mode 'full-auto
+           :sandbox-mode 'off
+           :permission-rules
+           (list (list "Glob" :path outside :action 'deny)
+                 (list "Grep" :path outside :action 'deny))))
+         (glob
+          (niwa-tool--create
+           :name "Glob" :handler #'niwa-tool-fs-search-glob
+           :args '((pattern string :required "Pattern")
+                   (path path :optional "Root"))
+           :async-p t :read-only-p t :groups '(read)
+           :get-path (lambda (args) (plist-get args :path))))
+         (grep
+          (niwa-tool--create
+           :name "Grep" :handler #'niwa-tool-fs-search-grep
+           :args '((pattern string :required "Pattern")
+                   (path path :optional "Root"))
+           :async-p t :read-only-p t :groups '(read)
+           :get-path (lambda (args) (plist-get args :path))))
+         (niwa-protected-paths nil)
+         results)
+    (unless (executable-find "rg")
+      (ert-skip "rg is required"))
+    (unwind-protect
+        (progn
+          (write-region "needle\n" nil
+                        (file-name-concat outside "found.el")
+                        nil 'silent)
+          (make-symbolic-link outside link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local niwa--workspace workspace)
+            (setq-local niwa--session session)
+            (dolist (entry (list (cons glob '(:pattern "*.el"))
+                          (cons grep '(:pattern "needle"))))
+              (dolist (path (list outside link))
+                (push
+                 (test-niwa-pipeline--run-tool-and-wait
+                  (car entry)
+                  (append (copy-sequence (cdr entry))
+                          (list :path path)))
+                 results))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "ApplyPatch authorizes a nonexistent symlink tail as its destination"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "niwa-pipeline-patch-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "niwa-pipeline-patch-outside-" t)))
+         (link (file-name-concat root "linked"))
+         (destination
+          (file-name-concat outside "new" "sub" "created.txt"))
+         (workspace
+          (niwa-workspace--create
+           :type 'project :id root :root root :name "patch-symlink-root"
+           :file-cache (niwa-test-file-cache-create)))
+         (session
+          (niwa-session--create
+           :name "patch-symlink" :workspace workspace
+           :working-directory root :permission-mode 'full-auto
+           :permission-rules
+           (list (list "ApplyPatch" :path destination
+                       :action 'deny))))
+         (tool
+          (niwa-tool--create
+           :name "ApplyPatch"
+           :handler #'niwa-tool-patch-handler
+           :args '((patch string :required "Patch"))
+           :async-p t :groups '(edit reviewed-edit) :snapshot-p t
+           :get-paths #'niwa-tool-patch--get-paths))
+         (patch
+          (string-join
+           '("*** Begin Patch"
+             "*** Add File: linked/new/sub/created.txt"
+             "+created"
+             "*** End Patch")
+           "\n"))
+         (niwa-permission-rules nil)
+         (niwa-protected-paths nil)
+         result)
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local niwa--workspace workspace)
+            (setq-local niwa--session session)
+            (setq result
+                  (test-niwa-pipeline--run-tool-and-wait
+                   tool (list :patch patch))))
+          (should
+           (string-prefix-p "Error: Permission denied" result))
+          (should-not (file-exists-p destination)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "ApplyPatch keeps its authorized destination across review delay"
+  (niwa-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "niwa-pipeline-review-root-" t)))
+           (outside-a (file-name-as-directory
+                       (make-temp-file
+                        "niwa-pipeline-review-a-" t)))
+           (outside-b (file-name-as-directory
+                       (make-temp-file
+                        "niwa-pipeline-review-b-" t)))
+           (link (file-name-concat root "linked"))
+           (destination-a
+            (file-name-concat outside-a "new" "created.txt"))
+           (destination-b
+            (file-name-concat outside-b "new" "created.txt"))
+           (workspace
+            (niwa-workspace--create
+             :type 'project :id root :root root
+             :name "review-symlink-root"
+             :file-cache (niwa-test-file-cache-create)))
+           (session
+            (niwa-session--create
+             :name "review-symlink" :workspace workspace
+             :working-directory root :permission-mode 'ask
+             :resource-grants
+             (list (list :path destination-a :access 'write))))
+           (tool
+            (niwa-tool--create
+             :name "ApplyPatch"
+             :handler #'niwa-tool-patch-handler
+             :args '((patch string :required "Patch"))
+             :async-p t :groups '(edit reviewed-edit) :snapshot-p t
+             :get-paths #'niwa-tool-patch--get-paths))
+           (patch
+            (string-join
+             '("*** Begin Patch"
+               "*** Add File: linked/new/created.txt"
+               "+authorized"
+               "*** End Patch")
+             "\n"))
+           (niwa-permission-rules nil)
+           (niwa-protected-paths nil)
+           result)
+      (unwind-protect
+          (progn
+            (make-symbolic-link outside-a link)
+            (with-current-buffer data-buf
+              (setq-local default-directory root)
+              (setq-local niwa--workspace workspace)
+              (setq-local niwa--session session)
+              (niwa-pipeline-run-tool
+               tool (lambda (value) (setq result value))
+               (list :patch patch)))
+            (should-not result)
+            (delete-file link)
+            (make-symbolic-link outside-b link)
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "[ Apply 1 change in 1 file ]")
+              (backward-char 2)
+              (let ((command (key-binding (kbd "RET"))))
+                (should (eq command #'niwa-patch-review-submit))
+                (call-interactively command)))
+            (should (string-search "Applied patch" result))
+            (should
+             (equal "authorized\n"
+                    (with-temp-buffer
+                      (insert-file-contents destination-a)
+                      (buffer-string))))
+            (should-not (file-exists-p destination-b)))
+        (delete-directory root t)
+        (delete-directory outside-a t)
+        (delete-directory outside-b t))))
+  :doc "side tool lifecycle audit uses the durable target without content"
+		 (let* ((parent (niwa-session--create :name "parent"))
+			(side (niwa-session--create
+			       :name "side" :audit-session parent
+			       :permission-mode 'full-auto))
+			(tool (niwa-tool--create
+			       :name "PrivateEcho"
+			       :handler (lambda (_args) '(:result "private-result"))
+			       :args '((file_path string :required "Path"))
+			       :read-only-p t))
+			calls result)
+		   (with-temp-buffer
+		     (setq-local niwa--session side)
+		     (cl-letf (((symbol-function 'niwa-telemetry-record)
+				(lambda (session event &rest props)
+				  (push (list session event props) calls))))
+		       (niwa-pipeline-run-tool
+			tool (lambda (value) (setq result value))
+			'(:file_path "/private/path"))))
+		   (should (equal "private-result" result))
+		   (dolist (event '(tool-received tool-finished))
+		     (let ((call (cl-find event calls :key #'cadr)))
+		       (should (eq parent (car call)))
+		       (should (eq 'btw
+				   (plist-get (nth 2 call) :conversation-scope)))
+		       (should-not
+			(string-match-p
+			 (regexp-opt '("/private/path" "private-result"))
+			 (prin1-to-string (nth 2 call)))))))
+		 :doc "side permission decisions forward only whitelisted audit fields"
+		 (let* ((root (make-temp-file "niwa-side-audit-" t))
+			(workspace (niwa-workspace--create
+				    :type 'project :id "audit" :root root
+				    :name "audit"))
+			(path (file-name-concat root "private"))
+			(parent (niwa-session--create
+				 :name "parent" :workspace workspace))
+			(side (niwa-session--create
+			       :name "side" :audit-session parent
+			       :workspace workspace :working-directory root
+			       :permission-mode 'full-auto))
+			(tool (niwa-tool--create
+			       :name "PrivateEdit"
+			       :handler (lambda (_args) '(:result "changed"))
+			       :args '((file_path string :required "Path"))
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(niwa-protected-paths nil)
+			calls result)
+		   (unwind-protect
+		       (progn
+			 (with-temp-buffer
+			   (setq-local niwa--session side)
+			   (cl-letf (((symbol-function 'niwa-telemetry-record)
+				      (lambda (session event &rest props)
+					(push (list session event props) calls))))
+			     (niwa-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :file_path path))))
+			 (should (equal "changed" result))
+			 (let ((call
+				(cl-find-if
+				 (lambda (entry)
+				   (and (eq parent (car entry))
+					(eq 'permission-decision (cadr entry))))
+				 calls)))
+			   (should call)
+			   (should (eq 'btw
+				       (plist-get (nth 2 call) :conversation-scope)))
+			   (should (eq :path
+				       (plist-get (nth 2 call) :specifier-key)))
+			   (should-not (plist-member (nth 2 call) :specifier-value))
+			   (should-not
+			    (string-match-p (regexp-quote path)
+					    (prin1-to-string (nth 2 call))))))
+		     (delete-directory root t)))
+		 :doc "one-shot request prompts for mutations without storing authority"
+		 (let* ((workspace (niwa-workspace--create
+				   :type 'project :id temporary-file-directory
+				   :root temporary-file-directory))
+				(session (niwa-session--create
+					  :name "one-shot" :workspace workspace
+					  :permission-mode 'edits))
+			(request (niwa-request--create
+				  :session session
+				  :one-shot-mutations-p t
+				  :skill-permission-rules
+				  '(("Edit" :action allow))))
+			(tool (niwa-tool--create
+			       :name "Edit"
+			       :handler (lambda (_args) '(:result "changed"))))
+			(niwa-permission-rules nil)
+			(niwa-protected-paths nil)
+			entry result)
+		   (with-temp-buffer
+		     (setq-local niwa--session session)
+		     (setq-local niwa--current-request request)
+		     (niwa-pq-test--with-view-here view
+		       (niwa-pipeline-run-tool
+			tool (lambda (value) (setq result value)) nil)
+		       (let ((card (niwa-pq-test--card view)))
+			 (setq entry (plist-get card :entry))
+			 ;; Even a non-UI reusable outcome must collapse to once.
+			 (niwa-pq-test--answer-captured card 'allow-session))))
+		   (should (plist-get entry :once-only))
+		   (should (equal "changed" result))
+		   (should-not (niwa-session-permission-rules session)))
+		 :doc "normal sessions omit per-step telemetry spans"
+		 (let* ((session (niwa-session--create
+				  :name "normal-telemetry"
+				  :permission-mode 'full-auto))
+			(tool (niwa-tool--create
+			       :name "QuietEcho"
+			       :handler (lambda (_args) '(:result "done"))
+			       :read-only-p t
+			       :async-p nil))
+			started result)
+		   (with-temp-buffer
+		     (setq-local niwa--session session)
+		     (cl-letf (((symbol-function 'niwa-telemetry-start)
+				(lambda (&rest _) (setq started t)))
+			       ((symbol-function 'niwa-telemetry-record)
+				#'ignore))
+		       (niwa-pipeline-run-tool
+			tool (lambda (value) (setq result value)) nil)))
+		   (should (equal "done" result))
+		   (should-not started))
+		 :doc "direct native-edit allow reaches the handler as auto-apply authority"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "niwa-direct-edit-" t)))
+			(path (file-name-concat root "file.txt"))
+			(workspace
+			 (niwa-workspace--create
+			  :type 'project :id "direct-edit" :root root
+			  :name "direct-edit" :file-cache nil))
+			(session
+			 (niwa-session--create
+			  :name "direct-edit" :workspace workspace
+			  :permission-mode 'ask
+			  :permission-rules '(("Edit" :action allow))))
+			(auto-apply-p nil)
+			(tool
+			 (niwa-tool--create
+			  :name "Edit" :groups '(edit)
+			  :get-path (lambda (args) (plist-get args :file_path))
+			  :handler
+			  (lambda (callback _args)
+			    (setq auto-apply-p
+				  (and
+				   (boundp 'niwa-pipeline--auto-apply-edit-p)
+				   (symbol-value
+				    'niwa-pipeline--auto-apply-edit-p)))
+			    (funcall callback '(:result "done")))
+			  :async-p t))
+			(niwa-permission-rules nil)
+			(niwa-protected-paths nil)
+			permission-context
+			handler-context)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local niwa--workspace workspace)
+			 (setq-local niwa--session session)
+			 (setq-local default-directory root)
+			 (cl-letf
+			     (((symbol-function 'niwa--all-allowed-roots)
+			       (lambda (&optional _buffer) (list root))))
+                           (niwa-tool-permission-step
+			    (list :tool tool
+				  :args (list :file_path path)
+				  :session session
+				  :workspace workspace
+				  :buffer (current-buffer))
+			    (lambda (context)
+			      (setq permission-context context))
+			    #'ert-fail)
+			   (niwa-pipeline--step-handler
+			    permission-context
+			    (lambda (context) (setq handler-context context))
+			    #'ert-fail))
+			 (should (equal "done"
+					(plist-get handler-context :result)))
+			 (should auto-apply-p))
+		     (delete-directory root t)))
+		 :doc "allowed-root ApplyPatch goes directly to its mandatory review"
+		 (niwa-view-test--with-buffers
+		   (let* ((root (file-name-as-directory
+				 (make-temp-file "niwa-pipeline-patch-ret-" t)))
+			  (path (file-name-concat root "test.el"))
+			  (workspace
+			   (niwa-workspace--create
+			    :type 'project :id root :root root :name "patch-ret"
+			    :file-cache (niwa-test-file-cache-create)))
+			  (session
+			   (niwa-session--create
+			    :name "patch-ret" :workspace workspace
+			    :working-directory root :permission-mode 'ask))
+			  (patch
+			   (string-join
+			    '("*** Begin Patch"
+			      "*** Update File: test.el"
+			      "@@"
+			      "-(defun hello-world ())"
+			      "+(defun hello-world ()"
+			      "+  (interactive)"
+			      "+  (message \"Hello, world!\"))"
+			      "*** End Patch")
+			    "\n"))
+			  (tool (or (niwa-tool-get "ApplyPatch" "niwa")
+				    (progn
+				      (niwa-tool-patch-register)
+				      (niwa-tool-get "ApplyPatch" "niwa"))))
+			  (niwa-permission-rules nil)
+			  (niwa-protected-paths nil)
+			  file-buffer
+			  result)
+		     (unwind-protect
+			 (progn
+			   (with-temp-file path
+			     (insert "(defun hello-world ())\n"))
+			   (setq file-buffer (find-file-noselect path))
+			   (with-current-buffer data-buf
+			     (setq-local default-directory root
+					 niwa--workspace workspace
+					 niwa--session session)
+			     (niwa-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :patch patch)))
+			   (with-current-buffer view-buf
+			     (goto-char (point-min))
+			     (should-not (search-forward "Permission Request" nil t))
+			     (goto-char (point-min))
+			     (search-forward "M test.el")
+			     (niwa-patch-review-toggle-fold)
+			     (should (string-search "- │ (defun hello-world ())"
+						    (buffer-string)))
+			     (should (string-search "Keys:" (buffer-string)))
+			     (goto-char (point-min))
+			     (search-forward "[ Apply 1 change in 1 file ]")
+			     (backward-char 2)
+			     (let ((command (key-binding (kbd "RET"))))
+			       (should (eq command #'niwa-patch-review-submit))
+			       (call-interactively command)))
+			   (should (string-search "Applied patch" result))
+			   (should
+			    (equal
+			     "(defun hello-world ()\n  (interactive)\n  (message \"Hello, world!\"))\n"
+			     (with-temp-buffer
+			       (insert-file-contents path)
+			       (buffer-string))))
+			   (should
+			    (equal
+			     "(defun hello-world ()\n  (interactive)\n  (message \"Hello, world!\"))\n"
+			     (with-current-buffer file-buffer (buffer-string))))
+			   (should (verify-visited-file-modtime file-buffer)))
+		       (when (buffer-live-p file-buffer)
+			 (with-current-buffer file-buffer (set-buffer-modified-p nil))
+			 (kill-buffer file-buffer))
+		       (when (file-directory-p root) (delete-directory root t)))))
+		 :doc "request cancellation settles an active pipeline exactly once"
+		 (let* ((session (niwa-session--create
+				  :name "cancel-pipeline"
+				  :permission-mode 'full-auto))
+			(tool (niwa-tool--create
+			       :name "NeverReturns"
+			       :handler (lambda (_callback _args) nil)
+			       :read-only-p t
+			       :async-p t))
+			(callback-count 0)
+			events
+			finished
+			request
+			result)
+		   (with-temp-buffer
+		     (setq-local niwa--session session)
+		     (setq request (niwa-request-begin session))
+		     (cl-letf (((symbol-function 'niwa-telemetry-detailed-p)
+				(lambda (_session) t))
+			       ((symbol-function 'niwa-telemetry-start)
+				(lambda (_session event &rest props)
+				  (list :event event :props props)))
+			       ((symbol-function 'niwa-telemetry-finish)
+				(lambda (span &rest props)
+				  (push (append span props) finished)))
+			       ((symbol-function 'niwa-telemetry-record)
+				(lambda (_session event &rest props)
+				  (push (cons event props) events))))
+		       (niwa-pipeline-run-tool
+			tool
+			(lambda (value)
+			  (cl-incf callback-count)
+			  (setq result value))
+			nil)
+		       (should-not result)
+		       (niwa-request-end)
+		       (should (= 1 callback-count))
+		       (should (string-prefix-p "Error: Request cancelled" result))
+		       (should (= 1 (cl-count 'tool-received events :key #'car)))
+		       (should (= 1 (cl-count 'tool-finished events :key #'car)))
+		       (should
+			(eq 'error
+			    (plist-get (cdr (cl-find 'tool-finished events :key #'car))
+				       :outcome)))
+		       (should
+			(= 1
+			   (cl-count 'cancelled finished
+				     :key (lambda (span)
+					    (plist-get span :outcome)))))
+		       (niwa-request-drain-cancellers request)
+		       (should (= 1 callback-count)))))
+		 :doc "each retry gets one pre-hook and one handler-specific post-hook"
+		 (let* ((attempt 0)
+			(tool (niwa-tool--create
+			       :name "Retry"
+			       :handler (lambda (_args)
+					  (if (= 1 (cl-incf attempt))
+					      (error "First attempt failed")
+					    '(:result "ok")))
+			       :read-only-p t))
+			events
+			results)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(push event events)
+				(funcall callback nil))))
+		     (niwa-pipeline-run-tool
+		      tool (lambda (result) (push result results)) nil)
+		     (niwa-pipeline-run-tool
+		      tool (lambda (result) (push result results)) nil))
+		   (should (equal '(PreToolUse PostToolUseFailure
+				    PreToolUse PostToolUse)
+				  (nreverse events)))
+		   (should (string-prefix-p "Error: First attempt failed"
+					    (cadr results)))
+		   (should (equal "ok" (car results))))
+		 :doc "validation failures run no lifecycle hooks or handler"
+		 (let* ((handler-called nil)
+			(tool (niwa-tool--create
+			       :name "Invalid"
+			       :args '((value string :required "Value"))
+			       :handler (lambda (_args)
+					  (setq handler-called t)
+					  '(:result "unexpected"))
+			       :read-only-p t))
+			events
+			result)
+		   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(push event events)
+				(funcall callback nil))))
+		     (niwa-pipeline-run-tool
+		      tool (lambda (value) (setq result value)) nil))
+		   (should (string-prefix-p "Error:" result))
+		   (should-not handler-called)
+		   (should-not events))
+		 :doc "repaired calls reach the handler and append one corrective note"
+		 (let* ((tool (niwa-tool--create
+			       :name "Collect"
+			       :category "niwa"
+			       :handler (lambda (args)
+					  (list :result
+						(format "received %d name"
+							(length (plist-get args :names)))))
+			       :args '((names array :required "Names"
+					     :items (:type string)))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-tool-register tool)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (let* ((adapted
+				 (niwa-tool-repair-pre-tool-call
+				  '(:name "Collect" :args (:names "alice"))))
+				(args (plist-get adapted :args)))
+			   (niwa-pipeline-run-tool
+			    tool (lambda (value) (setq result value)) args)
+			   (should (string-match-p "received 1 name" result))
+			   (let ((audit
+                                  (car (niwa-test--hook-audit-records
+					result))))
+			     (should (eq 'tool-input-repair
+					 (plist-get audit :type)))
+			     (should (eq 'committed (plist-get audit :state)))
+			     (should (equal 'wrap-array-singleton
+					    (plist-get
+					     (car (plist-get audit :repairs)) :rule))))
+			   (let ((first (string-match
+					 "Note: Repaired tool input" result)))
+			     (should first)
+			     (should-not
+			      (string-match "Note: Repaired tool input"
+					    result (1+ first))))))
+		     (niwa-tool-clear-registry)))
+  :doc "valid raw calls settle and release tracking without appending a repair row"
+  (let* ((root (make-temp-file "niwa-pipeline-noop-repair-" t))
+         (session (niwa-session--create :name "main" :save-path root))
+         (niwa-tool-repair-persist-log t)
+         handler-callback entry result
+         (tool (niwa-tool--create
+                :name "NoopRepair" :category "niwa"
+                :handler (lambda (callback _args) (setq handler-callback callback))
+                :args '((message string :required "Message"))
+                :read-only-p t :async-p t))
+         (delivered 0))
+    (unwind-protect
+        (progn
+          (niwa-tool-register tool)
+          (with-temp-buffer
+            (setq-local niwa--session session)
+            (should-not
+             (niwa-tool-repair-pre-tool-call
+              '(:name "NoopRepair" :args (:message "hello"))))
+            (setq entry (car niwa-tool-repair--ledger))
+            (should (eq 'valid (plist-get entry :status)))
+            (niwa-pipeline-run-tool
+             tool (lambda (value) (cl-incf delivered) (setq result value))
+             '(:message "hello"))
+            (should handler-callback)
+            (should (equal (list entry) niwa-tool-repair--in-flight))
+            (should-not niwa-tool-repair--ledger)
+            (should-not (plist-get entry :telemetry-recorded))
+            (funcall handler-callback '(:result "delivered" :status success))
+            (should (equal "delivered" (car (niwa-tool-render-data-extract result))))
+            (should (= 1 delivered))
+            (should (plist-get entry :telemetry-recorded))
+            (should-not niwa-tool-repair--in-flight)
+            (niwa-tool-repair-post-tool-call
+             '(:name "NoopRepair" :args (:message "hello") :result "delivered"))
+            (should (= 1 delivered))
+            (should-not niwa-tool-repair--ledger)
+            (should-not niwa-tool-repair--in-flight)
+            (should-not (file-exists-p (niwa-tool-repair-log-path session)))
+            (should-not (niwa-session-repair-log session))
+            (should-not (niwa-session-repair-log-pending session))))
+      (niwa-tool-clear-registry)
+      (delete-directory root t)))
+
+				 :doc "records repaired main-session execution with actual backend and model"
+		 (let* ((session (niwa-session--create :name "main"))
+			(tool (niwa-tool--create
+			       :name "TelemetryEcho"
+			       :category "niwa"
+			       :handler (lambda (_args)
+					  '(:result "sentinel tool result"))
+				       :args '((message array :required "Message" :items (:type string)))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-tool-register tool)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local niwa--session session)
+				 (let ((adapted
+				        (niwa-tool-repair-pre-tool-call
+				         '(:name "TelemetryEcho" :args (:message "sentinel input")
+				           :backend main-backend :model main-model))))
+				   (should adapted)
+				   (niwa-pipeline-run-tool
+				    tool (lambda (value) (setq result value))
+				    (plist-get adapted :args)))
+				 (should (string-prefix-p "sentinel tool result" result)))
+		     (niwa-tool-clear-registry))
+		   (let ((event (car (niwa-session-repair-log session))))
+			     (should (eq 'repaired (plist-get event :outcome)))
+		     (should (equal "/root" (plist-get event :origin)))
+		     (should (eq 'main-backend (plist-get event :backend)))
+		     (should (eq 'main-model (plist-get event :model)))
+		     (should (eq 'executed (plist-get event :execution)))
+		     (should (eq 'success (plist-get event :result)))
+			     (should-not
+			      (string-match-p "sentinel" (prin1-to-string event)))))
+
+  :doc "structured errors remain errors in lifecycle and repair telemetry"
+  (let* ((session (niwa-session--create :name "structured-error"))
+         (niwa-tool--registry (make-hash-table :test #'equal))
+         (tool
+          (niwa-tool--create
+           :name "StructuredFailure"
+           :category "niwa"
+           :handler (lambda (_args)
+                      '(:result "plain failure" :status error))
+           :args '((message array :required "Message" :items (:type string)))
+           :read-only-p t))
+         result)
+    (niwa-tool-register tool)
+    (with-temp-buffer
+      (setq-local niwa--session session)
+      (let ((adapted (niwa-tool-repair-pre-tool-call
+                      '(:name "StructuredFailure" :args (:message "hello")))))
+        (should adapted)
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (plist-get adapted :args))))
+    (should-not (string-prefix-p "Error:" result))
+    (let ((finished
+           (cl-find 'tool-finished
+                    (niwa-session-telemetry-pending session)
+                    :key (lambda (event) (plist-get event :event))))
+          (repair (car (niwa-session-repair-log session))))
+      (should (eq 'error (plist-get finished :outcome)))
+      (should (eq 'error (plist-get repair :result)))))
+
+  :doc "rejected duplicate callbacks cannot replace settled handler status"
+  (let* ((session (niwa-session--create :name "settled-status"))
+         (niwa-tool--registry (make-hash-table :test #'equal))
+         handler-callback
+         post-callback
+         repaired-args
+         result
+         (tool
+          (niwa-tool--create
+           :name "SettledStatus"
+           :category "niwa"
+           :handler (lambda (callback _args)
+                      (setq handler-callback callback))
+           :args '((message array :required "Message" :items (:type string)))
+           :read-only-p t
+           :async-p t)))
+    (niwa-tool-register tool)
+    (with-temp-buffer
+      (setq-local niwa--session session)
+      (let ((adapted (niwa-tool-repair-pre-tool-call
+                      '(:name "SettledStatus" :args (:message "hello")))))
+        (should adapted)
+        (setq repaired-args (plist-get adapted :args)))
+      (cl-letf (((symbol-function 'niwa-hooks-run-event)
+                 (lambda (event _payload callback &rest _)
+                   (if (memq event '(PostToolUse PostToolUseFailure))
+                       (setq post-callback callback)
+                     (funcall callback nil)))))
+        (niwa-pipeline-run-tool
+         tool (lambda (value) (setq result value)) repaired-args)
+        (funcall handler-callback '(:result "accepted" :status success))
+        (should post-callback)
+        (niwa-test--with-captured-diagnostics nil
+          (funcall handler-callback '(:result "late" :status error)))
+        (funcall post-callback nil)))
+    (should (string-prefix-p "accepted" result))
+    (should
+     (eq 'success
+         (plist-get
+          (cdr (niwa-tool-render-data-extract result)) :status)))
+    (let ((finished
+           (cl-find 'tool-finished
+                    (niwa-session-telemetry-pending session)
+                    :key (lambda (event) (plist-get event :event))))
+          (repair (car (niwa-session-repair-log session))))
+      (should (eq 'success (plist-get finished :outcome)))
+      (should (eq 'success (plist-get repair :result)))))
+
+			 :doc "telemetry construction failures do not block result delivery"
+			 (let* ((session (niwa-session--create :name "main"))
+				(tool (niwa-tool--create
+				       :name "TelemetryFailure"
+				       :category "niwa"
+				       :handler (lambda (_args) '(:result "delivered"))
+					       :args '((message array :required "Message" :items (:type string)))
+				       :read-only-p t
+				       :async-p nil))
+					result
+					repaired-args
+					warning)
+				   (niwa-tool-register tool)
+				   (unwind-protect
+				       (with-temp-buffer
+					 (setq-local niwa--session session)
+					 (setq repaired-args
+					       (plist-get
+					        (niwa-tool-repair-pre-tool-call
+					         '(:name "TelemetryFailure" :args (:message "hello")))
+					        :args))
+				 (cl-letf (((symbol-function 'niwa-tool-repair--event)
+					    (lambda (&rest _)
+					      (error "private telemetry sentinel")))
+					   ((symbol-function 'display-warning)
+					    (lambda (_type message &rest _)
+					      (setq warning message))))
+				   (niwa-pipeline-run-tool
+				    tool (lambda (value) (setq result value))
+						    repaired-args))
+				 (should (string-prefix-p "delivered" result))
+				 (should warning)
+				 (should-not (string-match-p "private\|sentinel" warning))
+				 (should-not niwa-tool-repair--in-flight))
+			     (niwa-tool-clear-registry)))
+			 :doc "repair audit construction failures do not block result delivery"
+			 (let* ((tool (niwa-tool--create
+				       :name "AuditConstructionFailure"
+				       :category "niwa"
+				       :handler (lambda (_args) '(:result "delivered"))
+				       :args '((names array :required "Names"
+						     :items (:type string)))
+				       :read-only-p t
+				       :async-p nil))
+				result
+				warning)
+			   (niwa-tool-register tool)
+			   (unwind-protect
+			       (with-temp-buffer
+				 (let* ((adapted
+					 (niwa-tool-repair-pre-tool-call
+					  '(:name "AuditConstructionFailure"
+						  :args (:names "alice"))))
+					(args (plist-get adapted :args)))
+				   (cl-letf
+				       (((symbol-function 'niwa-tool-repair-audit-record)
+					 (lambda (&rest _)
+					   (error "private audit sentinel")))
+					((symbol-function 'display-warning)
+					 (lambda (_type message &rest _)
+					   (setq warning message))))
+				     (niwa-pipeline-run-tool
+				      tool (lambda (value) (setq result value)) args)))
+				 (should (equal "delivered\n\nNote: Repaired tool input: Wrapped the singleton at `names` as an array. Please use the corrected argument shape in later calls."
+						result))
+				 (should warning)
+				 (should-not (string-match-p "private\|sentinel" warning)))
+			     (niwa-tool-clear-registry)))
+			 :doc "repaired handler signals retain committed audit metadata"
+			 (let* ((tool (niwa-tool--create
+				       :name "RepairedSignal"
+				       :category "niwa"
+				       :handler (lambda (_args)
+					  (error "handler exploded"))
+				       :args '((names array :required "Names"
+						     :items (:type string)))
+				       :read-only-p t
+				       :async-p nil))
+				result)
+			   (niwa-tool-register tool)
+			   (unwind-protect
+			       (with-temp-buffer
+				 (let* ((adapted
+					 (niwa-tool-repair-pre-tool-call
+					  '(:name "RepairedSignal"
+						  :args (:names "alice"))))
+					(args (plist-get adapted :args)))
+				   (niwa-pipeline-run-tool
+				    tool (lambda (value) (setq result value)) args))
+				 (should (string-prefix-p "Error:" result))
+				 (let ((first
+					(string-match "Note: Repaired tool input" result)))
+				   (should first)
+				   (should-not
+				    (string-match "Note: Repaired tool input"
+						  result (1+ first))))
+				 (let ((audit
+                                        (car (niwa-test--hook-audit-records
+					      result))))
+				   (should (eq 'tool-input-repair
+					       (plist-get audit :type)))
+				   (should (eq 'committed (plist-get audit :state)))))
+			     (niwa-tool-clear-registry)))
+		 :doc "repaired PreToolUse denials include one repair audit"
+		 (let* ((tool (niwa-tool--create
+			       :name "RepairedDenied"
+			       :category "niwa"
+			       :handler (lambda (_args) "must not run")
+			       :args '((names array :required "Names"
+					     :items (:type string)))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-tool-register tool)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (let* ((adapted
+				 (niwa-tool-repair-pre-tool-call
+				  '(:name "RepairedDenied"
+					  :args (:names "alice"))))
+				(args (plist-get adapted :args)))
+			   (cl-letf (((symbol-function 'niwa-hooks-run-event)
+				      (lambda (event _payload callback &rest _)
+					(should (eq event 'PreToolUse))
+					(funcall callback
+						 '(:continue nil
+						   :stop-reason "test denial")))))
+			     (niwa-pipeline-run-tool
+			      tool (lambda (value) (setq result value)) args)))
+			 (should (string-prefix-p "Error:" result))
+			 (let ((repair-audits
+				(cl-remove-if-not
+				 (lambda (record)
+				   (eq 'tool-input-repair
+				       (plist-get record :type)))
+                                 (niwa-test--hook-audit-records result))))
+			   (should (= 1 (length repair-audits)))))
+		     (niwa-tool-clear-registry)))
+                 :doc "path repair is shared by permission, snapshot, handler, and rendering"
+                 (let* ((expected "/tmp/notes.md")
+                        (workspace (niwa-workspace--create
+                                    :type 'project :id temporary-file-directory
+                                    :root temporary-file-directory))
+                        (session
+                         (niwa-session--create
+                          :name "path-repair"
+                          :workspace workspace
+                          :permission-mode 'ask
+                          :resource-grants
+                          (list (list :path expected :access 'write))))
+                        (request (niwa-request--create
+                                  :file-snapshots (make-hash-table :test #'equal)))
+                        (niwa--session session)
+                        (niwa--current-request request)
+                        (get-path-values nil)
+                        snapshot-value
+                        handler-value
+                        render-value
+                        (tool (niwa-tool--create
+                               :name "PathMutation"
+                               :category "niwa"
+                               :handler (lambda (args)
+                                          (setq handler-value
+                                                (plist-get args :file_path))
+                                          '(:result "updated"))
+                               :args '((file_path path :required "File path"))
+                               :check-permission (lambda (_tool _args) 'allow)
+                               :get-path (lambda (args)
+                                           (let ((path (plist-get args :file_path)))
+                                             (push path get-path-values)
+                                             path))
+                               :render-transform
+                               (lambda (_name args _result)
+                                 (setq render-value (plist-get args :file_path))
+                                 '(:status updated))
+                               :read-only-p nil
+                               :snapshot-p t
+                               :async-p nil))
+                        result)
+                   (niwa-tool-register tool)
+                   (unwind-protect
+                       (with-temp-buffer
+                         (cl-letf (((symbol-function
+                                     'niwa-pipeline--snapshot-file-if-needed)
+                                    (lambda (_request path)
+                                      (setq snapshot-value path))))
+                           (let* ((adapted
+                                   (niwa-tool-repair-pre-tool-call
+                                    '(:name "PathMutation"
+                                            :args
+                                            (:file_path
+                                             "/tmp/[notes.md](https://notes.md)"))))
+                                  (args (plist-get adapted :args)))
+                             (niwa-pipeline-run-tool
+                              tool (lambda (value) (setq result value)) args)
+                             (should (seq-every-p
+                                      (lambda (value) (equal expected value))
+                                      get-path-values))
+                             (should (equal expected snapshot-value))
+                             (should (equal expected handler-value))
+                             (should (equal expected render-value))
+                             (should (string-match-p
+                                      "Note: Repaired tool input" result)))))
+                     (niwa-tool-clear-registry)))
+		 :doc "async tool runs through pipeline"
+		 (let* ((tool (niwa-tool--create
+			       :name "AsyncEcho"
+			       :handler (lambda (cb args)
+					  (funcall cb
+						   (list :result (plist-get args :msg))))
+			       :args '((msg string :required "Message"))
+			       :read-only-p t
+			       :async-p t))
+			result)
+		   (niwa-pipeline-run-tool
+		    tool (lambda (r) (setq result r)) '(:msg "async hello"))
+		   (should (equal result "async hello")))
+		 :doc "network escalation is a separate audited retry without hidden replay"
+		 (let* ((root (make-temp-file "niwa-network-retry-" t))
+			(workspace (niwa-workspace--create
+			            :type 'project :id root :root root))
+			(session (niwa-session--create
+				  :name "network-retry"
+				  :workspace workspace
+				  :execution-target
+				  (niwa-execution-target-create root)
+				  :save-path root
+				  :permission-mode 'full-auto))
+			(niwa--session session)
+			(niwa-permission-log-enabled t)
+			(niwa-permission-rules nil)
+			launches first-result second-result)
+		   (niwa-tool-exec--register)
+		   (unwind-protect
+		       (let ((tool (niwa-tool-get "Bash")))
+			 (cl-letf
+			     (((symbol-function
+				'niwa-execution-start-bash)
+			       (lambda (callback &rest keys)
+				 (let ((additional-permissions
+					(plist-get keys :additional-permissions)))
+				   (push additional-permissions launches)
+				 (funcall
+				  callback
+				  (if additional-permissions
+				      '(:output "downloaded"
+					:facts
+					(:state completed :termination exited
+					 :exit-code 0 :outcome success
+					 :wall-time-seconds 0.1 :output-bytes 10
+					 :output-lines 1 :omitted-output-bytes 0
+					 :tty nil)
+					:sandbox-facts
+					(:sandbox bubblewrap
+					 :filesystem workspace-write
+					 :network unrestricted))
+				    '(:output "network denied"
+				      :facts
+				      (:state completed :termination exited
+				       :exit-code 7 :outcome failure
+				       :wall-time-seconds 0.1 :output-bytes 14
+				       :output-lines 1 :omitted-output-bytes 0
+				       :tty nil)
+				      :sandbox-facts
+				      (:sandbox bubblewrap
+				       :filesystem workspace-write
+				       :network isolated))))))))
+			   (niwa-pipeline-run-tool
+			    tool (lambda (result) (setq first-result result))
+				    '(:command "pwd" :description "Probe isolated network launch"))
+			   (should (= 1 (length launches)))
+			   (should (string-match-p "network denied" first-result))
+			   (should (string-match-p "network: isolated" first-result))
+			   (niwa-pipeline-run-tool
+			    tool (lambda (result) (setq second-result result))
+			    '(:command "pwd"
+				      :description "Probe authorized network retry"
+			      :sandbox_permissions "with_additional_permissions"
+			      :additional_permissions (:network t)
+			      :justification "Reach the requested service?"))
+			   (should (= 2 (length launches)))
+			   (should (equal '((:network t) nil) launches))
+			   (should (string-match-p "downloaded" second-result))
+			   (should (string-match-p "network: unrestricted"
+					   second-result)))
+			 (let* ((entries
+                                 (niwa-test--permission-log-entries session))
+				(classifier-entries
+				 (seq-filter
+				  (lambda (entry)
+				    (eq 'bash-classifier (plist-get entry :via)))
+				  entries))
+				(network-entry
+				 (seq-find
+				  (lambda (entry)
+				    (eq 'sandbox-network (plist-get entry :via)))
+				  entries)))
+			   (should (= 2 (length classifier-entries)))
+			   (should (eq 'allow (plist-get network-entry :outcome)))
+			   (should
+			    (equal '(:network t)
+				   (plist-get network-entry
+					      :additional-permissions)))))
+		     (niwa-tool-clear-registry)
+		     (delete-directory root t)))
+		 :doc "filesystem authority does not authorize its Bash consumer"
+		 (let* ((root (make-temp-file "niwa-resource-authority-" t))
+			(secret (file-name-concat root "secret"))
+			(workspace (niwa-workspace--create
+			            :type 'project :id root :root root))
+			(session (niwa-session--create
+				  :name "resource-authority"
+				  :workspace workspace
+				  :execution-target
+				  (niwa-execution-target-create root)
+				  :save-path root
+				  :permission-mode 'ask
+				  :resource-grants
+				  (list (list :path secret :access 'read))))
+			(niwa--session session)
+			(niwa-permission-rules nil)
+			enqueued-kinds launched result)
+		   (niwa-tool-exec--register)
+		   (unwind-protect
+		       (let ((tool (niwa-tool-get "Bash")))
+			 (cl-letf
+			     (((symbol-function 'niwa-execution-start-one-shot)
+			       (lambda (&rest _args) (setq launched t))))
+			   (niwa-pq-test--with-session-view session view
+			     (niwa-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :command (format "custom-reader %s" secret)
+				    :description "Probe Bash resource authority"
+				    :sandbox_permissions "with_additional_permissions"
+				    :additional_permissions
+				    (list :file_system (list :read (vector secret)))
+				    :justification "Read the requested secret?"))
+			     (let ((card (niwa-pq-test--card view)))
+			       (setq enqueued-kinds
+				     (list (plist-get (plist-get card :entry) :kind)))
+			       (niwa-pq-test--press card "d"))))
+			 (should (equal '(bash) enqueued-kinds))
+			 (should-not launched)
+			 (should (string-match-p "Permission denied" result)))
+		     (niwa-tool-clear-registry)
+		     (delete-directory root t)))
+		 :doc "tool handlers default to the workspace root"
+		 (let* ((root (make-temp-file "niwa-tool-root-" t))
+			(other (make-temp-file "niwa-tool-other-" t))
+			(ws (niwa-workspace--create :root root))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws))
+			(tool (niwa-tool--create
+			       :name "PwdTool"
+			       :handler (lambda (_args)
+					  (list :result default-directory))
+			       :args nil
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (unwind-protect
+		       (let ((default-directory other))
+			 (niwa-pipeline-run-tool tool (lambda (r) (setq result r)) nil)
+			 (should (equal result (file-name-as-directory root))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "tool handlers default to the session working directory"
+		 (let* ((root (make-temp-file "niwa-tool-root-" t))
+			(module-dir (file-name-concat root "packages" "api"))
+			(other (make-temp-file "niwa-tool-other-" t))
+			(ws (niwa-workspace--create :root root))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws
+					   :working-directory module-dir))
+			(tool (niwa-tool--create
+			       :name "PwdTool"
+			       :handler (lambda (_args)
+					  (list :result default-directory))
+			       :args nil
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (make-directory module-dir t)
+		   (unwind-protect
+		       (let ((default-directory other))
+			 (niwa-pipeline-run-tool tool (lambda (r) (setq result r)) nil)
+			 (should (equal result (file-name-as-directory module-dir))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "async tool continuations default to the workspace root"
+		 (let* ((root (make-temp-file "niwa-tool-root-" t))
+			(other (make-temp-file "niwa-tool-other-" t))
+			(ws (niwa-workspace--create :root root))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws))
+			saved-cb
+			(tool (niwa-tool--create
+			       :name "AsyncPwdTool"
+			       :handler (lambda (cb _args) (setq saved-cb cb))
+			       :args nil
+			       :read-only-p t
+			       :async-p t))
+			result)
+		   (unwind-protect
+		       (progn
+			 (let ((default-directory other))
+			   (niwa-pipeline-run-tool
+			    tool (lambda (_r) (setq result default-directory)) nil))
+			 (let ((default-directory other))
+			   (funcall saved-cb '(:result "done")))
+			 (should (equal result (file-name-as-directory root))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "async tool continuations default to the session working directory"
+		 (let* ((root (make-temp-file "niwa-tool-root-" t))
+			(module-dir (file-name-concat root "packages" "api"))
+			(other (make-temp-file "niwa-tool-other-" t))
+			(ws (niwa-workspace--create :root root))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws
+					   :working-directory module-dir))
+			saved-cb
+			(tool (niwa-tool--create
+			       :name "AsyncPwdTool"
+			       :handler (lambda (cb _args) (setq saved-cb cb))
+			       :args nil
+			       :read-only-p t
+			       :async-p t))
+			result)
+		   (make-directory module-dir t)
+		   (unwind-protect
+		       (progn
+			 (let ((default-directory other))
+			   (niwa-pipeline-run-tool
+			    tool (lambda (_r) (setq result default-directory)) nil))
+			 (let ((default-directory other))
+			   (funcall saved-cb '(:result "done")))
+			 (should (equal result (file-name-as-directory module-dir))))
+		     (delete-directory root t)
+		     (delete-directory other t)))
+		 :doc "validation failure returns error"
+		 (let* ((tool (niwa-tool--create
+			       :name "Strict"
+			       :handler (lambda (_args) "should not run")
+			       :args '((name string :required "Name"))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-pipeline-run-tool
+		    tool (lambda (r) (setq result r)) nil)
+		   (should (string-prefix-p "Error:" result)))
+		 :doc "handler error returns error string"
+		 (let* ((tool (niwa-tool--create
+			       :name "Broken"
+			       :handler (lambda (_args) (error "Handler exploded"))
+			       :args nil
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (niwa-pipeline-run-tool
+		    tool (lambda (r) (setq result r)) nil)
+		   (should (string-match-p "Handler exploded" result)))
+		 :doc "persist still fires when handler wraps callback in with-temp-buffer"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws
+					   :execution-target
+					   (niwa-execution-target-create tmpdir)
+					   :save-path save-path))
+			;; Handler mimics Grep/Glob: all work, including the callback,
+			;; runs inside `with-temp-buffer'.  If step-persist were
+			;; reading `current-buffer' it would see the temp buffer and
+			;; fail to find the session, truncating instead of persisting.
+			(tool (niwa-tool--create
+			       :name "BigFromTemp"
+			       :handler (lambda (cb _args)
+					  (with-temp-buffer
+					    (funcall cb
+						     (list :result (make-string 500 ?y)))))
+			       :args nil
+			       :read-only-p t
+			       :async-p t
+			       :max-result-size 100))
+			result)
+		   (unwind-protect
+		       (progn
+			 (niwa-pipeline-run-tool
+			  tool (lambda (r) (setq result r)) nil)
+                         (with-timeout (2 (ert-fail "Persisted result timed out"))
+                           (while (not result) (accept-process-output nil 0.01)))
+			 (should (string-prefix-p "<persisted-output>" result))
+			 (should (directory-files
+				  (file-name-concat save-path "tool-results")
+				  nil "\\.txt$")))
+		     (delete-directory tmpdir t)))
+		 :doc "once-fire guard: signal escaping after next-cont recursion delivered success drops the late error"
+		 ;; Regression for the foreground-stash hang's secondary cause.  An
+		 ;; inner step (e.g. attach-render-data) fires its NEXT, the recursion
+		 ;; runs the empty-steps branch which fires the success delivery, then
+		 ;; the deeper step's body signals.  The signal escapes the recursion
+		 ;; and is caught by the outer step's condition-case, which now fires
+		 ;; the gptel callback directly with an `Error: ...' string -- and the
+		 ;; once-fire wrapper drops that late error so the consumer is not
+		 ;; double-fired with both success and failure for the same call.
+		 (let* ((deliveries nil)
+			;; The consumer captures every fire.  Without the once-fire
+			;; wrapper the consumer would see two fires: the success and
+			;; the late error.
+			(callback (lambda (r) (push r deliveries)))
+			;; Step that fires NEXT successfully (which recurses through
+			;; the empty-steps branch and delivers the success), then
+			;; signals.  The runner's condition-case catches the signal
+			;; and -- per the fix -- fires `callback' directly with an
+			;; `Error: ...' string.  The once-fire wrapper at the entry
+			;; must drop that second attempt.
+			(post-next-signal-step
+			 (lambda (ctx next _fail)
+			   (funcall next (plist-put ctx :result "ok-from-step"))
+				   (error "Step body signaled after next-cont fired")))
+			;; Bypass `niwa-pipeline-run-tool' to install our custom
+			;; once-fire wrapper around the bare runner so the test
+			;; directly exercises the runner's escape path.
+			(called nil)
+			(once-callback
+			 (lambda (result)
+			   (unless called
+			     (setq called t)
+			     (condition-case err
+				 (funcall callback result)
+			       (error
+				(display-warning
+				 'niwa
+				 (format "Pipeline final callback signaled: %S" err)
+				 :warning)))))))
+		   (niwa-test--with-captured-diagnostics nil
+		     (niwa-pipeline--run
+		      (list post-next-signal-step) once-callback nil))
+		   (should (= 1 (length deliveries)))
+		   (should (equal "ok-from-step"
+				  (plist-get (car deliveries) :result))))
+
+		 :doc "once-fire guard: signaling consumer is caught and does not strand the pipeline"
+		 ;; The defensive `condition-case' inside the once-fire wrapper
+		 ;; demotes a signaling consumer to a `display-warning' so a
+		 ;; misbehaving gptel callback cannot escape and unwind the
+		 ;; runner's caller.  Verifies that path -- the wrapper still marks
+		 ;; itself fired and refuses the next attempt.
+		 (let* ((tool (niwa-tool--create
+			       :name "Signaling"
+			       :handler (lambda (_args) '(:result "payload"))
+			       :args nil
+			       :read-only-p t
+			       :async-p nil))
+			(count 0)
+			(signaling-cb (lambda (_r)
+					(cl-incf count)
+						(error "Consumer signaled"))))
+		   (niwa-test--with-captured-diagnostics nil
+		     (niwa-pipeline-run-tool tool signaling-cb nil))
+		   ;; The consumer was called once; its signal was caught inside the
+		   ;; once-fire wrapper, so the runner's caller did not unwind.
+		   (should (= 1 count))))
+
+
+(niwa-deftest niwa-pipeline--dispatch ()
+  ,test
+  (test)
+
+  :doc "defers dispatch of a mutating tool while the transport is busy"
+  (let* ((tool (niwa-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-busy"))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "ran")))))
+         deferred-thunk asserted settlement)
+    (cl-letf (((symbol-function 'niwa-transport-busy-p) (lambda (&optional _) t))
+              ((symbol-function 'niwa-transport-run-when-idle)
+               (lambda (_key _path thunk &optional _on-cancel)
+                 (setq deferred-thunk thunk)))
+              ((symbol-function
+                'niwa-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session) (setq asserted t)))
+              ((symbol-function 'niwa-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (niwa-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      ;; Busy: nothing ran yet, and the authority assertion waited too.
+      (should-not settlement)
+      (should-not asserted)
+      (should (functionp deferred-thunk))
+      ;; Transport idle: the deferred thunk asserts and runs the pipeline.
+      (funcall deferred-thunk)
+      (should asserted)
+      (should (equal "ran" (plist-get settlement :result)))))
+
+  :doc "settles the call instead of signaling when the assertion fails"
+  (let* ((tool (niwa-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-refused"))
+         (steps (list (lambda (ctx next _fail) (funcall next ctx))))
+         settlement)
+    (cl-letf (((symbol-function 'niwa-transport-busy-p)
+               (lambda (&optional _) nil))
+              ((symbol-function
+                'niwa-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session)
+                 (signal 'niwa-session-control-fs-busy '("/x/.lease")))))
+      ;; The whole point: gptel applies async tools bare, so this call
+      ;; must never signal.
+      (niwa-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (eq 'error (plist-get settlement :status)))
+      (should (eq 'pipeline-error (plist-get settlement :reason)))
+      (should (string-match-p "already in use"
+                              (plist-get settlement :result)))))
+
+  :doc "request cancellation cancels and settles deferred dispatch"
+  (let* ((tool (niwa-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (cancel-cell (list nil))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-cancelled"
+                        :cancel-cell cancel-cell))
+         settlement)
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-transport-busy-p)
+                   (lambda (&optional _) t)))
+          (niwa-pipeline--dispatch
+           tool (lambda (outcome) (setq settlement outcome)) context nil)
+          (should (functionp (car cancel-cell)))
+          (should (= 1 (hash-table-count niwa-transport--pending)))
+          (funcall (car cancel-cell))
+          (should (eq 'error (plist-get settlement :status)))
+          (should (eq 'cancelled (plist-get settlement :reason)))
+          (should (= 0 (hash-table-count niwa-transport--pending))))
+      (niwa-transport-cancel-pending)))
+
+  :doc "cancellation during authority I/O settles and prevents dispatch"
+  (let* ((tool (niwa-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (cancel-cell (list nil))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-cancel-during-authority"
+                        :cancel-cell cancel-cell))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "ran")))))
+         settlement)
+    (cl-letf (((symbol-function 'niwa-transport-busy-p)
+               (lambda (&optional _) nil))
+              ((symbol-function
+                'niwa-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session)
+                 (funcall (car cancel-cell))))
+              ((symbol-function 'niwa-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (niwa-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (eq 'cancelled (plist-get settlement :reason)))
+      (should-not (equal "ran" (plist-get settlement :result)))
+      (should-not (car cancel-cell))))
+
+  :doc "unidentified concurrent calls receive distinct deferral keys"
+  (let* ((tool (niwa-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (first-cell (list nil))
+         (second-cell (list nil))
+         (base (list :session 'session-stub
+                     :default-directory temporary-file-directory))
+         (first (append base (list :cancel-cell first-cell)))
+         (second (append base (list :cancel-cell second-cell)))
+         settlements)
+    (unwind-protect
+        (cl-letf (((symbol-function 'niwa-transport-busy-p)
+                   (lambda (&optional _) t)))
+          (niwa-pipeline--dispatch
+           tool (lambda (outcome) (push outcome settlements)) first nil)
+          (niwa-pipeline--dispatch
+           tool (lambda (outcome) (push outcome settlements)) second nil)
+          (should (= 2 (hash-table-count niwa-transport--pending))))
+      (niwa-transport-cancel-pending))
+    (should (= 2 (length settlements)))
+    (should (cl-every (lambda (outcome)
+                        (eq 'cancelled (plist-get outcome :reason)))
+                      settlements)))
+
+  :doc "read-only tools dispatch immediately even on a busy transport"
+  (let* ((tool (niwa-tool--create
+                :name "ReadThing" :read-only-p t :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-read"))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "read")))))
+         settlement)
+    (cl-letf (((symbol-function 'niwa-transport-busy-p) (lambda (&optional _) t))
+              ((symbol-function 'niwa-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (niwa-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (equal "read" (plist-get settlement :result))))))
+
+
+;;
+;;; Pipeline wrapper via niwa-define-tool
+
+(niwa-deftest niwa-pipeline--define-tool-wrapper
+		 (:before-each
+		  (advice-add 'display-warning :around
+                              #'niwa-test--drop-sessionless-permission-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+                                 #'niwa-test--drop-sessionless-permission-warning))
+		 ,test
+		 (test)
+		 :doc "generated wrapper runs pipeline"
+		 (progn
+		   (let ((niwa-permission-rules '(("TestEcho" :action allow)))
+			 (niwa-protected-paths nil)
+			 (niwa-permission-mode 'ask)
+			 result)
+		     (niwa-define-tool
+		      :name "TestEcho"
+		      :description "Echo test"
+		      :handler (lambda (args)
+				 (list :result (plist-get args :msg)))
+		      :args ((msg string :required "Message"))
+		      :read-only-p t
+		      :async-p nil)
+		     ;; Call the gptel-tool wrapper directly
+		     (let* ((mtool (niwa-tool-get "TestEcho"))
+			    (gt (niwa-tool-gptel-tool mtool))
+			    (fn (gptel-tool-function gt)))
+		       (funcall fn (lambda (r) (setq result r)) "hello"))
+		     (should (equal result "hello"))
+		     ;; Clean up
+		     (remhash '("niwa" "TestEcho") niwa-tool--registry)))
+		 :doc "wrapper validates args before calling handler"
+		 (progn
+		   (let ((niwa-permission-rules '(("TestStrict" :action allow)))
+			 (niwa-protected-paths nil)
+			 (niwa-permission-mode 'ask)
+			 result)
+		     (niwa-define-tool
+		      :name "TestStrict"
+		      :description "Strict test"
+		      :handler (lambda (args)
+				 (list :result (plist-get args :name)))
+		      :args ((name string :required "Name"))
+		      :read-only-p t
+		      :async-p nil)
+		     (let* ((mtool (niwa-tool-get "TestStrict"))
+			    (gt (niwa-tool-gptel-tool mtool))
+			    (fn (gptel-tool-function gt)))
+		       ;; Call with nil (missing required arg)
+		       (funcall fn (lambda (r) (setq result r))))
+		     (should (string-prefix-p "Error:" result))
+		     (remhash '("niwa" "TestStrict") niwa-tool--registry))))
+
+;;
+;;; Result persistence
+
+(niwa-deftest niwa-pipeline--head-tail-preview ()
+		 ,test
+		 (test)
+		 :doc "returns short output unchanged"
+		 (let ((niwa-pipeline--preview-size 20))
+		   (should (equal "short" (niwa-pipeline--head-tail-preview "short"))))
+		 :doc "returns output exactly at the preview limit unchanged"
+		 (let ((niwa-pipeline--preview-size 20)
+		       (result "01234567890123456789"))
+		   (should (equal result (niwa-pipeline--head-tail-preview result))))
+		 :doc "truncates output immediately above the preview limit"
+		 (let ((niwa-pipeline--preview-size 20))
+		   (should
+		    (equal
+		     "0123456789\n[niwa: tool output truncated; omitted 1 chars]\n1234567890"
+		     (niwa-pipeline--head-tail-preview "012345678901234567890"))))
+		 :doc "keeps equal ends of a long single line and reports the exact omission"
+		 (let* ((niwa-pipeline--preview-size 20)
+			(result "hhhhhhhhhhmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmtttttttttt")
+			(preview (niwa-pipeline--head-tail-preview result)))
+		   (should
+		    (equal
+		     "hhhhhhhhhh\n[niwa: tool output truncated; omitted 30 chars]\ntttttttttt"
+		     preview)))
+		 :doc "cuts both retained ends at nearby newline boundaries"
+		 (let* ((niwa-pipeline--preview-size 20)
+			(result (concat "HEAD-A\n" (make-string 30 ?m) "\nTAIL-B"))
+			(preview (niwa-pipeline--head-tail-preview result)))
+		   (should
+		    (equal
+		     "HEAD-A\n[niwa: tool output truncated; omitted 31 chars]\nTAIL-B"
+		     preview))))
+
+(niwa-deftest niwa-pipeline--persist-result ()
+		 ,test
+		 (test)
+		 :doc "writes full result to file and returns preview"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(_ (make-directory save-path t))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			(tool (niwa-tool--create :name "TestTool" :max-result-size 100))
+			(result (make-string 500 ?x))
+			(persisted (niwa-pipeline--persist-result result tool session)))
+		   (unwind-protect
+		       (progn
+			 ;; Preview should contain the XML wrapper
+			 (should (string-prefix-p "<persisted-output>" persisted))
+			 (should (string-suffix-p "</persisted-output>" persisted))
+				 ;; Preview should mention the size
+				 (should (string-match-p "500 chars" persisted))
+				 (should (string-match-p "Use Read(file_path=" persisted))
+				 (should (string-match-p "or Grep(pattern=" persisted))
+				 (should (string-match-p
+					      "Full output saved to: artifact://TestTool-[^[:space:]]+\\.txt"
+					      persisted))
+				 (should-not (string-search save-path persisted))
+				 (should (string-match-p "Read(file_path=\"artifact://" persisted))
+				 (should (string-match-p "Grep(pattern=PATTERN, path=\"artifact://"
+							      persisted))
+			 ;; The persisted file should exist and contain the full result
+			 (let ((files (directory-files
+				       (file-name-concat save-path "tool-results")
+				       t "\\.txt$")))
+			   (should (= 1 (length files)))
+			   (should (equal result
+					  (with-temp-buffer
+					    (insert-file-contents (car files))
+					    (buffer-string))))))
+		     (delete-directory tmpdir t)))
+		 :doc "publishes remote artifacts and reports a target-native path"
+		 (let ((host "artifact")
+		       (tmpdir (file-name-as-directory
+				(make-temp-file "niwa-result-remote-" t)))
+			published)
+		   (unwind-protect
+		       (niwa-test--with-local-shell-tramp (list host)
+			 (let* ((root (format "/niwamock:%s:%s/" host tmpdir))
+				(ws (niwa-workspace--create :root root))
+				(target (niwa-execution-target-create root))
+				(save-path (file-name-as-directory
+					    (file-name-concat
+					     root ".niwa" "sessions" "main")))
+				(session (niwa-session--create
+					  :name "main" :workspace ws
+					  :save-path save-path
+					  :execution-target target))
+				(tool (niwa-tool--create :name "TestTool"))
+				(result (make-string 500 ?x)))
+			   (cl-letf (((symbol-function
+                                        'niwa-session-artifacts-publish-text)
+				       (lambda (seen-session path content
+						&optional coding)
+					 (should-not
+					  (file-directory-p
+					   (file-name-directory path)))
+					 (setq published
+					       (list seen-session path content coding)))))
+			     (let ((preview
+				    (niwa-pipeline--persist-result
+				     result tool session)))
+			       (pcase-let ((`(,seen-session ,path ,content ,coding)
+					    published))
+				 (should (eq session seen-session))
+				 (should (equal result content))
+				 (should (eq 'utf-8-unix coding))
+				 (should (file-remote-p path))
+				 ;; The model sees the logical artifact address, never a
+				 ;; target path and never a client TRAMP prefix.
+				 (should (string-search
+					  (concat "artifact://"
+						  (file-name-nondirectory path))
+					  preview))
+				 (should-not
+				  (string-search
+				   (file-name-directory
+				    (file-remote-p path 'localname 'never))
+				   preview))
+				 (should-not
+				  (string-search "/niwamock:" preview)))))))
+		     (delete-directory tmpdir t)))
+		 :doc "normalizes raw UTF-8 bytes before writing persisted results"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(_ (make-directory save-path t))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			(tool (niwa-tool--create :name "TestTool" :max-result-size 100))
+			(result (concat "quote "
+					(test-niwa-pipeline--raw-bytes
+					 #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)
+					(make-string 200 ?x)))
+			(persisted (niwa-pipeline--persist-result result tool session)))
+		   (unwind-protect
+		       (let ((files (directory-files
+				     (file-name-concat save-path "tool-results")
+				     t "\\.txt$")))
+			 (should (= 1 (length files)))
+			 (should (string-match-p "quote “x”" persisted))
+			 (with-temp-buffer
+			   (insert-file-contents (car files))
+			   (should (string-prefix-p "quote “x”" (buffer-string)))))
+		     (delete-directory tmpdir t)))
+		 :doc "preview preserves the head and tail while the artifact stays complete"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(_ (make-directory save-path t))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			(tool (niwa-tool--create :name "TestTool" :max-result-size 100))
+			(result (concat (make-string 1000 ?h)
+					(make-string 3000 ?m)
+					(make-string 1000 ?t)))
+			(persisted (niwa-pipeline--persist-result result tool session)))
+		   (unwind-protect
+		       (let ((file (car (directory-files
+					(file-name-concat save-path "tool-results")
+					t "\\.txt$"))))
+			 (should (string-search (make-string 100 ?h) persisted))
+			 (should (string-search (make-string 100 ?t) persisted))
+			 (should-not (string-search (make-string 100 ?m) persisted))
+			 (should (string-search "omitted 3000 chars" persisted))
+			 (should (equal result
+					(with-temp-buffer
+					  (insert-file-contents file)
+					  (buffer-string)))))
+		     (delete-directory tmpdir t)))
+		 :doc "materializes session directory when save path is absent"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(session (niwa-session--create
+				  :name "main" :session-id "lazy-result-id" :workspace ws
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			(tool (niwa-tool--create :name "TestTool" :max-result-size 100))
+			(result (make-string 500 ?x))
+			persisted)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq persisted
+			       (niwa-pipeline--persist-result
+				result tool session (current-buffer)))
+			 (should (string-prefix-p "<persisted-output>" persisted))
+			 (should (niwa-session-save-path session))
+			 (should (directory-files
+				  (file-name-concat
+				   (niwa-session-save-path session) "tool-results")
+				  nil "\\.txt$")))
+		     (delete-directory tmpdir t))))
+
+(niwa-deftest niwa-pipeline--truncate-result ()
+		 ,test
+		 (test)
+		 :doc "truncates large result and mentions no session persistence directory"
+		 (let* ((tool (niwa-tool--create :name "BigTool" :max-result-size 100))
+			(result (make-string 5000 ?x))
+			(truncated (niwa-pipeline--truncate-result result tool)))
+		   (should (< (length truncated) (length result)))
+		   (should (string-match-p "no session persistence directory available"
+					   truncated))
+		   (should (string-match-p "5000 chars" truncated))
+		   (should (string-match-p "BigTool" truncated))
+		   (should (string-match-p "unavailable" truncated))
+		   (should (string-match-p "narrower" truncated)))
+		 :doc "keeps both ends when persistence is unavailable"
+		 (let* ((tool (niwa-tool--create :name "BigTool" :max-result-size 100))
+			(result (concat (make-string 1000 ?h)
+					(make-string 3000 ?m)
+					(make-string 1000 ?t)))
+			(truncated (niwa-pipeline--truncate-result result tool)))
+		   (should (string-search (make-string 100 ?h) truncated))
+		   (should (string-search (make-string 100 ?t) truncated))
+		   (should-not (string-search (make-string 100 ?m) truncated))
+		   (should (string-search "omitted 3000 chars" truncated))))
+
+(niwa-deftest niwa-pipeline--truncate-error-result ()
+			 ,test
+			 (test)
+			 :doc "truncates large errors while preserving error status"
+			 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "Error: " (make-string 5000 ?x)))
+				(truncated (niwa-pipeline--truncate-error-result
+					    result tool t)))
+			   (should (< (length truncated) (length result)))
+			   (should (string-prefix-p "Error:" truncated))
+			   (should (string-match-p "output too large" truncated))
+			   (should (string-match-p "ErrTool" truncated))
+			   (should (string-match-p "narrower scope" truncated)))
+			 :doc "uses neutral prose for structured error status"
+			 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "plain failure " (make-string 5000 ?x)))
+				(truncated (niwa-pipeline--truncate-error-result result tool)))
+			   (should-not (string-prefix-p "Error:" truncated))
+			   (should (string-prefix-p "Output too large" truncated)))
+			 :doc "keeps the failure tail and reports the exact omission"
+			 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat (make-string 1000 ?h)
+						(make-string 3000 ?m)
+						(make-string 1000 ?t)))
+				(truncated (niwa-pipeline--truncate-error-result result tool)))
+			   (should (string-search (make-string 100 ?h) truncated))
+			   (should (string-search (make-string 100 ?t) truncated))
+			   (should-not (string-search (make-string 100 ?m) truncated))
+			   (should (string-search "omitted 3000 chars" truncated))))
+
+(niwa-deftest niwa-pipeline--context-status
+		 (:before-each
+		  (advice-add 'display-warning :around
+                              #'niwa-test--drop-sessionless-permission-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+                                 #'niwa-test--drop-sessionless-permission-warning))
+		 ,test
+		 (test)
+		 :doc "canonical handler status takes precedence over render status"
+		 (should (eq 'success
+			     (niwa-pipeline--context-status
+			      '(:handler-status success :status error))))
+		 :doc "explicit render status remains valid for direct contexts"
+		 (should (eq 'error
+			     (niwa-pipeline--context-status
+			      '(:status error :result "visible"))))
+		 :doc "result text never determines lifecycle status"
+		 (should (eq 'success
+			     (niwa-pipeline--context-status
+			      '(:result "Error: visible text"))))
+		 :doc "missing status defaults to success"
+		 (should (eq 'success
+			     (niwa-pipeline--context-status '(:result "ok")))))
+
+(niwa-deftest niwa-pipeline--step-persist ()
+		 ,test
+		 (test)
+		 :doc "passes through when max-result-size is nil"
+		 (let* ((tool (niwa-tool--create :name "NoLimit" :max-result-size nil))
+			(ctx (list :tool tool :result (make-string 100000 ?x)))
+			next-ctx)
+		   (niwa-pipeline--step-persist
+		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+		   (should (equal (plist-get next-ctx :result)
+				  (plist-get ctx :result))))
+		 :doc "passes through when result is within limit"
+		 (let* ((tool (niwa-tool--create :name "SmallResult" :max-result-size 1000))
+			(ctx (list :tool tool :result "short"
+			           :render-data '(:kind ptc)))
+			next-ctx)
+		   (niwa-pipeline--step-persist
+		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+		   (should (equal "short" (plist-get next-ctx :result)))
+		   (should (equal '(:disposition inline :original-chars 5)
+				  (plist-get (plist-get next-ctx :render-data)
+				             :output-accounting))))
+		 :doc "passes through when error result is within limit"
+		 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+			(ctx (list :tool tool :result "Error: small"))
+			next-ctx)
+		   (niwa-pipeline--step-persist
+		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+		   (should (equal "Error: small" (plist-get next-ctx :result))))
+		 :doc "truncates error result when over limit"
+			 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "Error: " (make-string 5000 ?x)))
+				(original-length (length result))
+				(ctx (list :tool tool :result result
+					   :handler-status 'error))
+				next-ctx)
+			   (niwa-pipeline--step-persist
+			    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			   (should (string-prefix-p "Error:" (plist-get next-ctx :result)))
+			   (should (string-match-p "output too large"
+						   (plist-get next-ctx :result)))
+			   (should (< (length (plist-get next-ctx :result))
+				      original-length)))
+			 :doc "structured errors keep neutral preview prose and explicit status"
+			 (let* ((tool (niwa-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat (make-string 1000 ?h)
+						(make-string 3000 ?m)
+						(make-string 1000 ?t)))
+				(ctx (list :tool tool :result result :status 'error))
+				next-ctx)
+			   (niwa-pipeline--step-persist
+			    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			   (let ((preview (plist-get next-ctx :result)))
+			     (should (eq 'error (plist-get next-ctx :status)))
+			     (should-not (string-prefix-p "Error:" preview))
+			     (should (string-search (make-string 100 ?h) preview))
+			     (should (string-search (make-string 100 ?t) preview))))
+				 :doc "persists result when over limit"
+			 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(_ (make-directory save-path t))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			(tool (niwa-tool--create :name "BigResult" :max-result-size 100))
+			(big-result (make-string 500 ?y))
+			(ctx (list :tool tool :result big-result :session session
+			           :render-data '(:kind ptc)))
+			next-ctx)
+		   (unwind-protect
+		       (progn
+			 (niwa-pipeline--step-persist
+			  ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			 (should (string-prefix-p "<persisted-output>"
+						  (plist-get next-ctx :result)))
+			 (should
+			  (equal '(:disposition persisted :original-chars 500)
+				 (plist-get (plist-get next-ctx :render-data)
+				            :output-accounting)))
+			 ;; File should exist on disk
+			 (should (directory-files
+				  (file-name-concat save-path "tool-results")
+				  nil "\\.txt$")))
+		     (delete-directory tmpdir t)))
+		 :doc "ephemeral requests bound oversized results without materializing"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create :root tmpdir))
+			(session (niwa-session--create
+				  :name "ephemeral" :workspace ws))
+			(request (niwa-request--create
+				  :session session :ephemeral-p t))
+			(tool (niwa-tool--create
+			       :name "BigResult" :max-result-size 10))
+			(big-result (concat (make-string 1000 ?h)
+					    (make-string 3000 ?m)
+					    (make-string 1000 ?t)))
+			(niwa-pipeline--preview-size 20)
+			next-ctx)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (niwa-pipeline--step-persist
+			  (list :tool tool :result big-result :session session
+				:request request :buffer (current-buffer))
+			  (lambda (context) (setq next-ctx context)) #'ignore)
+			 (let ((preview (plist-get next-ctx :result)))
+			   (should (< (length preview) (length big-result)))
+			   (should (string-match-p "ephemeral request" preview))
+			   (should-not (string-prefix-p "<persisted-output>" preview)))
+			 (should-not (niwa-session-save-path session))
+			 (should-not (file-exists-p
+				      (file-name-concat tmpdir ".niwa"))))
+		     (delete-directory tmpdir t)))
+		 :doc "uses global cap when tool limit exceeds it"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(_ (make-directory save-path t))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (niwa-execution-target-create tmpdir)))
+			;; Tool declares 100000 but global cap is 50000
+			(tool (niwa-tool--create :name "HighLimit" :max-result-size 100000))
+			;; Result is 60000 chars: above the 50K global cap but below the
+			;; tool's declared 100K
+			(big-result (make-string 60000 ?z))
+			(ctx (list :tool tool :result big-result :session session))
+			next-ctx)
+		   (unwind-protect
+		       (progn
+			 (niwa-pipeline--step-persist
+			  ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			 ;; Should be persisted because 60K > 50K global cap
+			 (should (string-prefix-p "<persisted-output>"
+						  (plist-get next-ctx :result))))
+		     (delete-directory tmpdir t)))
+		 :doc "truncates when no session is in context"
+		 (let* ((tool (niwa-tool--create :name "NoWS" :max-result-size 10))
+			(ctx (list :tool tool :result (make-string 5000 ?w)))
+			next-ctx)
+		   (niwa-pipeline--step-persist
+		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+		   ;; Should truncate to preview size (no session directory to persist to)
+		   (should (< (length (plist-get next-ctx :result)) 5000))
+		   (should (string-match-p "no session persistence directory available"
+					   (plist-get next-ctx :result))))
+		 :doc "ignores buffer-local session — only reads session from context"
+		 (let* ((tmpdir (make-temp-file "niwa-test-ws-" t))
+			(ws (niwa-workspace--create :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(niwa--session (niwa-session--create
+					   :name "main"
+					   :workspace ws
+					   :save-path save-path))
+			(tool (niwa-tool--create :name "Orphan" :max-result-size 10))
+			(ctx (list :tool tool :result (make-string 5000 ?q)))
+			next-ctx)
+		   (unwind-protect
+		       (progn
+			 ;; Even though niwa--session is dynamically bound here with
+			 ;; a valid save path, step-persist must NOT fall back to
+			 ;; reading it — context is the sole source of truth.
+			 (niwa-pipeline--step-persist
+			  ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			 (should (string-match-p
+				  "no session persistence directory available"
+				  (plist-get next-ctx :result))))
+		     (delete-directory tmpdir t))))
+
+
+;;
+;;; Render-data attachment
+
+(niwa-deftest niwa-pipeline--handler-return-p ()
+		 ,test
+		 (test)
+		 :doc "accepts plist with :result keyword"
+		 (should (niwa-pipeline--handler-return-p '(:result "ok")))
+		 :doc "accepts plist with :result and :render-data"
+		 (should (niwa-pipeline--handler-return-p
+			  '(:result "ok" :render-data (:kind diff))))
+		 :doc "rejects non-plist render-data before attachment"
+		 (should-not
+		  (niwa-pipeline--handler-return-p
+		   '(:result "ok" :render-data ((:kind first) (:kind second)))))
+		 :doc "accepts explicit success and error status"
+		 (should (niwa-pipeline--handler-return-p
+			  '(:result "ok" :status success)))
+		 (should (niwa-pipeline--handler-return-p
+			  '(:result "failed" :status error)))
+		 :doc "rejects an unknown explicit status"
+		 (should-not (niwa-pipeline--handler-return-p
+			      '(:result "maybe" :status unknown)))
+		 :doc "rejects bare string"
+		 (should-not (niwa-pipeline--handler-return-p "just a string"))
+		 :doc "rejects nil"
+		 (should-not (niwa-pipeline--handler-return-p nil))
+		 :doc "rejects list with non-keyword head"
+		 (should-not (niwa-pipeline--handler-return-p '("x" "y")))
+		 :doc "rejects plist without :result"
+		 (should-not (niwa-pipeline--handler-return-p '(:other 1)))
+		 :doc "rejects odd and dotted lists"
+		 (should-not (niwa-pipeline--handler-return-p '(:result)))
+		 (should-not (niwa-pipeline--handler-return-p '(:result . "ok")))
+		 :doc "rejects non-keyword keys"
+		 (should-not
+		  (niwa-pipeline--handler-return-p '(:result "ok" extra t))))
+
+(niwa-deftest niwa-pipeline--step-attach-render-data ()
+		 ,test
+		 (test)
+		 :doc "no render-data: result passes through unchanged"
+		 (let ((ctx (list :result "hello" :render-data nil))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "hello" (plist-get out :result))))
+		 :doc "with render-data: result gets a delimited hidden block appended"
+		 (let ((ctx (list :result "hello" :tool-use-id "toolu_1"
+				  :render-data '(:kind diff :patch "p")))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((r (plist-get out :result)))
+		     (should (string-prefix-p "hello" r))
+                     (should (string-search niwa-tool-render-data-open r))
+                     (should (string-search niwa-tool-render-data-close r))))
+		 :doc "embedded block carries invisible text property for data-buffer display"
+		 (let ((ctx (list :result "x" :tool-use-id "toolu_1"
+				  :render-data '(:kind diff)))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let* ((r (plist-get out :result))
+                          (marker (string-search niwa-tool-render-data-open r)))
+		     (should marker)
+		     ;; gptel 'ignore is not set: gptel's buffer parser extracts tool
+		     ;; results via buffer-substring-no-properties, which drops text
+		     ;; properties -- the block reaches the LLM via two strip hooks
+                     ;; instead (see `niwa-tool-render-data-format').
+		     (should (eq t (get-text-property marker 'invisible r)))))
+		 :doc "gptel tool-result stamping preserves hidden render-data"
+		 (let ((ctx (list :result "x" :tool-use-id "toolu_1"
+				  :render-data '(:kind diff)))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let* ((r (copy-sequence (plist-get out :result)))
+			  (tool-prop '(tool . "call_render"))
+                          (marker (string-search niwa-tool-render-data-open r)))
+		     (add-text-properties 0 (length r) `(gptel ,tool-prop) r)
+		     (should marker)
+		     (should (equal tool-prop (get-text-property marker 'gptel r)))
+		     (should (eq t (get-text-property marker 'invisible r)))))
+                 :doc "non-string results retain metadata in provider projection"
+                 (dolist (raw '(37 nil t (:count 3) [1 2]))
+                   (let ((ctx (list :result raw :tool-use-id "scalar"
+                                    :render-data '(:kind probe)))
+                         out)
+                     (niwa-pipeline--step-attach-render-data
+                      ctx (lambda (c) (setq out c)) #'ignore)
+                     (let ((parsed (niwa-tool-render-data-extract
+                                    (plist-get out :result) nil "scalar")))
+                       (should (equal (gptel--to-string raw) (car parsed)))
+                       (should (eq 'probe (plist-get (cdr parsed) :kind))))))
+		 :doc "serializes explicit handler status with render-data"
+		 (let ((ctx (list :result "failed"
+				  :tool-use-id "toolu_1"
+				  :status 'error
+				  :render-data '(:kind bash)))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+                   (let ((data (cdr (niwa-tool-render-data-extract
+				  (plist-get out :result) nil "toolu_1"))))
+		     (should (eq 'bash (plist-get data :kind)))
+		     (should (eq 'error (plist-get data :status)))))
+		 :doc "serializes explicit status even without other render-data"
+		 (let ((ctx (list :result "failed" :status 'error
+				  :tool-use-id "toolu_1"))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should
+		    (eq 'error
+			(plist-get
+                         (cdr (niwa-tool-render-data-extract
+			       (plist-get out :result) nil "toolu_1"))
+			 :status))))
+		 :doc "omits read-only sandbox summaries beside existing data"
+		 (let* ((summary
+			 '(:attempt-count 1 :started-count 1 :refused-count 0
+			   :sandbox bubblewrap :filesystem workspace-write
+			   :network isolated :proc fresh
+			   :additional-read-count 3 :additional-write-count 0))
+			(ctx (list :result "ok"
+				   :tool-use-id "toolu_1"
+				   :render-data '(:kind helper)
+				   :sandbox-summary-cell (list summary)))
+			out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+                   (let ((data (cdr (niwa-tool-render-data-extract
+				  (plist-get out :result) nil "toolu_1"))))
+		     (should (eq 'helper (plist-get data :kind)))
+		     (should-not (plist-member data :sandbox-summary))))
+		 :doc "serializes warning sandbox summaries beside existing data"
+		 (let* ((summary
+			 '(:attempt-count 1 :started-count 1 :refused-count 0
+			   :sandbox bubblewrap :filesystem workspace-write
+			   :network isolated :proc fresh
+			   :additional-read-count 0 :additional-write-count 1))
+			(ctx (list :result "ok"
+				   :tool-use-id "toolu_1"
+				   :render-data '(:kind helper)
+				   :sandbox-summary-cell (list summary)))
+			out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+                   (let ((data (cdr (niwa-tool-render-data-extract
+				  (plist-get out :result) nil "toolu_1"))))
+		     (should (eq 'helper (plist-get data :kind)))
+		     (should (equal summary
+				    (plist-get data :sandbox-summary)))))
+		 :doc "omits default sandbox summaries"
+		 (let ((ctx
+			(list
+			 :result "ok"
+			 :sandbox-summary-cell
+			 (list
+			  '(:attempt-count 1 :started-count 1 :refused-count 0
+			    :sandbox bubblewrap :filesystem workspace-write
+			    :network isolated :proc fresh
+			    :additional-read-count 0 :additional-write-count 0))))
+		       out)
+		   (niwa-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))))
+
+(niwa-deftest niwa-pipeline--step-attach-media-data ()
+		 ,test
+		 (test)
+		 :doc "no media: result passes through unchanged"
+		 (let ((ctx (list :result "hello" :media nil))
+		       out)
+		   (niwa-pipeline--step-attach-media-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "hello" (plist-get out :result))))
+		 :doc "with media: result gets a delimited hidden block appended"
+		 (let ((ctx (list :result "hello"
+				  :media '((:path "/tmp/a.png"
+					    :mime "image/png"
+					    :kind image
+					    :data "captured"))))
+		       out)
+		   (niwa-pipeline--step-attach-media-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((r (plist-get out :result)))
+		     (should (string-prefix-p "hello" r))
+		     (should (string-search niwa-tool-media--data-open r))
+		     (should (string-search niwa-tool-media--data-close r))
+		     (should (eq t (get-text-property
+				    (string-search
+				     niwa-tool-media--data-open r)
+				    'niwa-media-data r)))
+		     (should (equal "hello"
+                                    (car (niwa-tool-render-data-extract r))))
+		     (should-not
+		      (string-search niwa-tool-media--data-open
+                                     (niwa-tool-media-strip-blocks r)))))
+		 :doc "ephemeral media remains in memory without materializing the session"
+		 (let* ((root (make-temp-file "niwa-ephemeral-media-" t))
+			(workspace (niwa-workspace--create
+				    :type 'project :id "media" :root root
+				    :name "media"))
+			(session (niwa-session--create
+				  :name "side" :workspace workspace))
+			(request (niwa-request--create
+				  :session session :ephemeral-p t))
+			out)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (niwa-pipeline--step-attach-media-data
+			  (list :result "hello"
+				:media '((:path "/private/image.png"
+					  :mime "image/png"
+					  :kind image
+					  :data "captured"))
+				:session session :request request
+				:buffer (current-buffer))
+			  (lambda (context) (setq out context)) #'ignore)
+			 (should (string-search
+				  niwa-tool-media--data-open
+				  (plist-get out :result)))
+			 (should-not (niwa-session-save-path session))
+			 (should-not (file-exists-p
+				      (file-name-concat root ".niwa"))))
+		     (delete-directory root t)))
+		 :doc "with media envelope: inline base64 is summarized before append"
+		 (let* ((result (concat "<media-file>\n"
+					"path: /tmp/a.png\n"
+					"mime_type: image/png\n"
+					"encoding: base64\n"
+					"data:\n"
+					"QUJD\n"
+					"</media-file>"))
+			(ctx (list :result result
+				   :media '((:path "/tmp/a.png"
+					     :mime "image/png"
+					     :kind image
+					     :data "QUJD"))))
+			out)
+		   (niwa-pipeline--step-attach-media-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let* ((r (plist-get out :result))
+			  (visible (car (test-niwa-pipeline--extract-media-data
+					 r))))
+		     (should (string-search "<native media block attached>"
+					    visible))
+		     (should-not (string-search "QUJD" visible))
+		     (should (string-search niwa-tool-media--data-open
+					    r))))
+		 :doc "with large media envelope: summarization avoids regexp overflow"
+		 (let* ((payload (make-string 500000 ?A))
+			(result (concat "<media-file>\n"
+					"path: /tmp/a.jpg\n"
+					"mime_type: image/jpeg\n"
+					"encoding: base64\n"
+					"data:\n"
+					payload
+					"\n</media-file>"))
+			(ctx (list :result result
+				   :media `((:path "/tmp/a.jpg"
+					     :mime "image/jpeg"
+					     :kind image
+					     :data ,payload))))
+			out)
+		   (niwa-pipeline--step-attach-media-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((visible (car (test-niwa-pipeline--extract-media-data
+					(plist-get out :result)))))
+		     (should (string-search "<native media block attached>"
+					    visible))
+		     (should-not (string-search payload visible))))
+		 :doc "literal media delimiters without text properties are normal text"
+		 (let* ((literal (concat "text\n"
+					 niwa-tool-media--data-open "\n"
+					 "(:items ((:path \"/tmp/a.png\" :mime \"image/png\" :kind image :data \"QUJD\")))\n"
+					 niwa-tool-media--data-close "\n"
+					 "tail"))
+			(extract (test-niwa-pipeline--extract-media-data literal)))
+		   (should (equal literal (car extract)))
+		 (should-not (cdr extract))
+		   (should (equal literal
+				  (niwa-tool-media-strip-blocks
+				   literal))))
+		 :doc "malformed hidden media block without close is ignored"
+		 (let* ((literal (concat
+				  "text"
+				  (propertize
+				   (concat "\n"
+					   niwa-tool-media--data-open
+					   "\n(:id \"missing-close\")")
+				   'niwa-media-data t)))
+			(extract (test-niwa-pipeline--extract-media-data literal)))
+		   (should (equal literal (car extract)))
+		   (should-not (cdr extract)))
+		 :doc "persisted media references survive text property loss"
+		 (let* ((tmpdir (make-temp-file "niwa-test-media-store-" t))
+			(ws (niwa-workspace--create :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa" "sessions" "main")))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path))
+			(media '((:path "/tmp/a.png"
+				  :mime "image/png"
+				  :kind image
+				  :data "captured")))
+			(result (concat "hello"
+					(test-niwa-pipeline--format-media-data-block
+					 media session nil "toolu_1")))
+			(plain (substring-no-properties result))
+			extract)
+		   (unwind-protect
+		       (progn
+			 (setq extract
+			       (test-niwa-pipeline--extract-media-data
+				plain session nil "toolu_1"))
+			 (should (equal "hello" (car extract)))
+			 (let ((item (car (cdr extract))))
+			   (should (equal "/tmp/a.png" (plist-get item :path)))
+			   (should (equal "image/png" (plist-get item :mime)))
+			   (should (eq 'image (plist-get item :kind)))
+			   (should (equal "captured" (plist-get item :data))))
+			 (should (equal
+				  "hello"
+                                  (car (niwa-tool-render-data-extract
+					plain session "toolu_1")))))
+		     (delete-directory tmpdir t)))
+		 :doc "view extraction can strip duplicate tool block with wrong gptel id"
+		 (let* ((tmpdir (make-temp-file
+				 "niwa-test-media-store-view-" t))
+			(ws (niwa-workspace--create :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".niwa"
+						      "sessions" "main")))
+			(session (niwa-session--create
+				  :name "main" :workspace ws :save-path save-path))
+			(media '((:path "/tmp/b.png"
+				  :mime "image/png"
+				  :kind image
+				  :data "captured")))
+			(result (concat "hello"
+					(test-niwa-pipeline--format-media-data-block
+					 media session nil "toolu_2")))
+			(plain (substring-no-properties result)))
+		   (unwind-protect
+		       (progn
+			 (should
+			  (string-search
+			   niwa-tool-media--data-open
+                           (car (niwa-tool-render-data-extract
+				 plain session "toolu_1"))))
+			 (should (equal
+				  "hello"
+                                  (car (niwa-tool-render-data-extract
+					plain session "toolu_1" t)))))
+		     (delete-directory tmpdir t))))
+
+(niwa-deftest niwa-pipeline--current-tool-use-id
+		 (:before-each
+		  (advice-add 'display-warning :around
+                              #'niwa-test--drop-sessionless-permission-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+                                 #'niwa-test--drop-sessionless-permission-warning))
+		 ,test
+		 (test)
+		 :doc "claims matching duplicate tool calls in dispatch order"
+		 (let* ((tool (niwa-tool--create :name "Read"))
+			(tool-call-args '(:file_path "a.png"))
+			(pipeline-args '(:file_path "a.png"
+					 :offset nil
+					 :limit nil
+					 :pages nil
+					 :max_width nil
+					 :max_height nil
+					 :max_tokens nil))
+			(call-1 (list :id "toolu_1" :name "Read"
+				      :args tool-call-args))
+			(call-2 (list :id "toolu_2" :name "Read"
+				      :args tool-call-args))
+			(info (list :tool-use (list call-1 call-2)))
+			(fsm (gptel-make-fsm :info info)))
+		   (let ((niwa-tools--current-engine fsm))
+		     (should (equal "toolu_1"
+				    (niwa-pipeline--current-tool-use-id
+				     tool pipeline-args)))
+		     (should (equal "toolu_2"
+				    (niwa-pipeline--current-tool-use-id
+				     tool pipeline-args)))
+		     (should-not
+		      (niwa-pipeline--current-tool-use-id
+		       tool pipeline-args)))))
+
+(niwa-deftest niwa-pipeline--step-render-transform ()
+		 ,test
+		 (test)
+		 :doc "stores transform render-data without changing result or raw-result"
+		 (let* ((tool (niwa-tool--create
+			       :name "Transform"
+			       :render-transform
+			       (lambda (name args result)
+				 (list :tool name
+				       :arg (plist-get args :x)
+				       :chars (length result)))))
+			(ctx (list :tool tool :args '(:x "a")
+				   :result "abcdef" :raw-result "abcdef"))
+			out)
+		   (niwa-pipeline--step-render-transform
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "abcdef" (plist-get out :result)))
+		   (should (equal "abcdef" (plist-get out :raw-result)))
+		   (should (equal '(:tool "Transform" :arg "a" :chars 6)
+				  (plist-get out :render-data))))
+		 :doc "does not run when handler render-data already exists"
+		 (let* ((called nil)
+			(tool (niwa-tool--create
+			       :name "HasData"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (setq called t)
+				 '(:new t))))
+			(ctx (list :tool tool :args nil :result "ok"
+				   :render-data '(:old t)))
+			out)
+		   (niwa-pipeline--step-render-transform
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should-not called)
+		   (should (equal '(:old t) (plist-get out :render-data))))
+		 :doc "skips non-string and Error results"
+		 (let* ((calls 0)
+			(tool (niwa-tool--create
+			       :name "Skip"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (cl-incf calls)
+				 '(:data t)))))
+		   (dolist (case '((42 success) ("Error: nope" error)))
+		     (pcase-let ((`(,result ,status) case))
+		       (let (out)
+		       (niwa-pipeline--step-render-transform
+			(list :tool tool :args nil :result result
+			      :handler-status status)
+			(lambda (c) (setq out c)) #'ignore)
+			 (should (null (plist-get out :render-data))))))
+		   (should (= 0 calls)))
+		 :doc "oversized transform metadata is rejected"
+		 (let* ((tool (niwa-tool--create
+			       :name "Big"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (list :body
+				       (make-string
+					(1+ niwa-pipeline--render-transform-max-data-size)
+					?x)))))
+			(warnings nil)
+			out)
+		   (cl-letf (((symbol-function 'display-warning)
+			      (lambda (&rest args) (push args warnings))))
+		     (niwa-pipeline--step-render-transform
+		      (list :tool tool :args nil :result "ok")
+		      (lambda (c) (setq out c)) #'ignore))
+		   (should warnings)
+		   (should (null (plist-get out :render-data))))
+		 :doc "transform errors warn and preserve context"
+		 (let* ((tool (niwa-tool--create
+			       :name "Boom"
+			       :render-transform
+			       (lambda (_name _args _result)
+					 (error "Bad transform"))))
+			(warnings nil)
+			out)
+		   (cl-letf (((symbol-function 'display-warning)
+			      (lambda (&rest args) (push args warnings))))
+		     (niwa-pipeline--step-render-transform
+		      (list :tool tool :args nil :result "ok")
+		      (lambda (c) (setq out c)) #'ignore))
+		   (should warnings)
+		   (should (null (plist-get out :render-data)))))
+
+(niwa-deftest niwa-pipeline--build-steps ()
+  ,test
+  (test)
+
+  :doc "provider projection preserves common and provider step ordering"
+  (let ((tool (niwa-tool--create :name "ReadTool" :read-only-p t)))
+    (should
+     (equal
+      (niwa-pipeline--build-steps tool)
+      (list #'niwa-pipeline--step-validate
+            #'niwa-pipeline--step-pre-tool-hooks
+            #'niwa-pipeline--step-normalize-paths
+            #'niwa-pipeline--step-prepare-resources
+            #'niwa-tool-permission-step
+            #'niwa-pipeline--step-capture-coverage
+            #'niwa-pipeline--step-handler
+            #'niwa-pipeline--step-render-transform
+            #'niwa-pipeline--step-post-tool-hooks
+            #'niwa-pipeline--step-hook-side-channel
+            #'niwa-pipeline--step-repair-reminder
+            #'niwa-pipeline--step-goal-budget-warning
+            #'niwa-pipeline--step-attach-render-data
+            #'niwa-pipeline--step-attach-media-data))))
+
+  :doc "snapshot tools insert snapshot immediately before the handler"
+  (let* ((tool (niwa-tool--create
+                :name "WriteTool" :read-only-p nil :snapshot-p t))
+         (steps (niwa-pipeline--build-steps tool)))
+    (should (eq #'niwa-pipeline--step-capture-coverage (nth 5 steps)))
+    (should (eq #'niwa-pipeline--step-snapshot (nth 6 steps)))
+    (should (eq #'niwa-pipeline--step-handler (nth 7 steps))))
+
+  :doc "mutating tools without a snapshot declaration skip snapshotting"
+  (let ((tool (niwa-tool--create :name "MkDir" :read-only-p nil)))
+    (should-not
+     (memq #'niwa-pipeline--step-snapshot
+           (niwa-pipeline--build-steps tool))))
+
+  :doc "provider projection persists declared oversized results once"
+  (let* ((tool (niwa-tool--create
+                :name "WithPersist" :read-only-p t :max-result-size 1000))
+         (steps (niwa-pipeline--build-steps tool)))
+    (should (= 1 (seq-count
+                  (lambda (step)
+                    (eq step #'niwa-pipeline--step-persist))
+                  steps)))
+    (should (< (cl-position #'niwa-pipeline--step-repair-reminder steps)
+               (cl-position #'niwa-pipeline--step-persist steps)))
+    (should (< (cl-position #'niwa-pipeline--step-persist steps)
+               (cl-position #'niwa-pipeline--step-goal-budget-warning steps))))
+
+  :doc "outcome projection stops before all provider-only steps"
+  (let* ((tool (niwa-tool--create
+                :name "Outcome" :read-only-p t :max-result-size 1000))
+         (steps (niwa-pipeline--build-steps tool t)))
+    (should (eq #'niwa-pipeline--step-post-tool-hooks (car (last steps))))
+    (dolist (step (list #'niwa-pipeline--step-repair-reminder
+                        #'niwa-pipeline--step-hook-side-channel
+                        #'niwa-pipeline--step-persist
+                        #'niwa-pipeline--step-goal-budget-warning
+                        #'niwa-pipeline--step-attach-render-data
+                        #'niwa-pipeline--step-attach-media-data))
+      (should-not (memq step steps)))))
+
+(niwa-deftest niwa-pipeline-run-tool-outcome
+  (:before-each
+   (advice-add 'display-warning :around
+               #'niwa-test--drop-sessionless-permission-warning)
+   :after-each
+   (advice-remove 'display-warning
+                  #'niwa-test--drop-sessionless-permission-warning))
+  ,test
+  (test)
+
+  :doc "returns the complete canonical result before provider persistence"
+  (let* ((tool (niwa-tool--create
+                :name "Large"
+                :handler (lambda (_args)
+                           '(:result "abcdef"
+                             :status success
+                             :render-data (:kind sample)))
+                :max-result-size 3
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (niwa-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil)
+    (should (equal "abcdef" (plist-get outcome :result)))
+    (should (equal "abcdef" (plist-get outcome :raw-result)))
+    (should (eq 'success (plist-get outcome :status)))
+    (should (equal '(:kind sample) (plist-get outcome :render-data))))
+
+  :doc "classifies permission denial without parsing result text"
+  (let* ((tool (niwa-tool--create
+                :name "Denied"
+                :handler (lambda (_args) '(:result "unreachable"))
+                :check-permission-async
+                (lambda (_tool _args cont) (funcall cont 'deny))
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (niwa-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'permission-denied (plist-get outcome :reason))))
+
+  :doc "carries caller-supplied nested identity"
+  (let* ((tool (niwa-tool--create
+                :name "Child"
+                :handler (lambda (_args) '(:result "ok"))
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (niwa-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil
+     '(:tool-use-id "parent/1" :parent-tool-use-id "parent" :source ptc))
+    (should (equal "parent/1" (plist-get outcome :tool-use-id)))
+    (should (equal "parent" (plist-get outcome :parent-tool-use-id)))
+    (should (eq 'ptc (plist-get outcome :source))))
+
+  :doc "returns a child-scoped cancellation thunk"
+  (let* ((tool (niwa-tool--create
+                :name "PendingChild"
+                :handler (lambda (_callback _args) nil)
+                :read-only-p t
+                :async-p t))
+         outcome
+         (cancel
+          (niwa-pipeline-run-tool-outcome
+           tool (lambda (value) (setq outcome value)) nil
+           '(:tool-use-id "parent/2"
+             :parent-tool-use-id "parent" :source ptc))))
+    (should (functionp cancel))
+    (should-not outcome)
+    (funcall cancel)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'cancelled (plist-get outcome :reason)))
+    (should (equal "parent/2" (plist-get outcome :tool-use-id))))
+
+  )
+
+;;
+;;; File checkpoint capture
+
+(niwa-deftest niwa-pipeline--snapshot-file-if-needed ()
+  ,test
+  (test)
+  :doc "captures a regular file once at its pre-turn contents"
+  (let* ((directory (make-temp-file "niwa-snapshot-" t))
+         (path (file-name-concat directory "tracked.el"))
+         (snapshots (make-hash-table :test #'equal))
+         (niwa--current-request
+          (niwa-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (write-region "before" nil path nil 'silent)
+          (niwa-pipeline--snapshot-file-if-needed
+           niwa--current-request path)
+          (write-region "after" nil path nil 'silent)
+          (niwa-pipeline--snapshot-file-if-needed
+           niwa--current-request path)
+          (should (equal "before" (gethash path snapshots))))
+      (delete-directory directory t)))
+  :doc "records a known gap when the pre-turn path cannot be read"
+  (let* ((directory (make-temp-file "niwa-snapshot-gap-" t))
+         (snapshots (make-hash-table :test #'equal))
+         (niwa--current-request
+          (niwa-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (niwa-pipeline--snapshot-file-if-needed
+           niwa--current-request directory)
+          (should (stringp
+                   (plist-get (gethash directory snapshots) :gap))))
+      (delete-directory directory t))))
+
+(niwa-deftest niwa-pipeline--run/yield ()
+  ,test
+  (test)
+  :doc "fast interactive steps unwind before exhausting the Lisp stack"
+  (let ((noninteractive nil)
+        (max-lisp-eval-depth 1600)
+        (niwa-pipeline--slice-seconds 60)
+        (cell (list nil))
+        (count 0) results)
+    (niwa-pipeline--run
+     (make-list 80 (lambda (ctx next _fail)
+                     (setq count (1+ count))
+                     (funcall next (plist-put ctx :result "done"))))
+     (lambda (result) (push result results))
+     (list :cancel-cell cell))
+    (with-timeout (5 (ert-fail "Fast pipeline did not finish"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (should (= count 80))
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :status) 'success))
+    (should-not (car cell)))
+  :doc "a stack-budget timer cannot reenter its still-running predecessor"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 60)
+        (count 0) during results)
+    (niwa-pipeline--run
+     (cons (lambda (ctx next _fail)
+             (funcall next ctx)
+             (setq during count)
+             (accept-process-output nil 0.03)
+             (should (= during count)))
+           (make-list 30 (lambda (ctx next _fail)
+                           (setq count (1+ count))
+                           (funcall next ctx))))
+     (lambda (result) (push result results)) nil)
+    (should (< during 30))
+    (with-timeout (5 (ert-fail "Stack-budget timer did not resume"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (should (= count 30))
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :status) 'success)))
+  :doc "a timer-resumed step keeps its stack ownership during a process wait"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 60)
+        (count 0) waited reentered results)
+    (niwa-pipeline--run
+     (make-list 40
+                (lambda (ctx next _fail)
+                  (setq count (1+ count))
+                  (let ((wait-p (= count 9)))
+                    (funcall next ctx)
+                    (when wait-p
+                      (setq waited t)
+                      (let ((before count))
+                        (accept-process-output nil 0.03)
+                        (setq reentered (/= before count)))))))
+     (lambda (result) (push result results)) nil)
+    (with-timeout (5 (ert-fail "Resumed pipeline did not finish"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (should waited)
+    (should-not reentered)
+    (should (= count 40))
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :status) 'success)))
+  :doc "cancellation owns a fast chain deferred by its stack budget"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 60)
+        (cell (list nil))
+        (count 0) results)
+    (niwa-pipeline--run
+     (make-list 30 (lambda (ctx next _fail)
+                     (setq count (1+ count)) (funcall next ctx)))
+     (lambda (result) (push result results))
+     (list :cancel-cell cell))
+    (should (< count 30))
+    (should-not results)
+    (funcall (car cell))
+    (let ((before count))
+      (accept-process-output nil 0.03)
+      (should (= before count)))
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :reason) 'cancelled))
+    (should-not (car cell)))
+  :doc "yields with cancellation installed and preserves ordered context"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        (cell (list nil)) order result)
+    (niwa-pipeline--run
+     (list (lambda (ctx next _fail)
+             (push 1 order) (funcall next (plist-put ctx :result "retained")))
+           (lambda (ctx next _fail)
+             (push 2 order) (funcall next ctx)))
+     (lambda (settlement) (setq result settlement))
+     (list :cancel-cell cell))
+    (should-not order)
+    (should (functionp (car cell)))
+    (with-timeout (2 (ert-fail "Yielded pipeline timed out"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal order '(2 1)))
+    (should (equal (plist-get result :result) "retained"))
+    (should-not (car cell)))
+  :doc "pending input takes priority even before the time budget expires"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 60)
+        result)
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () t)))
+      (niwa-pipeline--run
+       (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "ready"))))
+       (lambda (settlement) (setq result settlement)) nil)
+      (should-not result))
+    (with-timeout (2 (ert-fail "Input-prioritized step timed out"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "ready")))
+  :doc "a due timer waits for input and cancellation stops the rearmed timer"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        (cell (list nil)) ran results)
+    (cl-letf (((symbol-function 'input-pending-p) (lambda () t)))
+      (niwa-pipeline--run
+       (list (lambda (ctx next _fail) (setq ran t) (funcall next ctx)))
+       (lambda (result) (push result results)) (list :cancel-cell cell))
+      (accept-process-output nil 0.03)
+      (should-not ran)
+      (should-not results)
+      (funcall (car cell)))
+    (accept-process-output nil 0.03)
+    (should-not ran)
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :reason) 'cancelled)))
+  :doc "cancellation removes a pending step without running its side effects"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        (cell (list nil)) ran results)
+    (niwa-pipeline--run
+     (list (lambda (ctx next _fail) (setq ran t) (funcall next ctx)))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (should-not ran)
+    (should (functionp (car cell)))
+    (funcall (car cell))
+    (accept-process-output nil 0.02)
+    (should-not ran)
+    (should (= (length results) 1))
+    (should (eq (plist-get (car results) :reason) 'cancelled))
+    (should-not (car cell)))
+  :doc "a delayed step error settles once through the native error boundary"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        (cell (list nil)) results)
+    (niwa-pipeline--run
+     (list (lambda (&rest _) (error "Delayed step failed")))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (should-not results)
+    (with-timeout (2 (ert-fail "Delayed error was not delivered"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (should (= (length results) 1))
+    (should (string-match-p "Delayed step failed" (plist-get (car results) :result)))
+    (should-not (car cell)))
+  :doc "a step deferred from inside a remote command still finishes"
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        result)
+    ;; A process sentinel can start a tool call inside a remote command,
+    ;; while TRAMP has the timer lists bound away.
+    (niwa-transport--handler-advice
+     (lambda ()
+       (let (timer-list timer-idle-list)
+         (niwa-pipeline--run
+          (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "done"))))
+          (lambda (settlement) (setq result settlement)) nil))))
+    (should-not result)
+    (with-timeout (2 (ert-fail "Deferred step was lost with TRAMP's timer list"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "done")))
+  :doc "never runs a step inside a remote command, even in batch"
+  (let (inside result)
+    (niwa-transport--handler-advice
+     (lambda ()
+       (niwa-pipeline--run
+        (list (lambda (ctx next _fail) (funcall next (plist-put ctx :result "later"))))
+        (lambda (settlement) (setq result settlement)) nil)
+       (accept-process-output nil 0.03)
+       (setq inside result)))
+    (should-not inside)
+    (with-timeout (2 (ert-fail "Step deferred from a remote command never ran"))
+      (while (not result) (accept-process-output nil 0.01)))
+    (should (equal (plist-get result :result) "later"))))
+
+(niwa-deftest niwa-pipeline--run/late-error ()
+  (let ((noninteractive nil)
+        (niwa-pipeline--slice-seconds 0)
+        (cell (list nil)) effects results)
+    (niwa-pipeline--run
+     (list (lambda (ctx next _fail)
+             (funcall next ctx)
+             (error "Failure after handing off"))
+           (lambda (ctx next _fail)
+             (setq effects t) (funcall next ctx)))
+     (lambda (result) (push result results)) (list :cancel-cell cell))
+    (with-timeout (2 (ert-fail "Late error did not settle"))
+      (while (not results) (accept-process-output nil 0.01)))
+    (accept-process-output nil 0.02)
+    (should-not effects)
+    (should (= (length results) 1))
+    (should (string-match-p "Failure after handing off" (plist-get (car results) :result)))
+    (should-not (car cell))))
+
+(provide 'test-niwa-pipeline)
+;;; test-niwa-pipeline.el ends here

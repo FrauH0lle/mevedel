@@ -43,7 +43,7 @@ class RunnerTests(unittest.TestCase):
                 return BENCH.run(["git", *args], root, env, stdout=subprocess.PIPE)
 
             git("init", "-q", "-b", "master")
-            (root / "mevedel.el").write_text("baseline")
+            (root / "niwa.el").write_text("baseline")
             (root / "benchmark").mkdir()
             (root / "prompts" / "tools").mkdir(parents=True)
             (root / "prompts" / "tools" / "ask.md").write_text("compile-time prompt")
@@ -52,22 +52,22 @@ class RunnerTests(unittest.TestCase):
             git("add", ".")
             git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
             baseline = git("rev-parse", "HEAD").stdout.decode().strip()
-            (root / "mevedel.el").write_text("new master")
+            (root / "niwa.el").write_text("new master")
             git("add", ".")
             git("-c", "commit.gpgsign=false", "commit", "-qm", "advance master")
-            (root / "mevedel.el").write_text("working edit")
-            (root / "mevedel.elc").write_text("stale bytecode")
+            (root / "niwa.el").write_text("working edit")
+            (root / "niwa.elc").write_text("stale bytecode")
             destination = Path(name) / "snapshot"
             destination.mkdir()
             sources = BENCH.snapshot_sources(root, destination, baseline)
-            self.assertEqual((sources["master"] / "mevedel.el").read_text(), "baseline")
-            self.assertEqual((sources["current"] / "mevedel.el").read_text(), "working edit")
-            self.assertFalse((sources["current"] / "mevedel.elc").exists())
+            self.assertEqual((sources["master"] / "niwa.el").read_text(), "baseline")
+            self.assertEqual((sources["current"] / "niwa.el").read_text(), "working edit")
+            self.assertFalse((sources["current"] / "niwa.elc").exists())
             for source in sources.values():
                 self.assertEqual((source / BENCH.FIXTURE).read_bytes(), fixture.read_bytes())
                 self.assertEqual((source / "prompts" / "tools" / "ask.md").read_text(),
                                  "compile-time prompt")
-            self.assertEqual((root / "mevedel.el").read_text(), "working edit")
+            self.assertEqual((root / "niwa.el").read_text(), "working edit")
             self.assertFalse((root / ".git" / "worktrees").exists())
 
     def test_frozen_dependencies_exclude_archive_cache_and_keep_hashes(self):
@@ -148,17 +148,17 @@ class RunnerTests(unittest.TestCase):
     def test_real_child_compiles_runs_and_rejects_wrong_provenance(self):
         fixture = r''';;; fixture.el --- Runner probe -*- lexical-binding: t; -*-
 (require 'json)
-(defun mevedel-instruction-bench-run (directory)
+(defun niwa-instruction-bench-run (directory)
   "Probe real child compilation and isolation in DIRECTORY."
-  (unless (and (byte-code-function-p (symbol-function 'mevedel-instruction-bench-run))
+  (unless (and (byte-code-function-p (symbol-function 'niwa-instruction-bench-run))
                (not native-comp-jit-compilation)
                (string-prefix-p (getenv "HOME") (car native-comp-eln-load-path)))
     (error "Child is not isolated bytecode"))
   (princ (json-encode
-          `((hotpaths . [((symbol . "mevedel-instruction-bench-run")
-                          (loaded . ,(symbol-file 'mevedel-instruction-bench-run 'defun)))])
+          `((hotpaths . [((symbol . "niwa-instruction-bench-run")
+                          (loaded . ,(symbol-file 'niwa-instruction-bench-run 'defun)))])
             (executed . ,directory)))))
-(provide 'mevedel-instruction-edit-bench)
+(provide 'niwa-instruction-edit-bench)
 '''
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
@@ -173,8 +173,8 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(report["source_manifest"], BENCH.digest_files(source))
             self.assertIn("source_sha256", report["hotpaths"][0])
             path.write_text(fixture.replace(
-                "(symbol-file 'mevedel-instruction-bench-run 'defun)",
-                '"/foreign/mevedel-instruction-edit-bench.elc"'))
+                "(symbol-file 'niwa-instruction-bench-run 'defun)",
+                '"/foreign/niwa-instruction-edit-bench.elc"'))
             with self.assertRaisesRegex(RuntimeError, "Unexpected hotpath provenance"):
                 BENCH.measure("emacs", source, root / "foreign", [], dependencies)
             path.write_text(fixture.replace("(require 'json)",

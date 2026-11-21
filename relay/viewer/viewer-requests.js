@@ -7,7 +7,7 @@
       const card = [...requests.children].find(c => c.dataset.reqId === String(reqId));
       if (card) {
         if (card.dispose) card.dispose();
-        card.querySelectorAll('.expanded > textarea').forEach(input => window.mevedelComposer.setExpanded(input, false));
+        card.querySelectorAll('.expanded > textarea').forEach(input => window.niwaComposer.setExpanded(input, false));
         card.remove();
       }
     }
@@ -39,7 +39,7 @@
         open = index;
         rows.forEach((row, i) => {
           if (i !== open && row.custom.parentElement.classList.contains('expanded')) {
-            window.mevedelComposer.setExpanded(row.custom, false);
+            window.niwaComposer.setExpanded(row.custom, false);
           }
           row.heading.hidden = i === open;
           row.panel.inert = i !== open;
@@ -182,7 +182,7 @@
           advance(index, true);
         });
         panel.append(custom);
-        window.mevedelComposer.expandable(custom);
+        window.niwaComposer.expandable(custom);
         custom.setAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
         custom.title = 'Enter for a new line; Ctrl+Enter or ⌘+Enter to advance or submit answers';
         if (samples.size) panel.append(sampleBox);
@@ -195,7 +195,7 @@
       controls.append(previous, next);
       submit.addEventListener('click', async () => {
         if (await send({t: 'ui-response', reqId: frame.reqId, answers}) !== false) {
-          rows.forEach(row => window.mevedelComposer.setExpanded(row.custom, false));
+          rows.forEach(row => window.niwaComposer.setExpanded(row.custom, false));
         }
       });
       submitRow.append(submit);
@@ -222,7 +222,7 @@
             document.activeElement.selectionDirection] : null});
       if (draft) card.restoreQuestionFocus = () => {
         rows.forEach((row, i) => {
-          if (draft.expanded[i]) window.mevedelComposer.setExpanded(row.custom, true);
+          if (draft.expanded[i]) window.niwaComposer.setExpanded(row.custom, true);
         });
         const node = card.querySelectorAll('button,input,textarea')[draft.focus];
         if (!node) return;
@@ -274,10 +274,10 @@
         card.append(el('div', 'request-body request-notice', frame.notice));
       }
       if (frame.bodyKind === 'diff') {
-        card.bodyEl = window.mevedelTranscriptRenderer.renderDiff(frame.body || '');
+        card.bodyEl = window.niwaTranscriptRenderer.renderDiff(frame.body || '');
         card.append(card.bodyEl);
       } else if (frame.bodyKind === 'markdown') {
-        card.bodyEl = window.mevedelTranscriptRenderer.renderMarkdown(frame.body || '');
+        card.bodyEl = window.niwaTranscriptRenderer.renderMarkdown(frame.body || '');
         card.bodyEl.classList.add('request-body');
         card.append(card.bodyEl);
       } else if (frame.body) {
@@ -331,11 +331,11 @@
           button.addEventListener('click', async () => {
             if (feedback.value.trim()
                 && await send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value}) !== false) {
-              window.mevedelComposer.setExpanded(feedback, false);
+              window.niwaComposer.setExpanded(feedback, false);
             }
           });
           row.append(feedback, button);
-          window.mevedelComposer.bind(feedback, button);
+          window.niwaComposer.bind(feedback, button);
           const disclosure = el('details', 'decision-feedback');
           if (existing && existing.feedbackDisclosure) disclosure.open = existing.feedbackDisclosure.open;
           card.feedbackDisclosure = disclosure;
@@ -345,10 +345,10 @@
       }
       if (existing) {
         if (existing.dispose) existing.dispose();
-        existing.querySelectorAll('.expanded > textarea').forEach(input => window.mevedelComposer.setExpanded(input, false));
+        existing.querySelectorAll('.expanded > textarea').forEach(input => window.niwaComposer.setExpanded(input, false));
         existing.replaceWith(card);
       } else requests.append(card);
-      if (feedbackExpanded && card.feedbackEl) window.mevedelComposer.setExpanded(card.feedbackEl, true);
+      if (feedbackExpanded && card.feedbackEl) window.niwaComposer.setExpanded(card.feedbackEl, true);
       if (card.restoreQuestionFocus) card.restoreQuestionFocus();
       if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
       if (feedbackFocused && card.feedbackEl) {
@@ -367,5 +367,5 @@
     }
     return {render, remove, clear};
   }
-  window.mevedelRequestView = {create};
+  window.niwaRequestView = {create};
 })();

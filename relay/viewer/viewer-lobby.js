@@ -231,7 +231,7 @@
         if (wanted && wanted !== tab) select(wanted);
       }
       const project = typeof frame.project === 'string' && frame.project ? frame.project : null;
-      document.title = project ? `${project} · mevedel` : 'mevedel';
+      document.title = project ? `${project} · niwa` : 'niwa';
       tabs.hidden = false;
       filesTab.hidden = !filesAllowed();
       retitle();
@@ -316,5 +316,5 @@
                           tab: () => tab, active: () => active});
   }
 
-  window.mevedelLobbyView = Object.freeze({create, age});
+  window.niwaLobbyView = Object.freeze({create, age});
 })();

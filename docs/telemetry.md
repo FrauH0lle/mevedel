@@ -1,6 +1,6 @@
 # Session telemetry and profiling
 
-mevedel writes a versioned, append-only diagnostic event stream for every
+niwa writes a versioned, append-only diagnostic event stream for every
 session. The stream is evidence for postmortems and performance analysis; it
 is not session state and is never read during resume.
 
@@ -24,7 +24,7 @@ identity from the containing directory for all rows, including previously
 written rows with the now-redundant session field.
 
 Sessionless background work uses the same compact envelope and privacy filter at
-`WORKSPACE/.mevedel/state/diagnostics/telemetry-log.el`, through target-native control
+`WORKSPACE/.niwa/state/diagnostics/telemetry-log.el`, through target-native control
 operations on local and TRAMP workspaces. It has no session identity or Goal
 and does not manufacture a conversation. It follows the same enable switch;
 disabled telemetry creates no diagnostic state.
@@ -52,7 +52,7 @@ owner-request sweeps, cancellations, and aborts retain distinct event or
 for event semantics and the richer resource-scope fields restricted to
 `permission-log.el`.
 
-Telemetry may be disabled with `mevedel-telemetry-enabled`. Events emitted
+Telemetry may be disabled with `niwa-telemetry-enabled`. Events emitted
 before a new session has a directory are held in the session and flushed as
 soon as it is materialized. Persistence failures warn but never fail the user
 workflow. Local session events are appended synchronously as UTF-8, one write
@@ -63,7 +63,7 @@ recreate it after cleanup or deletion.
 
 Telemetry records lifecycle metadata, sizes, classifications, hashes, and
 bounded identifiers. The emitter keeps only the keys named in
-`mevedel-telemetry--allowed-keys` and drops everything else, at every depth: a
+`niwa-telemetry--allowed-keys` and drops everything else, at every depth: a
 nested property list is filtered by the same rule as the event's own
 properties. This is a structural filter, not content classification: a string
 under an allowed key is bounded but is not inspected for secrets or payload
@@ -115,7 +115,7 @@ per-hook-handler lifecycle spans, and hook-event spans with no matching
 handlers. Hook events that actually run handlers and nontrivial repair
 outcomes remain visible. Per-handler `hook-handler` outcomes repeat the
 session's persisted hook log, so a durable session records them only during a
-profiler run or with `mevedel-hooks-persist-log` disabled; a side
+profiler run or with `niwa-hooks-persist-log` disabled; a side
 conversation, whose hook log is transient, still forwards them as its
 value-free audit. A compaction attempt refused before admission is not
 measured at all; one rejected after measurement starts closes its span as
@@ -129,23 +129,23 @@ of them. Input validation therefore records one settled
 of a start/finish span, and only for outcomes with repairs, issues, or
 errors.
 
-An active `mevedel-telemetry-profiler-start` run records the full detailed
+An active `niwa-telemetry-profiler-start` run records the full detailed
 stream for its owning session, minus those no-op validation and repair
-events. `mevedel-session-debug` starts that same profiler, so it also enables
+events. `niwa-session-debug` starts that same profiler, so it also enables
 full telemetry. Other concurrently live sessions remain on the normal tier.
 
 ## Covered lifecycle boundaries
 
 Each session start and resume records one `session-runtime` event. Its
 `:boundary` is the start source and `:loaded-at` says when this Emacs loaded
-`mevedel`. `:mevedel-commit`, `:mevedel-version`, `:gptel-commit` and
-`:gptel-version` identify what it loaded of mevedel and gptel, captured once
+`niwa`. `:niwa-commit`, `:niwa-version`, `:gptel-commit` and
+`:gptel-version` identify what it loaded of niwa and gptel, captured once
 at that load. A running Emacs keeps executing the loaded code while the
 checkout moves on, so compare a session's evidence against these values, not
 against the checkout's current HEAD.
 
 Whatever installed a library is covered by one resolution order
-(`mevedel-library-provenance`):
+(`niwa-library-provenance`):
 
 - **Commit:** the library's own Git checkout, followed through the symlinks of
   a straight or elpaca build directory (straight, elpaca, package-vc, a manual
@@ -210,7 +210,7 @@ cancellation releases the fence and leaves the machine retryable.
   steering is queued), `interaction`, or `composer-draft`. It is recorded
   only when the reason changes; an admitted wake resets it;
 - `event-loop-lag` whenever the editor's event loop ran more than
-  `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
+  `niwa-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
   request runs and for two minutes after it settles, since journal,
   collection and publication work follows settlement. Admitted sessionless
   memory passes also watch from registration before preparation through terminal
@@ -268,7 +268,7 @@ cancellation releases the fence and leaves the machine retryable.
   the CPU time Emacs used since the previous heartbeat: close to the delay
   for a busy editor, near zero for a suspended machine or a blocking wait on
   a child process. A closure is
-  labelled `closure:` plus the function it calls, preferring a `mevedel-`
+  labelled `closure:` plus the function it calls, preferring a `niwa-`
   one: that names what it does, not where it was created. One that calls
   only primitives is named `anonymous`. Each settled request adds an `event-loop-lag-summary`
   with the counts above 200, 500 and 1000 ms, the maximum, and how many had
@@ -462,22 +462,22 @@ The session does not have to have hit disk yet: profiler start materializes a
 cold session itself, so a run can begin without sending a throwaway turn
 first.
 
-1. Run `M-x mevedel-telemetry-profiler-start`. Combined CPU and memory
+1. Run `M-x niwa-telemetry-profiler-start`. Combined CPU and memory
    profiling is the default. With a prefix argument, choose a single mode.
 2. Create the Goal with the preset and objective being investigated. For a
    comparison, repeat the same interaction sequence, including any queued input,
    and avoid unrelated commands.
 3. Let the Goal reach a terminal state or a clearly stranded state.
-4. Run `M-x mevedel-telemetry-profiler-stop`.
+4. Run `M-x niwa-telemetry-profiler-stop`.
 
-For a session-level reproduction, `M-x mevedel-session-debug` starts the same
+For a session-level reproduction, `M-x niwa-session-debug` starts the same
 profiler while enabling gptel debug logging and the existing view-render trace.
 Run it again to stop and save all three captures. The view trace includes
 buffer point, selected-window point/start, composer-relative offsets, and
 managed-fragment coordinates around interaction registration, full rerenders,
 and zone reconciliation.
 
-During `mevedel-session-debug`, `gptel--log` appends raw entries without
+During `niwa-session-debug`, `gptel--log` appends raw entries without
 JSON pretty-printing. The debug log remains an opt-in raw-data artifact; ordinary
 telemetry still follows the bounded metadata policy. See
 [ADR 0118](adr/0118-keep-diagnostics-observational-and-bounded.md) for the
@@ -496,8 +496,8 @@ profiler-cpu-report.txt       rendered CPU report, when enabled
 profiler-memory-profile.el    native readable Emacs memory profile, when enabled
 profiler-memory-report.txt    rendered memory report, when enabled
 full-suite-time.txt           GNU time report, when a full Eask suite ran
-gptel-debug.log               gptel log captured by mevedel-session-debug
-view-render-debug.log         view trace captured by mevedel-session-debug
+gptel-debug.log               gptel log captured by niwa-session-debug
+view-render-debug.log         view trace captured by niwa-session-debug
 ```
 
 For a session saved locally, the directory is
@@ -532,7 +532,7 @@ value.
 
 The two debug logs are explicit opt-in artifacts and may contain raw prompts,
 responses, request headers, connection settings, and short rendered text
-previews. Before persistence, mevedel replaces `Authorization`,
+previews. Before persistence, niwa replaces `Authorization`,
 `ChatGPT-Account-Id`, and `Session-Id` header values in the gptel log with
 `<redacted>`. Other diagnostic content remains raw. The logs are written with
 owner-only permissions (`0600`); still treat the diagnostics directory as
@@ -543,7 +543,7 @@ under `/usr/bin/time -v` when GNU time is installed. Focused test files and
 subsequent full-suite attempts are not wrapped. The corresponding execution
 events identify the report and include scheduler dwell, overlap count, cache
 identity, timeout state, and report size. Classification uses the original Bash
-text. `mevedel-execution-telemetry.el` owns that recognition and prepends GNU
+text. `niwa-execution-telemetry.el` owns that recognition and prepends GNU
 time directly to the already-tokenized argv; it does not add another shell
 layer or inspect the live process record.
 
@@ -571,7 +571,7 @@ which locates the client-side profiler output.
 ## Comparing session instrumentation modes
 
 The maintained
-[controlled session performance workload](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/session-performance-workload.md)
+[controlled session performance workload](https://github.com/FrauH0lle/niwa/blob/master/benchmark/session-performance-workload.md)
 exercises the native ApplyPatch tool, a child-agent permission request, retained
 agent coordination, focused Bash tests, and an ignored-file-safe Elisp Xref
 search.  It defines normal, profiler-only, and full-debug runs from equivalent
@@ -634,17 +634,17 @@ lost distinction. Token-baseline events normalize nested `:provider-context-usag
 and `:cumulative-usage` into these same allowlisted names without broadening
 the privacy filter to generic `:input`/`:output` keys.
 
-Analyze logs from a repository checkout, without loading mevedel or making
+Analyze logs from a repository checkout, without loading niwa or making
 provider calls:
 
 ```bash
 # Text summary of every session with a log in this workspace.
 emacs -Q --batch -l scripts/analyze-session-cache.el \
-  -f mevedel-analyze-session-cache-main -- .mevedel/sessions
+  -f niwa-analyze-session-cache-main -- .niwa/sessions
 
 # Structured report for explicit logs or session directories.
 emacs -Q --batch -l scripts/analyze-session-cache.el \
-  -f mevedel-analyze-session-cache-main -- --json /path/to/session/telemetry-log.el
+  -f niwa-analyze-session-cache-main -- --json /path/to/session/telemetry-log.el
 ```
 
 The analyzer accepts telemetry files, session directories, or sessions
@@ -676,7 +676,7 @@ The report locates drops; it does not automatically attribute their cause.
 Profiler runs temporarily advise `ask-user-about-supersession-threat`,
 `yes-or-no-p`, and `y-or-n-p`. Each invocation records the function, prompt
 length, and prompt hash. By default,
-`mevedel-telemetry-profiler-fail-on-prompt` then raises a `user-error`, making
+`niwa-telemetry-profiler-fail-on-prompt` then raises a `user-error`, making
 an unexpected compaction, file-conflict, or edit question a visible failed
 reproduction rather than unclassified user-wait time. Set the option to nil
 only when the reproduction intentionally includes synchronous prompts.
