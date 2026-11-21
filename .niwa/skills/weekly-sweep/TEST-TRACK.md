@@ -17,10 +17,8 @@ whose closing report lived in a removed worktree, use
 8 workers). After the 2026-11-14 continuation (lease-only sessions) the
 baseline is `20261114-222430-799374` (550 files, 14525 results, 576 s wall,
 4 workers). After the 2026-11-21 sweep the baseline is
-`20261121-161327-957582` (landing tree on master 9e09dbef: 572 files,
-14862 results, 853 s wall, 4 workers; summed test-seconds 2574, inflated by
-intermittent +10/+20 s memory-test waits; integration run
-`20261121-151526-909697`: 617 s, 2260 test-seconds). The close copies its report into the main checkout's
+`20261121-170945-164138` (572 files, 14862 results, 664 s wall, 2279
+test-seconds, 4 workers). The close copies its report into the main checkout's
 `.scratch/test-suite-performance/`. Commands and tiers:
 `docs/development.md`, checks
 table and testing section. The runner needs `eask` on PATH; without network,
