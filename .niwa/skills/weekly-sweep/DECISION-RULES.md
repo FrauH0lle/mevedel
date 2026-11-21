@@ -90,3 +90,10 @@ rule they corrected, and deletes one they overruled.
 ## Unsettled
 
 Ask the user at the next intake, then fold the answer into a rule.
+
+- 2026-11-21: explicit `delete-window` on a frame-filling view/composer pair:
+  (A) quit it non-destructively (taken by the coordinator from the user's bug
+  report; overrode the proxy) or (B) keep the documented last-window refusal.
+- 2026-11-21: one buffer-local, tick-checked agent-lookup cache in
+  `niwa-view-agent.el` for 7.6 -> 0.9 ms per refresh at 600 turns: (A) accept
+  as a rule-13 exception (taken) or (B) drop it and keep only stateless bounds.
