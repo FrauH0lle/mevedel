@@ -353,5 +353,41 @@
      (dolist (file '("hooks.el" "hooks.json"))
        (should (string-search expected (niwa-mig-test--r dst file)))))))
 
+(ert-deftest niwa-migrate-from-mevedel/preserves-config-bytes ()
+  (niwa-mig-test--with-ws
+   (let* ((json (concat "{\r\n  \"metadata\": {\"command\": \".mevedel/hooks/h.sh\"},\r\n"
+                        "  \"hooks\": {\"PreToolUse\": [{ \"hooks\": [{\r\n"
+                        "    \"description\": \"café: .mevedel/hooks/h.sh\",\r\n"
+                        "    \"command\" : \".\\u006devedel\\/hooks/h.sh; .mevedel/hooks/h.sh;"
+                        " printf '.mevedel/sample'\",\r\n    \"timeout\": 1e0\r\n  }]}]}\r\n}\r\n\t"))
+          (lisp (concat ";; .mevedel/hooks/h.sh\n((PreToolUse\n"
+                        "  (:hooks ((:type command :description \".mevedel/hooks/h.sh\"\n"
+                        "            :command \"bash \\\".mevedel/hooks/h.sh\\\"\")))))\n\n"))
+          (instructions
+           (concat ";; mevedel-id and .mevedel/hooks/h.sh stay here\n(:format  1\n"
+                   " :files ((\".mevedel/hooks/h.sh\" . (:instructions\n"
+                   "          ((:properties (mevedel-id \".mevedel/hooks/h.sh\"\n"
+                   "                         mevedel-note-settings (:preset mevedel-note))))))))  "))
+          (entries `(("hooks.json" ,json
+                      ,(string-replace ".\\u006devedel\\/hooks/h.sh; .mevedel/hooks/h.sh"
+                                       ".niwa\\/hooks/h.sh; .niwa/hooks/h.sh" json))
+                     ("hooks.el" ,lisp
+                      ,(string-replace "bash \\\".mevedel/" "bash \\\".niwa/" lisp))
+                     ("instructions.el" ,instructions
+                      ,(string-replace "mevedel-note-settings (:preset mevedel-note)"
+                                       "niwa-note-settings (:preset niwa-note)"
+                                       (string-replace "(mevedel-id " "(niwa-id "
+                                                       (string-replace "((\".mevedel/" "((\".niwa/" instructions))))))
+          (dst (file-name-concat root ".niwa"))
+          (coding-system-for-write 'utf-8-unix))
+     (dolist (entry entries)
+       (niwa-mig-test--w src (car entry) (cadr entry)))
+     (should (niwa-migrate-from-mevedel--migrate root))
+     (dolist (entry entries)
+       (with-temp-buffer
+         (set-buffer-multibyte nil)
+         (insert-file-contents-literally (file-name-concat dst (car entry)))
+         (should (equal (buffer-string) (encode-coding-string (nth 2 entry) 'utf-8-unix))))))))
+
 (provide 'test-niwa-migrate-from-mevedel)
 ;;; test-niwa-migrate-from-mevedel.el ends here

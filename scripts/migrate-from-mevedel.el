@@ -51,13 +51,17 @@
   "Read one inert Lisp form from PATH, allowing comments but not references."
   (with-temp-buffer
     (insert-file-contents path)
-    (set-syntax-table emacs-lisp-mode-syntax-table)
-    (goto-char (point-min))
-    (let* ((read-circle nil)
-           (form (read (current-buffer))))
-      (forward-comment (point-max))
-      (unless (eobp) (error "Trailing data in %s" path))
-      form)))
+    (niwa-migrate-from-mevedel--read-form path)))
+
+(defun niwa-migrate-from-mevedel--read-form (path)
+  "Read one inert Lisp form in the current buffer, named PATH for errors."
+  (set-syntax-table emacs-lisp-mode-syntax-table)
+  (goto-char (point-min))
+  (let* ((read-circle nil)
+         (form (read (current-buffer))))
+    (forward-comment (point-max))
+    (unless (eobp) (error "Trailing data in %s" path))
+    form))
 
 (defun niwa-migrate-from-mevedel--json (path)
   "Read JSON from PATH without evaluating anything."
@@ -157,31 +161,127 @@
           (setcar (cdr command) (niwa-migrate-from-mevedel--command (cadr command) source kept))))))
   record)
 
-(defun niwa-migrate-from-mevedel--json-hooks (record source kept)
-  "Rewrite command paths in JSON hook RECORD from SOURCE using KEPT entries."
-  (when-let* ((hooks (gethash "hooks" record)))
-    (maphash
-     (lambda (_event groups)
-       (mapc (lambda (group)
-               (mapc (lambda (handler)
-                       (when-let* ((command (gethash "command" handler)))
-                         (puthash "command" (niwa-migrate-from-mevedel--command command source kept) handler)))
-                     (gethash "hooks" group)))
-             groups))
-     hooks))
-  record)
+(defun niwa-migrate-from-mevedel--string-offset (literal prefix start reader)
+  "Find PREFIX's end in LITERAL after START, decoding escapes with READER."
+  (if (not (string-search "\\" literal))
+      (1+ (length prefix))
+    (or (cl-loop for end from start below (length literal)
+                 when (equal prefix (ignore-errors
+                                      (funcall reader (concat (substring literal 0 end) "\""))))
+                 return end)
+        (error "Cannot locate changed string token"))))
+
+(defun niwa-migrate-from-mevedel--edit-string (start before after reader)
+  "Patch the string from START to point from BEFORE to AFTER, using READER."
+  (unless (equal before after)
+    (let ((literal (buffer-substring-no-properties start (point)))
+          (offset 0) (raw-start 1)
+          (old "mevedel") (new "niwa") difference)
+      ;; Locate each changed spelling in the decoded string, then edit its raw span.
+      (while (not (eq t (setq difference (compare-strings before offset nil after offset nil))))
+        (let* ((at (+ offset (1- (abs difference))))
+               (end (+ at (length old)))
+               (left (niwa-migrate-from-mevedel--string-offset literal (substring before 0 at) raw-start reader))
+               (right (niwa-migrate-from-mevedel--string-offset literal (substring before 0 end) left reader)))
+          (unless (and (equal old (substring before at end)) (string-prefix-p new (substring after at)))
+            (error "Unexpected string change during cutover"))
+          (setq literal (concat (substring literal 0 left) new (substring literal right))
+                before (concat (substring before 0 at) new (substring before end))
+                offset (+ at (length new))
+                raw-start (+ left (length new)))))
+      (unless (equal after (funcall reader literal)) (error "Invalid cutover string edit"))
+      (delete-region start (point))
+      (insert literal))))
+
+(defun niwa-migrate-from-mevedel--edit-lisp (before after)
+  "Walk one Lisp value at point, patching only changes from BEFORE to AFTER."
+  (forward-comment (point-max))
+  (cond
+   ((equal before after) (read (current-buffer)))
+   ((and (consp before) (eq (char-after) ?\())
+    (forward-char)
+    (while (consp before)
+      (niwa-migrate-from-mevedel--edit-lisp (pop before) (pop after))
+      (forward-comment (point-max))
+      (when (looking-at "\\.[ \t\r\n;]")
+        (forward-char)
+        (niwa-migrate-from-mevedel--edit-lisp before after)
+        (setq before nil)
+        (forward-comment (point-max))))
+    (unless (eq (char-after) ?\)) (error "Cannot locate changed Lisp list"))
+    (forward-char))
+   (t
+    (let ((start (point))
+          (value (read (current-buffer))))
+      (unless (equal value before) (error "Cannot locate changed Lisp value"))
+      (if (stringp before)
+          (niwa-migrate-from-mevedel--edit-string start before after #'read)
+        (goto-char start)
+        (unless (and (symbolp before) (looking-at "mevedel-"))
+          (error "Cannot locate legacy Lisp prefix"))
+        (replace-match "niwa-" t t)
+        (goto-char start)
+        (read (current-buffer)))))))
+
+(defun niwa-migrate-from-mevedel--edit-json (keys source kept)
+  "Patch JSON hook commands at reversed KEYS using SOURCE and KEPT."
+  (skip-chars-forward " \t\r\n")
+  (let ((kind (pcase keys
+                (`("command" nil "hooks" nil ,_ "hooks") 'command)
+                ((or 'nil '("hooks") `(nil ,_ "hooks") `(nil "hooks" nil ,_ "hooks")) ?{)
+                ((or `(,_ "hooks") `("hooks" nil ,_ "hooks")) ?\[))))
+    (cond
+     ((eq kind 'command)
+      (let* ((start (point)) (command (json-parse-buffer)))
+        (niwa-migrate-from-mevedel--edit-string
+         start command (niwa-migrate-from-mevedel--command command source kept) #'json-parse-string)))
+     ((eq kind (char-after))
+      (forward-char)
+      (skip-chars-forward " \t\r\n")
+      (while (not (memq (char-after) '(?} ?\])))
+        (let ((key (when (eq kind ?{) (prog1 (json-parse-buffer) (skip-chars-forward " \t\r\n:")))))
+          (niwa-migrate-from-mevedel--edit-json (cons key keys) source kept))
+        (skip-chars-forward " \t\r\n,"))
+      (forward-char))
+     (t (json-parse-buffer)))))
+
+(defun niwa-migrate-from-mevedel--edit-config (path relative source kept)
+  "Return a text-only rewrite of PATH at RELATIVE using SOURCE and KEPT."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally path)
+    (let* ((bytes (buffer-string))
+           (original (decode-coding-string bytes 'utf-8-unix))
+           (read-circle nil))
+      (unless (equal bytes (encode-coding-string original 'utf-8-unix))
+        (error "Cannot preserve original encoding of %s" path))
+      (erase-buffer)
+      (set-buffer-multibyte t)
+      (insert original)
+      (goto-char (point-min))
+      (if (equal relative "hooks.json")
+          (progn
+            (json-parse-string original)
+            (niwa-migrate-from-mevedel--edit-json nil source kept)
+            (json-parse-string (buffer-string)))
+        (let* ((before (niwa-migrate-from-mevedel--read-form path))
+               (after (funcall (if (equal relative "hooks.el") #'niwa-migrate-from-mevedel--hooks
+                                 #'niwa-migrate-from-mevedel--instructions)
+                               (copy-tree before) source kept)))
+          (goto-char (point-min))
+          (niwa-migrate-from-mevedel--edit-lisp before after)
+          (unless (equal after (niwa-migrate-from-mevedel--read-form path))
+            (error "Invalid cutover edit in %s" path))))
+      (unless (equal original (buffer-string)) (buffer-string)))))
 
 (defun niwa-migrate-from-mevedel--transform (path relative source kept)
   "Rewrite PATH at RELATIVE from SOURCE using KEPT entries, or return nil."
   (cond
-   ((equal relative "hooks.json")
-    (let* ((record (niwa-migrate-from-mevedel--json path))
-           (before (json-serialize record :null-object :null :false-object :false))
-           (after (json-serialize (niwa-migrate-from-mevedel--json-hooks record source kept)
-                                  :null-object :null :false-object :false)))
-      (unless (equal before after) (concat after "\n"))))
-   ((or (member relative '("instructions.el" "skills-state.el" "permissions.el" "hooks.el"))
-        (string-match-p "\\`\\(?:exports/.+\\.el\\|schedules/[^/]+/schedule\\.el\\|workspace-schedules/[^/]+\\.el\\)\\'" relative))
+   ((or (member relative '("hooks.json" "hooks.el" "instructions.el"))
+        (string-match-p "\\`exports/.+\\.el\\'" relative))
+    (niwa-migrate-from-mevedel--edit-config path relative source kept))
+   ((or (member relative '("skills-state.el" "permissions.el"))
+        (string-match-p "\\`\\(?:schedules/[^/]+/schedule\\.el\\|workspace-schedules/[^/]+\\.el\\)\\'" relative))
     (let* ((record (niwa-migrate-from-mevedel--read path))
            (print-length nil) (print-level nil) (print-quoted t)
            (before (prin1-to-string record))
@@ -189,7 +289,6 @@
             (prin1-to-string
              (pcase relative
                ("permissions.el" (niwa-migrate-from-mevedel--permissions record))
-               ("hooks.el" (niwa-migrate-from-mevedel--hooks record source kept))
                ((pred (string-prefix-p "workspace-schedules/"))
                 (niwa-migrate-from-mevedel--paths record))
                ("skills-state.el"
@@ -199,8 +298,7 @@
                ((pred (string-prefix-p "schedules/"))
                 (when-let* ((preset (plist-member record :preset)))
                   (setcar (cdr preset) (niwa-migrate-from-mevedel--preset (cadr preset))))
-                record)
-               (_ (niwa-migrate-from-mevedel--instructions record source kept))))))
+                record)))))
       (unless (equal before after) (concat after "\n"))))))
 
 (defun niwa-migrate-from-mevedel--listing (directory &optional prefix)
