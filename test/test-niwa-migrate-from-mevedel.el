@@ -168,12 +168,10 @@
   (niwa-mig-test--w src "mystery/x.el"))
 (niwa-mig-test--refuses "collision"
   (niwa-mig-test--w root ".niwa/x"))
-(niwa-mig-test--refuses "inflight-cycle"
-  (niwa-mig-test--w src "state/shared-notes/cycle.el" "(:id \"c\" :inflight t)\n"))
-(niwa-mig-test--refuses "unretired-capture"
-  (niwa-mig-test--w src "state/journal/captures/C1/ready" ""))
-(niwa-mig-test--refuses "journal-pins"
-  (niwa-mig-test--w src "sessions/s1/.journal-pins/p.json" "{}\n"))
+(niwa-mig-test--refuses "unfinished-shared-note-write"
+  (niwa-mig-test--w src "state/shared-notes/pending/p.el" "(:id \"p\")\n"))
+(niwa-mig-test--refuses "unfinished-memory-write"
+  (niwa-mig-test--w src "state/memory-write/pending/p.el" "(:id \"p\")\n"))
 (niwa-mig-test--refuses "active-lease"
   (niwa-mig-test--w src "leases/artifacts/a1/00000000000000000001.el"
                     (format "(:status active :expires-at %S)\n" (+ (float-time) 3600))))
@@ -200,6 +198,30 @@
    (niwa-mig-test--w src "state/journal/expiry/owner.json"
                      "{\"generation\":1,\"owner\":\"owner\",\"expires-at\":1,\"entries\":[]}")
    (should (niwa-migrate-from-mevedel--migrate root))))
+
+(ert-deftest niwa-migrate-from-mevedel/keep-published-drop-pending-journal ()
+  (niwa-mig-test--with-ws
+   (let ((digest "journal/2026-11-21-published.md")
+         (bytes "---\nkind: digest\n---\n\nPublished mevedel history.\n")
+         (ready "state/journal/captures/pending-capture/ready")
+         (pin "sessions/s1/.journal-pins/pending-capture.json")
+         (dst (file-name-concat root ".niwa"))
+         messages backup)
+     (niwa-mig-test--w src digest bytes)
+     (niwa-mig-test--w src ready "")
+     (niwa-mig-test--w src pin "{}")
+     (niwa-mig-test--w src "state/shared-notes/cycle.el" "(:id \"c\" :inflight t)")
+     (cl-letf (((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (push (apply #'format fmt args) messages))))
+       (setq backup (niwa-migrate-from-mevedel--migrate root)))
+     (should (equal bytes (niwa-mig-test--r dst digest)))
+     (should (equal bytes (niwa-mig-test--r backup digest)))
+     (should (file-exists-p (file-name-concat backup ready)))
+     (should (file-exists-p (file-name-concat backup pin)))
+     (should-not (file-exists-p (file-name-concat dst ready)))
+     (should-not (file-exists-p (file-name-concat dst pin)))
+     (should (cl-some (lambda (text) (string-match-p "backup.*pending-capture" text)) messages)))))
 
 (ert-deftest niwa-migrate-from-mevedel/stale-staging-recovers ()
   (niwa-mig-test--with-ws

@@ -243,24 +243,28 @@
       (cond
        ((and dir (string-match-p "\\(?:\\(?:^\\|/\\)\\.lease\\|^leases/artifacts/[^/]+\\)\\'" relative))
         (niwa-migrate-from-mevedel--lease path))
-       ((and (not dir) (string-match-p "\\(?:/\\.lock\\|/\\.journal-pins\\(?:/[^/]+\\)?\\)\\'" relative))
-        (error "Live session lock or journal pin: %s" path))
+       ((and (not dir) (string-match-p "\\`sessions/[^/]+/\\.lock\\'" relative))
+        (error "Live session lock: %s" path))
        ((and (not dir) (string-match-p "\\`schedules/[^/]+/runs/[^/]+\\.el\\'" relative))
         (let ((run (niwa-migrate-from-mevedel--read path)))
           (unless (or (plist-get run :outcome) (plist-get run :settled-at))
             (error "Unsettled schedule run: %s" path))))
-       ((equal relative "state/shared-notes/cycle.el")
-        (when (plist-get (niwa-migrate-from-mevedel--read path) :inflight)
-          (error "Inflight shared-note cycle: %s" path)))
-       ((and dir (string-match-p "\\`state/journal/captures/[^/]+\\'" relative)
-             (file-exists-p (file-name-concat path "ready")))
-        (unless (or (file-exists-p (file-name-concat path "retired"))
-                    (file-exists-p (file-name-concat path "discard.json")))
-          (error "Pending journal capture: %s" path)))
-       ((and (not dir) (string-match-p "\\`state/journal/evidence-pins/" relative))
-        (error "Pending journal evidence pin: %s" path))
+       ((and (not dir) (string-match-p
+                        "\\`state/\\(?:memory-write\\|shared-notes\\)/\\(?:[^/]+/\\)*pending/"
+                        relative))
+        (error "Unfinished memory or shared-note write: %s" path))
        ((and (not dir) (string-match-p "\\`state/journal/expiry/[^/]+\\.json\\'" relative))
         (niwa-migrate-from-mevedel--expiry source path))))))
+
+(defun niwa-migrate-from-mevedel--pending-captures (source rows)
+  "Return pending capture IDs from legacy SOURCE listed in ROWS."
+  (cl-loop for (relative dir) in rows
+           for path = (file-name-concat source relative)
+           when (and dir (string-match-p "\\`state/journal/captures/[^/]+\\'" relative)
+                     (file-exists-p (file-name-concat path "ready"))
+                     (not (file-exists-p (file-name-concat path "retired")))
+                     (not (file-exists-p (file-name-concat path "discard.json"))))
+           collect (file-name-nondirectory relative)))
 
 (defun niwa-migrate-from-mevedel--hash (path)
   "Return SHA-256 of the literal bytes at PATH."
@@ -328,6 +332,7 @@ Return the backup name, or nil when already migrated."
       (let* ((rows (niwa-migrate-from-mevedel--listing source))
              (keep (cl-remove-if-not (lambda (row) (niwa-migrate-from-mevedel--keep-p (car row) user))
                                      rows))
+             (captures (niwa-migrate-from-mevedel--pending-captures source rows))
              (tracked (niwa-migrate-from-mevedel--tracked-p parent))
              promoted)
         (niwa-migrate-from-mevedel--closed source rows)
@@ -347,6 +352,9 @@ Return the backup name, or nil when already migrated."
               (setq promoted t)
               (rename-file source backup)
               (setq promoted nil)
+              (when captures
+                (message "Pending journal captures left in backup for %s: %s"
+                         directory (string-join captures ", ")))
               (when tracked (message "Commit the tracked state move for %s" parent))
               (when (file-exists-p (file-name-concat backup "trusted-hooks.el"))
                 (message "Hook approvals were not carried over; re-approve the migrated hook configs"))
