@@ -21,7 +21,7 @@
 (autoload 'niwa-journal-gc "niwa-journal-gc")
 
 ;; `niwa-memory-cleanup'
-(declare-function niwa-memory-cleanup-entry "niwa-memory-cleanup" (workspace entry entries))
+(declare-function niwa-memory-cleanup-entry "niwa-memory-cleanup" (workspace entry entries &optional early-clock))
 (autoload 'niwa-memory-cleanup-entry "niwa-memory-cleanup")
 
 ;; `niwa-memory-decision'
@@ -230,14 +230,28 @@ manifests are verified but not counted."
         (when niwa-journal-cleanup--finished (cl-incf finished))))
     finished))
 
-(defun niwa-journal-cleanup--protected-p (root entry)
-  "Return non-nil when ENTRY retains pending capture or pinned review evidence."
-  (let ((capture (file-name-concat (niwa-journal-store-state-directory root) "captures" (plist-get entry :capture-id))))
-    (or (equal '(t nil) (niwa-session-control-fs-paths-exist
-                         (list capture (file-name-concat capture "retired"))))
-        (niwa-session-control-fs-list-directory
-         (file-name-concat (niwa-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
-         "\\`[^.]"))))
+(defun niwa-journal-cleanup--capture-probes (root tail unreviewed limit)
+  "Probe up to LIMIT consecutive reviewed digests in TAIL under ROOT.
+Stop before UNREVIEWED entries; leave failures for selection order."
+  (niwa-session-control-fs-run-program
+   (cl-loop for entry in tail repeat limit
+            while (and (eq (plist-get entry :kind) 'digest) (not (memq entry unreviewed)))
+            append (let ((capture (file-name-concat (niwa-journal-store-state-directory root)
+                                                    "captures" (plist-get entry :capture-id))))
+                     (list (list :op 'path-exists-p :path capture :optional t)
+                           (list :op 'path-exists-p :path (file-name-concat capture "retired") :optional t))))))
+
+(defun niwa-journal-cleanup--protected-p (root entry capture retired)
+  "Check CAPTURE and RETIRED probe results, then ENTRY's pins under ROOT."
+  (or (equal '(ok absent)
+             (mapcar (lambda (result)
+                       (let ((status (plist-get result :status)))
+                         (unless (memq status '(ok absent)) (niwa-session-control-fs-program-value result))
+                         status))
+                     (list capture retired)))
+      (niwa-session-control-fs-list-directory
+       (file-name-concat (niwa-journal-store-state-directory root) "evidence-pins" (plist-get entry :id))
+       "\\`[^.]")))
 
 (defun niwa-journal-cleanup-pending-pass-p (root pass)
   "Whether an accepted, unfinished expiry in journal ROOT retires PASS.
@@ -267,7 +281,10 @@ Select at most LIMIT content groups, including recovery.  Return
          (root (niwa-journal-store-directory workspace-root))
          (deleted 0)
          (remaining limit)
-         observed unreviewed entries)
+         sampled-time
+         (early-clock (lambda () (or sampled-time
+                                     (setq sampled-time (niwa-session-control-fs-target-time workspace-root)))))
+         observed unreviewed entries probes)
     ;; Recovery consumes the same content budget as new work.  A manifest is
     ;; indivisible: defer one that does not fit until the next idle batch.
     (dolist (path (niwa-session-control-fs-list-directory
@@ -284,18 +301,22 @@ Select at most LIMIT content groups, including recovery.  Return
             (cl-decf remaining count)))))
     (setq observed (niwa-journal-store-entries workspace-root)
           unreviewed (niwa-journal-index-unreviewed observed))
-    (dolist (entry (reverse observed))
-      (when (< (length entries) remaining)
+    (cl-loop for tail on (reverse observed) for entry = (car tail)
+             while (< (length entries) remaining) do
         (pcase (plist-get entry :kind)
           ('digest
            (unless (or (memq entry unreviewed)
-                       (niwa-journal-cleanup--protected-p root entry))
+                       (progn
+                         (unless probes
+                           (setq probes (niwa-journal-cleanup--capture-probes
+                                         root tail unreviewed (- remaining (length entries)))))
+                         (niwa-journal-cleanup--protected-p root entry (pop probes) (pop probes))))
              (niwa-journal-store--record-coverage workspace-root entry)
              (push (list :kind "digest" :id (plist-get entry :capture-id) :file (plist-get entry :file)
                          :sha256 (secure-hash 'sha256 (plist-get entry :text)) :private []) entries)))
           ('consolidation
-           (when-let* ((candidate (niwa-memory-cleanup-entry workspace entry observed)))
-             (push candidate entries))))))
+           (when-let* ((candidate (niwa-memory-cleanup-entry workspace entry observed early-clock)))
+             (push candidate entries)))))
     (when entries
       (let* ((directory (file-name-concat (niwa-journal-store-state-directory root) "expiry"))
              (path (file-name-concat directory (concat (plist-get claim :owner) ".json")))

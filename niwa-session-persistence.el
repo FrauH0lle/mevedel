@@ -2445,16 +2445,10 @@ REFRESHED keeps an empty chooser open after deleting its last session."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
-  (let* ((scan (when (file-remote-p (niwa-workspace-root workspace))
-                 (niwa-session-persistence--scan
-                  workspace "\\`\\(?:[^.]\\|\\.niwa-save-as-\\)")))
-         (enumeration
-          (if scan
-              (progn
-                (niwa-session-persistence-cleanup-expired workspace nil scan)
-                (niwa-session-persistence--enumerate-sessions workspace nil scan))
-            (niwa-session-persistence-cleanup-expired workspace)
-            (niwa-session-persistence--enumerate-sessions workspace)))
+  (let* ((scan (niwa-session-persistence--scan
+                workspace "\\`\\(?:[^.]\\|\\.niwa-save-as-\\)"))
+         (_ (niwa-session-persistence-cleanup-expired workspace nil scan))
+         (enumeration (niwa-session-persistence--enumerate-sessions workspace nil scan))
          (sessions (niwa-session-persistence-without-dedicated
                     workspace (plist-get enumeration :sessions)))
          (incompatible
@@ -2463,10 +2457,15 @@ REFRESHED keeps an empty chooser open after deleting its last session."
     (when (or sessions incompatible refreshed)
       (let* ((new-label "Start new session")
              (held-p nil)
+             (remote (file-remote-p (niwa-workspace-root workspace)))
+             (probe-entries (if remote sessions
+                              (seq-remove #'niwa-session-persistence--entry-live-buffer sessions)))
              (assessments
-              (when (and sessions (file-remote-p (niwa-workspace-root workspace)))
-                (niwa-session-durability-assess-batch
-                 (mapcar (lambda (entry) (plist-get entry :save-path)) sessions))))
+              (when probe-entries
+                (let ((paths (mapcar (lambda (entry) (plist-get entry :save-path)) probe-entries)))
+                  (if remote (niwa-session-durability-assess-batch paths)
+                    ;; A failed local batch falls back to the per-row authority checks.
+                    (ignore-errors (niwa-session-durability-assess-batch paths))))))
              (session-candidates
               (mapcar
                (lambda (entry)

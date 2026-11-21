@@ -31,11 +31,12 @@ FILE is relative to the private journal state directory."
           :related (vconcat (plist-get history :related))
           :expires (+ (plist-get history :resolved-at) (* niwa-memory-history-max-age-days 86400)))))
 
-(defun niwa-memory-cleanup-entry (workspace entry entries)
+(defun niwa-memory-cleanup-entry (workspace entry entries &optional early-clock)
   "Return an expiry group for an unreferenced completed review ENTRY.
 ENTRIES is a fresh public journal observation in WORKSPACE. The caller holds
 journal mutation and consolidation admission. Retain unresolved decision/write
-dependencies; this function never deletes or publishes state."
+dependencies; this function never deletes or publishes state.  EARLY-CLOCK,
+when supplied, samples time for rejecting recent public entries only."
   (let ((id (plist-get entry :pass-id)))
     (unless (and (string-empty-p (or (plist-get entry :focus) ""))
                  (seq-some (lambda (other) (and (eq (plist-get other :kind) 'digest)
@@ -46,7 +47,8 @@ dependencies; this function never deletes or publishes state."
                  ;; Keep the authenticated history checks below for candidates.
                  (created (float-time (date-to-time (plist-get entry :created))))
                  (_ (when (> (+ created (* niwa-memory-history-max-age-days 86400))
-                             (niwa-session-control-fs-target-time (niwa-workspace-root workspace)))
+                             (if early-clock (funcall early-clock)
+                               (niwa-session-control-fs-target-time (niwa-workspace-root workspace))))
                       (error "Memory history is still recent")))
                  (_ (when (niwa-memory-cycle-pins-pass-p workspace id)
                       (error "Note cycle has not reconciled its accepted admission")))

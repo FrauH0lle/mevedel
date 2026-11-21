@@ -20,6 +20,7 @@
 (require 'niwa-session-persistence)
 (require 'niwa-session-publication)
 (require 'niwa-telemetry)
+(require 'niwa-utilities)
 (require 'niwa-workspace)
 (require 'niwa-workspace-identity)
 (require 'helpers
@@ -349,6 +350,46 @@ directories -- the existence probes and the lease listings."
                      (lambda (&rest _) (ert-fail "Chooser queued journal retention"))))
             (should-not (niwa-session-persistence-choose-entry workspace))))
       (delete-directory root t)))
+
+  :doc "lists released local sessions with one shared scan and one row assessment batch"
+  (let* ((root (file-name-as-directory (make-temp-file "niwa-chooser-cost-" t)))
+         (workspace (niwa-workspace-get-or-create 'project root root "chooser-cost")))
+    (unwind-protect
+        (progn
+          (niwa-workspace-identity-ensure root)
+          (dolist (name '("one" "two" "three"))
+            (let ((session (niwa-session-create name workspace)))
+              (with-temp-buffer
+                (org-mode)
+                (setq-local niwa--session session)
+                (insert "*** Prompt\n")
+                (niwa-session-artifacts-save session (current-buffer))
+                (niwa-session-durability-lease-release
+                 (niwa-session-save-path session) session))))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt choices &rest _)
+                       (should (= 3 (length (all-completions "Resume" choices))))
+                       "Start new session")))
+            (should (<= (test-niwa-session-persistence-cost--measure
+                          (should (eq 'new (niwa-session-persistence-choose-entry workspace))))
+                        8)))
+          ;; One unreadable lease aborts the batch, but not the local chooser.
+          (let ((run (symbol-function 'niwa-session-control-fs-run-program)) bad-path)
+            (cl-letf (((symbol-function 'niwa-session-control-fs-run-program)
+                       (lambda (ops &rest args)
+                         (let ((rows (seq-filter (lambda (op) (eq 'observation-time (plist-get op :op))) ops)))
+                           (when (cdr rows) (setq bad-path (directory-file-name (plist-get (car rows) :path))))
+                           (when (and rows (equal bad-path (directory-file-name (plist-get (car rows) :path))))
+                             (signal 'file-error '("Injected unreadable authority"))))
+                         (apply run ops args)))
+                      ((symbol-function 'completing-read)
+                       (lambda (_prompt choices &rest _)
+                         (should (= 2 (length (all-completions "Resume" choices))))
+                         (should (= 1 (length (all-completions "Inspect" choices))))
+                         "Start new session")))
+              (should (eq 'new (niwa-session-persistence-choose-entry workspace))))))
+      (delete-directory root t)
+      (niwa-workspace-clear-registry)))
 
   :doc "sizes every incompatible row in one target program"
   (let* ((root (file-name-as-directory
