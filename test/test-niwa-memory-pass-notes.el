@@ -229,6 +229,36 @@
                         (should (eq 'applied (status disposal)))
                         (should-not (file-exists-p path))
                         (should-not (file-exists-p (file-name-concat memory "parser.md")))))))
+                 :doc "an admission offered by a turn event during a reversal waits for its locks to be released"
+                 (niwa-test-memory-pass-notes--without-prompts
+                  (let ((path (note "plan.md" "The parser must reject duplicate index destinations.\n"))
+                        (start-original (symbol-function 'niwa-memory-pass-start))
+                        (reversing nil) inside outside)
+                    (should (start :automatic t))
+                    (setq reply (text (list (list "parser.md" "Reject duplicate index destinations."
+                                                  (list (address "plan.md"))))))
+                    (finish)
+                    (should-not (file-exists-p path))
+                    (cl-letf (((symbol-function 'niwa-memory-pass-start)
+                               (lambda (&rest args)
+                                 (push t (if reversing inside outside))
+                                 (apply start-original args)))
+                              ((symbol-value 'niwa-session-control-fs--lock-budget) 1))
+                      (let ((extraction (proposal 'promote)))
+                        ;; The admission `finish' queued is due, and a turn finishing
+                        ;; offers another, while the reversal waits on its pin helper.
+                        (run-at-time 0 nil (lambda () (niwa-memory-pass-schedule workspace)))
+                        (setq reversing t)
+                        (should (eq 'reversed (plist-get (niwa-memory-decision-reverse
+                                                          workspace (pass) (plist-get extraction :id))
+                                                         :status)))
+                        (setq reversing nil))
+                      (should-not inside)
+                      ;; Deferred, not dropped or repeated: it starts once, after the locks.
+                      (with-timeout (10 (ert-fail "Offered admission never started"))
+                        (while (null outside) (accept-process-output nil 0.05)))
+                      (accept-process-output nil 0.5)
+                      (should (= 1 (length outside))))))
                  :doc "propose mode leaves decisions pending and a disposal waits for its extraction"
                  (let ((niwa-memory-consolidation-mode 'propose)
                        (path (note "handoff.md" "Lesson: run clean elc before tests.\n")))

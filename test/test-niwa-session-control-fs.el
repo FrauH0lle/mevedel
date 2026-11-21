@@ -71,6 +71,44 @@
           (dolist (lock locks) (should (= 0 (call-process "flock" nil nil nil "-n" lock "true")))))
       (delete-directory root t))))
 
+(niwa-deftest niwa-session-control-fs-call-with-locks/idle-work
+  (:doc "idle work offered during two-lock setup, the callback and teardown runs once, after both locks are free")
+  (let* ((root (make-temp-file "niwa-lock-idle-" t))
+         (locks (mapcar (lambda (name) (file-name-concat root name)) '("target" "workspace")))
+         (niwa-transport--enabled-p t)
+         (acquire (symbol-function 'niwa-session-control-fs--acquire))
+         (close (symbol-function 'niwa-session-control-fs-lock-session-close))
+         (calling t) delivered offered)
+    (cl-labels ((offer (key)
+                  (unless (memq key offered)
+                    (push key offered)
+                    (niwa-transport-run-when-idle
+                     key nil
+                     (lambda ()
+                       (push (list key calling
+                                   (mapcar (lambda (lock) (call-process "flock" nil nil nil "-n" lock "true")) locks))
+                             delivered))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'niwa-session-control-fs--acquire)
+                     (lambda (&rest args) (prog1 (apply acquire args) (offer 'setup))))
+                    ((symbol-function 'niwa-session-control-fs-lock-session-close)
+                     (lambda (process) (offer 'teardown) (funcall close process))))
+            (should-error (niwa-session-control-fs-call-with-locks
+                           locks (lambda (&rest _) (offer 'callback) (error "Caller failed"))))
+            (setq calling nil)
+            (should (equal '(callback setup teardown) (sort (copy-sequence offered) #'string<)))
+            (with-timeout (10 (ert-fail "Offered idle work never ran"))
+              (while (< (length delivered) 3) (accept-process-output nil 0.05)))
+            (accept-process-output nil 0.3)
+            (should (= 3 (length delivered)))
+            (should (equal '(callback setup teardown)
+                           (sort (mapcar #'car delivered) #'string<)))
+            (dolist (row delivered)
+              ;; Never inside the call; both locks free when it runs.
+              (should-not (nth 1 row))
+              (should (equal '(0 0) (nth 2 row)))))
+        (delete-directory root t)))))
+
 (niwa-deftest niwa-session-control-fs-lock-session-run
   (:doc "large and non-ASCII frames survive a stopped program without leaking into the next call")
   (let* ((root (make-temp-file "niwa-control-frames-" t))

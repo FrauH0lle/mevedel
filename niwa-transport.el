@@ -159,6 +159,17 @@ Paced processes continue."
   "Return non-nil when a TRAMP file operation is already on the stack."
   (> niwa-transport--depth 0))
 
+(defvar niwa-transport--section nil
+  "Non-nil while this process holds or is taking control locks.")
+
+(defun niwa-transport-call-in-section (thunk)
+  "Call THUNK as a durable section holding control locks.
+Deferred work consults this, not `niwa-transport-busy-p': code inside the
+section must still run its own target operations, while an unrelated timer
+that fires in one of the section's waits must not queue behind the locks."
+  (let ((niwa-transport--section t))
+    (funcall thunk)))
+
 
 ;;
 ;;; Busy predicate
@@ -552,7 +563,11 @@ still be delivered after a suspended timer list is restored."
 (put 'niwa-transport--retry 'niwa-telemetry-delegate 3)
 
 (defun niwa-transport-run-when-idle (key path thunk &optional on-cancel delay)
-  "Call THUNK once no remote operation for PATH is in flight.
+  "Call THUNK once PATH's transport is idle and no control locks are held here.
+
+Control locks held by a durable section of this process count as busy, so
+work a timer starts inside the section's waits queues instead of blocking
+on those locks.
 
 KEY coalesces repeated scheduling of the same logical work, so a caller that
 re-arms on every event queues one retry rather than a growing fan of timers.
@@ -562,7 +577,7 @@ cancelled before THUNK starts. Non-nil DELAY queues the first attempt by that
 many seconds even when transport is idle, retaining the same cancellation owner.
 Return non-nil when work was accepted; disabled transport drops late work."
   (when niwa-transport--enabled-p
-    (if (or delay (niwa-transport-busy-p path))
+    (if (or delay (niwa-transport-busy-p path) niwa-transport--section)
         (unless (gethash key niwa-transport--pending)
           (let ((timer (timer-create)))
             (timer-set-time timer (time-add nil (or delay niwa-transport-retry-seconds)))

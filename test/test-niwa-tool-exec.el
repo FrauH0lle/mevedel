@@ -1866,7 +1866,7 @@ the execution boundary owns the session's single unavailable warning"
          events inline yielded final listed
          (niwa-execution-event-functions
           (list (lambda (event) (push event events))))
-         (expression "(progn (sleep-for 2) (princ \"printed\") (message \"diagnostic\") 42)"))
+         (expression "(progn (sleep-for 0.7) (princ \"printed\") (message \"diagnostic\") 42)"))
     (niwa-tool-exec--eval
      (lambda (result) (setq inline result))
      (list :expression expression :mode "fresh" :yield_time_ms 10000))
@@ -1929,7 +1929,7 @@ the execution boundary owns the session's single unavailable warning"
       (cl-letf (((symbol-function 'niwa-pending-inputs-offer-idle-work) #'ignore))
         (niwa-tool-exec--eval
          (lambda (result) (setq initial result))
-         (list :expression "(progn (sleep-for 1) (make-string 2000000 ?x))"
+         (list :expression "(progn (sleep-for 0.7) (make-string 2000000 ?x))"
                :mode "fresh" :yield_time_ms (if (eq delivery 'inline) 10000 250)))
         (with-timeout (15 (error "Large Eval did not return or yield"))
           (while (null initial) (accept-process-output nil 0.02)))
@@ -2020,7 +2020,7 @@ the execution boundary owns the session's single unavailable warning"
                (lambda (buffer) (push buffer offered))))
       (niwa-tool-exec--eval
        (lambda (result) (setq yielded result))
-       '(:expression "(progn (sleep-for 2) (message \"mail diagnostic\") 42)"
+       '(:expression "(progn (sleep-for 0.7) (message \"mail diagnostic\") 42)"
          :mode "fresh" :yield_time_ms 250))
       (with-timeout (15 (error "Eval mailbox completion timed out"))
         (while (null offered) (accept-process-output nil 0.02))))

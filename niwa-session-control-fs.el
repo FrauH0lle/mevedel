@@ -67,6 +67,11 @@ The paused script gives up after a bounded wait: a test that dies before
 writing the continue marker must not leave a target-side process polling
 forever.")
 
+(defvar niwa-session-control-fs--lock-budget 20
+  "Seconds `niwa-session-control-fs-call-with-locks' waits for its locks.
+Tests that expect a lock refusal bind a smaller value instead of waiting out
+the production budget.")
+
 (defconst niwa-session-control-fs--spelling-cache-limit 4096
   "How many canonical control spellings to remember before starting over.")
 
@@ -1445,20 +1450,27 @@ WAIT bounds lock acquisition in seconds, at most twenty (the default)."
 
 (defun niwa-session-control-fs-call-with-locks (directories function)
   "Create and lock DIRECTORIES in order, then call FUNCTION with their sessions.
-One twenty-second budget covers all startup, never the work of FUNCTION.
+One budget (`niwa-session-control-fs--lock-budget', twenty seconds) covers all
+startup, never the work of FUNCTION.
 Release acquired locks in reverse order on every exit."
-  (let ((deadline (+ (float-time) 20)) (niwa-session-control-fs--lock-holder nil) current sessions)
-    (unwind-protect
-        (progn
-          (niwa-transport-call-with-deadline
-           20 (lambda ()
+  ;; The section spans acquisition and release: the first lock is held while
+  ;; later ones start, and closing a helper runs kill hooks.
+  (niwa-transport-call-in-section
+   (lambda ()
+     (let ((deadline (+ (float-time) niwa-session-control-fs--lock-budget))
+           (niwa-session-control-fs--lock-holder nil) current sessions)
+       (unwind-protect
+           (progn
+             (niwa-transport-call-with-deadline
+              niwa-session-control-fs--lock-budget
+              (lambda ()
                 (dolist (directory directories)
                   (setq current directory niwa-session-control-fs--lock-holder nil)
                   (niwa-session-control-fs-make-directory directory t)
                   (push (niwa-session-control-fs--acquire directory deadline) sessions)))
-           (lambda () (niwa-session-control-fs--lock-timeout current)))
-          (apply function (reverse sessions)))
-      (mapc #'niwa-session-control-fs-lock-session-close sessions))))
+              (lambda () (niwa-session-control-fs--lock-timeout current)))
+             (apply function (reverse sessions)))
+         (mapc #'niwa-session-control-fs-lock-session-close sessions))))))
 
 (defun niwa-session-control-fs-lock-session-run (session operations)
   "Run OPERATIONS only on SESSION, under its original directory lock."

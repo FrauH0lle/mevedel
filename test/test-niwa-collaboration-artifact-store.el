@@ -151,6 +151,7 @@
          (buffer (generate-new-buffer " *store-live-count*"))
          (session (niwa-session--create :workspace workspace :session-id "saved-0"
                                           :attached-artifacts '("page" "draft")))
+         (saved-count 8)
          (lobby (list :workspace workspace)))
     (unwind-protect
         (progn
@@ -160,8 +161,9 @@
               (make-directory dir t)
               (write-region "hi" nil (file-name-concat dir "index.html") nil 'silent)
               (niwa-artifact-store-create-meta workspace id "index.html")))
-          ;; A realistic saved catalog makes per-artifact session scans costly.
-          (dotimes (n 100)
+          ;; Several saved sessions suffice to tell merged discovery from live
+          ;; attachments; each costs real lease and publication programs.
+          (dotimes (n saved-count)
             (let* ((id (format "saved-%d" n))
                    (directory (file-name-concat
                                (niwa-session-artifacts-sessions-dir workspace) id))
@@ -189,12 +191,12 @@
           (with-current-buffer buffer (setq-local niwa--session session))
           (let* ((snapshot (niwa-collaboration--store-snapshot workspace t))
                  (rows (niwa-collaboration--store-rows lobby snapshot)))
-            (should (= 100 (gethash "page" (plist-get snapshot :attached-counts))))
+            (should (= saved-count (gethash "page" (plist-get snapshot :attached-counts))))
             (should (= 1 (gethash "draft" (plist-get snapshot :attached-counts))))
-            (should (= 100 (plist-get
-                            (cl-find "page" rows :key (lambda (row) (plist-get row :id))
-                                     :test #'equal)
-                            :attachedSessions))))
+            (should (= saved-count (plist-get
+                                    (cl-find "page" rows :key (lambda (row) (plist-get row :id))
+                                             :test #'equal)
+                                    :attachedSessions))))
           ;; Mutation notifications reuse discovery without probing saved
           ;; sessions, while live attachments remain current.
           (setf (niwa-session-attached-artifacts session) '("draft"))
@@ -202,7 +204,7 @@
                      (lambda (&rest _) (ert-fail "Unexpected session discovery"))))
             (let ((counts (plist-get (niwa-collaboration--store-snapshot workspace t t)
                                      :attached-counts)))
-              (should (= 99 (gethash "page" counts)))
+              (should (= (1- saved-count) (gethash "page" counts)))
               (should (= 1 (gethash "draft" counts))))
             ;; Session room listings never need project attachment counts.
             (should (= 0 (hash-table-count

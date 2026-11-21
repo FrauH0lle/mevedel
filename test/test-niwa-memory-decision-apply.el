@@ -19,6 +19,16 @@
 (require 'niwa-session-persistence)
 (require 'niwa-system)
 
+(defun niwa-test-memory-decision-refused-at (workspace pass item target)
+  "Apply ITEM of PASS in WORKSPACE; require the lock refusal of TARGET's directory.
+The wait is shortened to one second, so a timeout at another lock or an
+unrelated error cannot satisfy this."
+  (let* ((niwa-session-control-fs--lock-budget 1)
+         (err (should-error (niwa-memory-decision-apply workspace pass (plist-get item :id))
+                            :type 'file-error)))
+    (should (string-prefix-p "Control lock wait expired" (cadr err)))
+    (should (equal target (nth 2 err)))))
+
 (defun niwa-test-memory-decision-owner-loss (workspace pass item memory victim successor)
   "Kill VICTIM after writing ITEM, then run SUCCESSOR on PASS in WORKSPACE.
 Verify the exact rebased index in MEMORY, including its trailing blank line."
@@ -524,7 +534,8 @@ Verify the exact rebased index in MEMORY, including its trailing blank line."
   (niwa-session-control-fs-call-with-locks
    (list (niwa-memory-write--target scope root-id))
    (lambda (_target)
-     (should-error (plist-get (niwa-memory-decision-apply workspace pass (plist-get item :id)) :decision))
+     (niwa-test-memory-decision-refused-at
+      workspace pass item (niwa-memory-write--target scope root-id))
      (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
   :doc "an independent Emacs in another workspace serializes edits at a shared memory root"
   t
@@ -565,7 +576,8 @@ Verify the exact rebased index in MEMORY, including its trailing blank line."
             (accept-process-output nil 0.01))
           (should (file-exists-p ready))
           (should (process-live-p process))
-          (should-error (plist-get (niwa-memory-decision-apply workspace pass (plist-get item :id)) :decision))
+          (niwa-test-memory-decision-refused-at
+           workspace pass item (niwa-memory-write--target scope root-id))
           (should (equal "Original topic.\n" (niwa-session-control-fs-read-file (file-name-concat memory "topic.md"))))
           (write-region "release" nil release nil 'silent)
           (while (and (process-live-p process) (< (float-time) deadline)) (accept-process-output nil 0.01))
